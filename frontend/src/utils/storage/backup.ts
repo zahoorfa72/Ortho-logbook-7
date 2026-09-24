@@ -20,7 +20,7 @@ const bytesToHex=(b:Uint8Array)=>Array.from(b).map(x=>x.toString(16).padStart(2,
 function hexToBytes(hex:string){if(!hex||hex.length%2)throw new Error("Invalid encrypted backup data.");const b=new Uint8Array(hex.length/2);for(let i=0;i<b.length;i++){const n=parseInt(hex.slice(i*2,i*2+2),16);if(Number.isNaN(n))throw new Error("Invalid encrypted backup data.");b[i]=n;}return b;}
 const stringToBytes=(v:string)=>new TextEncoder().encode(v);
 const bytesToString=(b:Uint8Array)=>new TextDecoder().decode(b);
-async function deriveKey(password:string,salt:Uint8Array){if(!password||password.length<8)throw new Error("Backup password must contain at least 8 characters.");const h=await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256,\`${bytesToHex(salt)}:${password}\`);return hexToBytes(h);}
+async function deriveKey(password:string,salt:Uint8Array){if(!password||password.length<8)throw new Error("Backup password must contain at least 8 characters.");const h=await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256,`${bytesToHex(salt)}:${password}`);return hexToBytes(h);}
 
 function photoMime(uri:string){
   const clean=uri.split("?")[0].toLowerCase();
@@ -41,7 +41,7 @@ async function embedPhoto(uri:string):Promise<string>{
     const file=new File(uri);
     const base64=await file.base64();
     if(!base64)throw new Error("Empty photo file.");
-    return \`data:${photoMime(uri)};base64,${base64}\`;
+    return `data:${photoMime(uri)};base64,${base64}`;
   }catch{
     throw new Error("Could not read a patient photo for backup. Please make sure the photo is still available on this device and try again.");
   }
@@ -166,7 +166,7 @@ export function mergeBackup(backup: BackupData) {
  if(!backup||![2,3].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
  const stats = { patients: 0, procedures: 0, inventory: 0, expenses: 0, users: 0, patientHistory: 0, inventoryMovements: 0 };
  db.withTransactionSync(() => {
-  const has = (table: string, id: string) => !!db.getFirstSync<any>(\`SELECT id FROM ${table} WHERE id=?\`, [id]);
+  const has = (table: string, id: string) => !!db.getFirstSync<any>(`SELECT id FROM ${table} WHERE id=?`, [id]);
   for (const p of backup.patients) {
    if (has("patients", p.id)) continue;
    const photos=restorePatientPhotos(p);
