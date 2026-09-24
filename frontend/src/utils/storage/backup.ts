@@ -1,8 +1,9 @@
 import * as Crypto from "expo-crypto";
+import { File } from "expo-file-system";
 import nacl from "tweetnacl";
 import { db, initializeDatabase } from "@/src/db/database";
 
-const BACKUP_VERSION = 2;
+const BACKUP_VERSION = 3;
 const BACKUP_APP = "Ortho Logbook";
 
 type BackupData = {
@@ -19,35 +20,97 @@ const bytesToHex=(b:Uint8Array)=>Array.from(b).map(x=>x.toString(16).padStart(2,
 function hexToBytes(hex:string){if(!hex||hex.length%2)throw new Error("Invalid encrypted backup data.");const b=new Uint8Array(hex.length/2);for(let i=0;i<b.length;i++){const n=parseInt(hex.slice(i*2,i*2+2),16);if(Number.isNaN(n))throw new Error("Invalid encrypted backup data.");b[i]=n;}return b;}
 const stringToBytes=(v:string)=>new TextEncoder().encode(v);
 const bytesToString=(b:Uint8Array)=>new TextDecoder().decode(b);
-async function deriveKey(password:string,salt:Uint8Array){if(!password||password.length<8)throw new Error("Backup password must contain at least 8 characters.");const h=await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256,`${bytesToHex(salt)}:${password}`);return hexToBytes(h);}
+async function deriveKey(password:string,salt:Uint8Array){if(!password||password.length<8)throw new Error("Backup password must contain at least 8 characters.");const h=await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256,\`${bytesToHex(salt)}:${password}\`);return hexToBytes(h);}
 
-function createBackupData():BackupData{
+function photoMime(uri:string){
+  const clean=uri.split("?")[0].toLowerCase();
+  if(clean.endsWith(".png"))return "image/png";
+  if(clean.endsWith(".webp"))return "image/webp";
+  if(clean.endsWith(".heic")||clean.endsWith(".heif"))return "image/heic";
+  return "image/jpeg";
+}
+
+// Convert local phone photo files into self-contained data URIs.
+// This is the important difference from the old backup: file:// or content://
+// paths are not portable between phones, so the actual photo bytes are stored
+// inside the encrypted backup.
+async function embedPhoto(uri:string):Promise<string>{
+  if(!uri)return "";
+  if(uri.startsWith("data:"))return uri;
+  try{
+    const file=new File(uri);
+    const base64=await file.base64();
+    if(!base64)throw new Error("Empty photo file.");
+    return \`data:${photoMime(uri)};base64,${base64}\`;
+  }catch{
+    throw new Error("Could not read a patient photo for backup. Please make sure the photo is still available on this device and try again.");
+  }
+}
+
+async function embedPatientPhotos(row:any){
+  const raw = row.photos_json;
+  let photos:string[]=[];
+  if(raw){
+    try{
+      const parsed=JSON.parse(String(raw));
+      if(Array.isArray(parsed))photos=parsed.filter((x)=>typeof x==="string"&&x.length>0);
+    }catch{}
+  }
+  if(!photos.length && row.photo_uri)photos=[String(row.photo_uri)];
+  const embedded:string[]=[];
+  for(const uri of photos)embedded.push(await embedPhoto(uri));
+  return {
+    ...row,
+    photo_uri: embedded[0] || "",
+    photos_json: JSON.stringify(embedded),
+  };
+}
+
+async function createBackupData():Promise<BackupData>{
  initializeDatabase();
+ const patients=db.getAllSync<any>("SELECT * FROM patients ORDER BY date DESC, created_at DESC");
+ const embeddedPatients:any[]=[];
+ for(const patient of patients)embeddedPatients.push(await embedPatientPhotos(patient));
+
+ const history=db.getAllSync<any>("SELECT * FROM patient_history ORDER BY created_at ASC");
+ // Keep history portable too when an old snapshot contains patient photos.
+ const embeddedHistory=history.map((h:any)=>{
+   try{
+     const snap=JSON.parse(String(h.snapshot_json||""));
+     if(snap && Array.isArray(snap.photos)) snap.photos=snap.photos.slice();
+     if(snap && snap.photoUri && !snap.photos?.length) snap.photos=[snap.photoUri];
+     return {...h,snapshot_json:JSON.stringify(snap)};
+   }catch{return h;}
+ });
+
  return {
   version:BACKUP_VERSION,app:BACKUP_APP,createdAt:new Date().toISOString(),
-  patients:db.getAllSync<any>("SELECT * FROM patients ORDER BY date DESC, created_at DESC"),
+  patients:embeddedPatients,
   procedures:db.getAllSync<any>("SELECT * FROM procedures ORDER BY name COLLATE NOCASE"),
   inventory:db.getAllSync<any>("SELECT * FROM inventory ORDER BY name COLLATE NOCASE"),
   expenses:db.getAllSync<any>("SELECT * FROM expenses ORDER BY date DESC, created_at DESC"),
   users:db.getAllSync<any>("SELECT * FROM users ORDER BY created_at ASC"),
-  patientHistory:db.getAllSync<any>("SELECT * FROM patient_history ORDER BY created_at ASC"),
+  patientHistory:embeddedHistory,
   inventoryMovements:db.getAllSync<any>("SELECT * FROM inventory_movements ORDER BY created_at ASC"),
  };
 }
 
 export async function exportBackup(password:string):Promise<string>{
- const backup=createBackupData(); const salt=await Crypto.getRandomBytesAsync(16); const nonce=await Crypto.getRandomBytesAsync(nacl.secretbox.nonceLength);
- const key=await deriveKey(password,salt); const ciphertext=nacl.secretbox(stringToBytes(JSON.stringify(backup)),nonce,key);
+ const backup=await createBackupData();
+ const salt=await Crypto.getRandomBytesAsync(16);
+ const nonce=await Crypto.getRandomBytesAsync(nacl.secretbox.nonceLength);
+ const key=await deriveKey(password,salt);
+ const ciphertext=nacl.secretbox(stringToBytes(JSON.stringify(backup)),nonce,key);
  return JSON.stringify({version:BACKUP_VERSION,app:BACKUP_APP,encrypted:true,algorithm:"XSalsa20-Poly1305",kdf:"SHA-256",createdAt:backup.createdAt,salt:bytesToHex(salt),nonce:bytesToHex(nonce),ciphertext:bytesToHex(ciphertext)} satisfies EncryptedBackup);
 }
 
 function parseHeader(text:string):EncryptedBackup{
  let b:any;try{b=JSON.parse(text);}catch{throw new Error("The selected backup file is not valid.");}
- if(!b||b.version!==BACKUP_VERSION||b.app!==BACKUP_APP||b.encrypted!==true||b.algorithm!=="XSalsa20-Poly1305"||b.kdf!=="SHA-256")throw new Error("Invalid or unsupported Ortho Logbook backup.");
+ if(!b||![2,3].includes(b.version)||b.app!==BACKUP_APP||b.encrypted!==true||b.algorithm!=="XSalsa20-Poly1305"||b.kdf!=="SHA-256")throw new Error("Invalid or unsupported Ortho Logbook backup.");
  if(!b.createdAt||!b.salt||!b.nonce||!b.ciphertext)throw new Error("The backup file is incomplete or damaged.");
  return b;
 }
-export function getBackupInfo(text:string){const b=parseHeader(text);return {createdAt:b.createdAt,encrypted:true,version:b.version};}
+export function getBackupInfo(text:string){const b=parseHeader(text);return {createdAt:b.createdAt,encrypted:true,version:b.version,includesPhotos:b.version>=3};}
 
 export async function decryptBackup(text:string,password:string):Promise<BackupData>{
  const b=parseHeader(text);
@@ -56,18 +119,34 @@ export async function decryptBackup(text:string,password:string):Promise<BackupD
   const plain=nacl.secretbox.open(hexToBytes(b.ciphertext),hexToBytes(b.nonce),key);
   if(!plain)throw new Error("Incorrect backup password or damaged backup.");
   const data=JSON.parse(bytesToString(plain)) as BackupData;
-  if(!data||data.version!==BACKUP_VERSION||data.app!==BACKUP_APP)throw new Error("The decrypted backup is invalid.");
+  if(!data||![2,3].includes(data.version)||data.app!==BACKUP_APP)throw new Error("The decrypted backup is invalid.");
   for(const keyName of ["patients","procedures","inventory","expenses","users","patientHistory","inventoryMovements"]){if(!Array.isArray((data as any)[keyName]))throw new Error("The backup is incomplete or damaged.");}
   return data;
  }catch(e){if(e instanceof Error&&e.message.includes("Incorrect backup password"))throw e;throw new Error("Unable to decrypt backup. Check the password and backup file.");}
 }
 
+function restorePatientPhotos(p:any){
+  // v3 contains data:image/...;base64,... strings, which work directly with
+  // React Native Image and therefore survive moving the backup to another phone.
+  // v2 is still accepted for backward compatibility.
+  const photosJson = p.photos_json || null;
+  let photos:string[]=[];
+  if(photosJson){
+    try{const parsed=JSON.parse(String(photosJson));if(Array.isArray(parsed))photos=parsed.filter((x)=>typeof x==="string"&&x.length>0);}catch{}
+  }
+  const primary=photos[0]||p.photo_uri||"";
+  return {photoUri:primary,photosJson:photos.length?JSON.stringify(photos):null};
+}
+
 export function restoreBackup(backup:BackupData){
  initializeDatabase();
- if(!backup||backup.version!==BACKUP_VERSION||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
+ if(!backup||![2,3].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
  db.withTransactionSync(()=>{
   db.runSync("DELETE FROM inventory_movements"); db.runSync("DELETE FROM patient_history"); db.runSync("DELETE FROM expenses"); db.runSync("DELETE FROM patients"); db.runSync("DELETE FROM procedures"); db.runSync("DELETE FROM inventory"); db.runSync("DELETE FROM users");
-  for(const p of backup.patients) db.runSync("INSERT INTO patients (id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,address,file_name,photo_uri,photos_json,date,created_at,created_by,updated_at,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",[p.id,p.mr_no,p.name,p.gender||"",p.age||"",p.diagnosis||"",p.procedure||"",p.implant||"",p.implant_ii||"",p.address||"",p.file_name||"",p.photo_uri||"",p.photos_json||null,p.date,p.created_at,p.created_by||null,p.updated_at||null,p.updated_by||null]);
+  for(const p of backup.patients){
+   const photos=restorePatientPhotos(p);
+   db.runSync("INSERT INTO patients (id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,address,file_name,photo_uri,photos_json,date,created_at,created_by,updated_at,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",[p.id,p.mr_no,p.name,p.gender||"",p.age||"",p.diagnosis||"",p.procedure||"",p.implant||"",p.implant_ii||"",p.address||"",p.file_name||"",photos.photoUri,photos.photosJson,p.date,p.created_at,p.created_by||null,p.updated_at||null,p.updated_by||null]);
+  }
   for(const p of backup.procedures) db.runSync("INSERT INTO procedures (id,name) VALUES (?,?)",[p.id,p.name]);
   for(const i of backup.inventory) db.runSync("INSERT INTO inventory (id,name,quantity,unit,minimum_stock) VALUES (?,?,?,?,?)",[i.id,i.name,Number(i.quantity||0),i.unit||"pcs",Number(i.minimum_stock||0)]);
   for(const e of backup.expenses) db.runSync("INSERT INTO expenses (id,description,amount,belongs_to,doctor_id,date,created_at) VALUES (?,?,?,?,?,?,?)",[e.id,e.description,Number(e.amount||0),e.belongs_to||"hospital",e.doctor_id||null,e.date,e.created_at]);
@@ -84,13 +163,14 @@ export function restoreBackup(backup:BackupData){
 //   multiple phones' new stock does not overwrite each other.
 export function mergeBackup(backup: BackupData) {
  initializeDatabase();
- if(!backup||backup.version!==BACKUP_VERSION||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
+ if(!backup||![2,3].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
  const stats = { patients: 0, procedures: 0, inventory: 0, expenses: 0, users: 0, patientHistory: 0, inventoryMovements: 0 };
  db.withTransactionSync(() => {
-  const has = (table: string, id: string) => !!db.getFirstSync<any>(`SELECT id FROM ${table} WHERE id=?`, [id]);
+  const has = (table: string, id: string) => !!db.getFirstSync<any>(\`SELECT id FROM ${table} WHERE id=?\`, [id]);
   for (const p of backup.patients) {
    if (has("patients", p.id)) continue;
-   db.runSync("INSERT INTO patients (id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,address,file_name,photo_uri,photos_json,date,created_at,created_by,updated_at,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",[p.id,p.mr_no,p.name,p.gender||"",p.age||"",p.diagnosis||"",p.procedure||"",p.implant||"",p.implant_ii||"",p.address||"",p.file_name||"",p.photo_uri||"",p.photos_json||null,p.date,p.created_at,p.created_by||null,p.updated_at||null,p.updated_by||null]);
+   const photos=restorePatientPhotos(p);
+   db.runSync("INSERT INTO patients (id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,address,file_name,photo_uri,photos_json,date,created_at,created_by,updated_at,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",[p.id,p.mr_no,p.name,p.gender||"",p.age||"",p.diagnosis||"",p.procedure||"",p.implant||"",p.implant_ii||"",p.address||"",p.file_name||"",photos.photoUri,photos.photosJson,p.date,p.created_at,p.created_by||null,p.updated_at||null,p.updated_by||null]);
    stats.patients++;
   }
   for (const p of backup.procedures) {
@@ -126,7 +206,7 @@ export function mergeBackup(backup: BackupData) {
   }
   for (const m of backup.inventoryMovements) {
    if (has("inventory_movements", m.id)) continue;
-   db.runSync("INSERT INTO inventory_movements (id,inventory_id,user_id,type,amount,quantity_after,note,created_at) VALUES (?,?,?,?,?,?,?,?)", [m.id, m.inventory_id, m.user_id||null, m.type, Number(m.amount||0), Number(m.quantity_after||0), m.note||null, m.created_at]);
+   db.runSync("INSERT INTO inventory_movements (id,inventory_id,user_id,type,amount,quantity_after,note,created_at) VALUES (?,?,?,?,?,?,?,?)", [m.id,m.inventory_id,m.user_id||null,m.type,Number(m.amount||0),Number(m.quantity_after||0),m.note||null,m.created_at]);
    stats.inventoryMovements++;
   }
  });
