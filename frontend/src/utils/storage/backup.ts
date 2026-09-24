@@ -1,5 +1,6 @@
 import * as Crypto from "expo-crypto";
 import { File } from "expo-file-system";
+import * as ImageManipulator from "expo-image-manipulator";
 import nacl from "tweetnacl";
 import { db, initializeDatabase } from "@/src/db/database";
 
@@ -38,12 +39,17 @@ async function embedPhoto(uri:string):Promise<string>{
   if(!uri)return "";
   if(uri.startsWith("data:"))return uri;
   try{
-    const file=new File(uri);
-    const base64=await file.base64();
-    if(!base64)throw new Error("Empty photo file.");
-    return `data:${photoMime(uri)};base64,${base64}`;
+    // Backup copies are deliberately made small: resize to max 1280px and
+    // use strong JPEG compression. This does not change the patient's stored photo.
+    const result=await ImageManipulator.manipulateAsync(
+      uri,
+      [{resize:{width:1280}}],
+      {compress:0.25,format:ImageManipulator.SaveFormat.JPEG,base64:true}
+    );
+    if(!result.base64)throw new Error("Empty compressed photo.");
+    return `data:image/jpeg;base64,${result.base64}`;
   }catch{
-    throw new Error("Could not read a patient photo for backup. Please make sure the photo is still available on this device and try again.");
+    throw new Error("Could not compress a patient photo for backup. Please make sure the photo is still available on this device and try again.");
   }
 }
 
