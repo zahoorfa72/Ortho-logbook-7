@@ -1,0 +1,168 @@
+{
+  "app_name": "PulseClinix Offline",
+  "personality": "1 iOS-Native Clean",
+  "personality_one_liner": "An offline-first clinical command center with stone-clean iOS ergonomics, robust patient operation tracking, and zero-server Wi-Fi/Bluetooth sync.",
+  "color": {
+    "surface": "#F9F8F6",
+    "onSurface": "#1C1C1E",
+    "surfaceSecondary": "#FFFFFF",
+    "onSurfaceSecondary": "#2C2C2E",
+    "surfaceTertiary": "#EFECE6",
+    "onSurfaceTertiary": "#3A3A3C",
+    "surfaceInverse": "#1C1C1E",
+    "onSurfaceInverse": "#F9F8F6",
+    "brand": "#4A6B5D",
+    "brandPrimary": "#4A6B5D",
+    "onBrandPrimary": "#FFFFFF",
+    "brandSecondary": "#385347",
+    "onBrandSecondary": "#FFFFFF",
+    "brandTertiary": "#DCE5E1",
+    "onBrandTertiary": "#293D34",
+    "success": "#3B7A57",
+    "onSuccess": "#FFFFFF",
+    "warning": "#C27803",
+    "onWarning": "#FFFFFF",
+    "error": "#A83232",
+    "onError": "#FFFFFF",
+    "info": "#3A6073",
+    "onInfo": "#FFFFFF",
+    "border": "#E2DFD8",
+    "borderStrong": "#C7C2B6",
+    "divider": "#EFECE6",
+    "muted": "#7C7872",
+    "onBrand": "#FFFFFF"
+  },
+  "typography": {
+    "displayFontFamily": "Plus Jakarta Sans",
+    "textFontFamily": "Inter",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24
+    }
+  },
+  "spacing": {
+    "rule": "Generous iOS vertical padding with comfortable touch targets ≥44pt and safe-area margins.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 6,
+    "md": 12,
+    "lg": 20,
+    "pill": 999
+  },
+  "shadow_tier": "1",
+  "navigation": "bottom_tabs",
+  "icon_set": "Ionicons",
+  "glassmorphism": {
+    "enabled": true,
+    "do's": [
+      "Use translucent blurred headers over scrolling patient lists",
+      "Apply glass cards on featured dashboard stat modules"
+    ],
+    "dont's": [
+      "Never blur input fields or dense inventory tables"
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-glass-effect",
+      "android": "expo-blur",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "Auth / PIN Unlock",
+      "purpose": "Device-stored PIN or password verification for admin and staff access without cloud dependency.",
+      "states": {
+        "loading": "Verifying offline credentials...",
+        "empty": "Set up your admin PIN to secure local records.",
+        "error": "Incorrect PIN. Please try again."
+      },
+      "layout": "Centered clean card with masked 6-digit PIN dots, numeric keypad, and biometric prompt simulation."
+    },
+    {
+      "name": "Dashboard / Statistics",
+      "purpose": "Overview of today's patient visits, repeat operation counts, low-stock alerts, and quick PDF export triggers.",
+      "states": {
+        "loading": "Calculating clinical statistics...",
+        "empty": "No clinical data recorded yet. Add your first patient visit.",
+        "error": "Failed to load local database stats. Tap to retry."
+      },
+      "layout": "ScrollView with top clinic branding header (editable logo/title), stat summary cards, low stock warning banner, and quick PDF export bar."
+    },
+    {
+      "name": "Patient List & Visit Tracking",
+      "purpose": "Comprehensive patient roster with automatic duplicate detection (Name + MrNumber) marking repeat visits (2nd, 3rd time operated).",
+      "states": {
+        "loading": "Loading patient registry...",
+        "empty": "No patients found. Tap + to register a patient visit.",
+        "error": "Database read error. Retry loading."
+      },
+      "layout": "Sticky search bar at top, filter chips (All / Repeat / New), patient cards showing operation count badges, and FAB to register visit."
+    },
+    {
+      "name": "Inventory & Stock Management",
+      "purpose": "CRUD for clinic medical supplies, medicines, and equipment with automatic low-stock highlighting and PDF report export.",
+      "states": {
+        "loading": "Loading inventory items...",
+        "empty": "Inventory is empty. Add items like surgical kits or medicines.",
+        "error": "Could not retrieve inventory. Tap to refresh."
+      },
+      "layout": "Segmented inventory view (All / Low Stock), item cards with stock status badges and quick edit/delete actions, floating add item button."
+    },
+    {
+      "name": "Direct Device Sync (Offline Wi-Fi / Bluetooth)",
+      "purpose": "Allows multiple phones to sync data directly without online servers when an admin initiates admin-to-device peer sync.",
+      "states": {
+        "loading": "Scanning nearby clinic devices...",
+        "empty": "No nearby devices found. Ensure Wi-Fi/Bluetooth is active.",
+        "error": "Sync interrupted. Check connection and retry."
+      },
+      "layout": "Radar wave animation, admin host start button, connected peers list, and manual JSON export/import backup fallback."
+    },
+    {
+      "name": "Clinic Settings & Customization",
+      "purpose": "Admin controls to set custom clinic title, upload/change logo, customize app color theme, and manage security PIN.",
+      "states": {
+        "loading": "Loading clinic configuration...",
+        "empty": "Configure your clinic title and branding.",
+        "error": "Failed to save settings."
+      },
+      "layout": "Form groups for Clinic Title, Logo URL upload, color palette selector, backup/restore data, and app version info."
+    }
+  ],
+  "images": {
+    "clinic_logo": {
+      "url": "https://images.unsplash.com/photo-1631507623095-c710d184498f?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxNzV8MHwxfHNlYXJjaHwxfHxtZWRpY2FsJTIwY2xpbmljJTIwY3Jvc3MlMjBsb2dvJTIwcG5nJTIwdHJhbnNwYXJlbnR8ZW58MHx8fHwxNzkwMTQ2MzMzfDA&ixlib=rb-4.1.0&q=85",
+      "alt": "PulseClinix Medical Cross Logo"
+    },
+    "inventory_hero": {
+      "url": "https://images.unsplash.com/photo-1628771065518-0d82f1938462?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDN8MHwxfHNlYXJjaHwxfHxwaGFybWFjeSUyMHBpbGxzJTIwaW52ZW50b3J5JTIwYm90dGxlJTIwaWxsdXN0cmF0aW9ufGVufDB8fHx8MTc5MDE0NjMzM3ww&ixlib=rb-4.1.0&q=85",
+      "alt": "Medical inventory bottle and pills"
+    }
+  },
+  "instructions_to_main_agent": [
+    "Build a fully offline-first React Native / Expo clinical management app for multi-phone deployment without any online server.",
+    "Implement local storage persistence (AsyncStorage / SQLite style local store) for patients, visits, repeat operation counts (Name + MrNumber matching), and inventory CRUD.",
+    "Support admin PIN/password login stored securely on the device.",
+    "Implement PDF export functionality for patient list, clinic statistics, and low-stock inventory, ensuring custom clinic title and uploaded logo appear on generated reports.",
+    "Allow full admin customization of clinic title, logo upload/edit, and app color theme.",
+    "Implement direct peer-to-peer sync simulation (Wi-Fi/Bluetooth direct sync where admin acts as sync host and other phones sync instantly offline).",
+    "Ensure all touch targets are ≥44pt, loading/empty/error states are fully handled on all data screens, and strict adherence to iOS-native clean design principles."
+  ]
+}

@@ -1,0 +1,186 @@
+name: Build Android APK
+
+# HOW TO USE
+#   1. In Emergent click "Save to GitHub" so THIS updated file is pushed
+#      (this file replaces any older workflow that used cache-dependency-path).
+#   2. On github.com open your repo -> Actions tab -> "Build Android APK".
+#   3. Click "Run workflow" on the main branch.
+#   4. When the run finishes (~15-25 min the first time) open it and download
+#      the "ortho-logbook-apk" artifact.
+#   5. Unzip -> copy ortho-logbook.apk to your Android phone -> tap to install
+#      (enable "Install unknown apps" for whichever file manager you use).
+#
+# The APK is signed with the standard debug keystore that ships with the
+# Android SDK, so it installs on any Android phone. It is NOT signed for
+# Play Store upload -- for that use Emergent's Publish button.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # React Native 0.86 (Expo SDK 57) is pinned to this exact NDK.
+  NDK_VERSION: "27.1.12297006"
+  # Only build for modern 64-bit phones (>99% of Android devices) so we
+  # avoid ninja OOM on GitHub-hosted runners.
+  ORG_GRADLE_PROJECT_reactNativeArchitectures: "arm64-v8a"
+
+jobs:
+  build:
+    name: Build APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Fail fast + friendly if the repo is missing critical files, so the
+      # user knows exactly what to fix instead of an obscure Node error.
+      - name: Sanity check repository layout
+        run: |
+          set -euo pipefail
+          test -f frontend/package.json || {
+            echo "::error::frontend/package.json is missing. Did the repo push correctly?"; exit 1; }
+          if [ ! -f frontend/yarn.lock ]; then
+            echo "::warning::frontend/yarn.lock is missing; will install without a lockfile."
+          fi
+
+      # NOTE: we do NOT enable `cache: yarn` here. The previous failing run
+      # used that + a cache-dependency-path pointing at a missing yarn.lock,
+      # which is what killed the whole workflow at "Set up Node.js" in 6s.
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Set up Java JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      # ubuntu-latest already has $ANDROID_HOME with build-tools + platforms
+      # preinstalled. We just accept licences and install the ONE NDK version
+      # that Expo SDK 57 / RN 0.86 is pinned to. This is the fix for the
+      # `ninja ... react_codegen_RNKC / rnscreens / safeareacontext` crash.
+      - name: Prepare Android SDK + install required NDK
+        run: |
+          set -euo pipefail
+          SDKMAN="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          echo "ANDROID_HOME=$ANDROID_HOME"
+
+          # Accept all licences (ignore SIGPIPE 141 from `yes`).
+          yes | "$SDKMAN" --licenses >/dev/null 2>&1 || true
+
+          # Install / verify the NDK version React Native 0.86 requires.
+          "$SDKMAN" "ndk;${NDK_VERSION}"
+
+          NDK_DIR="$ANDROID_HOME/ndk/${NDK_VERSION}"
+          test -f "$NDK_DIR/source.properties"
+          echo "NDK ready at: $NDK_DIR"
+
+          {
+            echo "ANDROID_SDK_ROOT=$ANDROID_HOME"
+            echo "ANDROID_NDK_HOME=$NDK_DIR"
+            echo "ANDROID_NDK_ROOT=$NDK_DIR"
+          } >> "$GITHUB_ENV"
+
+      # ccache dramatically speeds up subsequent runs (first run ~20 min,
+      # later runs ~5-8 min because the C++ codegen objects are cached).
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: android-ndk-${{ env.NDK_VERSION }}
+
+      - name: Install JS dependencies
+        working-directory: frontend
+        run: |
+          set -euo pipefail
+          if [ -f yarn.lock ]; then
+            yarn install --frozen-lockfile --ignore-scripts
+          else
+            yarn install --ignore-scripts
+          fi
+
+      - name: Generate native Android project (expo prebuild)
+        working-directory: frontend
+        env:
+          CI: "1"
+          EXPO_NO_TELEMETRY: "1"
+        run: npx expo prebuild --platform android --no-install --non-interactive --clean
+
+      # Pin the NDK inside the generated gradle project so every native
+      # module (screens, safe-area-context, keyboard-controller, worklets,
+      # reanimated, gesture-handler) resolves the SAME NDK. This is the
+      # mismatch that caused the earlier `ninja ... non-zero exit value 1`.
+      - name: Force NDK version in gradle.properties
+        run: |
+          set -euo pipefail
+          PROPS=frontend/android/gradle.properties
+          {
+            echo ""
+            echo "# Pinned by CI (build-apk.yml)"
+            echo "android.ndkVersion=${NDK_VERSION}"
+            echo "org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=768g -Dfile.encoding=UTF-8"
+            echo "org.gradle.parallel=false"
+            echo "org.gradle.caching=true"
+            echo "org.gradle.configureondemand=false"
+          } >> "$PROPS"
+          echo "----- gradle.properties (tail) -----"
+          tail -n 15 "$PROPS"
+
+      - name: Make gradlew executable
+        run: chmod +x frontend/android/gradlew
+
+      # Ensure the release build type in the generated app/build.gradle is
+      # signed with the debug keystore so the APK is installable without
+      # any user-provided secrets. Expo prebuild already sets
+      # `signingConfig signingConfigs.debug` in the release block, but we
+      # verify + patch defensively in case a future template changes.
+      - name: Ensure release build is signed with debug keystore
+        run: |
+          set -euo pipefail
+          GRADLE_FILE=frontend/android/app/build.gradle
+          if ! grep -qE 'release\s*\{[^}]*signingConfig[^}]*signingConfigs\.debug' "$GRADLE_FILE"; then
+            echo "Patching release signingConfig -> signingConfigs.debug"
+            # Insert `signingConfig signingConfigs.debug` right after `release {`
+            sed -i '/buildTypes\s*{/,/^\s*}/ {
+              /release\s*{/a\        signingConfig signingConfigs.debug
+            }' "$GRADLE_FILE"
+          fi
+          echo "----- release block -----"
+          awk '/buildTypes\s*{/,/^}/' "$GRADLE_FILE" | sed -n '1,40p'
+
+      - name: Build release APK (JS bundle embedded, standalone offline)
+        working-directory: frontend/android
+        env:
+          NDK_CCACHE: /usr/bin/ccache
+        run: ./gradlew assembleRelease --stacktrace --no-daemon
+
+      - name: Collect APK
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          shopt -s nullglob
+          APKS=(frontend/android/app/build/outputs/apk/release/*.apk)
+          if [ ${#APKS[@]} -eq 0 ]; then
+            echo "::error::No APK was produced"
+            ls -R frontend/android/app/build/outputs || true
+            exit 1
+          fi
+          cp "${APKS[0]}" out/ortho-logbook.apk
+          ls -la out
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ortho-logbook-apk
+          path: out/ortho-logbook.apk
+          if-no-files-found: error
+          retention-days: 14

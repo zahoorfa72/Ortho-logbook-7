@@ -1,0 +1,527 @@
+import { useQuery } from "@tanstack/react-query";
+import { router, useFocusEffect } from "expo-router";
+import { useCallback, useMemo, useState } from "react";
+import {
+  ActivityIndicator,
+  FlatList,
+  Pressable,
+  RefreshControl,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
+import Ionicons from "@react-native-vector-icons/ionicons";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+
+import { api } from "@/src/api/client";
+import { useAuth } from "@/src/auth/AuthContext";
+import { EmptyState } from "@/src/components/EmptyState";
+import { PinPromptModal } from "@/src/components/PinPromptModal";
+import { useToast } from "@/src/components/toast";
+import { usesNativeTabs } from "@/src/navigation";
+import {
+  fontFamily,
+  fontSize,
+  makeStyles,
+  radius,
+  spacing,
+  useTheme,
+} from "@/src/theme";
+import { hasAdminPin } from "@/src/utils/admin-pin";
+import {
+  dismissReminderForToday,
+  evaluateReminder,
+  type ReminderState,
+} from "@/src/utils/backup-reminder";
+import { buildPatientListHtml, generateAndSharePdf } from "@/src/utils/pdf";
+
+type Patient = {
+  id: string;
+  mrNo: string;
+  name: string;
+  gender: string;
+  age: string;
+  diagnosis: string;
+  procedure: string;
+  implant: string;
+  implantII: string;
+  date: string;
+  operationCount?: number;
+  totalOperations?: number;
+};
+
+function ordinalShort(n: number) {
+  const s = ["th", "st", "nd", "rd"];
+  const v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+
+export default function Logbook() {
+  const styles = useStyles();
+  const { colors, branding } = useTheme();
+  const insets = useSafeAreaInsets();
+  const { user, logout } = useAuth();
+  const toast = useToast();
+  const [query, setQuery] = useState("");
+  const [pinPromptFor, setPinPromptFor] = useState<null | "settings" | "export">(null);
+  const [exporting, setExporting] = useState(false);
+  const [reminder, setReminder] = useState<ReminderState>({ show: false, lastBackupIso: null, reason: null });
+
+  // Re-evaluate the daily backup reminder whenever the Logbook tab regains focus.
+  useFocusEffect(
+    useCallback(() => {
+      if (user?.role !== "admin") {
+        setReminder({ show: false, lastBackupIso: null, reason: null });
+        return;
+      }
+      let cancelled = false;
+      evaluateReminder().then((r) => {
+        if (!cancelled) setReminder(r);
+      });
+      return () => {
+        cancelled = true;
+      };
+    }, [user?.role]),
+  );
+
+  const dismissReminder = useCallback(async () => {
+    await dismissReminderForToday();
+    setReminder({ show: false, lastBackupIso: reminder.lastBackupIso, reason: null });
+  }, [reminder.lastBackupIso]);
+
+  const goBackupNow = useCallback(() => {
+    setReminder({ show: false, lastBackupIso: reminder.lastBackupIso, reason: null });
+    router.push("/backup-restore");
+  }, [reminder.lastBackupIso]);
+
+  const bottomChrome = usesNativeTabs ? insets.bottom : 0;
+
+  const {
+    data,
+    isLoading,
+    isError,
+    refetch,
+    isRefetching,
+  } = useQuery<Patient[]>({
+    queryKey: ["patients"],
+    queryFn: () => api.get("/patients"),
+  });
+
+  const filtered = useMemo(() => {
+    const list = data || [];
+    const q = query.trim().toLowerCase();
+
+    if (!q) return list;
+
+    return list.filter((p) =>
+      [p.mrNo, p.name, p.diagnosis, p.procedure, p.implant, p.implantII]
+        .join(" ")
+        .toLowerCase()
+        .includes(q),
+    );
+  }, [data, query]);
+
+  const doExport = useCallback(async () => {
+    if (!filtered.length) {
+      toast("No patients to export.", "info");
+      return;
+    }
+    setExporting(true);
+    try {
+      const html = buildPatientListHtml(branding, filtered);
+      await generateAndSharePdf(html, "Patient List");
+    } catch (e: any) {
+      toast(e?.message || "Could not create PDF.", "error");
+    } finally {
+      setExporting(false);
+    }
+  }, [branding, filtered, toast]);
+
+  const requestExport = useCallback(async () => {
+    if (await hasAdminPin()) setPinPromptFor("export");
+    else doExport();
+  }, [doExport]);
+
+  const requestSettings = useCallback(async () => {
+    if (await hasAdminPin()) setPinPromptFor("settings");
+    else router.push("/settings");
+  }, []);
+
+  const chip = (label: string, key: string) =>
+    label ? (
+      <View key={key} style={styles.chip}>
+        <Text style={styles.chipText} numberOfLines={1}>
+          {label}
+        </Text>
+      </View>
+    ) : null;
+
+  return (
+    <View style={styles.container}>
+      {/* Sticky header */}
+      <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
+        <View style={styles.headerTop}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.hello}>{branding.title}</Text>
+            <Text style={styles.name} numberOfLines={1}>
+              {user?.name || "Doctor"}
+            </Text>
+          </View>
+
+          <View style={{ flexDirection: "row", gap: spacing.sm }}>
+            {user?.role === "admin" && (
+              <Pressable
+                testID="export-pdf-button"
+                onPress={requestExport}
+                style={styles.iconBtn}
+                hitSlop={8}
+                disabled={exporting}
+              >
+                {exporting ? (
+                  <ActivityIndicator size="small" color={colors.brandPrimary} />
+                ) : (
+                  <Ionicons name="document-text-outline" size={22} color={colors.onSurfaceSecondary} />
+                )}
+              </Pressable>
+            )}
+            {user?.role === "admin" && (
+              <Pressable
+                testID="settings-button"
+                onPress={requestSettings}
+                style={styles.iconBtn}
+                hitSlop={8}
+              >
+                <Ionicons name="settings-outline" size={22} color={colors.onSurfaceSecondary} />
+              </Pressable>
+            )}
+            <Pressable
+              testID="logout-button"
+              onPress={logout}
+              style={styles.iconBtn}
+              hitSlop={8}
+            >
+              <Ionicons name="log-out-outline" size={22} color={colors.onSurfaceSecondary} />
+            </Pressable>
+          </View>
+        </View>
+
+        <View style={styles.searchWrap}>
+          <Ionicons name="search" size={18} color={colors.muted} />
+          <TextInput
+            testID="logbook-search-input"
+            value={query}
+            onChangeText={setQuery}
+            placeholder="Search MRNo, name, diagnosis…"
+            placeholderTextColor={colors.muted}
+            style={styles.searchInput}
+          />
+          {query.length > 0 && (
+            <Pressable onPress={() => setQuery("")} hitSlop={8}>
+              <Ionicons name="close-circle" size={18} color={colors.muted} />
+            </Pressable>
+          )}
+        </View>
+      </View>
+
+      {reminder.show ? (
+        <View style={styles.reminder} testID="backup-reminder-banner">
+          <View style={styles.reminderIcon}>
+            <Ionicons name="cloud-upload-outline" size={20} color={colors.onBrandPrimary} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.reminderTitle}>
+              {reminder.reason === "never"
+                ? "Back up today's records"
+                : "It's evening — back up today's work"}
+            </Text>
+            <Text style={styles.reminderSub} numberOfLines={2}>
+              {reminder.lastBackupIso
+                ? `Last backup: ${new Date(reminder.lastBackupIso).toLocaleString()}`
+                : "You haven't shared a backup yet."}
+            </Text>
+          </View>
+          <View style={styles.reminderActions}>
+            <Pressable
+              testID="backup-reminder-cta"
+              onPress={goBackupNow}
+              style={styles.reminderCta}
+              hitSlop={6}
+            >
+              <Text style={styles.reminderCtaText}>Back up</Text>
+            </Pressable>
+            <Pressable
+              testID="backup-reminder-dismiss"
+              onPress={dismissReminder}
+              style={styles.reminderDismiss}
+              hitSlop={6}
+            >
+              <Ionicons name="close" size={18} color={colors.muted} />
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
+
+      {isLoading ? (
+        <View style={styles.center}>
+          <ActivityIndicator size="large" color={colors.brandPrimary} />
+        </View>
+      ) : isError ? (
+        <View style={styles.center}>
+          <EmptyState
+            icon="cloud-offline-outline"
+            title="Failed to load logbook"
+            subtitle="Pull to retry."
+          />
+        </View>
+      ) : (
+        <FlatList
+          data={filtered}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={{
+            padding: spacing.lg,
+            paddingBottom: bottomChrome + 96,
+            flexGrow: 1,
+          }}
+          refreshControl={
+            <RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor={colors.brandPrimary} />
+          }
+          ListHeaderComponent={
+            filtered.length > 0 ? (
+              <Text style={styles.count}>
+                {filtered.length} record{filtered.length === 1 ? "" : "s"}
+              </Text>
+            ) : null
+          }
+          ListEmptyComponent={
+            <EmptyState
+              icon="reader-outline"
+              title={query ? "No matching records" : "No patients logged yet"}
+              subtitle={query ? "Try a different search." : "Tap the + button to add your first patient."}
+            />
+          }
+          renderItem={({ item }) => (
+            <Pressable
+              testID={`patient-card-${item.id}`}
+              style={styles.card}
+              onPress={() =>
+                router.push({ pathname: "/patient-form", params: { id: item.id } })
+              }
+            >
+              <View style={styles.cardTop}>
+                <Text style={styles.mrNo}>{item.mrNo || "—"}</Text>
+                <Text style={styles.date}>{item.date}</Text>
+              </View>
+
+              <View style={styles.nameRow}>
+                <Text style={styles.patientName} numberOfLines={1}>
+                  {item.name || "Unnamed patient"}
+                </Text>
+                {item.totalOperations && item.totalOperations > 1 ? (
+                  <View
+                    testID={`op-badge-${item.id}`}
+                    style={[
+                      styles.opBadge,
+                      (item.operationCount || 1) > 1 && { backgroundColor: colors.warning },
+                    ]}
+                  >
+                    <Ionicons name="repeat" size={11} color="#FFF" />
+                    <Text style={styles.opBadgeText}>
+                      {ordinalShort(item.operationCount || 1)} time
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
+
+              <View style={styles.chipRow}>
+                {chip(item.diagnosis, "dx")}
+                {chip(item.procedure, "px")}
+              </View>
+
+              {!!(item.implant || item.implantII) && (
+                <View style={styles.implantRow}>
+                  <Ionicons name="hardware-chip-outline" size={12} color={colors.muted} />
+                  <Text style={styles.implant} numberOfLines={1}>
+                    {[item.implant, item.implantII].filter(Boolean).join("  •  ")}
+                  </Text>
+                </View>
+              )}
+            </Pressable>
+          )}
+        />
+      )}
+
+      {/* FAB */}
+      <Pressable
+        testID="add-patient-fab"
+        style={[styles.fab, { bottom: bottomChrome + spacing.lg }]}
+        onPress={() => router.push("/patient-form")}
+      >
+        <Ionicons name="add" size={30} color={colors.onBrandPrimary} />
+      </Pressable>
+
+      <PinPromptModal
+        visible={pinPromptFor !== null}
+        title="Admin PIN required"
+        description={
+          pinPromptFor === "export"
+            ? "Enter admin PIN to export the patient list."
+            : "Enter admin PIN to open settings."
+        }
+        onSuccess={() => {
+          const kind = pinPromptFor;
+          setPinPromptFor(null);
+          if (kind === "export") doExport();
+          if (kind === "settings") router.push("/settings");
+        }}
+        onCancel={() => setPinPromptFor(null)}
+      />
+    </View>
+  );
+}
+
+const useStyles = makeStyles((colors) => ({
+  container: { flex: 1, backgroundColor: colors.surfaceSecondary },
+  header: {
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  headerTop: { flexDirection: "row", alignItems: "center", marginBottom: spacing.md },
+  hello: { fontFamily: fontFamily.medium, fontSize: fontSize.sm, color: colors.muted },
+  name: { fontFamily: fontFamily.bold, fontSize: fontSize.xl, color: colors.onSurface },
+  iconBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: radius.md,
+    backgroundColor: colors.surfaceSecondary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  searchWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    backgroundColor: colors.surfaceSecondary,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  searchInput: {
+    flex: 1,
+    paddingVertical: spacing.md,
+    fontFamily: fontFamily.regular,
+    fontSize: fontSize.base,
+    color: colors.onSurface,
+  },
+  center: { flex: 1, alignItems: "center", justifyContent: "center" },
+  count: {
+    fontFamily: fontFamily.semibold,
+    fontSize: fontSize.sm,
+    color: colors.muted,
+    marginBottom: spacing.md,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  card: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: spacing.lg,
+    marginBottom: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  cardTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  mrNo: { fontFamily: fontFamily.monoBold, fontSize: fontSize.base, color: colors.brandPrimary },
+  date: { fontFamily: fontFamily.monoRegular, fontSize: fontSize.sm, color: colors.muted },
+  nameRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginTop: spacing.xs, marginBottom: spacing.sm },
+  patientName: { flex: 1, fontFamily: fontFamily.bold, fontSize: fontSize.lg, color: colors.onSurface },
+  opBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: colors.brandPrimary,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 3,
+    borderRadius: radius.pill,
+  },
+  opBadgeText: { fontFamily: fontFamily.bold, fontSize: 10, color: "#FFF" },
+  chipRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
+  chip: {
+    backgroundColor: colors.brandTertiary,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    maxWidth: "100%",
+  },
+  chipText: { fontFamily: fontFamily.semibold, fontSize: fontSize.sm, color: colors.onBrandTertiary },
+  implantRow: { flexDirection: "row", alignItems: "center", gap: spacing.xs, marginTop: spacing.sm },
+  implant: { fontFamily: fontFamily.regular, fontSize: fontSize.sm, color: colors.muted, flex: 1 },
+  fab: {
+    position: "absolute",
+    right: spacing.lg,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: colors.brandPrimary,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: colors.brandPrimary,
+    shadowOpacity: 0.4,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 8,
+  },
+  reminder: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    marginHorizontal: spacing.lg,
+    marginTop: spacing.md,
+    padding: spacing.md,
+    borderRadius: radius.md,
+    backgroundColor: colors.brandTertiary,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+  },
+  reminderIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.brandPrimary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  reminderTitle: {
+    fontFamily: fontFamily.bold,
+    fontSize: fontSize.sm,
+    color: colors.onBrandTertiary,
+  },
+  reminderSub: {
+    fontFamily: fontFamily.regular,
+    fontSize: fontSize.xs,
+    color: colors.onBrandTertiary,
+    opacity: 0.8,
+    marginTop: 2,
+  },
+  reminderActions: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
+  reminderCta: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.sm,
+    backgroundColor: colors.brandPrimary,
+  },
+  reminderCtaText: {
+    fontFamily: fontFamily.bold,
+    fontSize: fontSize.sm,
+    color: colors.onBrandPrimary,
+  },
+  reminderDismiss: {
+    width: 32,
+    height: 32,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+}));

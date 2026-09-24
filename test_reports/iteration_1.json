@@ -1,0 +1,23 @@
+{
+  "summary": "Frontend-only smoke test on Expo web preview at https://offline-clinic-app.preview.emergentagent.com. Verified route rendering for /login, /signup, /forgot-password, /branding, /admin-pin, /settings, /backup-restore. All routes rendered correctly without red-box errors or fatal JS errors. Login screen shows branded title 'Ortho Logbook', email/password form, Forgot password link, and 'Create admin account' link. Admin-gated routes (/branding, /admin-pin, /settings, /backup-restore) correctly show 'Administrator only' fallback for unauthenticated users. Testing scope intentionally limited to route-render checks because expo-sqlite is stubbed on web (see /app/frontend/src/db/database.web.ts) and any DB mutation flow (signup persistence, login, patient CRUD, exports) would throw. No deprecated Expo packages (expo-av, expo-barcode-scanner, expo-background-fetch) detected in code. No SafeAreaView deprecation issues found (uses react-native-safe-area-context useSafeAreaInsets).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Web preview intentionally cannot execute DB flows; end-to-end verification of patient CRUD, PDF export, backup/restore, and admin-PIN gating must be done on Android/iOS via Expo Go. Consider adding a graceful web-runtime banner on the login/signup screens so admins that hit the web URL by mistake understand why buttons appear to no-op.",
+    "database.web.ts throws on runSync/execSync — safe for smoke tests but any accidental call will crash into the RN error overlay. The current login and signup screens do not appear to invoke these on mount, so no crashes are seen; keep this contract as new features are added."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A", "frontend": "100%"},
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Only route-render smoke tests are feasible on the web preview (SQLite is stubbed). For any real behaviour test (auth, CRUD, PDF, backup, admin PIN, branding save), the app must be run on a physical Android device via Expo Go. If backend/API testing is later required, note this app is fully offline (no FastAPI/Mongo usage) — everything runs on local SQLite. All 7 in-scope routes verified: /login, /signup, /forgot-password render full unauthenticated UI; /branding, /admin-pin, /settings, /backup-restore correctly show 'Administrator only' fallback with a working back button.",
+  "rca_of_issue": "N/A — no bugs surfaced during the route-render smoke test."
+}
