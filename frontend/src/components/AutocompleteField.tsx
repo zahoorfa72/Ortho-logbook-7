@@ -17,6 +17,9 @@ type Props = Omit<TextInputProps, "value" | "onChangeText"> & {
 
 // Text input with type-ahead suggestions: typing 1+ letters shows near matches
 // (prefix matches first, then partial matches) that can be tapped to autofill.
+// NOTE: the list renders INLINE below the input, never as an absolute overlay.
+// An overlay with a conditional zIndex made Android re-layout the scroll view
+// mid-typing, which jumped focus/scroll away from the field being typed in.
 export function AutocompleteField({
   label,
   testID,
@@ -52,7 +55,7 @@ export function AutocompleteField({
   };
 
   return (
-    <View style={[styles.wrap, showList && styles.wrapRaised]}>
+    <View style={styles.wrap}>
       <Text style={styles.label}>{label}</Text>
       <View>
         <TextInput
@@ -110,7 +113,6 @@ export function AutocompleteField({
 
 const useStyles = makeStyles((colors) => ({
   wrap: { marginBottom: spacing.lg },
-  wrapRaised: { zIndex: 50 },
   label: {
     fontFamily: fontFamily.semibold,
     fontSize: fontSize.sm,
@@ -138,17 +140,11 @@ const useStyles = makeStyles((colors) => ({
     justifyContent: "center",
   },
   dropdown: {
-    position: "absolute",
-    top: "100%",
-    left: 0,
-    right: 0,
     marginTop: spacing.xs,
     backgroundColor: colors.surfaceSecondary,
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
-    boxShadow: "0px 6px 12px rgba(0, 0, 0, 0.12)",
-    elevation: 10,
     overflow: "hidden",
   },
   option: {

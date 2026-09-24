@@ -10,7 +10,7 @@ A 100% offline mobile app (Expo/React Native) that lets an orthopaedic clinic ke
 - Search by name, MR number, diagnosis, procedure or implant.
 - **Duplicate patient tracking**: if a record with the same Name + MR Number already exists, the new record is still added but is automatically labelled as "2nd time operated", "3rd time operated", etc. The badge appears on the list, the patient form, and inside the PDF export.
 - Per-record photo strip, diagnosis, procedure, implants, address and edit history.
-- **Type-ahead autocomplete (Sep 24, 2026)**: Procedure, Implant and Implant II fields in the patient form show near-match suggestions after typing 1+ letters (prefix matches ranked first). Tap a suggestion to autofill. Procedure suggestions come from the procedure catalogue + past patient records; implant suggestions come from inventory (with live stock count shown). Each field has a one-tap clear button.
+- **Type-ahead autocomplete (Sep 24, 2026)**: Procedure, Implant and Implant II fields in the patient form show near-match suggestions after typing 1+ letters (prefix matches ranked first). Tap a suggestion to autofill. Procedure suggestions come from the procedure catalogue + past patient records; implant suggestions come from inventory (with live stock count shown). Each field has a one-tap clear button. The suggestion list renders inline below the input (an absolute overlay with dynamic zIndex caused an Android focus/scroll jump mid-typing — fixed same day).
 
 ### Inventory
 - Track implants with quantity, unit, minimum stock.
