@@ -5,7 +5,7 @@ import Ionicons from "@react-native-vector-icons/ionicons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { decryptBackup, mergeBackup, restoreBackup } from "../src/utils/storage/backup";
-import { pickBackupFile, shareBackupFile } from "../src/utils/storage/backup-file";
+import { pickBackupFile, saveBackupToPhone, shareBackupFile } from "../src/utils/storage/backup-file";
 import { storage } from "@/src/utils/storage";
 import { queryClient } from "@/src/query-client";
 import { useAuth } from "@/src/auth/AuthContext";
@@ -26,6 +26,22 @@ export default function BackupRestoreScreen() {
     backupText: string;
     info: { createdAt: string; encrypted: boolean };
   } | null>(null);
+
+  const handleSaveToPhone = async () => {
+    if (backupPassword.length < 8) {
+      Alert.alert("Password required", "Please enter a backup password with at least 8 characters.");
+      return;
+    }
+    try {
+      setLoading(true);
+      await saveBackupToPhone(backupPassword);
+      Alert.alert("Backup saved", "Your encrypted backup was saved to the folder you selected in the phone's File Manager.");
+    } catch (error) {
+      Alert.alert("Save failed", error instanceof Error ? error.message : "Unable to save backup.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleBackup = async () => {
     if (backupPassword.length < 8) {
@@ -186,6 +202,21 @@ export default function BackupRestoreScreen() {
               <>
                 <Ionicons name="share-outline" size={18} color={colors.onBrandPrimary} />
                 <Text style={styles.primaryText}>Share Encrypted Backup</Text>
+              </>
+            )}
+          </Pressable>
+          <Pressable
+            style={[styles.secondaryButton, loading && styles.disabledButton, { marginTop: spacing.sm }]}
+            onPress={handleSaveToPhone}
+            disabled={loading}
+            testID="backup-save-button"
+          >
+            {loading ? (
+              <ActivityIndicator color={colors.onSurface} />
+            ) : (
+              <>
+                <Ionicons name="download-outline" size={18} color={colors.onSurface} />
+                <Text style={styles.secondaryText}>Save Backup to Phone</Text>
               </>
             )}
           </Pressable>
