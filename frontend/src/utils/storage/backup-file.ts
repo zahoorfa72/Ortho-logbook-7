@@ -1,4 +1,5 @@
 import { File, Paths } from "expo-file-system";
+import * as FileSystem from "expo-file-system";
 import * as Sharing from "expo-sharing";
 import * as DocumentPicker from "expo-document-picker";
 
@@ -17,6 +18,26 @@ export async function createBackupFile(password: string) {
   file.create();
   file.write(encryptedBackup);
   return file.uri;
+}
+
+export async function saveBackupToPhone(password: string) {
+  const encryptedBackup = await exportBackup(password);
+
+  // Android's Storage Access Framework lets the user choose a real folder
+  // such as Downloads, Documents, or another folder in the phone's File Manager.
+  const permissions = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
+  if (!permissions.granted) {
+    throw new Error("Save cancelled. Please choose a folder in the phone's File Manager.");
+  }
+
+  const fileUri = await FileSystem.StorageAccessFramework.createFileAsync(
+    permissions.directoryUri,
+    BACKUP_FILE_NAME,
+    "application/octet-stream",
+  );
+  await FileSystem.writeAsStringAsync(fileUri, encryptedBackup);
+  await markBackupTaken();
+  return fileUri;
 }
 
 export async function shareBackupFile(password: string) {
