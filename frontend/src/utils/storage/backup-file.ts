@@ -6,13 +6,14 @@ import * as DocumentPicker from "expo-document-picker";
 import {
   exportBackup,
   getBackupInfo,
+  type BackupFilter,
 } from "@/src/utils/storage/backup";
 import { markBackupTaken } from "@/src/utils/backup-reminder";
 
 const BACKUP_FILE_NAME = "ortho-logbook-backup.orbackup";
 
-export async function createBackupFile(password: string) {
-  const encryptedBackup = await exportBackup(password);
+export async function createBackupFile(password: string, filter: BackupFilter = { type: "all" }) {
+  const encryptedBackup = await exportBackup(password, filter);
   const file = new File(Paths.cache, BACKUP_FILE_NAME);
   if (file.exists) file.delete();
   file.create();
@@ -20,7 +21,7 @@ export async function createBackupFile(password: string) {
   return file.uri;
 }
 
-export async function saveBackupToPhone(password: string) {
+export async function saveBackupToPhone(password: string, filter: BackupFilter = { type: "all" }) {
   const encryptedBackup = await exportBackup(password);
 
   // Android's Storage Access Framework lets the user choose a real folder
@@ -40,8 +41,8 @@ export async function saveBackupToPhone(password: string) {
   return fileUri;
 }
 
-export async function shareBackupFile(password: string) {
-  const fileUri = await createBackupFile(password);
+export async function shareBackupFile(password: string, filter: BackupFilter = { type: "all" }) {
+  const fileUri = await createBackupFile(password, filter);
   const available = await Sharing.isAvailableAsync();
 
   if (!available) {
