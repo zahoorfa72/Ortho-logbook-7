@@ -68,7 +68,10 @@ export default function PatientForm() {
     () =>
       (inventory ?? [])
         .filter((x) => x.name?.trim())
-        .map((x) => ({ key: x.id, label: x.name.trim(), detail: `${x.quantity} in stock` }))
+        .map((x) => {
+          const label = [x.category, x.name, x.size].filter(Boolean).join(" · ");
+          return { key: x.id, label, detail: `${x.quantity} ${x.size ? "" : "pcs"} in stock` };
+        })
         .sort((a, b) => a.label.localeCompare(b.label)),
     [inventory],
   );
@@ -287,7 +290,7 @@ export default function PatientForm() {
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.quickScroller} contentContainerStyle={styles.quickRow}>
             {inventory.map((x) => (
               <Pressable key={x.id} style={styles.quickChip} onPress={() => set("implant")(x.name)}>
-                <Text style={styles.quickChipText}>{x.name} · {x.quantity}</Text>
+                <Text style={styles.quickChipText}>{[x.category, x.name, x.size].filter(Boolean).join(" · ")} · {x.quantity}</Text>
               </Pressable>
             ))}
           </ScrollView>
