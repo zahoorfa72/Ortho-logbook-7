@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { router, useLocalSearchParams } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import { useMemo, useState } from "react";
-import { Image, Pressable, ScrollView, Text, View } from "react-native";
+import { Image, Modal, Pressable, ScrollView, Text, View } from "react-native";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -73,6 +73,7 @@ export default function PatientForm() {
     [inventory],
   );
 
+  const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
   const [p, setP] = useState<Patient>(empty);
   const [ready, setReady] = useState(false);
   if (existing && !ready) {
@@ -247,7 +248,9 @@ export default function PatientForm() {
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.photoStrip}>
             {p.photos.map((uri, idx) => (
               <View key={`${uri}-${idx}`} style={styles.photoBox} testID={`patient-photo-${idx}`}>
-                <Image source={{ uri }} style={styles.photoThumb} resizeMode="cover" />
+                <Pressable style={{ flex: 1 }} onPress={() => setSelectedPhoto(uri)} testID={`open-patient-photo-${idx}`}>
+                  <Image source={{ uri }} style={styles.photoThumb} resizeMode="cover" />
+                </Pressable>
                 <Pressable style={styles.photoRemove} onPress={() => removePhoto(idx)} hitSlop={8} testID={`remove-photo-${idx}`}>
                   <Ionicons name="close" size={16} color="#FFFFFF" />
                 </Pressable>
@@ -299,6 +302,17 @@ export default function PatientForm() {
         )}
       </KeyboardAwareScrollView>
 
+      <Modal visible={!!selectedPhoto} transparent animationType="fade" onRequestClose={() => setSelectedPhoto(null)}>
+        <View style={styles.photoViewer}>
+          <Pressable style={styles.photoViewerClose} onPress={() => setSelectedPhoto(null)} hitSlop={10}>
+            <Ionicons name="close" size={30} color="#FFFFFF" />
+          </Pressable>
+          {!!selectedPhoto && (
+            <Image source={{ uri: selectedPhoto }} style={styles.photoFull} resizeMode="contain" />
+          )}
+        </View>
+      </Modal>
+
       <View style={[styles.footer, { paddingBottom: insets.bottom + spacing.md }]}>
         {canEdit || !isEdit ? (
           <PrimaryButton title={isEdit ? "Update Record" : "Save Record"} onPress={onSave} testID="save-patient-button" loading={save.isPending} />
@@ -323,6 +337,25 @@ const useStyles = makeStyles((colors) => ({
   photoPlaceholder: { height: 140, borderRadius: radius.lg, backgroundColor: colors.surfaceTertiary, alignItems: "center", justifyContent: "center", marginBottom: spacing.md, gap: spacing.sm },
   hint: { fontFamily: fontFamily.regular, fontSize: fontSize.sm, color: colors.muted },
   photoStrip: { gap: spacing.md, paddingVertical: spacing.sm, paddingRight: spacing.md },
+  photoViewer: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.96)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  photoFull: { width: "100%", height: "100%" },
+  photoViewerClose: {
+    position: "absolute",
+    zIndex: 10,
+    top: 52,
+    right: 18,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "rgba(0,0,0,0.6)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   photoBox: { width: 140, height: 180, borderRadius: radius.md, overflow: "hidden", backgroundColor: colors.surfaceTertiary },
   photoThumb: { width: "100%", height: "100%" },
   photoRemove: { position: "absolute", top: 6, right: 6, backgroundColor: "rgba(0,0,0,0.65)", width: 26, height: 26, borderRadius: 13, alignItems: "center", justifyContent: "center" },
