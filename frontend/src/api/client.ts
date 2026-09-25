@@ -203,10 +203,10 @@ async function listPatients(): Promise<Patient[]> {
 
 const inventory = () =>
   db
-    .getAllSync<any>("SELECT id,name,quantity,unit,minimum_stock FROM inventory ORDER BY name COLLATE NOCASE")
+    .getAllSync<any>("SELECT id,name,category,size,quantity,unit,minimum_stock FROM inventory ORDER BY COALESCE(category,''), name COLLATE NOCASE, COALESCE(size,'')")
     .map((r) => ({
-      id: r.id, name: r.name, quantity: Number(r.quantity),
-      unit: r.unit || "pcs", minimumStock: Number(r.minimum_stock),
+      id: r.id, name: r.name, category: r.category || "", size: r.size || "",
+      quantity: Number(r.quantity), unit: r.unit || "pcs", minimumStock: Number(r.minimum_stock),
     }));
 
 export const api = {
@@ -289,6 +289,8 @@ export const api = {
     if (path === "/inventory") {
       await requireAdmin();
       const name = String(body?.name || "").trim();
+      const category = String(body?.category || "").trim();
+      const size = String(body?.size || "").trim();
       const quantity = Number(body?.quantity || 0);
       const minimumStock = Number(body?.minimumStock || 0);
       const unit = String(body?.unit || "pcs").trim() || "pcs";
@@ -297,8 +299,8 @@ export const api = {
       if (!Number.isFinite(minimumStock) || minimumStock < 0) throw new Error("Minimum stock cannot be negative.");
       const uid = await currentUser();
       const existing = db.getFirstSync<any>(
-        "SELECT id,name,quantity,unit,minimum_stock FROM inventory WHERE LOWER(name)=LOWER(?) LIMIT 1",
-        [name],
+        "SELECT id,name,quantity,unit,minimum_stock,category,size FROM inventory WHERE LOWER(name)=LOWER(?) AND LOWER(COALESCE(size,''))=LOWER(?) LIMIT 1",
+        [name, size],
       );
       if (existing) {
         const next = Number(existing.quantity) + quantity;
@@ -306,8 +308,8 @@ export const api = {
         movement(existing.id, "receive", quantity, next, "Stock received", uid);
         return { id: existing.id, name: existing.name, quantity: next, unit, minimumStock } as any;
       }
-      const item = { id: id(), name, quantity, unit, minimumStock };
-      db.runSync("INSERT INTO inventory (id,name,quantity,unit,minimum_stock) VALUES (?,?,?,?,?)", [item.id, name, quantity, unit, minimumStock]);
+      const item = { id: id(), name, category, size, quantity, unit, minimumStock };
+      db.runSync("INSERT INTO inventory (id,name,category,size,quantity,unit,minimum_stock) VALUES (?,?,?,?,?,?,?)", [item.id, name, category, size, quantity, unit, minimumStock]);
       movement(item.id, "receive", quantity, quantity, "Initial stock", uid);
       return item as any;
     }
@@ -389,8 +391,8 @@ export const api = {
       const delta = next - Number(item.quantity);
       const uid = await currentUser();
       db.runSync(
-        "UPDATE inventory SET name=?,quantity=?,unit=?,minimum_stock=? WHERE id=?",
-        [String(body.name).trim(), next, String(body.unit || "pcs"), Number(body.minimumStock || 0), im[1]],
+        "UPDATE inventory SET name=?,category=?,size=?,quantity=?,unit=?,minimum_stock=? WHERE id=?",
+        [String(body.name).trim(), String(body.category || "").trim(), String(body.size || "").trim(), next, String(body.unit || "pcs"), Number(body.minimumStock || 0), im[1]],
       );
       if (delta) movement(im[1], "adjust", delta, next, body?.note || "Manual adjustment", uid);
       return { ...body, id: im[1], quantity: next } as any;
