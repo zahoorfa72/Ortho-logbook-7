@@ -24,7 +24,7 @@ async function requireAdmin() {
 
 export type Patient = {
   id: string; mrNo: string; name: string; gender: string; age: string;
-  diagnosis: string; procedure: string; implant: string; implantII: string;
+  diagnosis: string; procedure: string; implant: string; implantII: string; implantId?: string; implantIIId?: string;
   address: string; fileName: string; photoUri: string; photos: string[]; date: string;
   createdAt?: string; createdBy?: string; updatedAt?: string; updatedBy?: string;
   operationCount?: number; // Nth-time operated (1 = first, 2 = 2nd time, ...)
@@ -45,7 +45,7 @@ const fromPatient = (r: any): Patient => {
   return {
     id: r.id, mrNo: r.mr_no, name: r.name || "", gender: r.gender || "",
     age: r.age || "", diagnosis: r.diagnosis || "", procedure: r.procedure || "",
-    implant: r.implant || "", implantII: r.implant_ii || "", address: r.address || "",
+    implant: r.implant || "", implantII: r.implant_ii || "", implantId: r.implant_id || "", implantIIId: r.implant_ii_id || "", address: r.address || "",
     fileName: r.file_name || "", photoUri: photos[0] || "", photos,
     date: r.date, createdAt: r.created_at, createdBy: r.created_by,
     updatedAt: r.updated_at, updatedBy: r.updated_by,
@@ -61,13 +61,12 @@ function movement(inventoryId: string, type: string, amount: number, quantityAft
   );
 }
 
-function changeInventory(name: string, amount: number, type: string, note: string, userId: string | null) {
+function changeInventory(name: string, amount: number, type: string, note: string, userId: string | null, inventoryId?: string) {
   const clean = String(name || "").trim();
   if (!clean || !amount) return;
-  const item = db.getFirstSync<any>(
-    "SELECT id,quantity FROM inventory WHERE LOWER(name)=LOWER(?) LIMIT 1",
-    [clean],
-  );
+  const item = inventoryId
+    ? db.getFirstSync<any>("SELECT id,name,quantity FROM inventory WHERE id=? LIMIT 1",[inventoryId])
+    : db.getFirstSync<any>("SELECT id,quantity FROM inventory WHERE LOWER(name)=LOWER(?) LIMIT 1",[clean]);
   if (!item) {
     if (amount < 0) throw new Error(`Implant "${clean}" is not available in inventory.`);
     return;
@@ -80,30 +79,34 @@ function changeInventory(name: string, amount: number, type: string, note: strin
 }
 
 function validateImplants(p: Patient) {
-  const required = new Map<string, number>();
-  for (const name of [p.implant, p.implantII]) {
+  const required = new Map<string, { name: string; count: number; inventoryId?: string }>();
+  const entries = [[p.implant, p.implantId],[p.implantII, p.implantIIId]] as const;
+  for (const [name, inventoryId] of entries) {
     const clean = String(name || "").trim().toLowerCase();
-    if (clean) required.set(clean, (required.get(clean) || 0) + 1);
+    if (clean) {
+      const key = inventoryId || clean;
+      const prev = required.get(key);
+      required.set(key, { name: String(name).trim(), inventoryId, count: (prev?.count || 0) + 1 });
+    }
   }
-  for (const [clean, count] of required) {
-    const item = db.getFirstSync<any>(
-      "SELECT name,quantity FROM inventory WHERE LOWER(name)=? LIMIT 1",
-      [clean],
-    );
-    if (!item) throw new Error(`Implant "${clean}" is not available in inventory.`);
+  for (const itemReq of required.values()) {
+    const item = itemReq.inventoryId
+      ? db.getFirstSync<any>("SELECT name,quantity FROM inventory WHERE id=? LIMIT 1",[itemReq.inventoryId])
+      : db.getFirstSync<any>("SELECT name,quantity FROM inventory WHERE LOWER(name)=? LIMIT 1",[itemReq.name.toLowerCase()]);
+    if (!item) throw new Error(`Implant "${itemReq.name}" is not available in inventory.`);
     const available = Number(item.quantity) || 0;
-    if (available < count) throw new Error(`Insufficient stock for "${item.name}". Available: ${available}, required: ${count}.`);
+    if (available < itemReq.count) throw new Error(`Insufficient stock for "${item.name}". Available: ${available}, required: ${itemReq.count}.`);
   }
 }
 
 function deduct(p: Patient, userId: string | null) {
-  changeInventory(p.implant, -1, "patient-use", `Used by patient ${p.mrNo || p.name}`, userId);
-  changeInventory(p.implantII, -1, "patient-use", `Used by patient ${p.mrNo || p.name}`, userId);
+  changeInventory(p.implant, -1, "patient-use", `Used by patient ${p.mrNo || p.name}`, userId, p.implantId);
+  changeInventory(p.implantII, -1, "patient-use", `Used by patient ${p.mrNo || p.name}`, userId, p.implantIIId);
 }
 
 function restoreStock(p: Patient, userId: string | null) {
-  changeInventory(p.implant, 1, "patient-return", `Returned from patient ${p.mrNo || p.name}`, userId);
-  changeInventory(p.implantII, 1, "patient-return", `Returned from patient ${p.mrNo || p.name}`, userId);
+  changeInventory(p.implant, 1, "patient-return", `Returned from patient ${p.mrNo || p.name}`, userId, p.implantId);
+  changeInventory(p.implantII, 1, "patient-return", `Returned from patient ${p.mrNo || p.name}`, userId, p.implantIIId);
 }
 
 async function canEdit(): Promise<boolean> {
@@ -143,8 +146,8 @@ async function savePatient(p: Patient, editing: boolean) {
       restoreStock(fromPatient(old), uid);
       validateImplants(p);
       db.runSync(
-        "UPDATE patients SET mr_no=?,name=?,gender=?,age=?,diagnosis=?,procedure=?,implant=?,implant_ii=?,address=?,file_name=?,photo_uri=?,photos_json=?,date=?,updated_at=?,updated_by=? WHERE id=?",
-        [p.mrNo, p.name, p.gender, p.age, p.diagnosis, p.procedure, p.implant, p.implantII, p.address, p.fileName, primaryPhoto, photosJson, p.date, now, uid, patientId],
+        "UPDATE patients SET mr_no=?,name=?,gender=?,age=?,diagnosis=?,procedure=?,implant=?,implant_ii=?,implant_id=?,implant_ii_id=?,address=?,file_name=?,photo_uri=?,photos_json=?,date=?,updated_at=?,updated_by=? WHERE id=?",
+        [p.mrNo, p.name, p.gender, p.age, p.diagnosis, p.procedure, p.implant, p.implantII, p.implantId || null, p.implantIIId || null, p.address, p.fileName, primaryPhoto, photosJson, p.date, now, uid, patientId],
       );
       db.runSync(
         "INSERT INTO patient_history (id,patient_id,user_id,action,snapshot_json,created_at) VALUES (?,?,?,?,?,?)",
@@ -157,7 +160,7 @@ async function savePatient(p: Patient, editing: boolean) {
 
   validateImplants(p);
   db.runSync(
-    "INSERT INTO patients (id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,address,file_name,photo_uri,photos_json,date,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    "INSERT INTO patients (id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,implant_id,implant_ii_id,address,file_name,photo_uri,photos_json,date,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
     [patientId, p.mrNo, p.name, p.gender, p.age, p.diagnosis, p.procedure, p.implant, p.implantII, p.address, p.fileName, primaryPhoto, photosJson, p.date, now, uid],
   );
   db.runSync(
