@@ -81,6 +81,7 @@ export default function Inventory() {
       api.post("/inventory", body),
     onSuccess: () => {
       invalidate();
+      queryClient.invalidateQueries({ queryKey: ["inventory-categories"] });
       toast("Stock added.", "success");
       setAddModal(false);
       setName(""); setCategory(""); setSize(""); setQty(""); setMin("1"); setUnit("pcs");
