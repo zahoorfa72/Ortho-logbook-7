@@ -39,7 +39,7 @@ export function initializeDatabase() {
     CREATE TABLE IF NOT EXISTS patients (
       id TEXT PRIMARY KEY NOT NULL, mr_no TEXT NOT NULL, name TEXT NOT NULL,
       gender TEXT, age TEXT, diagnosis TEXT, procedure TEXT, implant TEXT,
-      implant_ii TEXT, address TEXT, file_name TEXT, photo_uri TEXT,
+      implant_ii TEXT, implant_id TEXT, implant_ii_id TEXT, address TEXT, file_name TEXT, photo_uri TEXT,
       date TEXT NOT NULL, created_at TEXT NOT NULL, created_by TEXT,
       updated_at TEXT, updated_by TEXT
     );
@@ -81,6 +81,8 @@ export function initializeDatabase() {
   `);
   // Non-destructive migration for databases created by older builds.
   addColumn("patients", "photo_uri", "TEXT");
+  addColumn("patients", "implant_id", "TEXT");
+  addColumn("patients", "implant_ii_id", "TEXT");
   addColumn("inventory", "category", "TEXT");
   addColumn("inventory", "size", "TEXT");
   addColumn("patients", "photos_json", "TEXT");
