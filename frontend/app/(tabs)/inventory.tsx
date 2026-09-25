@@ -34,6 +34,8 @@ type InventoryItem = {
   quantity: number;
   unit: string;
   minimumStock: number;
+  category: string;
+  size: string;
 };
 
 export default function Inventory() {
@@ -50,6 +52,8 @@ export default function Inventory() {
   const [addModal, setAddModal] = useState(false);
   const [editItem, setEditItem] = useState<InventoryItem | null>(null);
   const [name, setName] = useState("");
+  const [category, setCategory] = useState("");
+  const [size, setSize] = useState("");
   const [qty, setQty] = useState("");
   const [min, setMin] = useState("1");
   const [unit, setUnit] = useState("pcs");
@@ -68,13 +72,13 @@ export default function Inventory() {
   };
 
   const addStock = useMutation({
-    mutationFn: (body: { name: string; quantity: number; minimumStock: number; unit: string }) =>
+    mutationFn: (body: { name: string; category: string; size: string; quantity: number; minimumStock: number; unit: string }) =>
       api.post("/inventory", body),
     onSuccess: () => {
       invalidate();
       toast("Stock added.", "success");
       setAddModal(false);
-      setName(""); setQty(""); setMin("1"); setUnit("pcs");
+      setName(""); setCategory(""); setSize(""); setQty(""); setMin("1"); setUnit("pcs");
     },
     onError: (e: any) => toast(e?.message || "Could not add stock.", "error"),
   });
@@ -83,6 +87,8 @@ export default function Inventory() {
     mutationFn: (item: InventoryItem) =>
       api.put(`/inventory/${item.id}`, {
         name: item.name,
+        category: item.category,
+        size: item.size,
         quantity: item.quantity,
         unit: item.unit,
         minimumStock: item.minimumStock,
@@ -130,7 +136,7 @@ export default function Inventory() {
       toast("Enter an item name and a quantity above 0.", "error");
       return;
     }
-    addStock.mutate({ name: name.trim(), quantity: q, minimumStock: parseInt(min, 10) || 1, unit: unit.trim() || "pcs" });
+    addStock.mutate({ name: name.trim(), category: category.trim(), size: size.trim(), quantity: q, minimumStock: parseInt(min, 10) || 1, unit: unit.trim() || "pcs" });
   };
 
   const changeQty = (item: InventoryItem, delta: number) => {
@@ -264,8 +270,8 @@ export default function Inventory() {
             return (
               <View style={styles.row} testID={`inventory-row-${item.id}`}>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.itemName} numberOfLines={1}>
-                    {item.name}
+                  <Text style={styles.itemName} numberOfLines={2}>
+                    {item.category ? item.category + " · " : ""}{item.name}{item.size ? " · " + item.size : ""}
                   </Text>
                   <View style={styles.metaRow}>
                     <Text style={[styles.qty, low && styles.qtyLow]}>
@@ -325,7 +331,9 @@ export default function Inventory() {
             <View style={styles.modalHandle} />
             <Text style={styles.modalTitle}>Add Stock</Text>
             <KeyboardAwareScrollView bottomOffset={40} keyboardShouldPersistTaps="handled">
-              <Field label="Item / Implant Name" testID="stock-name-input" value={name} onChangeText={setName} placeholder="e.g. DCP Plate" autoCapitalize="words" />
+              <Field label="Category" testID="stock-category-input" value={category} onChangeText={setCategory} placeholder="e.g. Interlocking Nail 10mm" autoCapitalize="words" />
+              <Field label="Item / Implant Name" testID="stock-name-input" value={name} onChangeText={setName} placeholder="e.g. Interlocking Nail" autoCapitalize="words" />
+              <Field label="Size / Length" testID="stock-size-input" value={size} onChangeText={setSize} placeholder="e.g. 280mm" />
               <Field label="Quantity Received" testID="stock-qty-input" value={qty} onChangeText={setQty} placeholder="e.g. 20" keyboardType="number-pad" />
               <Field label="Unit" testID="stock-unit-input" value={unit} onChangeText={setUnit} placeholder="pcs" />
               <Field label="Minimum Stock Alert" testID="stock-min-input" value={min} onChangeText={setMin} placeholder="1" keyboardType="number-pad" />
@@ -347,11 +355,23 @@ export default function Inventory() {
             {editItem ? (
               <KeyboardAwareScrollView bottomOffset={40} keyboardShouldPersistTaps="handled">
                 <Field
+                  label="Category"
+                  testID="edit-category-input"
+                  value={editItem.category}
+                  onChangeText={(v) => setEditItem({ ...editItem, category: v })}
+                />
+                <Field
                   label="Name"
                   testID="edit-name-input"
                   value={editItem.name}
                   onChangeText={(v) => setEditItem({ ...editItem, name: v })}
                   autoCapitalize="words"
+                />
+                <Field
+                  label="Size / Length"
+                  testID="edit-size-input"
+                  value={editItem.size}
+                  onChangeText={(v) => setEditItem({ ...editItem, size: v })}
                 />
                 <Field
                   label="Quantity"
