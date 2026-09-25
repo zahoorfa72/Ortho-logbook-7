@@ -20,10 +20,6 @@ export default function TabsLayout() {
           <NativeTabs.Trigger.Icon sf="list.bullet.rectangle" />
           <NativeTabs.Trigger.Label>Logbook</NativeTabs.Trigger.Label>
         </NativeTabs.Trigger>
-        <NativeTabs.Trigger name="new-inventory">
-          <NativeTabs.Trigger.Icon sf="plus.rectangle.fill" />
-          <NativeTabs.Trigger.Label>New Inventory</NativeTabs.Trigger.Label>
-        </NativeTabs.Trigger>
         <NativeTabs.Trigger name="inventory">
           <NativeTabs.Trigger.Icon sf="shippingbox.fill" />
           <NativeTabs.Trigger.Label>Inventory</NativeTabs.Trigger.Label>
