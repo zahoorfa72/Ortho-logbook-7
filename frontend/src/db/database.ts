@@ -50,6 +50,8 @@ export function initializeDatabase() {
   `);
   // Non-destructive migration for databases created by older builds.
   addColumn("patients", "photo_uri", "TEXT");
+  addColumn("inventory", "category", "TEXT");
+  addColumn("inventory", "size", "TEXT");
   addColumn("patients", "photos_json", "TEXT");
   addColumn("patients", "created_by", "TEXT");
   addColumn("patients", "updated_at", "TEXT");
