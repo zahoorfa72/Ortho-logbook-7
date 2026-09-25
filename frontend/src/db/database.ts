@@ -9,7 +9,15 @@ function addColumn(table: string, column: string, definition: string) {
 function migrateInventorySchema() {
   try {
     const indexes = db.getAllSync<any>("PRAGMA index_list('inventory')");
-    const hasUniqueName = indexes.some((x) => Number(x.unique) === 1);
+    let hasUniqueName = false;
+    for (const index of indexes) {
+      if (Number(index.unique) !== 1) continue;
+      const cols = db.getAllSync<any>(`PRAGMA index_info('${String(index.name).replace(/'/g, "''")}')`);
+      if (cols.length === 1 && String(cols[0]?.name || "") === "name") {
+        hasUniqueName = true;
+        break;
+      }
+    }
     if (!hasUniqueName) return;
     db.execSync(`
       CREATE TABLE inventory_v2 (
