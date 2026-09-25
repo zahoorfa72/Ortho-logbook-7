@@ -4,7 +4,7 @@ import { router } from "expo-router";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { decryptBackup, mergeBackup, restoreBackup } from "../src/utils/storage/backup";
+import { decryptBackup, mergeBackup, restoreBackup, type BackupFilter } from "../src/utils/storage/backup";
 import { pickBackupFile, saveBackupToPhone, shareBackupFile } from "../src/utils/storage/backup-file";
 import { storage } from "@/src/utils/storage";
 import { queryClient } from "@/src/query-client";
@@ -20,6 +20,8 @@ export default function BackupRestoreScreen() {
   const [backupPassword, setBackupPassword] = useState("");
   const [restorePassword, setRestorePassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [backupFilter, setBackupFilter] = useState<BackupFilter>({ type: "all" });
+  const [filterValue, setFilterValue] = useState("");
   const [mode, setMode] = useState<"Merge (safe)" | "Replace">("Merge (safe)");
   const [selectedBackup, setSelectedBackup] = useState<{
     name: string;
@@ -34,7 +36,7 @@ export default function BackupRestoreScreen() {
     }
     try {
       setLoading(true);
-      await saveBackupToPhone(backupPassword);
+      await saveBackupToPhone(backupPassword, backupFilter);
       Alert.alert("Backup saved", "Your encrypted backup was saved to the folder you selected in the phone's File Manager.");
     } catch (error) {
       Alert.alert("Save failed", error instanceof Error ? error.message : "Unable to save backup.");
@@ -50,7 +52,7 @@ export default function BackupRestoreScreen() {
     }
     try {
       setLoading(true);
-      await shareBackupFile(backupPassword);
+      await shareBackupFile(backupPassword, backupFilter);
       Alert.alert(
         "Backup created",
         "Share the encrypted backup via WhatsApp, Bluetooth, Drive or email. On the receiving phone, use Sync & Backup → Import to merge it into the admin account.",
@@ -169,6 +171,43 @@ export default function BackupRestoreScreen() {
               Data from all phones combines in the admin account.
             </Text>
           </View>
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Backup Range</Text>
+          <Text style={styles.cardSub}>Choose exactly which patient date records are included in this backup.</Text>
+          <Segmented
+            options={["All", "Date", "Month", "Year"] as any}
+            value={backupFilter.type === "all" ? "All" : backupFilter.type.charAt(0).toUpperCase() + backupFilter.type.slice(1)}
+            onChange={(v) => {
+              const map: any = { All: "all", Date: "date", Month: "month", Year: "year" };
+              setBackupFilter({ type: map[v as string] });
+              setFilterValue("");
+            }}
+            testIDPrefix="backup-range"
+          />
+          {backupFilter.type !== "all" && (
+            <TextInput
+              testID="backup-filter-value"
+              value={filterValue}
+              onChangeText={(v) => {
+                setFilterValue(v);
+                setBackupFilter((x) => ({ ...x, value: v }));
+              }}
+              placeholder={
+                backupFilter.type === "date" ? "YYYY-MM-DD" :
+                backupFilter.type === "month" ? "YYYY-MM" : "YYYY"
+              }
+              keyboardType="numbers-and-punctuation"
+              placeholderTextColor={colors.muted}
+              style={[styles.input, { marginTop: spacing.md }]}
+            />
+          )}
+          {backupFilter.type !== "all" && (
+            <Text style={styles.hint}>
+              Date: one day only · Month: one month only · Year: one year only.
+            </Text>
+          )}
         </View>
 
         <View style={styles.card}>
