@@ -13,6 +13,7 @@ type Props = Omit<TextInputProps, "value" | "onChangeText"> & {
   onChangeText: (v: string) => void;
   suggestions: Suggestion[];
   maxResults?: number;
+  onSelect?: (suggestion: Suggestion) => void;
 };
 
 // Text input with type-ahead suggestions: typing 1+ letters shows near matches
@@ -27,6 +28,7 @@ export function AutocompleteField({
   onChangeText,
   suggestions,
   maxResults = 6,
+  onSelect,
   ...rest
 }: Props) {
   const styles = useStyles();
@@ -51,6 +53,7 @@ export function AutocompleteField({
 
   const pick = (s: Suggestion) => {
     onChangeText(s.label);
+    onSelect?.(s);
     setOpen(false);
   };
 
