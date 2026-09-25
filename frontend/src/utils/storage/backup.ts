@@ -72,13 +72,25 @@ async function embedPatientPhotos(row:any){
   };
 }
 
-async function createBackupData():Promise<BackupData>{
+export type BackupFilter = { type: "all" | "date" | "month" | "year"; value?: string };
+
+function whereForFilter(filter: BackupFilter, column: string) {
+  if (filter.type === "date") return { sql: ` WHERE ${column}=?`, args: [filter.value || ""] };
+  if (filter.type === "month") return { sql: ` WHERE ${column} LIKE ?`, args: [`${filter.value || ""}-%`] };
+  if (filter.type === "year") return { sql: ` WHERE ${column} LIKE ?`, args: [`${filter.value || ""}-%`] };
+  return { sql: "", args: [] };
+}
+
+async function createBackupData(filter: BackupFilter = { type: "all" }):Promise<BackupData>{
  initializeDatabase();
- const patients=db.getAllSync<any>("SELECT * FROM patients ORDER BY date DESC, created_at DESC");
+ const pf=whereForFilter(filter, "date");
+ const patients=db.getAllSync<any>(`SELECT * FROM patients${pf.sql} ORDER BY date DESC, created_at DESC`, pf.args);
+ const selectedPatientIds = new Set(patients.map((p:any)=>p.id));
  const embeddedPatients:any[]=[];
  for(const patient of patients)embeddedPatients.push(await embedPatientPhotos(patient));
 
- const history=db.getAllSync<any>("SELECT * FROM patient_history ORDER BY created_at ASC");
+ const historyAll=db.getAllSync<any>("SELECT * FROM patient_history ORDER BY created_at ASC");
+ const history=filter.type==="all" ? historyAll : historyAll.filter((h:any)=>selectedPatientIds.has(h.patient_id));
  // Keep history portable too when an old snapshot contains patient photos.
  const embeddedHistory=history.map((h:any)=>{
    try{
@@ -93,16 +105,17 @@ async function createBackupData():Promise<BackupData>{
   version:BACKUP_VERSION,app:BACKUP_APP,createdAt:new Date().toISOString(),
   patients:embeddedPatients,
   procedures:db.getAllSync<any>("SELECT * FROM procedures ORDER BY name COLLATE NOCASE"),
-  inventory:db.getAllSync<any>("SELECT * FROM inventory ORDER BY name COLLATE NOCASE"),
-  expenses:db.getAllSync<any>("SELECT * FROM expenses ORDER BY date DESC, created_at DESC"),
+  inventory:db.getAllSync<any>("SELECT id,name,category,size,quantity,unit,minimum_stock FROM inventory ORDER BY COALESCE(category,''),name COLLATE NOCASE,COALESCE(size,'')"),
+  expenses:(()=>{const f=whereForFilter(filter,"date");return db.getAllSync<any>(`SELECT * FROM expenses${f.sql} ORDER BY date DESC, created_at DESC`,f.args);})(),
   users:db.getAllSync<any>("SELECT * FROM users ORDER BY created_at ASC"),
   patientHistory:embeddedHistory,
-  inventoryMovements:db.getAllSync<any>("SELECT * FROM inventory_movements ORDER BY created_at ASC"),
+  inventoryMovements:(()=>{if(filter.type==="all") return db.getAllSync<any>("SELECT * FROM inventory_movements ORDER BY created_at ASC"); const f=filter.type==="date" ? {sql:" WHERE date(created_at)=?",args:[filter.value||""]} : filter.type==="month" ? {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]} : {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]}; return db.getAllSync<any>(`SELECT * FROM inventory_movements${f.sql} ORDER BY created_at ASC`,f.args);})(),
  };
 }
 
-export async function exportBackup(password:string):Promise<string>{
- const backup=await createBackupData();
+export async function exportBackup(password:string, filter: BackupFilter = { type: "all" }):Promise<string>{
+ const backup=await createBackupData(filter);
+ backup.filter = filter;
  const salt=await Crypto.getRandomBytesAsync(16);
  const nonce=await Crypto.getRandomBytesAsync(nacl.secretbox.nonceLength);
  const key=await deriveKey(password,salt);
@@ -154,7 +167,7 @@ export function restoreBackup(backup:BackupData){
    db.runSync("INSERT INTO patients (id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,address,file_name,photo_uri,photos_json,date,created_at,created_by,updated_at,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",[p.id,p.mr_no,p.name,p.gender||"",p.age||"",p.diagnosis||"",p.procedure||"",p.implant||"",p.implant_ii||"",p.address||"",p.file_name||"",photos.photoUri,photos.photosJson,p.date,p.created_at,p.created_by||null,p.updated_at||null,p.updated_by||null]);
   }
   for(const p of backup.procedures) db.runSync("INSERT INTO procedures (id,name) VALUES (?,?)",[p.id,p.name]);
-  for(const i of backup.inventory) db.runSync("INSERT INTO inventory (id,name,quantity,unit,minimum_stock) VALUES (?,?,?,?,?)",[i.id,i.name,Number(i.quantity||0),i.unit||"pcs",Number(i.minimum_stock||0)]);
+  for(const i of backup.inventory) db.runSync("INSERT INTO inventory (id,name,category,size,quantity,unit,minimum_stock) VALUES (?,?,?,?,?,?,?)",[i.id,i.name,i.category||"",i.size||"",Number(i.quantity||0),i.unit||"pcs",Number(i.minimum_stock||0)]);
   for(const e of backup.expenses) db.runSync("INSERT INTO expenses (id,description,amount,belongs_to,doctor_id,date,created_at) VALUES (?,?,?,?,?,?,?)",[e.id,e.description,Number(e.amount||0),e.belongs_to||"hospital",e.doctor_id||null,e.date,e.created_at]);
   for(const u of backup.users) db.runSync("INSERT INTO users (id,email,name,password_hash,recovery_code,role,can_edit_patients,disabled,created_at) VALUES (?,?,?,?,?,?,?,?,?)",[u.id,u.email,u.name,u.password_hash,u.recovery_code||null,u.role||"doctor",Number(u.can_edit_patients??1),Number(u.disabled??0),u.created_at]);
   for(const h of backup.patientHistory) db.runSync("INSERT INTO patient_history (id,patient_id,user_id,action,snapshot_json,created_at) VALUES (?,?,?,?,?,?)",[h.id,h.patient_id,h.user_id||null,h.action,h.snapshot_json,h.created_at]);
@@ -185,10 +198,10 @@ export function mergeBackup(backup: BackupData) {
    try { db.runSync("INSERT INTO procedures (id,name) VALUES (?,?)", [p.id, p.name]); stats.procedures++; } catch {}
   }
   for (const i of backup.inventory) {
-   const existing = db.getFirstSync<any>("SELECT id,quantity,minimum_stock FROM inventory WHERE LOWER(name)=LOWER(?) LIMIT 1", [i.name]);
+   const existing = db.getFirstSync<any>("SELECT id,quantity,minimum_stock,category,size FROM inventory WHERE LOWER(name)=LOWER(?) AND LOWER(COALESCE(size,''))=LOWER(?) LIMIT 1", [i.name, i.size||""]);
    if (existing) {
     const q = Number(existing.quantity || 0) + Number(i.quantity || 0);
-    db.runSync("UPDATE inventory SET quantity=?,minimum_stock=? WHERE id=?", [q, Math.max(Number(existing.minimum_stock||0), Number(i.minimum_stock||0)), existing.id]);
+    db.runSync("UPDATE inventory SET quantity=?,minimum_stock=?,category=?,size=? WHERE id=?", [q, Math.max(Number(existing.minimum_stock||0), Number(i.minimum_stock||0)), i.category||existing.category||"", i.size||existing.size||"", existing.id]);
    } else {
     db.runSync("INSERT INTO inventory (id,name,quantity,unit,minimum_stock) VALUES (?,?,?,?,?)", [i.id, i.name, Number(i.quantity||0), i.unit||"pcs", Number(i.minimum_stock||0)]);
    }
