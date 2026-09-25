@@ -6,6 +6,25 @@ function addColumn(table: string, column: string, definition: string) {
   try { db.execSync(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`); } catch {}
 }
 
+function migrateInventorySchema() {
+  try {
+    const indexes = db.getAllSync<any>("PRAGMA index_list('inventory')");
+    const hasUniqueName = indexes.some((x) => Number(x.unique) === 1);
+    if (!hasUniqueName) return;
+    db.execSync(`
+      CREATE TABLE inventory_v2 (
+        id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, quantity REAL NOT NULL DEFAULT 0,
+        unit TEXT NOT NULL DEFAULT 'pcs', minimum_stock REAL NOT NULL DEFAULT 0,
+        category_id TEXT, category TEXT, size TEXT
+      );
+      INSERT INTO inventory_v2 (id,name,quantity,unit,minimum_stock,category_id,category,size)
+        SELECT id,name,quantity,unit,minimum_stock,category_id,category,size FROM inventory;
+      DROP TABLE inventory;
+      ALTER TABLE inventory_v2 RENAME TO inventory;
+    `);
+  } catch {}
+}
+
 export function initializeDatabase() {
   db.execSync(`
     PRAGMA journal_mode = WAL;
@@ -67,6 +86,7 @@ export function initializeDatabase() {
   addColumn("inventory", "category_id", "TEXT");
   addColumn("inventory", "category", "TEXT");
   addColumn("inventory", "size", "TEXT");
+  migrateInventorySchema();
 
   const legacyCategories = db.getAllSync<any>(
     "SELECT DISTINCT TRIM(category) AS name FROM inventory WHERE TRIM(COALESCE(category,'')) <> ''",
