@@ -247,7 +247,7 @@ export function buildInventoryHtml(
           return `
         <tr>
           <td>${idx + 1}</td>
-          <td><strong>${escapeHtml(i.name)}</strong></td>
+          <td><strong>${escapeHtml([i.category, i.name, i.size].filter(Boolean).join(" · "))}</strong></td>
           <td style="text-align:right">${i.quantity} ${escapeHtml(i.unit || "pcs")}</td>
           <td style="text-align:right">${i.minimumStock}</td>
           <td>${low ? '<span class="badge badgeWarn">LOW</span>' : '<span class="badge">OK</span>'}</td>
@@ -265,7 +265,7 @@ export function buildInventoryHtml(
           <thead>
             <tr>
               <th style="width:32px">#</th>
-              <th>Item / Implant</th>
+              <th>Category / Item / Size</th>
               <th style="width:100px;text-align:right">Quantity</th>
               <th style="width:80px;text-align:right">Minimum</th>
               <th style="width:70px">Status</th>
