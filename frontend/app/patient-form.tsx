@@ -23,7 +23,7 @@ type Patient = {
   operationCount?: number; totalOperations?: number;
 };
 type Procedure = { id: string; name: string };
-type InventoryItem = { id: string; name: string; category: string; size: string; quantity: number };
+type InventoryItem = { id: string; name: string; category: string; categoryId?: string; size: string; quantity: number };
 
 const today = () => new Date().toISOString().slice(0, 10);
 const empty = (): Patient => ({
@@ -78,6 +78,9 @@ export default function PatientForm() {
 
   const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
   const [p, setP] = useState<Patient>(empty);
+  const setImplant = (field: "implant" | "implantII", item: InventoryItem) => {
+    setP(prev => ({ ...prev, [field]: item.name, [field === "implant" ? "implantId" : "implantIIId"]: item.id }));
+  };
   const [ready, setReady] = useState(false);
   if (existing && !ready) {
     // Normalise legacy records that only had photoUri.
@@ -284,12 +287,12 @@ export default function PatientForm() {
             ))}
           </ScrollView>
         )}
-        <AutocompleteField label="Implant" testID="patient-implant-input" value={p.implant} onChangeText={set("implant")} placeholder="Type to search implants" suggestions={implantSuggestions} />
-        <AutocompleteField label="Implant II" testID="patient-implant2-input" value={p.implantII} onChangeText={set("implantII")} placeholder="Second implant (optional)" suggestions={implantSuggestions} />
+        <AutocompleteField label="Implant" testID="patient-implant-input" value={p.implant} onChangeText={(v) => setP(prev => ({ ...prev, implant: v, implantId: undefined }))} placeholder="Type to search implants" suggestions={implantSuggestions} onSelect={(s) => { const item = (inventory ?? []).find(x => x.id === s.key); if (item) setImplant("implant", item); }} />
+        <AutocompleteField label="Implant II" testID="patient-implant2-input" value={p.implantII} onChangeText={(v) => setP(prev => ({ ...prev, implantII: v, implantIIId: undefined }))} placeholder="Second implant (optional)" suggestions={implantSuggestions} onSelect={(s) => { const item = (inventory ?? []).find(x => x.id === s.key); if (item) setImplant("implantII", item); }} />
         {!!inventory?.length && (
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.quickScroller} contentContainerStyle={styles.quickRow}>
             {inventory.map((x) => (
-              <Pressable key={x.id} style={styles.quickChip} onPress={() => set("implant")(x.name)}>
+              <Pressable key={x.id} style={styles.quickChip} onPress={() => setImplant("implant", x)}>
                 <Text style={styles.quickChipText}>{[x.category, x.name, x.size].filter(Boolean).join(" · ")} · {x.quantity}</Text>
               </Pressable>
             ))}
