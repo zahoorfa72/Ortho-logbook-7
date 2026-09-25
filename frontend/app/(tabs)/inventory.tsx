@@ -14,6 +14,7 @@ import {
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { router, useLocalSearchParams } from "expo-router";
 
 import { api } from "@/src/api/client";
 import { useAuth } from "@/src/auth/AuthContext";
@@ -34,6 +35,7 @@ type InventoryItem = {
   quantity: number;
   unit: string;
   minimumStock: number;
+  categoryId: string;
   category: string;
   size: string;
 };
@@ -47,12 +49,15 @@ export default function Inventory() {
   const { user } = useAuth();
   const bottomChrome = usesNativeTabs ? insets.bottom : 0;
   const isAdmin = user?.role === "admin";
+  const params = useLocalSearchParams<{ categoryId?: string; categoryName?: string }>();
+  const selectedCategoryId = typeof params.categoryId === "string" ? params.categoryId : "";
+  const selectedCategoryName = typeof params.categoryName === "string" ? params.categoryName : "";
 
   const [tab, setTab] = useState("All");
   const [addModal, setAddModal] = useState(false);
   const [editItem, setEditItem] = useState<InventoryItem | null>(null);
   const [name, setName] = useState("");
-  const [category, setCategory] = useState("");
+  const [category, setCategory] = useState(selectedCategoryName);
   const [size, setSize] = useState("");
   const [qty, setQty] = useState("");
   const [min, setMin] = useState("1");
@@ -63,8 +68,8 @@ export default function Inventory() {
   const [exporting, setExporting] = useState(false);
 
   const { data, isLoading, isError, refetch, isRefetching } = useQuery<InventoryItem[]>({
-    queryKey: ["inventory"],
-    queryFn: async () => await api.get<InventoryItem[]>("/inventory"),
+    queryKey: ["inventory", selectedCategoryId],
+    queryFn: async () => await api.get<InventoryItem[]>(selectedCategoryId ? "/inventory?categoryId=" + encodeURIComponent(selectedCategoryId) : "/inventory"),
   });
 
   const invalidate = () => {
@@ -72,7 +77,7 @@ export default function Inventory() {
   };
 
   const addStock = useMutation({
-    mutationFn: (body: { name: string; category: string; size: string; quantity: number; minimumStock: number; unit: string }) =>
+    mutationFn: (body: { name: string; categoryId: string; category: string; size: string; quantity: number; minimumStock: number; unit: string }) =>
       api.post("/inventory", body),
     onSuccess: () => {
       invalidate();
@@ -125,7 +130,10 @@ export default function Inventory() {
 
   const list = useMemo(() => {
     let items = data || [];
-    if (search.trim()) items = items.filter(i => i.name.toLowerCase().includes(search.trim().toLowerCase()));
+    if (search.trim()) {
+      const s = search.trim().toLowerCase();
+      items = items.filter(i => i.name.toLowerCase().includes(s) || i.size.toLowerCase().includes(s) || i.category.toLowerCase().includes(s));
+    }
     if (tab === "Low Stock") items = items.filter((i) => i.quantity <= i.minimumStock);
     return items;
   }, [data, tab, search]);
@@ -136,7 +144,8 @@ export default function Inventory() {
       toast("Enter an item name and a quantity above 0.", "error");
       return;
     }
-    addStock.mutate({ name: name.trim(), category: category.trim(), size: size.trim(), quantity: q, minimumStock: parseInt(min, 10) || 1, unit: unit.trim() || "pcs" });
+    if (!selectedCategoryId && !category.trim()) { toast("Select an inventory category first.", "error"); return; }
+    addStock.mutate({ name: name.trim(), categoryId: selectedCategoryId, category: category.trim(), size: size.trim(), quantity: q, minimumStock: parseInt(min, 10) || 1, unit: unit.trim() || "pcs" });
   };
 
   const changeQty = (item: InventoryItem, delta: number) => {
@@ -221,7 +230,12 @@ export default function Inventory() {
               </Pressable>
             ) : null}
             {isAdmin ? (
-              <Pressable testID="add-stock-button" style={styles.addBtn} onPress={() => setAddModal(true)}>
+              <Pressable testID="categories-button" style={styles.iconBtn} onPress={() => router.push("/categories" as any)}>
+                <Ionicons name="layers-outline" size={20} color={colors.brandPrimary} />
+              </Pressable>
+            ) : null}
+            {isAdmin ? (
+              <Pressable testID="add-stock-button" style={styles.addBtn} onPress={() => { setCategory(selectedCategoryName); setAddModal(true); }}>
                 <Ionicons name="add" size={20} color={colors.onBrandPrimary} />
                 <Text style={styles.addBtnText}>Add Stock</Text>
               </Pressable>
@@ -331,7 +345,7 @@ export default function Inventory() {
             <View style={styles.modalHandle} />
             <Text style={styles.modalTitle}>Add Stock</Text>
             <KeyboardAwareScrollView bottomOffset={40} keyboardShouldPersistTaps="handled">
-              <Field label="Category" testID="stock-category-input" value={category} onChangeText={setCategory} placeholder="e.g. Interlocking Nail 10mm" autoCapitalize="words" />
+              <Field label="Category" testID="stock-category-input" value={category} onChangeText={setCategory} placeholder="Select a category" autoCapitalize="words" editable={!selectedCategoryId} />
               <Field label="Item / Implant Name" testID="stock-name-input" value={name} onChangeText={setName} placeholder="e.g. Interlocking Nail" autoCapitalize="words" />
               <Field label="Size / Length" testID="stock-size-input" value={size} onChangeText={setSize} placeholder="e.g. 280mm" />
               <Field label="Quantity Received" testID="stock-qty-input" value={qty} onChangeText={setQty} placeholder="e.g. 20" keyboardType="number-pad" />
