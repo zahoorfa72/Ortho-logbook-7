@@ -11,6 +11,7 @@ type BackupData = {
   version:number; app:string; createdAt:string;
   patients:any[]; procedures:any[]; inventory:any[]; expenses:any[]; users:any[];
   patientHistory:any[]; inventoryMovements:any[];
+  filter?: BackupFilter;
 };
 type EncryptedBackup = {
   version:number; app:string; encrypted:true; algorithm:"XSalsa20-Poly1305"; kdf:"SHA-256";
@@ -203,7 +204,7 @@ export function mergeBackup(backup: BackupData) {
     const q = Number(existing.quantity || 0) + Number(i.quantity || 0);
     db.runSync("UPDATE inventory SET quantity=?,minimum_stock=?,category=?,size=? WHERE id=?", [q, Math.max(Number(existing.minimum_stock||0), Number(i.minimum_stock||0)), i.category||existing.category||"", i.size||existing.size||"", existing.id]);
    } else {
-    db.runSync("INSERT INTO inventory (id,name,quantity,unit,minimum_stock) VALUES (?,?,?,?,?)", [i.id, i.name, Number(i.quantity||0), i.unit||"pcs", Number(i.minimum_stock||0)]);
+    db.runSync("INSERT INTO inventory (id,name,category,size,quantity,unit,minimum_stock) VALUES (?,?,?,?,?,?,?)", [i.id, i.name, i.category||"", i.size||"", Number(i.quantity||0), i.unit||"pcs", Number(i.minimum_stock||0)]);
    }
    stats.inventory++;
   }
