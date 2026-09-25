@@ -161,7 +161,7 @@ async function savePatient(p: Patient, editing: boolean) {
   validateImplants(p);
   db.runSync(
     "INSERT INTO patients (id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,implant_id,implant_ii_id,address,file_name,photo_uri,photos_json,date,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-    [patientId, p.mrNo, p.name, p.gender, p.age, p.diagnosis, p.procedure, p.implant, p.implantII, p.address, p.fileName, primaryPhoto, photosJson, p.date, now, uid],
+    [patientId, p.mrNo, p.name, p.gender, p.age, p.diagnosis, p.procedure, p.implant, p.implantII, p.implantId || null, p.implantIIId || null, p.address, p.fileName, primaryPhoto, photosJson, p.date, now, uid],
   );
   db.runSync(
     "INSERT INTO patient_history (id,patient_id,user_id,action,snapshot_json,created_at) VALUES (?,?,?,?,?,?)",
