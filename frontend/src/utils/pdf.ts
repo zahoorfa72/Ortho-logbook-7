@@ -24,6 +24,8 @@ type InventoryItem = {
   quantity: number;
   unit: string;
   minimumStock: number;
+  category?: string;
+  size?: string;
 };
 
 type StatsData = {
