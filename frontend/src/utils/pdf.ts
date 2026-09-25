@@ -247,10 +247,13 @@ export function buildInventoryHtml(
           return `
         <tr>
           <td>${idx + 1}</td>
-          <td><strong>${escapeHtml([i.category, i.name, i.size].filter(Boolean).join(" · "))}</strong></td>
+          <td>
+            <strong>${escapeHtml([i.category, i.name, i.size].filter(Boolean).join(" · "))}</strong>
+            ${low ? '<div style="color:#A24B00;font-size:10px;font-weight:800;margin-top:3px">THIS ITEM IS LOW STOCK</div>' : ""}
+          </td>
           <td style="text-align:right">${i.quantity} ${escapeHtml(i.unit || "pcs")}</td>
           <td style="text-align:right">${i.minimumStock}</td>
-          <td>${low ? '<span class="badge badgeWarn">LOW</span>' : '<span class="badge">OK</span>'}</td>
+          <td>${low ? `<span class="badge badgeWarn">LOW — ${i.quantity} / ${i.minimumStock}</span>` : '<span class="badge">OK</span>'}</td>
         </tr>
       `;
         })
