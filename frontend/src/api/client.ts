@@ -201,13 +201,29 @@ async function listPatients(): Promise<Patient[]> {
   return patients;
 }
 
-const inventory = () =>
-  db
-    .getAllSync<any>("SELECT id,name,category,size,quantity,unit,minimum_stock FROM inventory ORDER BY COALESCE(category,''), name COLLATE NOCASE, COALESCE(size,'')")
-    .map((r) => ({
-      id: r.id, name: r.name, category: r.category || "", size: r.size || "",
-      quantity: Number(r.quantity), unit: r.unit || "pcs", minimumStock: Number(r.minimum_stock),
-    }));
+const inventoryCategories = () =>
+  db.getAllSync<any>(
+    "SELECT c.id,c.name,c.created_at,COUNT(i.id) AS item_count FROM inventory_categories c LEFT JOIN inventory i ON i.category_id=c.id GROUP BY c.id,c.name,c.created_at ORDER BY c.name COLLATE NOCASE",
+  ).map((r) => ({ id: r.id, name: r.name, createdAt: r.created_at, itemCount: Number(r.item_count) }));
+
+const inventory = (categoryId?: string, term?: string) => {
+  const args: any[] = [];
+  const where: string[] = [];
+  if (categoryId) { where.push("i.category_id=?"); args.push(categoryId); }
+  if (term?.trim()) {
+    where.push("(LOWER(i.name) LIKE ? OR LOWER(COALESCE(i.size,'')) LIKE ? OR LOWER(COALESCE(i.category,'')) LIKE ?)");
+    const q = "%" + term.trim().toLowerCase() + "%"; args.push(q,q,q);
+  }
+  const sql = `SELECT i.id,i.name,i.category_id,i.category,i.size,i.quantity,i.unit,i.minimum_stock,
+      c.name AS category_name
+      FROM inventory i LEFT JOIN inventory_categories c ON c.id=i.category_id
+      ${where.length ? "WHERE " + where.join(" AND ") : ""}
+      ORDER BY COALESCE(c.name,i.category,''), i.name COLLATE NOCASE, COALESCE(i.size,'')`;
+  return db.getAllSync<any>(sql,args).map((r) => ({
+    id:r.id,name:r.name,categoryId:r.category_id||"",category:r.category_name||r.category||"",size:r.size||"",
+    quantity:Number(r.quantity),unit:r.unit||"pcs",minimumStock:Number(r.minimum_stock),
+  }));
+};
 
 export const api = {
   async get<T = any>(path: string): Promise<T> {
@@ -219,6 +235,7 @@ export const api = {
     if (path === "/patients") return (await listPatients()) as any;
     if (path === "/procedures")
       return db.getAllSync<any>("SELECT id,name FROM procedures ORDER BY name COLLATE NOCASE") as any;
+    if (path === "/inventory-categories") return inventoryCategories() as any;
     if (path.startsWith("/inventory-history/")) {
       const iid = path.split("/").pop() || "";
       return db.getAllSync<any>(
@@ -228,8 +245,8 @@ export const api = {
     }
     if (path.startsWith("/inventory")) {
       const q = path.split("?")[1] || "";
-      const term = new URLSearchParams(q).get("q") || "";
-      return inventory().filter((x: any) => x.name.toLowerCase().includes(term.toLowerCase())) as any;
+      const params = new URLSearchParams(q);
+      return inventory(params.get("categoryId") || undefined, params.get("q") || "") as any;
     }
     if (path.startsWith("/patient-history/")) {
       const pid = path.split("/").pop() || "";
@@ -278,6 +295,16 @@ export const api = {
   async post<T = any>(path: string, body?: any): Promise<T> {
     initializeDatabase();
     if (path === "/patients") return (await savePatient(body, false)) as any;
+    if (path === "/inventory-categories") {
+      await requireAdmin();
+      const name = String(body?.name || "").trim();
+      if (!name) throw new Error("Category name is required.");
+      const existing = db.getFirstSync<any>("SELECT id,name FROM inventory_categories WHERE LOWER(name)=LOWER(?) LIMIT 1",[name]);
+      if (existing) throw new Error("This inventory category already exists.");
+      const item = { id:id(), name, createdAt:nowIso() };
+      db.runSync("INSERT INTO inventory_categories (id,name,created_at) VALUES (?,?,?)",[item.id,item.name,item.createdAt]);
+      return item as any;
+    }
     if (path === "/procedures") {
       await requireAdmin();
       const name = String(body?.name || "").trim();
@@ -290,6 +317,7 @@ export const api = {
       await requireAdmin();
       const name = String(body?.name || "").trim();
       const category = String(body?.category || "").trim();
+      const categoryId = String(body?.categoryId || "").trim();
       const size = String(body?.size || "").trim();
       const quantity = Number(body?.quantity || 0);
       const minimumStock = Number(body?.minimumStock || 0);
@@ -298,18 +326,25 @@ export const api = {
       if (!Number.isFinite(quantity) || quantity <= 0) throw new Error("Quantity must be greater than 0.");
       if (!Number.isFinite(minimumStock) || minimumStock < 0) throw new Error("Minimum stock cannot be negative.");
       const uid = await currentUser();
+      let categoryName = category;
+      if (categoryId) {
+        const cat = db.getFirstSync<any>("SELECT name FROM inventory_categories WHERE id=? LIMIT 1",[categoryId]);
+        if (!cat) throw new Error("Selected category was not found.");
+        categoryName = cat.name;
+      }
+      if (!categoryId && !categoryName) throw new Error("Select an inventory category.");
       const existing = db.getFirstSync<any>(
-        "SELECT id,name,quantity,unit,minimum_stock,category,size FROM inventory WHERE LOWER(name)=LOWER(?) AND LOWER(COALESCE(size,''))=LOWER(?) LIMIT 1",
-        [name, size],
+        "SELECT id,name,quantity,unit,minimum_stock,category,size FROM inventory WHERE LOWER(name)=LOWER(?) AND LOWER(COALESCE(size,''))=LOWER(?) AND COALESCE(category_id,'')=COALESCE(?, '') LIMIT 1",
+        [name, size, categoryId || null],
       );
       if (existing) {
         const next = Number(existing.quantity) + quantity;
-        db.runSync("UPDATE inventory SET quantity=?,unit=?,minimum_stock=? WHERE id=?", [next, unit, minimumStock, existing.id]);
+        db.runSync("UPDATE inventory SET quantity=?,unit=?,minimum_stock=?,category_id=?,category=? WHERE id=?", [next, unit, minimumStock, categoryId || null, categoryName, existing.id]);
         movement(existing.id, "receive", quantity, next, "Stock received", uid);
         return { id: existing.id, name: existing.name, quantity: next, unit, minimumStock } as any;
       }
-      const item = { id: id(), name, category, size, quantity, unit, minimumStock };
-      db.runSync("INSERT INTO inventory (id,name,category,size,quantity,unit,minimum_stock) VALUES (?,?,?,?,?,?,?)", [item.id, name, category, size, quantity, unit, minimumStock]);
+      const item = { id: id(), name, categoryId, category: categoryName, size, quantity, unit, minimumStock };
+      db.runSync("INSERT INTO inventory (id,name,category_id,category,size,quantity,unit,minimum_stock) VALUES (?,?,?,?,?,?,?,?)", [item.id, name, categoryId || null, categoryName, size, quantity, unit, minimumStock]);
       movement(item.id, "receive", quantity, quantity, "Initial stock", uid);
       return item as any;
     }
@@ -426,6 +461,14 @@ export const api = {
         db.runSync("DELETE FROM patients WHERE id=?", [pm[1]]);
       }
       return { success: true } as any;
+    }
+    const cat = path.match(/^\/inventory-categories\/(.+)$/);
+    if (cat) {
+      await requireAdmin();
+      const count = db.getFirstSync<any>("SELECT COUNT(*) AS n FROM inventory WHERE category_id=?",[cat[1]]);
+      if (Number(count?.n) > 0) throw new Error("Cannot delete a category that still contains items. Move or delete its items first.");
+      db.runSync("DELETE FROM inventory_categories WHERE id=?",[cat[1]]);
+      return {success:true} as any;
     }
     const proc = path.match(/^\/procedures\/(.+)$/);
     if (proc) {
