@@ -23,7 +23,7 @@ type Patient = {
   operationCount?: number; totalOperations?: number;
 };
 type Procedure = { id: string; name: string };
-type InventoryItem = { id: string; name: string; quantity: number };
+type InventoryItem = { id: string; name: string; category: string; size: string; quantity: number };
 
 const today = () => new Date().toISOString().slice(0, 10);
 const empty = (): Patient => ({
