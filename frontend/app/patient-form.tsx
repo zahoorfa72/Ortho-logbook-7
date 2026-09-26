@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { router, useLocalSearchParams } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
+import * as ImageManipulator from "expo-image-manipulator";
+import * as FileSystem from "expo-file-system/legacy";
 import { useMemo, useState } from "react";
 import { Image, Modal, Pressable, ScrollView, Text, View } from "react-native";
 import Ionicons from "@react-native-vector-icons/ionicons";
@@ -142,30 +144,59 @@ export default function PatientForm() {
     return req.granted;
   }
 
+  // Keep a private, permanent copy inside the app. Gallery/camera URIs can
+  // point to temporary cache/content-provider locations that stop working later.
+  // We copy/normalize every newly added photo immediately so the saved patient
+  // record never depends on the gallery app or a temporary URI.
+  const persistPhoto = async (sourceUri: string) => {
+    if (!sourceUri || sourceUri.startsWith("data:")) return sourceUri;
+    const directory = `${FileSystem.documentDirectory}patient-photos/`;
+    await FileSystem.makeDirectoryAsync(directory, { intermediates: true }).catch(() => {});
+    const normalized = await ImageManipulator.manipulateAsync(
+      sourceUri,
+      [],
+      { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG },
+    );
+    const filename = `patient-photo-${Date.now()}-${Math.random().toString(36).slice(2, 10)}.jpg`;
+    const destination = `${directory}${filename}`;
+    await FileSystem.copyAsync({ from: normalized.uri, to: destination });
+    return destination;
+  };
+
   // No cropping (allowsEditing:false). Library allows multi-select.
   const addFromLibrary = async () => {
     if (!(await ensureLibraryPermission())) return;
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images"],
-      allowsEditing: false,
-      allowsMultipleSelection: true,
-      selectionLimit: 20,
-      quality: 0.9,
-    });
-    if (result.canceled) return;
-    const uris = result.assets.map((a) => a.uri).filter(Boolean);
-    setP((x) => ({ ...x, photos: [...x.photos, ...uris] }));
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        allowsEditing: false,
+        allowsMultipleSelection: true,
+        selectionLimit: 20,
+        quality: 0.9,
+      });
+      if (result.canceled) return;
+      const uris = result.assets.map((a) => a.uri).filter(Boolean);
+      const permanentUris: string[] = [];
+      for (const uri of uris) permanentUris.push(await persistPhoto(uri));
+      setP((x) => ({ ...x, photos: [...x.photos, ...permanentUris] }));
+    } catch (e: any) {
+      toast(e?.message || "Could not save the selected photo.", "error");
+    }
   };
 
   const addFromCamera = async () => {
     if (!(await ensureCameraPermission())) return;
-    const result = await ImagePicker.launchCameraAsync({
-      allowsEditing: false,
-      quality: 0.9,
-    });
-    if (result.canceled) return;
-    const uri = result.assets[0]?.uri;
-    if (uri) setP((x) => ({ ...x, photos: [...x.photos, uri] }));
+    try {
+      const result = await ImagePicker.launchCameraAsync({
+        allowsEditing: false,
+        quality: 0.9,
+      });
+      if (result.canceled) return;
+      const uri = result.assets[0]?.uri;
+      if (uri) setP((x) => ({ ...x, photos: [...x.photos, await persistPhoto(uri)] }));
+    } catch (e: any) {
+      toast(e?.message || "Could not save the camera photo.", "error");
+    }
   };
 
   const removePhoto = (idx: number) => {
