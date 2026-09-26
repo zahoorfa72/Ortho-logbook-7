@@ -22,7 +22,7 @@ export async function createBackupFile(password: string, filter: BackupFilter = 
 }
 
 export async function saveBackupToPhone(password: string, filter: BackupFilter = { type: "all" }) {
-  const encryptedBackup = await exportBackup(password);
+  const encryptedBackup = await exportBackup(password, filter);
 
   // Android's Storage Access Framework lets the user choose a real folder
   // such as Downloads, Documents, or another folder in the phone's File Manager.
