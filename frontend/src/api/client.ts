@@ -205,6 +205,18 @@ async function listPatients(): Promise<Patient[]> {
     ? db.getAllSync<any>("SELECT * FROM patients ORDER BY date DESC, created_at DESC")
     : db.getAllSync<any>("SELECT * FROM patients WHERE created_by=? ORDER BY date DESC, created_at DESC", [me.id]);
   const patients = rows.map(fromPatient);
+  for (const p of patients) {
+    const rows2 = db.getAllSync<any>(
+      "SELECT id,inventory_id,name,category,size,quantity FROM patient_implants WHERE patient_id=? ORDER BY created_at ASC",
+      [p.id],
+    );
+    if (rows2.length) {
+      (p as any).implants = rows2.map((x:any) => ({
+        id:x.id, inventoryId:x.inventory_id || "", name:x.name || "",
+        category:x.category || "", size:x.size || "", quantity:Number(x.quantity || 1),
+      }));
+    }
+  }
 
   // Compute Nth-time-operated: identical (name lowercased + MR no).
   // For each duplicate group, the earliest surgery is 1st time, next is 2nd, etc.
