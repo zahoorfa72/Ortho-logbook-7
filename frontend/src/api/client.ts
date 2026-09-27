@@ -78,35 +78,60 @@ function changeInventory(name: string, amount: number, type: string, note: strin
   movement(item.id, type, amount, q, note, userId);
 }
 
+function selectedImplants(p: Patient) {
+  const list = Array.isArray((p as any).implants) ? (p as any).implants : [];
+  if (list.length) return list.map((x:any) => ({
+    id: String(x.id || id()),
+    inventoryId: x.inventoryId ? String(x.inventoryId) : undefined,
+    name: String(x.name || "").trim(),
+    category: String(x.category || "").trim(),
+    size: String(x.size || "").trim(),
+    quantity: Math.max(1, Number(x.quantity) || 1),
+  })).filter((x:any) => x.name);
+  const legacy = [[p.implant,p.implantId],[p.implantII,p.implantIIId]];
+  return legacy.map(([name, inventoryId]) => ({
+    id: id(), inventoryId: inventoryId ? String(inventoryId) : undefined,
+    name: String(name || "").trim(), category:"", size:"", quantity:1,
+  })).filter((x:any) => x.name);
+}
+
 function validateImplants(p: Patient) {
-  const required = new Map<string, { name: string; count: number; inventoryId?: string }>();
-  const entries = [[p.implant, p.implantId],[p.implantII, p.implantIIId]] as const;
-  for (const [name, inventoryId] of entries) {
-    const clean = String(name || "").trim().toLowerCase();
-    if (clean) {
-      const key = inventoryId || clean;
-      const prev = required.get(key);
-      required.set(key, { name: String(name).trim(), inventoryId, count: (prev?.count || 0) + 1 });
-    }
+  const required = new Map<string, { name:string; inventoryId?:string; count:number }>();
+  for (const x of selectedImplants(p)) {
+    const key = x.inventoryId || x.name.toLowerCase();
+    const prev = required.get(key);
+    required.set(key, { name:x.name, inventoryId:x.inventoryId, count:(prev?.count || 0) + x.quantity });
   }
-  for (const itemReq of required.values()) {
-    const item = itemReq.inventoryId
-      ? db.getFirstSync<any>("SELECT name,quantity FROM inventory WHERE id=? LIMIT 1",[itemReq.inventoryId])
-      : db.getFirstSync<any>("SELECT name,quantity FROM inventory WHERE LOWER(name)=? LIMIT 1",[itemReq.name.toLowerCase()]);
-    if (!item) throw new Error(`Implant "${itemReq.name}" is not available in inventory.`);
+  for (const req of required.values()) {
+    const item = req.inventoryId
+      ? db.getFirstSync<any>("SELECT name,quantity FROM inventory WHERE id=? LIMIT 1",[req.inventoryId])
+      : db.getFirstSync<any>("SELECT name,quantity FROM inventory WHERE LOWER(name)=? LIMIT 1",[req.name.toLowerCase()]);
+    if (!item) throw new Error(`Implant "${req.name}" is not available in inventory.`);
     const available = Number(item.quantity) || 0;
-    if (available < itemReq.count) throw new Error(`Insufficient stock for "${item.name}". Available: ${available}, required: ${itemReq.count}.`);
+    if (available < req.count) throw new Error(`Insufficient stock for "${item.name}". Available: ${available}, required: ${req.count}.`);
   }
 }
 
 function deduct(p: Patient, userId: string | null) {
-  changeInventory(p.implant, -1, "patient-use", `Used by patient ${p.mrNo || p.name}`, userId, p.implantId);
-  changeInventory(p.implantII, -1, "patient-use", `Used by patient ${p.mrNo || p.name}`, userId, p.implantIIId);
+  for (const x of selectedImplants(p)) {
+    changeInventory(x.name, -x.quantity, "patient-use", `Used by patient ${p.mrNo || p.name}`, userId, x.inventoryId);
+  }
 }
 
 function restoreStock(p: Patient, userId: string | null) {
-  changeInventory(p.implant, 1, "patient-return", `Returned from patient ${p.mrNo || p.name}`, userId, p.implantId);
-  changeInventory(p.implantII, 1, "patient-return", `Returned from patient ${p.mrNo || p.name}`, userId, p.implantIIId);
+  for (const x of selectedImplants(p)) {
+    changeInventory(x.name, x.quantity, "patient-return", `Returned from patient ${p.mrNo || p.name}`, userId, x.inventoryId);
+  }
+}
+
+function replacePatientImplants(patientId:string, p:Patient) {
+  db.runSync("DELETE FROM patient_implants WHERE patient_id=?",[patientId]);
+  for (const x of selectedImplants(p)) {
+    db.runSync(
+      "INSERT INTO patient_implants (id,patient_id,inventory_id,name,category,size,quantity,created_at) VALUES (?,?,?,?,?,?,?,?)",
+      [x.id,patientId,x.inventoryId||null,x.name,x.category||null,x.size||null,x.quantity,nowIso()]
+    );
+  }
 }
 
 async function canEdit(): Promise<boolean> {
@@ -154,6 +179,7 @@ async function savePatient(p: Patient, editing: boolean) {
         [id(), patientId, uid, "edit", snapshot(fromPatient(old)), now],
       );
       deduct({ ...p, id: patientId }, uid);
+      replacePatientImplants(patientId, p);
       return { ...p, id: patientId };
     });
   }
@@ -168,6 +194,7 @@ async function savePatient(p: Patient, editing: boolean) {
     [id(), patientId, uid, "create", snapshot(p), now],
   );
   deduct({ ...p, id: patientId }, uid);
+  replacePatientImplants(patientId, p);
   return { ...p, id: patientId };
 }
 
