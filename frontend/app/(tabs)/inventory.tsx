@@ -65,7 +65,6 @@ export default function Inventory() {
   const [search, setSearch] = useState("");
   const [historyItem, setHistoryItem] = useState<InventoryItem | null>(null);
   const [usageItem, setUsageItem] = useState<InventoryItem | null>(null);
-  const [usageItem, setUsageItem] = useState<InventoryItem | null>(null);
   const [pinPromptOpen, setPinPromptOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
 
