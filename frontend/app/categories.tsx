@@ -24,6 +24,7 @@ export default function InventoryCategories() {
   const [search, setSearch] = useState("");
   const [name, setName] = useState("");
   const [showAdd, setShowAdd] = useState(false);
+  const [editCategory, setEditCategory] = useState<Category | null>(null);
 
   const q = useQuery<Category[]>({
     queryKey: ["inventory-categories"],
@@ -40,6 +41,17 @@ export default function InventoryCategories() {
       router.push({ pathname: "/(tabs)/inventory", params: { categoryId: category.id, categoryName: category.name } } as any);
     },
     onError: (e: any) => toast(e?.message || "Could not add category.", "error"),
+  });
+
+  const update = useMutation({
+    mutationFn: (category: Category) => api.put<Category>("/inventory-categories/" + category.id, { name: category.name.trim() }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["inventory-categories"] });
+      qc.invalidateQueries({ queryKey: ["inventory"] });
+      setEditCategory(null);
+      toast("Category updated.", "success");
+    },
+    onError: (e:any) => toast(e?.message || "Could not update category.", "error"),
   });
 
   const remove = useMutation({
@@ -131,6 +143,13 @@ export default function InventoryCategories() {
                 <Text style={styles.meta}>{item.itemCount} {item.itemCount === 1 ? "item" : "items"}</Text>
               </View>
               <Pressable
+                testID={`edit-category-${item.id}`}
+                onPress={() => setEditCategory(item)}
+                style={styles.openBtn}
+              >
+                <Ionicons name="create-outline" size={19} color={colors.brandPrimary} />
+              </Pressable>
+              <Pressable
                 testID={`open-category-${item.id}`}
                 onPress={() => router.push({ pathname: "/(tabs)/inventory", params: { categoryId: item.id, categoryName: item.name } } as any)}
                 style={styles.openBtn}
@@ -151,12 +170,37 @@ export default function InventoryCategories() {
           )}
         />
       )}
+      <Modal visible={!!editCategory} transparent animationType="slide" onRequestClose={() => setEditCategory(null)}>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalCard, { paddingBottom: insets.bottom + spacing.lg }]}>
+            <View style={styles.modalHandle} />
+            <Text style={styles.title}>Edit Category</Text>
+            {editCategory ? (
+              <>
+                <Field label="Category name" value={editCategory.name} onChangeText={name => setEditCategory({...editCategory,name})} autoCapitalize="words" />
+                <PrimaryButton title="Save Changes" onPress={() => {
+                  if (!editCategory.name.trim()) { toast("Enter a category name.", "error"); return; }
+                  update.mutate(editCategory);
+                }} loading={update.isPending} />
+                <Pressable style={styles.cancelBtn} onPress={() => setEditCategory(null)}>
+                  <Text style={styles.cancelText}>Cancel</Text>
+                </Pressable>
+              </>
+            ) : null}
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
 
 const useStyles = makeStyles(colors => ({
   container: { flex: 1, backgroundColor: colors.surfaceSecondary },
+  modalOverlay: { flex:1, backgroundColor:"rgba(0,0,0,0.5)", justifyContent:"flex-end" },
+  modalCard: { backgroundColor:colors.surface, borderTopLeftRadius:radius.lg, borderTopRightRadius:radius.lg, padding:spacing.lg },
+  modalHandle: { width:42, height:5, borderRadius:3, backgroundColor:colors.border, alignSelf:"center", marginBottom:spacing.lg },
+  cancelBtn: { alignItems:"center", padding:spacing.md, marginTop:spacing.sm },
+  cancelText: { fontFamily:fontFamily.semibold, color:colors.muted },
   header: { backgroundColor: colors.surface, paddingHorizontal: spacing.lg, paddingBottom: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.border },
   headerTop: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   iconBtn: { width: 40, height: 40, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, alignItems: "center", justifyContent: "center", backgroundColor: colors.surfaceSecondary },
