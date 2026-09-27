@@ -150,7 +150,9 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
                 <td>${escapeHtml([p.gender, p.age].filter(Boolean).join(" • "))}</td>
                 <td>${escapeHtml(p.diagnosis)}</td>
                 <td>${escapeHtml(p.procedure)}<br/><span style="color:#7C7872;font-size:10px">${escapeHtml(
-                  [p.implant, p.implantII].filter(Boolean).join(" • "),
+                  (p.implants && p.implants.length
+                    ? p.implants.map((x: any) => [x.category, x.name, x.size].filter(Boolean).join(" · ") + (x.quantity > 1 ? ` × ${x.quantity}` : "")).join(" • ")
+                    : [p.implant, p.implantII].filter(Boolean).join(" • ")),
                 )}</span></td>
               </tr>
             `;
