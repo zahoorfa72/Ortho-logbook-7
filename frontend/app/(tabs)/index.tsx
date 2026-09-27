@@ -48,6 +48,7 @@ type Patient = {
   date: string;
   operationCount?: number;
   totalOperations?: number;
+  implants?: { id:string; inventoryId:string; name:string; category:string; size:string; quantity:number }[];
 };
 
 function ordinalShort(n: number) {
@@ -114,7 +115,7 @@ export default function Logbook() {
     if (!q) return list;
 
     return list.filter((p) =>
-      [p.mrNo, p.name, p.diagnosis, p.procedure, p.implant, p.implantII]
+      [p.mrNo, p.name, p.diagnosis, p.procedure, p.implant, p.implantII, ...(p.implants || []).flatMap(x => [x.category, x.name, x.size])]
         .join(" ")
         .toLowerCase()
         .includes(q),
@@ -337,14 +338,21 @@ export default function Logbook() {
                 {chip(item.procedure, "px")}
               </View>
 
-              {!!(item.implant || item.implantII) && (
+              {((item.implants && item.implants.length) || item.implant || item.implantII) ? (
                 <View style={styles.implantRow}>
                   <Ionicons name="hardware-chip-outline" size={12} color={colors.muted} />
-                  <Text style={styles.implant} numberOfLines={1}>
-                    {[item.implant, item.implantII].filter(Boolean).join("  •  ")}
-                  </Text>
+                  <View style={{ flex: 1 }}>
+                    {(item.implants && item.implants.length ? item.implants : [
+                      { id:"legacy-1", category:"", name:item.implant, size:"", quantity:1 },
+                      { id:"legacy-2", category:"", name:item.implantII, size:"", quantity:1 },
+                    ]).filter((x:any) => x.name).map((x:any) => (
+                      <Text key={x.id} style={styles.implant} numberOfLines={1}>
+                        {[x.category, x.name, x.size].filter(Boolean).join(" · ")}{x.quantity > 1 ? ` × ${x.quantity}` : ""}
+                      </Text>
+                    ))}
+                  </View>
                 </View>
-              )}
+              ) : null}
             </Pressable>
           )}
         />
