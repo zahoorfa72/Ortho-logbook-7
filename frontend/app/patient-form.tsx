@@ -193,7 +193,10 @@ export default function PatientForm() {
       });
       if (result.canceled) return;
       const uri = result.assets[0]?.uri;
-      if (uri) {\n        const permanentUri = await persistPhoto(uri);\n        setP((x) => ({ ...x, photos: [...x.photos, permanentUri] }));\n      }
+      if (uri) {
+        const permanentUri = await persistPhoto(uri);
+        setP((x) => ({ ...x, photos: [...x.photos, permanentUri] }));
+      }
     } catch (e: any) {
       toast(e?.message || "Could not save the camera photo.", "error");
     }
