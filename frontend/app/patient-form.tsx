@@ -20,7 +20,7 @@ import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/s
 
 type Patient = {
   id: string; mrNo: string; name: string; gender: string; age: string;
-  diagnosis: string; procedure: string; implant: string; implantII: string;
+  diagnosis: string; procedure: string; implant: string; implantII: string; implants?: SelectedImplant[];
   address: string; fileName: string; photoUri: string; photos: string[]; date: string;
   operationCount?: number; totalOperations?: number;
 };
@@ -95,8 +95,8 @@ export default function PatientForm() {
       return {
         ...prev,
         implants: [...current, { id: `pi-${Date.now()}-${Math.random().toString(36).slice(2,7)}`, inventoryId:item.id, name:item.name, category:item.category, size:item.size, quantity:1 }],
-        implant: current.length ? prev.implant : item.name,
-        implantId: current.length ? (prev as any).implantId : item.id,
+        implant: "",
+        implantId: undefined as any,
       };
     });
     setImplantSearch("");
