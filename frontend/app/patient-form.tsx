@@ -94,7 +94,7 @@ export default function PatientForm() {
       }
       return {
         ...prev,
-        implants: [...current, { id: \`pi-${Date.now()}-${Math.random().toString(36).slice(2,7)}\`, inventoryId:item.id, name:item.name, category:item.category, size:item.size, quantity:1 }],
+        implants: [...current, { id: `pi-${Date.now()}-${Math.random().toString(36).slice(2,7)}`, inventoryId:item.id, name:item.name, category:item.category, size:item.size, quantity:1 }],
         implant: current.length ? prev.implant : item.name,
         implantId: current.length ? (prev as any).implantId : item.id,
       };
