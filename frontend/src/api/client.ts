@@ -124,6 +124,20 @@ function restoreStock(p: Patient, userId: string | null) {
   }
 }
 
+function hydratePatientImplants(patientId:string, p:Patient): Patient {
+  const rows = db.getAllSync<any>(
+    "SELECT id,inventory_id,name,category,size,quantity FROM patient_implants WHERE patient_id=? ORDER BY created_at ASC",
+    [patientId],
+  );
+  if (rows.length) {
+    (p as any).implants = rows.map((x:any) => ({
+      id:x.id, inventoryId:x.inventory_id || "", name:x.name || "",
+      category:x.category || "", size:x.size || "", quantity:Number(x.quantity || 1),
+    }));
+  }
+  return p;
+}
+
 function replacePatientImplants(patientId:string, p:Patient) {
   db.runSync("DELETE FROM patient_implants WHERE patient_id=?",[patientId]);
   for (const x of selectedImplants(p)) {
@@ -168,7 +182,7 @@ async function savePatient(p: Patient, editing: boolean) {
       const old = db.getFirstSync<any>("SELECT * FROM patients WHERE id=?", [patientId]);
       if (!old) throw new Error("Patient not found.");
       // Ownership check for non-admins (sync inside transaction: we already ran assertRecordAccess above? No -- do it here using a sync fetch of current user role).
-      restoreStock(fromPatient(old), uid);
+      restoreStock(hydratePatientImplants(patientId, fromPatient(old)), uid);
       validateImplants(p);
       db.runSync(
         "UPDATE patients SET mr_no=?,name=?,gender=?,age=?,diagnosis=?,procedure=?,implant=?,implant_ii=?,implant_id=?,implant_ii_id=?,address=?,file_name=?,photo_uri=?,photos_json=?,date=?,updated_at=?,updated_by=? WHERE id=?",
@@ -508,7 +522,7 @@ export const api = {
       if (patient) {
         await assertRecordAccess(patient.created_by);
         const uid = await currentUser();
-        restoreStock(fromPatient(patient), uid);
+        restoreStock(hydratePatientImplants(pm[1], fromPatient(patient)), uid);
         db.runSync(
           "INSERT INTO patient_history (id,patient_id,user_id,action,snapshot_json,created_at) VALUES (?,?,?,?,?,?)",
           [id(), pm[1], uid, "delete", snapshot(fromPatient(patient)), nowIso()],
