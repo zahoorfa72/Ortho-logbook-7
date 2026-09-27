@@ -298,20 +298,6 @@ export default function Inventory() {
                 </View>
                 <View style={styles.stepper}>
                   <Pressable
-                    onPress={() => setUsageItem(item)}
-                    style={styles.smallBtn}
-                    testID={`inv-patients-${item.id}`}
-                  >
-                    <Ionicons name="people-outline" size={18} color={colors.brandPrimary} />
-                  </Pressable>
-                  <Pressable
-                    onPress={() => setUsageItem(item)}
-                    style={styles.smallBtn}
-                    testID={`inv-patients-${item.id}`}
-                  >
-                    <Ionicons name="people-outline" size={18} color={colors.brandPrimary} />
-                  </Pressable>
-                  <Pressable
                     onPress={() => setHistoryItem(item)}
                     style={styles.smallBtn}
                     testID={`inv-history-${item.id}`}
