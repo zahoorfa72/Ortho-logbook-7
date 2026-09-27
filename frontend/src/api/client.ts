@@ -459,7 +459,7 @@ export const api = {
       await assertRecordAccess(existing.created_by);
       return (await savePatient(body, true)) as any;
     }
-    const cm = path.match(/^\\/inventory-categories\\/(.+)$/);
+    const cm = path.match(/^\/inventory-categories\/(.+)$/);
     if (cm) {
       await requireAdmin();
       const name = String(body?.name || "").trim();
