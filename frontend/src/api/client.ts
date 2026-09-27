@@ -459,6 +459,19 @@ export const api = {
       await assertRecordAccess(existing.created_by);
       return (await savePatient(body, true)) as any;
     }
+    const cm = path.match(/^\\/inventory-categories\\/(.+)$/);
+    if (cm) {
+      await requireAdmin();
+      const name = String(body?.name || "").trim();
+      if (!name) throw new Error("Category name is required.");
+      const existing = db.getFirstSync<any>("SELECT id FROM inventory_categories WHERE LOWER(name)=LOWER(?) AND id<>? LIMIT 1",[name,cm[1]]);
+      if (existing) throw new Error("This inventory category already exists.");
+      const cat = db.getFirstSync<any>("SELECT id FROM inventory_categories WHERE id=? LIMIT 1",[cm[1]]);
+      if (!cat) throw new Error("Category not found.");
+      db.runSync("UPDATE inventory_categories SET name=? WHERE id=?",[name,cm[1]]);
+      db.runSync("UPDATE inventory SET category=? WHERE category_id=?",[name,cm[1]]);
+      return { id:cm[1], name } as any;
+    }
     const im = path.match(/^\/inventory\/(.+)$/);
     if (im) {
       await requireAdmin();
