@@ -56,7 +56,6 @@ export default function Inventory() {
   const [tab, setTab] = useState("All");
   const [addModal, setAddModal] = useState(false);
   const [editItem, setEditItem] = useState<InventoryItem | null>(null);
-  const [name, setName] = useState("");
   const [category, setCategory] = useState(selectedCategoryName);
   const [size, setSize] = useState("");
   const [qty, setQty] = useState("");
@@ -85,7 +84,7 @@ export default function Inventory() {
       queryClient.invalidateQueries({ queryKey: ["inventory-categories"] });
       toast("Stock added.", "success");
       setAddModal(false);
-      setName(""); setCategory(""); setSize(""); setQty(""); setMin("1"); setUnit("pcs");
+      setCategory(""); setSize(""); setQty(""); setMin("1"); setUnit("pcs");
     },
     onError: (e: any) => toast(e?.message || "Could not add stock.", "error"),
   });
@@ -142,12 +141,12 @@ export default function Inventory() {
 
   const onSubmit = () => {
     const q = parseInt(qty, 10);
-    if (!name.trim() || isNaN(q) || q <= 0) {
-      toast("Enter an item name and a quantity above 0.", "error");
+    if (isNaN(q) || q <= 0) {
+      toast("Enter quantity received above 0.", "error");
       return;
     }
     if (!selectedCategoryId && !category.trim()) { toast("Select an inventory category first.", "error"); return; }
-    addStock.mutate({ name: name.trim(), categoryId: selectedCategoryId, category: category.trim(), size: size.trim(), quantity: q, minimumStock: parseInt(min, 10) || 1, unit: unit.trim() || "pcs" });
+    addStock.mutate({ name: size.trim() || "Inventory Item", categoryId: selectedCategoryId, category: category.trim(), size: size.trim(), quantity: q, minimumStock: parseInt(min, 10) || 1, unit: unit.trim() || "pcs" });
   };
 
   const changeQty = (item: InventoryItem, delta: number) => {
@@ -161,10 +160,6 @@ export default function Inventory() {
 
   const saveEdit = () => {
     if (!editItem) return;
-    if (!editItem.name.trim()) {
-      toast("Name is required.", "error");
-      return;
-    }
     if (editItem.quantity < 0) {
       toast("Quantity cannot be negative.", "error");
       return;
@@ -362,7 +357,6 @@ export default function Inventory() {
             <Text style={styles.modalTitle}>Add Stock</Text>
             <KeyboardAwareScrollView bottomOffset={40} keyboardShouldPersistTaps="handled">
               <Field label="Category" testID="stock-category-input" value={category} onChangeText={setCategory} placeholder="Select a category" autoCapitalize="words" editable={!selectedCategoryId} />
-              <Field label="Item / Implant Name" testID="stock-name-input" value={name} onChangeText={setName} placeholder="e.g. Interlocking Nail" autoCapitalize="words" />
               <Field label="Size / Length" testID="stock-size-input" value={size} onChangeText={setSize} placeholder="e.g. 280mm" />
               <Field label="Quantity Received" testID="stock-qty-input" value={qty} onChangeText={setQty} placeholder="e.g. 20" keyboardType="number-pad" />
               <Field label="Unit" testID="stock-unit-input" value={unit} onChangeText={setUnit} placeholder="pcs" />
@@ -381,7 +375,7 @@ export default function Inventory() {
         <View style={styles.modalOverlay}>
           <View style={[styles.modalCard, { paddingBottom: insets.bottom + spacing.lg }]}>
             <View style={styles.modalHandle} />
-            <Text style={styles.modalTitle}>Edit Item</Text>
+            <Text style={styles.modalTitle}>Edit Inventory Item</Text>
             {editItem ? (
               <KeyboardAwareScrollView bottomOffset={40} keyboardShouldPersistTaps="handled">
                 <Field
@@ -389,13 +383,6 @@ export default function Inventory() {
                   testID="edit-category-input"
                   value={editItem.category}
                   onChangeText={(v) => setEditItem({ ...editItem, category: v })}
-                />
-                <Field
-                  label="Name"
-                  testID="edit-name-input"
-                  value={editItem.name}
-                  onChangeText={(v) => setEditItem({ ...editItem, name: v })}
-                  autoCapitalize="words"
                 />
                 <Field
                   label="Size / Length"
