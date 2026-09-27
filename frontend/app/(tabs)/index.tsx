@@ -212,7 +212,7 @@ export default function Logbook() {
             testID="logbook-search-input"
             value={query}
             onChangeText={setQuery}
-            placeholder="Search MRNo, name, diagnosis…"
+            placeholder="Search MRNo, name, diagnosis, inventory…"
             placeholderTextColor={colors.muted}
             style={styles.searchInput}
           />
