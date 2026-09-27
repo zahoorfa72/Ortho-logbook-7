@@ -292,6 +292,15 @@ export const api = {
     if (path === "/procedures")
       return db.getAllSync<any>("SELECT id,name FROM procedures ORDER BY name COLLATE NOCASE") as any;
     if (path === "/inventory-categories") return inventoryCategories() as any;
+    if (path.startsWith("/inventory-patients/")) {
+      const iid = path.split("/").pop() || "";
+      return db.getAllSync<any>(
+        `SELECT pi.id,pi.patient_id,pi.name,pi.category,pi.size,pi.quantity,p.mr_no,p.name AS patient_name,p.date
+         FROM patient_implants pi JOIN patients p ON p.id=pi.patient_id
+         WHERE pi.inventory_id=? ORDER BY p.date DESC, pi.created_at DESC`,
+        [iid],
+      ) as any;
+    }
     if (path.startsWith("/inventory-history/")) {
       const iid = path.split("/").pop() || "";
       return db.getAllSync<any>(
