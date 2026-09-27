@@ -64,6 +64,7 @@ export default function Inventory() {
   const [unit, setUnit] = useState("pcs");
   const [search, setSearch] = useState("");
   const [historyItem, setHistoryItem] = useState<InventoryItem | null>(null);
+  const [usageItem, setUsageItem] = useState<InventoryItem | null>(null);
   const [pinPromptOpen, setPinPromptOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
 
@@ -303,6 +304,13 @@ export default function Inventory() {
                 </View>
                 <View style={styles.stepper}>
                   <Pressable
+                    onPress={() => setUsageItem(item)}
+                    style={styles.smallBtn}
+                    testID={`inv-patients-${item.id}`}
+                  >
+                    <Ionicons name="people-outline" size={18} color={colors.brandPrimary} />
+                  </Pressable>
+                  <Pressable
                     onPress={() => setHistoryItem(item)}
                     style={styles.smallBtn}
                     testID={`inv-history-${item.id}`}
@@ -435,6 +443,7 @@ export default function Inventory() {
         </View>
       </Modal>
 
+      <InventoryPatientsModal item={usageItem} onClose={() => setUsageItem(null)} />
       <HistoryModal item={historyItem} onClose={() => setHistoryItem(null)} />
 
       <PinPromptModal
@@ -452,6 +461,45 @@ export default function Inventory() {
         onCancel={() => setPinPromptOpen(false)}
       />
     </View>
+  );
+}
+
+function InventoryPatientsModal({ item, onClose }: { item: InventoryItem | null; onClose: () => void }) {
+  const styles = useStyles();
+  const { colors } = useTheme();
+  const { data = [], isLoading } = useQuery<any[]>({
+    queryKey: ["inventory-patients", item?.id],
+    queryFn: () => api.get<any[]>("/inventory-patients/" + item!.id),
+    enabled: !!item,
+  });
+  if (!item) return null;
+  return (
+    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalCard}>
+          <View style={styles.modalHandle} />
+          <Text style={styles.modalTitle}>Used by Patients</Text>
+          <Text style={styles.historyName}>{[item.category,item.name,item.size].filter(Boolean).join(" · ")}</Text>
+          {isLoading ? <ActivityIndicator size="small" color={colors.brandPrimary} /> : (
+            <FlatList
+              data={data}
+              keyExtractor={(x:any) => x.id}
+              renderItem={({item:x}:any) => (
+                <Pressable
+                  style={styles.historyRow}
+                  onPress={() => { onClose(); router.push({pathname:"/patient-form",params:{id:x.patient_id}} as any); }}
+                >
+                  <Text style={styles.historyType}>{x.patient_name || "Unnamed patient"}</Text>
+                  <Text style={styles.historyMeta}>MRNo: {x.mr_no || "—"} · {x.date || "—"} · Qty {x.quantity}</Text>
+                </Pressable>
+              )}
+              ListEmptyComponent={<Text style={styles.historyMeta}>This inventory item has not been recorded as used by a patient.</Text>}
+            />
+          )}
+          <Pressable onPress={onClose} style={styles.cancel}><Text style={[styles.cancelText,{color:colors.muted}]}>Close</Text></Pressable>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
