@@ -66,6 +66,11 @@ export function initializeDatabase() {
       id TEXT PRIMARY KEY NOT NULL, patient_id TEXT NOT NULL, user_id TEXT,
       action TEXT NOT NULL, snapshot_json TEXT NOT NULL, created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS patient_implants (
+      id TEXT PRIMARY KEY NOT NULL, patient_id TEXT NOT NULL, inventory_id TEXT,
+      name TEXT NOT NULL, category TEXT, size TEXT, quantity REAL NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS inventory_movements (
       id TEXT PRIMARY KEY NOT NULL, inventory_id TEXT NOT NULL, user_id TEXT,
       type TEXT NOT NULL, amount REAL NOT NULL, quantity_after REAL NOT NULL,
@@ -77,6 +82,8 @@ export function initializeDatabase() {
     CREATE INDEX IF NOT EXISTS idx_patients_name ON patients(name);
     CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date);
     CREATE INDEX IF NOT EXISTS idx_history_patient ON patient_history(patient_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_patient_implants_patient ON patient_implants(patient_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_patient_implants_inventory ON patient_implants(inventory_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_inventory_movements_item ON inventory_movements(inventory_id, created_at);
   `);
   // Non-destructive migration for databases created by older builds.
