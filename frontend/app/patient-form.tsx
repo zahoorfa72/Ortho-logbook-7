@@ -26,12 +26,13 @@ type Patient = {
 };
 type Procedure = { id: string; name: string };
 type InventoryItem = { id: string; name: string; category: string; categoryId?: string; size: string; quantity: number };
+type SelectedImplant = { id: string; inventoryId: string; name: string; category: string; size: string; quantity: number };
 
 const today = () => new Date().toISOString().slice(0, 10);
 const empty = (): Patient => ({
   id: "", mrNo: "", name: "", gender: "", age: "", diagnosis: "",
   procedure: "", implant: "", implantII: "", address: "", fileName: "",
-  photoUri: "", photos: [], date: today(),
+  photoUri: "", photos: [], date: today(), implants: [],
 });
 
 export default function PatientForm() {
@@ -79,10 +80,32 @@ export default function PatientForm() {
   );
 
   const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
+  const [implantSearch, setImplantSearch] = useState("");
   const [p, setP] = useState<Patient>(empty);
-  const setImplant = (field: "implant" | "implantII", item: InventoryItem) => {
-    setP(prev => ({ ...prev, [field]: item.name, [field === "implant" ? "implantId" : "implantIIId"]: item.id }));
+  const selectedImplants = p.implants || [];
+  const addImplant = (item: InventoryItem) => {
+    setP(prev => {
+      const current = prev.implants || [];
+      const existingIndex = current.findIndex(x => x.inventoryId === item.id);
+      if (existingIndex >= 0) {
+        const next = [...current];
+        next[existingIndex] = { ...next[existingIndex], quantity: next[existingIndex].quantity + 1 };
+        return { ...prev, implants: next };
+      }
+      return {
+        ...prev,
+        implants: [...current, { id: \`pi-${Date.now()}-${Math.random().toString(36).slice(2,7)}\`, inventoryId:item.id, name:item.name, category:item.category, size:item.size, quantity:1 }],
+        implant: current.length ? prev.implant : item.name,
+        implantId: current.length ? (prev as any).implantId : item.id,
+      };
+    });
+    setImplantSearch("");
   };
+  const removeImplant = (id: string) => setP(prev => ({ ...prev, implants:(prev.implants || []).filter(x => x.id !== id) }));
+  const changeImplantQty = (id: string, delta: number) => setP(prev => ({
+    ...prev,
+    implants:(prev.implants || []).map(x => x.id === id ? { ...x, quantity:Math.max(1,x.quantity + delta) } : x),
+  }));
   const [ready, setReady] = useState(false);
   if (existing && !ready) {
     // Normalise legacy records that only had photoUri.
@@ -321,16 +344,57 @@ export default function PatientForm() {
             ))}
           </ScrollView>
         )}
-        <AutocompleteField label="Implant" testID="patient-implant-input" value={p.implant} onChangeText={(v) => setP(prev => ({ ...prev, implant: v, implantId: undefined }))} placeholder="Type to search implants" suggestions={implantSuggestions} onSelect={(s) => { const item = (inventory ?? []).find(x => x.id === s.key); if (item) setImplant("implant", item); }} />
-        <AutocompleteField label="Implant II" testID="patient-implant2-input" value={p.implantII} onChangeText={(v) => setP(prev => ({ ...prev, implantII: v, implantIIId: undefined }))} placeholder="Second implant (optional)" suggestions={implantSuggestions} onSelect={(s) => { const item = (inventory ?? []).find(x => x.id === s.key); if (item) setImplant("implantII", item); }} />
-        {!!inventory?.length && (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.quickScroller} contentContainerStyle={styles.quickRow}>
-            {inventory.map((x) => (
-              <Pressable key={x.id} style={styles.quickChip} onPress={() => setImplant("implant", x)}>
-                <Text style={styles.quickChipText}>{[x.category, x.name, x.size].filter(Boolean).join(" · ")} · {x.quantity}</Text>
-              </Pressable>
+        <Text style={styles.section}>Inventory Items Used</Text>
+        <Field
+          label="Search inventory"
+          testID="patient-inventory-search"
+          value={implantSearch}
+          onChangeText={setImplantSearch}
+          placeholder="Search category, item or size"
+        />
+        {!!implantSearch.trim() && (
+          <View style={styles.inventoryPicker}>
+            {(inventory ?? [])
+              .filter(x => {
+                const q = implantSearch.trim().toLowerCase();
+                return [x.category,x.name,x.size].some(v => String(v || "").toLowerCase().includes(q));
+              })
+              .slice(0, 20)
+              .map(x => (
+                <Pressable key={x.id} style={styles.inventoryOption} onPress={() => addImplant(x)}>
+                  <Text style={styles.inventoryOptionTitle} numberOfLines={2}>
+                    {[x.category, x.name, x.size].filter(Boolean).join(" · ")}
+                  </Text>
+                  <Text style={styles.inventoryOptionDetail}>{x.quantity} {x.quantity === 1 ? "available" : "available"}</Text>
+                </Pressable>
+              ))}
+          </View>
+        )}
+        {selectedImplants.length > 0 ? (
+          <View style={styles.selectedInventory}>
+            {selectedImplants.map((x) => (
+              <View key={x.id} style={styles.selectedInventoryRow}>
+                <View style={{flex:1}}>
+                  <Text style={styles.selectedInventoryTitle} numberOfLines={2}>
+                    {[x.category, x.name, x.size].filter(Boolean).join(" · ")}
+                  </Text>
+                  <Text style={styles.selectedInventoryDetail}>Selected separately · Qty {x.quantity}</Text>
+                </View>
+                <Pressable style={styles.qtyButton} onPress={() => changeImplantQty(x.id,-1)}>
+                  <Ionicons name="remove" size={17} color={colors.onSurface} />
+                </Pressable>
+                <Text style={styles.selectedQty}>{x.quantity}</Text>
+                <Pressable style={styles.qtyButton} onPress={() => changeImplantQty(x.id,1)}>
+                  <Ionicons name="add" size={17} color={colors.onSurface} />
+                </Pressable>
+                <Pressable style={styles.removeSelected} onPress={() => removeImplant(x.id)}>
+                  <Ionicons name="trash-outline" size={18} color={colors.error} />
+                </Pressable>
+              </View>
             ))}
-          </ScrollView>
+          </View>
+        ) : (
+          <Text style={styles.hint}>Select one or more inventory items. Each category, item and size is kept separately.</Text>
         )}
         <Field label="File / Reference" testID="patient-file-input" value={p.fileName} onChangeText={set("fileName")} placeholder="File reference" />
         <Field label="Date" testID="patient-date-input" value={p.date} onChangeText={set("date")} placeholder="YYYY-MM-DD" />
@@ -400,6 +464,17 @@ const useStyles = makeStyles((colors) => ({
   photoThumb: { width: "100%", height: "100%" },
   photoRemove: { position: "absolute", top: 6, right: 6, backgroundColor: "rgba(0,0,0,0.65)", width: 26, height: 26, borderRadius: 13, alignItems: "center", justifyContent: "center" },
   quickScroller: { marginTop: -spacing.sm, marginBottom: spacing.lg },
+  inventoryPicker: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, backgroundColor: colors.surfaceSecondary, marginTop: -spacing.md, marginBottom: spacing.md, overflow: "hidden" },
+  inventoryOption: { paddingHorizontal: spacing.md, paddingVertical: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.divider },
+  inventoryOptionTitle: { fontFamily: fontFamily.semibold, fontSize: fontSize.base, color: colors.onSurface },
+  inventoryOptionDetail: { fontFamily: fontFamily.regular, fontSize: fontSize.sm, color: colors.muted, marginTop: 3 },
+  selectedInventory: { gap: spacing.sm, marginBottom: spacing.md },
+  selectedInventoryRow: { flexDirection:"row", alignItems:"center", gap:spacing.xs, padding:spacing.md, borderWidth:1, borderColor:colors.border, borderRadius:radius.md, backgroundColor:colors.surfaceSecondary },
+  selectedInventoryTitle: { fontFamily:fontFamily.semibold, fontSize:fontSize.sm, color:colors.onSurface },
+  selectedInventoryDetail: { fontFamily:fontFamily.regular, fontSize:fontSize.xs, color:colors.muted, marginTop:3 },
+  qtyButton: { width:32, height:32, borderRadius:16, borderWidth:1, borderColor:colors.border, alignItems:"center", justifyContent:"center" },
+  selectedQty: { minWidth:22, textAlign:"center", fontFamily:fontFamily.bold, color:colors.onSurface },
+  removeSelected: { width:32, height:32, alignItems:"center", justifyContent:"center" },
   quickRow: { gap: spacing.sm, paddingRight: spacing.lg },
   quickChip: { height: 36, justifyContent: "center", backgroundColor: colors.surfaceTertiary, borderRadius: radius.pill, paddingHorizontal: spacing.md },
   quickChipText: { fontFamily: fontFamily.medium, fontSize: fontSize.sm, color: colors.onSurfaceTertiary },
