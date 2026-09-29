@@ -44,6 +44,7 @@ export default function PatientForm() {
   const { user } = useAuth();
   const { id } = useLocalSearchParams<{ id?: string }>();
   const isEdit = !!id;
+  const [implantSearch, setImplantSearch] = useState("");
 
   const { data: patients } = useQuery<Patient[]>({ queryKey: ["patients"], queryFn: () => api.get("/patients") });
   const { data: procedures } = useQuery<Procedure[]>({ queryKey: ["procedures"], queryFn: () => api.get("/procedures") });
