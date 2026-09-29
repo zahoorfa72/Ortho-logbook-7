@@ -95,9 +95,9 @@ function header(branding: BrandingConfig, subtitle: string) {
     <div class="header">
       <div class="logoSide">${leftLogo}</div>
       <div class="titleBlock">
-        <div class="title">${escapeHtml(branding.title)}</div>
+        <div class="title" style="font-size:${titleSize}px;font-weight:${titleWeight}">${escapeHtml(branding.title)}</div>
         ${customBlock}
-        <div class="subtitle">${escapeHtml(subtitle)}</div>
+        <div class="subtitle" style="font-size:${subtitleSize}px;font-weight:${subtitleWeight}">${escapeHtml(subtitle)}</div>
         <div class="printed">Generated on ${escapeHtml(new Date().toLocaleString())}</div>
       </div>
       <div class="logoSide">${rightLogo}</div>
@@ -117,9 +117,9 @@ function styles(branding: BrandingConfig) {
       .titleBlock { flex: 1; text-align: center; }
       .titleBlockLeft { text-align: left; padding-left: 4px; }
       .headerLeft .logoSide { flex: 0 0 auto; }
-      .title { font-size: 28px; font-weight: 800; color: ${branding.primary}; margin: 0; letter-spacing: 0.5px; }
+      .title { font-size: 24px; font-weight: 800; color: ${branding.primary}; margin: 0; letter-spacing: 0.5px; }
       .pdfCustom { margin-top: 4px; font-size: 12px; color: #3A3A3C; line-height: 1.5; font-weight: 500; }
-      .subtitle { font-size: 14px; color: #3A3A3C; margin-top: 8px; font-weight: 600; }
+      .subtitle { font-size: 12px; color: #3A3A3C; margin-top: 8px; font-weight: 600; }
       .printed { font-size: 10px; color: #7C7872; margin-top: 4px; }
       table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 12px; }
       th { text-align: left; padding: 10px 8px; background: ${branding.tertiary}; color: ${branding.onTertiary}; font-weight: 700; border-bottom: 2px solid ${branding.primary}; }
