@@ -80,6 +80,8 @@ export default function PatientForm() {
   );
 
   const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
+  const [editingPhotoIndex, setEditingPhotoIndex] = useState<number | null>(null);
+  const [photoBusy, setPhotoBusy] = useState(false);
   const [implantSearch, setImplantSearch] = useState("");
   const [p, setP] = useState<Patient>(empty);
   const selectedImplants = p.implants || [];
@@ -228,6 +230,43 @@ export default function PatientForm() {
   const removePhoto = (idx: number) => {
     setP((x) => ({ ...x, photos: x.photos.filter((_, i) => i !== idx) }));
   };
+  const editPhoto = async (idx: number, action: "rotate" | "crop") => {
+    const uri = p.photos[idx];
+    if (!uri) return;
+    setPhotoBusy(true);
+    try {
+      let actions: ImageManipulator.Action[] = [];
+      if (action === "rotate") {
+        actions = [{ rotate: 90 }];
+      } else {
+        const size = await new Promise<{ width: number; height: number }>((resolve, reject) =>
+          Image.getSize(uri, (width, height) => resolve({ width, height }), reject),
+        );
+        const side = Math.min(size.width, size.height);
+        actions = [{
+          crop: {
+            originX: Math.max(0, Math.round((size.width - side) / 2)),
+            originY: Math.max(0, Math.round((size.height - side) / 2)),
+            width: side,
+            height: side,
+          },
+        }];
+      }
+      const result = await ImageManipulator.manipulateAsync(uri, actions, {
+        compress: 0.9,
+        format: ImageManipulator.SaveFormat.JPEG,
+      });
+      const permanent = await persistPhoto(result.uri);
+      setP((x) => ({ ...x, photos: x.photos.map((v, i) => i === idx ? permanent : v) }));
+      setEditingPhotoIndex(null);
+      setSelectedPhoto(null);
+      toast(action === "rotate" ? "Photo rotated." : "Photo cropped.", "success");
+    } catch (e: any) {
+      toast(e?.message || "Could not edit photo.", "error");
+    } finally {
+      setPhotoBusy(false);
+    }
+  };
 
   const save = useMutation({
     mutationFn: () => (isEdit ? api.put("/patients/" + id, p) : api.post("/patients", p)),
@@ -311,7 +350,7 @@ export default function PatientForm() {
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.photoStrip}>
             {p.photos.map((uri, idx) => (
               <View key={`${uri}-${idx}`} style={styles.photoBox} testID={`patient-photo-${idx}`}>
-                <Pressable style={{ flex: 1 }} onPress={() => setSelectedPhoto(uri)} testID={`open-patient-photo-${idx}`}>
+                <Pressable style={{ flex: 1 }} onPress={() => { setSelectedPhoto(uri); setEditingPhotoIndex(idx); }} testID={`open-patient-photo-${idx}`}>
                   <Image source={{ uri }} style={styles.photoThumb} resizeMode="cover" />
                 </Pressable>
                 <Pressable style={styles.photoRemove} onPress={() => removePhoto(idx)} hitSlop={8} testID={`remove-photo-${idx}`}>
@@ -322,6 +361,29 @@ export default function PatientForm() {
           </ScrollView>
         )}
 
+        <Modal visible={editingPhotoIndex !== null} transparent animationType="slide" onRequestClose={() => setEditingPhotoIndex(null)}>
+          <View style={styles.photoEditOverlay}>
+            <View style={styles.photoEditCard}>
+              <Text style={styles.section}>Edit Patient Photo</Text>
+              {editingPhotoIndex !== null && p.photos[editingPhotoIndex] ? (
+                <Image source={{ uri: p.photos[editingPhotoIndex] }} style={styles.photoEditPreview} resizeMode="contain" />
+              ) : null}
+              <View style={styles.photoEditActions}>
+                <Pressable style={styles.secondary} disabled={photoBusy} onPress={() => editingPhotoIndex !== null && editPhoto(editingPhotoIndex, "rotate")}>
+                  <Ionicons name="refresh-outline" size={19} color={colors.onSurface} />
+                  <Text style={styles.secondaryText}>Rotate 90°</Text>
+                </Pressable>
+                <Pressable style={styles.secondary} disabled={photoBusy} onPress={() => editingPhotoIndex !== null && editPhoto(editingPhotoIndex, "crop")}>
+                  <Ionicons name="crop-outline" size={19} color={colors.onSurface} />
+                  <Text style={styles.secondaryText}>Crop Square</Text>
+                </Pressable>
+              </View>
+              <Pressable style={styles.photoEditClose} onPress={() => setEditingPhotoIndex(null)}>
+                <Text style={styles.secondaryText}>Close</Text>
+              </Pressable>
+            </View>
+          </View>
+        </Modal>
         <Text style={styles.section}>Patient Details</Text>
         <Field label="MRNo" testID="patient-mrno-input" value={p.mrNo} onChangeText={set("mrNo")} placeholder="e.g. 10234" />
         <Field label="Patient Name" testID="patient-name-input" value={p.name} onChangeText={set("name")} placeholder="Full name" autoCapitalize="words" />
@@ -438,6 +500,11 @@ const useStyles = makeStyles((colors) => ({
   photoActions: { flexDirection: "row", gap: spacing.md, marginBottom: spacing.md, alignItems: "center", flexWrap: "wrap" },
   secondary: { flexDirection: "row", alignItems: "center", height: 48, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, paddingHorizontal: spacing.md, justifyContent: "center" },
   secondaryText: { fontFamily: fontFamily.semibold, color: colors.onSurface },
+  photoEditOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.72)", justifyContent: "center", padding: spacing.lg },
+  photoEditCard: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.lg, maxHeight: "90%" },
+  photoEditPreview: { width: "100%", height: 300, borderRadius: radius.md, backgroundColor: colors.surfaceSecondary, marginBottom: spacing.md },
+  photoEditActions: { flexDirection: "row", gap: spacing.sm },
+  photoEditClose: { alignItems: "center", paddingVertical: spacing.md, marginTop: spacing.sm },
   photoPlaceholder: { height: 140, borderRadius: radius.lg, backgroundColor: colors.surfaceTertiary, alignItems: "center", justifyContent: "center", marginBottom: spacing.md, gap: spacing.sm },
   hint: { fontFamily: fontFamily.regular, fontSize: fontSize.sm, color: colors.muted },
   photoStrip: { gap: spacing.md, paddingVertical: spacing.sm, paddingRight: spacing.md },
