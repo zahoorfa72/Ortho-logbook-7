@@ -43,7 +43,8 @@ export default function SettingsScreen() {
   }
 
   const rows: Row[] = [
-    { icon: "color-palette-outline", label: "Branding", sub: "App title, logo, colours", to: "/branding", testID: "settings-branding" },
+    { icon: "color-palette-outline", label: "Branding", sub: "App title, logo, colours and text styling", to: "/branding", testID: "settings-branding" },
+    { icon: "list-outline", label: "Procedures", sub: "Add, edit or remove procedure names", to: "/procedures", testID: "settings-procedures" },
     { icon: "keypad-outline", label: pinSet ? "Change Admin PIN" : "Set Admin PIN", sub: "Protect exports & settings", to: "/admin-pin", testID: "settings-pin" },
     { icon: "sync-outline", label: "Sync & Backup", sub: "Share data between phones (offline)", to: "/backup-restore", testID: "settings-sync" },
     { icon: "people-outline", label: "User Management", sub: "Add or restrict doctors & staff", to: "/user-management", testID: "settings-users" },
