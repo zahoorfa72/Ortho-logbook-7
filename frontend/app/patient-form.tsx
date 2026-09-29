@@ -47,7 +47,12 @@ export default function PatientForm() {
 
   const { data: patients } = useQuery<Patient[]>({ queryKey: ["patients"], queryFn: () => api.get("/patients") });
   const { data: procedures } = useQuery<Procedure[]>({ queryKey: ["procedures"], queryFn: () => api.get("/procedures") });
-  const { data: inventory } = useQuery<InventoryItem[]>({ queryKey: ["inventory"], queryFn: () => api.get("/inventory") });
+  const { data: inventory = [] } = useQuery<InventoryItem[]>({
+    queryKey: ["inventory", "patient-search", implantSearch.trim().toLowerCase()],
+    queryFn: () => api.get("/inventory?q=" + encodeURIComponent(implantSearch.trim())),
+    enabled: implantSearch.trim().length > 0,
+    staleTime: 10000,
+  });
   const existing = useMemo(() => (id ? patients?.find((p) => p.id === id) : undefined), [id, patients]);
 
   // Type-ahead sources: procedure catalogue + any procedure names used on past
@@ -66,18 +71,6 @@ export default function PatientForm() {
       .sort((a, b) => a.localeCompare(b))
       .map((n) => ({ key: n.toLowerCase(), label: n }));
   }, [procedures, patients]);
-
-  const implantSuggestions = useMemo<Suggestion[]>(
-    () =>
-      (inventory ?? [])
-        .filter((x) => x.name?.trim())
-        .map((x) => {
-          const label = [x.category, x.name, x.size].filter(Boolean).join(" · ");
-          return { key: x.id, label, detail: `${x.quantity} ${x.size ? "" : "pcs"} in stock` };
-        })
-        .sort((a, b) => a.label.localeCompare(b.label)),
-    [inventory],
-  );
 
   const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
   const [editingPhotoIndex, setEditingPhotoIndex] = useState<number | null>(null);
