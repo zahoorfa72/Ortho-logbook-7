@@ -208,33 +208,13 @@ export default function BrandingScreen() {
           on the app login screen. If you upload only one, it is used on both sides.
         </Text>
 
-        <Text style={[styles.label, { marginTop: spacing.md }]}>PDF sub-heading (2–3 lines)</Text>
+        <Text style={[styles.label, { marginTop: spacing.md }]}>PDF sub-heading</Text>
         <TextInput
           testID="branding-pdf-subtitle-input"
           value={draft.pdfSubtitle}
           onChangeText={set("pdfSubtitle")}
-
-        <Text style={[styles.label, { marginTop: spacing.md }]}>PDF heading style</Text>
-        <View style={styles.styleRow}>
-          {(["regular","medium","semibold","bold"] as const).map(v => (
-            <Pressable key={v} onPress={() => setDraft(d => ({...d, pdfTitleFont:v}))} style={[styles.styleChip,{backgroundColor:draft.pdfTitleFont===v?colors.brandPrimary:colors.surfaceSecondary}]}>
-              <Text style={[styles.styleChipText,{color:draft.pdfTitleFont===v?colors.onBrandPrimary:colors.onSurface}]}>{v}</Text>
-            </Pressable>
-          ))}
-        </View>
-        <View style={styles.sizeRow}>
-          <Text style={styles.colorLabel}>Heading size</Text>
-          <TextInput keyboardType="number-pad" value={String(draft.pdfTitleSize)} onChangeText={v => setDraft(d=>({...d,pdfTitleSize:Math.max(8,Math.min(72,Number(v)||24))}))} style={styles.smallSizeInput}/>
-        </View>
-        <Text style={styles.hint}>
-          Shown centred, below the app title in the PDF header. Kept short — 3 lines fit best.
-        </Text>
-        <Text style={[styles.label, { marginTop: spacing.md }]}>Selective bold for PDF sub-heading</Text>
-        <TextInput
-          value={draft.pdfSubtitle}
-          onChangeText={set("pdfSubtitle")}
           onSelectionChange={e => setSubtitleSelection(e.nativeEvent.selection)}
-          placeholder="Select words, then tap Bold. Use **bold** markers automatically."
+          placeholder="Write 2–3 lines. Select words, then tap Bold."
           placeholderTextColor={colors.muted}
           multiline
           numberOfLines={4}
@@ -249,7 +229,7 @@ export default function BrandingScreen() {
           }}>
             <Text style={[styles.styleChipText,{fontFamily:fontFamily.bold}]}>Bold selected</Text>
           </Pressable>
-          <Text style={styles.hint}>Only the selected words are formatted; other text stays normal.</Text>
+          <Text style={styles.hint}>Only the selected words become bold.</Text>
         </View>
         <View style={styles.styleRow}>
           {(["regular","medium","semibold","bold"] as const).map(v => (
@@ -263,47 +243,19 @@ export default function BrandingScreen() {
           <TextInput keyboardType="number-pad" value={String(draft.pdfSubtitleSize)} onChangeText={v => setDraft(d=>({...d,pdfSubtitleSize:Math.max(8,Math.min(48,Number(v)||12))}))} style={styles.smallSizeInput}/>
         </View>
 
-        <Text style={[styles.label, { marginTop: spacing.md }]}>PDF header layout</Text>
-        <View style={styles.layoutRow}>
-          {[
-            { key: "center", label: "Centre", icon: "reorder-four-outline" as const },
-            { key: "left", label: "Left", icon: "reorder-three-outline" as const },
-          ].map((opt) => {
-            const active = draft.pdfLogoLayout === opt.key;
-            return (
-              <Pressable
-                key={opt.key}
-                testID={`layout-${opt.key}`}
-                onPress={() => setDraft((d) => ({ ...d, pdfLogoLayout: opt.key as any }))}
-                style={[
-                  styles.layoutOption,
-                  { backgroundColor: active ? colors.brandPrimary : colors.surfaceSecondary },
-                ]}
-              >
-                <Ionicons
-                  name={opt.icon}
-                  size={18}
-                  color={active ? colors.onBrandPrimary : colors.onSurface}
-                />
-                <Text
-                  style={{
-                    fontFamily: fontFamily.semibold,
-                    fontSize: fontSize.sm,
-                    color: active ? colors.onBrandPrimary : colors.onSurface,
-                  }}
-                >
-                  {opt.label}
-                </Text>
-              </Pressable>
-            );
-          })}
+        <Text style={[styles.label, { marginTop: spacing.md }]}>PDF heading style</Text>
+        <View style={styles.styleRow}>
+          {(["regular","medium","semibold","bold"] as const).map(v => (
+            <Pressable key={v} onPress={() => setDraft(d => ({...d, pdfTitleFont:v}))} style={[styles.styleChip,{backgroundColor:draft.pdfTitleFont===v?colors.brandPrimary:colors.surfaceSecondary}]}>
+              <Text style={[styles.styleChipText,{color:draft.pdfTitleFont===v?colors.onBrandPrimary:colors.onSurface}]}>{v}</Text>
+            </Pressable>
+          ))}
         </View>
-        <Text style={styles.hint}>
-          <Text style={{ fontFamily: fontFamily.bold }}>Centre</Text> = title in the middle, one logo on each side.
-          {"\n"}
-          <Text style={{ fontFamily: fontFamily.bold }}>Left</Text> = compact — logo on left, title beside it.
-        </Text>
-
+        <View style={styles.sizeRow}>
+          <Text style={styles.colorLabel}>Heading size</Text>
+          <TextInput keyboardType="number-pad" value={String(draft.pdfTitleSize)} onChangeText={v => setDraft(d=>({...d,pdfTitleSize:Math.max(8,Math.min(72,Number(v)||24))}))} style={styles.smallSizeInput}/>
+        </View>
+        <Text style={styles.hint}>Heading and sub-heading styles affect the PDF header only.</Text>
         <Text style={[styles.section, { marginTop: spacing.xl }]}>Colour Presets</Text>
         <View style={styles.presets}>
           {BRANDING_PRESETS.map((p) => (
