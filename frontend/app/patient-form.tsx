@@ -78,6 +78,9 @@ export default function PatientForm() {
   const [editingPhotoOriginal, setEditingPhotoOriginal] = useState<string | null>(null);
   const [editingPhotoUri, setEditingPhotoUri] = useState<string | null>(null);
   const [photoBusy, setPhotoBusy] = useState(false);
+  const [cropScale, setCropScale] = useState(0.78);
+  const [cropX, setCropX] = useState(0.5);
+  const [cropY, setCropY] = useState(0.5);
   const [p, setP] = useState<Patient>(empty);
   const selectedImplants = p.implants || [];
   const addImplant = (item: InventoryItem) => {
@@ -232,6 +235,9 @@ export default function PatientForm() {
     setEditingPhotoIndex(idx);
     setEditingPhotoOriginal(uri);
     setEditingPhotoUri(uri);
+    setCropScale(0.78);
+    setCropX(0.5);
+    setCropY(0.5);
   };
 
   const closePhotoEditor = () => {
@@ -239,6 +245,9 @@ export default function PatientForm() {
     setEditingPhotoIndex(null);
     setEditingPhotoOriginal(null);
     setEditingPhotoUri(null);
+    setCropScale(0.78);
+    setCropX(0.5);
+    setCropY(0.5);
   };
 
   const editPhoto = async (action: "rotate" | "crop") => {
@@ -252,11 +261,13 @@ export default function PatientForm() {
         const size = await new Promise<{ width: number; height: number }>((resolve, reject) =>
           Image.getSize(editingPhotoUri, (width, height) => resolve({ width, height }), reject),
         );
-        const side = Math.min(size.width, size.height);
+        const side = Math.max(1, Math.round(Math.min(size.width, size.height) * cropScale));
+        const maxX = Math.max(0, size.width - side);
+        const maxY = Math.max(0, size.height - side);
         actions = [{
           crop: {
-            originX: Math.max(0, Math.round((size.width - side) / 2)),
-            originY: Math.max(0, Math.round((size.height - side) / 2)),
+            originX: Math.max(0, Math.min(maxX, Math.round(maxX * cropX))),
+            originY: Math.max(0, Math.min(maxY, Math.round(maxY * cropY))),
             width: side,
             height: side,
           },
@@ -267,6 +278,11 @@ export default function PatientForm() {
         format: ImageManipulator.SaveFormat.JPEG,
       });
       setEditingPhotoUri(result.uri);
+      if (action === "crop") {
+        setCropScale(0.78);
+        setCropX(0.5);
+        setCropY(0.5);
+      }
     } catch (e: any) {
       toast(e?.message || "Could not edit photo.", "error");
     } finally {
@@ -277,6 +293,9 @@ export default function PatientForm() {
   const resetPhotoEdits = () => {
     if (photoBusy || !editingPhotoOriginal) return;
     setEditingPhotoUri(editingPhotoOriginal);
+    setCropScale(0.78);
+    setCropX(0.5);
+    setCropY(0.5);
   };
 
   const savePhotoEdits = async () => {
@@ -379,7 +398,7 @@ export default function PatientForm() {
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.photoStrip}>
             {p.photos.map((uri, idx) => (
               <View key={`${uri}-${idx}`} style={styles.photoBox} testID={`patient-photo-${idx}`}>
-                <Pressable style={{ flex: 1 }} onPress={() => openPhotoEditor(idx)} testID={`open-patient-photo-${idx}`}>
+                <Pressable style={{ flex: 1 }} onPress={() => setSelectedPhoto(uri)} testID={`open-patient-photo-${idx}`}>
                   <Image source={{ uri }} style={styles.photoThumb} resizeMode="cover" />
                 </Pressable>
                 <Pressable style={styles.photoRemove} onPress={() => removePhoto(idx)} hitSlop={8} testID={`remove-photo-${idx}`}>
@@ -409,28 +428,44 @@ export default function PatientForm() {
                 ) : null}
               </View>
 
+              <View style={styles.cropControls}>
+                <View style={styles.cropControlHeader}>
+                  <View>
+                    <Text style={styles.cropTitle}>Crop area</Text>
+                    <Text style={styles.cropHint}>Adjust the frame, position it, then apply crop.</Text>
+                  </View>
+                  <Text style={styles.cropValue}>{Math.round(cropScale * 100)}%</Text>
+                </View>
+                <View style={styles.cropSizeRow}>
+                  <Pressable style={styles.cropCircleButton} disabled={photoBusy} onPress={() => setCropScale(v => Math.max(0.45, Number((v - 0.08).toFixed(2))))}>
+                    <Ionicons name="remove" size={20} color={colors.onSurface} />
+                  </Pressable>
+                  <View style={styles.cropTrack}><View style={[styles.cropTrackFill, { width: `${Math.round(((cropScale - 0.45) / 0.45) * 100)}%` }]} /></View>
+                  <Pressable style={styles.cropCircleButton} disabled={photoBusy} onPress={() => setCropScale(v => Math.min(0.9, Number((v + 0.08).toFixed(2))))}>
+                    <Ionicons name="add" size={20} color={colors.onSurface} />
+                  </Pressable>
+                </View>
+                <View style={styles.cropPosition}>
+                  <Pressable style={styles.cropArrow} disabled={photoBusy} onPress={() => setCropY(v => Math.max(0, Number((v - 0.08).toFixed(2))))}><Ionicons name="chevron-up" size={20} color={colors.onSurface} /></Pressable>
+                  <View style={styles.cropMiddle}>
+                    <Pressable style={styles.cropArrow} disabled={photoBusy} onPress={() => setCropX(v => Math.max(0, Number((v - 0.08).toFixed(2))))}><Ionicons name="chevron-back" size={20} color={colors.onSurface} /></Pressable>
+                    <View style={styles.cropCenter}><Ionicons name="scan-outline" size={18} color={colors.muted} /></View>
+                    <Pressable style={styles.cropArrow} disabled={photoBusy} onPress={() => setCropX(v => Math.min(1, Number((v + 0.08).toFixed(2))))}><Ionicons name="chevron-forward" size={20} color={colors.onSurface} /></Pressable>
+                  </View>
+                  <Pressable style={styles.cropArrow} disabled={photoBusy} onPress={() => setCropY(v => Math.min(1, Number((v + 0.08).toFixed(2))))}><Ionicons name="chevron-down" size={20} color={colors.onSurface} /></Pressable>
+                </View>
+              </View>
+
               <View style={styles.photoEditActions}>
-                <Pressable
-                  style={styles.photoTool}
-                  disabled={photoBusy}
-                  onPress={() => editPhoto("rotate")}
-                >
-                  <Ionicons name="refresh-outline" size={20} color={colors.onSurface} />
+                <Pressable style={styles.photoTool} disabled={photoBusy} onPress={() => editPhoto("rotate")}>
+                  <Ionicons name="rotate-right-outline" size={20} color={colors.onSurface} />
                   <Text style={styles.photoToolText}>Rotate 90°</Text>
                 </Pressable>
-                <Pressable
-                  style={styles.photoTool}
-                  disabled={photoBusy}
-                  onPress={() => editPhoto("crop")}
-                >
+                <Pressable style={styles.photoTool} disabled={photoBusy} onPress={() => editPhoto("crop")}>
                   <Ionicons name="crop-outline" size={20} color={colors.onSurface} />
-                  <Text style={styles.photoToolText}>Crop Square</Text>
+                  <Text style={styles.photoToolText}>Apply Crop</Text>
                 </Pressable>
-                <Pressable
-                  style={styles.photoTool}
-                  disabled={photoBusy}
-                  onPress={resetPhotoEdits}
-                >
+                <Pressable style={styles.photoTool} disabled={photoBusy} onPress={resetPhotoEdits}>
                   <Ionicons name="refresh-circle-outline" size={20} color={colors.onSurface} />
                   <Text style={styles.photoToolText}>Reset</Text>
                 </Pressable>
@@ -540,6 +575,21 @@ export default function PatientForm() {
           {!!selectedPhoto && (
             <Image source={{ uri: selectedPhoto }} style={styles.photoFull} resizeMode="contain" />
           )}
+          {!!selectedPhoto && (
+            <View style={styles.photoViewerToolbar}>
+              <Pressable style={styles.photoViewerAction} onPress={() => {
+                const idx = p.photos.indexOf(selectedPhoto);
+                if (idx >= 0) { setSelectedPhoto(null); openPhotoEditor(idx); }
+              }}>
+                <Ionicons name="create-outline" size={19} color="#FFFFFF" />
+                <Text style={styles.photoViewerActionText}>Edit photo</Text>
+              </Pressable>
+              <Pressable style={styles.photoViewerAction} onPress={() => setSelectedPhoto(null)}>
+                <Ionicons name="checkmark" size={19} color="#FFFFFF" />
+                <Text style={styles.photoViewerActionText}>Done</Text>
+              </Pressable>
+            </View>
+          )}
         </View>
       </Modal>
 
@@ -564,6 +614,22 @@ const useStyles = makeStyles((colors) => ({
   photoActions: { flexDirection: "row", gap: spacing.md, marginBottom: spacing.md, alignItems: "center", flexWrap: "wrap" },
   secondary: { flexDirection: "row", alignItems: "center", height: 48, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, paddingHorizontal: spacing.md, justifyContent: "center" },
   secondaryText: { fontFamily: fontFamily.semibold, color: colors.onSurface },
+  cropControls: { backgroundColor: colors.surfaceSecondary, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, padding: spacing.md, marginBottom: spacing.md },
+  cropControlHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: spacing.sm },
+  cropTitle: { fontFamily: fontFamily.semibold, fontSize: fontSize.sm, color: colors.onSurface },
+  cropHint: { fontFamily: fontFamily.regular, fontSize: fontSize.xs, color: colors.muted, marginTop: 2 },
+  cropValue: { fontFamily: fontFamily.bold, fontSize: fontSize.sm, color: colors.brandPrimary },
+  cropSizeRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  cropCircleButton: { width: 38, height: 38, borderRadius: 19, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" },
+  cropTrack: { flex: 1, height: 6, borderRadius: 3, backgroundColor: colors.border, overflow: "hidden" },
+  cropTrackFill: { height: "100%", backgroundColor: colors.brandPrimary, borderRadius: 3 },
+  cropPosition: { alignItems: "center", marginTop: spacing.sm },
+  cropMiddle: { flexDirection: "row", alignItems: "center", gap: spacing.lg },
+  cropArrow: { width: 38, height: 38, borderRadius: 19, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" },
+  cropCenter: { width: 44, height: 44, borderRadius: 10, borderWidth: 1, borderColor: colors.border, alignItems: "center", justifyContent: "center", backgroundColor: colors.surface },
+  photoViewerToolbar: { position: "absolute", bottom: 32, left: 20, right: 20, flexDirection: "row", justifyContent: "center", gap: spacing.sm },
+  photoViewerAction: { minWidth: 120, height: 46, borderRadius: 23, paddingHorizontal: spacing.md, backgroundColor: "rgba(0,0,0,0.68)", borderWidth: 1, borderColor: "rgba(255,255,255,0.25)", flexDirection: "row", alignItems: "center", justifyContent: "center", gap: spacing.xs },
+  photoViewerActionText: { fontFamily: fontFamily.semibold, color: "#FFFFFF", fontSize: fontSize.sm },
   photoEditOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.72)", justifyContent: "center", padding: spacing.lg },
   photoEditCard: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.lg, width: "100%", maxWidth: 520, maxHeight: "92%" },
   photoEditHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: spacing.md },
