@@ -219,16 +219,26 @@ async function listPatients(): Promise<Patient[]> {
     ? db.getAllSync<any>("SELECT * FROM patients ORDER BY date DESC, created_at DESC")
     : db.getAllSync<any>("SELECT * FROM patients WHERE created_by=? ORDER BY date DESC, created_at DESC", [me.id]);
   const patients = rows.map(fromPatient);
-  for (const p of patients) {
-    const rows2 = db.getAllSync<any>(
-      "SELECT id,inventory_id,name,category,size,quantity FROM patient_implants WHERE patient_id=? ORDER BY created_at ASC",
-      [p.id],
+  if (patients.length) {
+    const ids = patients.map((p) => p.id);
+    const placeholders = ids.map(() => "?").join(",");
+    const implantRows = db.getAllSync<any>(
+      `SELECT id,patient_id,inventory_id,name,category,size,quantity FROM patient_implants
+       WHERE patient_id IN (${placeholders}) ORDER BY created_at ASC`,
+      ids,
     );
-    if (rows2.length) {
-      (p as any).implants = rows2.map((x:any) => ({
+    const byPatient = new Map<string, any[]>();
+    for (const x of implantRows) {
+      const list = byPatient.get(x.patient_id) || [];
+      list.push({
         id:x.id, inventoryId:x.inventory_id || "", name:x.name || "",
         category:x.category || "", size:x.size || "", quantity:Number(x.quantity || 1),
-      }));
+      });
+      byPatient.set(x.patient_id, list);
+    }
+    for (const p of patients) {
+      const items = byPatient.get(p.id);
+      if (items?.length) (p as any).implants = items;
     }
   }
 
@@ -377,6 +387,16 @@ export const api = {
       const item = { id: id(), name };
       db.runSync("INSERT INTO procedures (id,name) VALUES (?,?)", [item.id, item.name]);
       return item as any;
+    }
+    const procPut = path.match(/^\/procedures\/(.+)$/);
+    if (procPut) {
+      await requireAdmin();
+      const name = String(body?.name || "").trim();
+      if (!name) throw new Error("Procedure name is required.");
+      const duplicate = db.getFirstSync<any>("SELECT id FROM procedures WHERE LOWER(name)=LOWER(?) AND id<>? LIMIT 1",[name,procPut[1]]);
+      if (duplicate) throw new Error("A procedure with this name already exists.");
+      db.runSync("UPDATE procedures SET name=? WHERE id=?",[name,procPut[1]]);
+      return { id:procPut[1], name } as any;
     }
     if (path === "/inventory") {
       await requireAdmin();
