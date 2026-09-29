@@ -75,6 +75,8 @@ export default function PatientForm() {
 
   const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
   const [editingPhotoIndex, setEditingPhotoIndex] = useState<number | null>(null);
+  const [editingPhotoOriginal, setEditingPhotoOriginal] = useState<string | null>(null);
+  const [editingPhotoUri, setEditingPhotoUri] = useState<string | null>(null);
   const [photoBusy, setPhotoBusy] = useState(false);
   const [p, setP] = useState<Patient>(empty);
   const selectedImplants = p.implants || [];
@@ -223,9 +225,24 @@ export default function PatientForm() {
   const removePhoto = (idx: number) => {
     setP((x) => ({ ...x, photos: x.photos.filter((_, i) => i !== idx) }));
   };
-  const editPhoto = async (idx: number, action: "rotate" | "crop") => {
+  const openPhotoEditor = (idx: number) => {
     const uri = p.photos[idx];
     if (!uri) return;
+    setSelectedPhoto(null);
+    setEditingPhotoIndex(idx);
+    setEditingPhotoOriginal(uri);
+    setEditingPhotoUri(uri);
+  };
+
+  const closePhotoEditor = () => {
+    if (photoBusy) return;
+    setEditingPhotoIndex(null);
+    setEditingPhotoOriginal(null);
+    setEditingPhotoUri(null);
+  };
+
+  const editPhoto = async (action: "rotate" | "crop") => {
+    if (!editingPhotoUri) return;
     setPhotoBusy(true);
     try {
       let actions: any[] = [];
@@ -233,7 +250,7 @@ export default function PatientForm() {
         actions = [{ rotate: 90 }];
       } else {
         const size = await new Promise<{ width: number; height: number }>((resolve, reject) =>
-          Image.getSize(uri, (width, height) => resolve({ width, height }), reject),
+          Image.getSize(editingPhotoUri, (width, height) => resolve({ width, height }), reject),
         );
         const side = Math.min(size.width, size.height);
         actions = [{
@@ -245,17 +262,36 @@ export default function PatientForm() {
           },
         }];
       }
-      const result = await ImageManipulator.manipulateAsync(uri, actions, {
+      const result = await ImageManipulator.manipulateAsync(editingPhotoUri, actions, {
         compress: 0.9,
         format: ImageManipulator.SaveFormat.JPEG,
       });
-      const permanent = await persistPhoto(result.uri);
-      setP((x) => ({ ...x, photos: x.photos.map((v, i) => i === idx ? permanent : v) }));
-      setEditingPhotoIndex(null);
-      setSelectedPhoto(null);
-      toast(action === "rotate" ? "Photo rotated." : "Photo cropped.", "success");
+      setEditingPhotoUri(result.uri);
     } catch (e: any) {
       toast(e?.message || "Could not edit photo.", "error");
+    } finally {
+      setPhotoBusy(false);
+    }
+  };
+
+  const resetPhotoEdits = () => {
+    if (photoBusy || !editingPhotoOriginal) return;
+    setEditingPhotoUri(editingPhotoOriginal);
+  };
+
+  const savePhotoEdits = async () => {
+    if (editingPhotoIndex === null || !editingPhotoUri) return;
+    setPhotoBusy(true);
+    try {
+      const permanent = await persistPhoto(editingPhotoUri);
+      setP((x) => ({
+        ...x,
+        photos: x.photos.map((v, i) => i === editingPhotoIndex ? permanent : v),
+      }));
+      toast("Photo changes saved.", "success");
+      closePhotoEditor();
+    } catch (e: any) {
+      toast(e?.message || "Could not save photo changes.", "error");
     } finally {
       setPhotoBusy(false);
     }
@@ -343,7 +379,7 @@ export default function PatientForm() {
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.photoStrip}>
             {p.photos.map((uri, idx) => (
               <View key={`${uri}-${idx}`} style={styles.photoBox} testID={`patient-photo-${idx}`}>
-                <Pressable style={{ flex: 1 }} onPress={() => { setSelectedPhoto(uri); setEditingPhotoIndex(idx); }} testID={`open-patient-photo-${idx}`}>
+                <Pressable style={{ flex: 1 }} onPress={() => openPhotoEditor(idx)} testID={`open-patient-photo-${idx}`}>
                   <Image source={{ uri }} style={styles.photoThumb} resizeMode="cover" />
                 </Pressable>
                 <Pressable style={styles.photoRemove} onPress={() => removePhoto(idx)} hitSlop={8} testID={`remove-photo-${idx}`}>
@@ -354,26 +390,61 @@ export default function PatientForm() {
           </ScrollView>
         )}
 
-        <Modal visible={editingPhotoIndex !== null} transparent animationType="slide" onRequestClose={() => setEditingPhotoIndex(null)}>
+        <Modal visible={editingPhotoIndex !== null} transparent animationType="fade" onRequestClose={closePhotoEditor}>
           <View style={styles.photoEditOverlay}>
             <View style={styles.photoEditCard}>
-              <Text style={styles.section}>Edit Patient Photo</Text>
-              {editingPhotoIndex !== null && p.photos[editingPhotoIndex] ? (
-                <Image source={{ uri: p.photos[editingPhotoIndex] }} style={styles.photoEditPreview} resizeMode="contain" />
-              ) : null}
-              <View style={styles.photoEditActions}>
-                <Pressable style={styles.secondary} disabled={photoBusy} onPress={() => editingPhotoIndex !== null && editPhoto(editingPhotoIndex, "rotate")}>
-                  <Ionicons name="refresh-outline" size={19} color={colors.onSurface} />
-                  <Text style={styles.secondaryText}>Rotate 90°</Text>
-                </Pressable>
-                <Pressable style={styles.secondary} disabled={photoBusy} onPress={() => editingPhotoIndex !== null && editPhoto(editingPhotoIndex, "crop")}>
-                  <Ionicons name="crop-outline" size={19} color={colors.onSurface} />
-                  <Text style={styles.secondaryText}>Crop Square</Text>
+              <View style={styles.photoEditHeader}>
+                <View>
+                  <Text style={styles.photoEditTitle}>Edit Patient Photo</Text>
+                  <Text style={styles.photoEditHint}>Rotate or crop, then save when you are satisfied.</Text>
+                </View>
+                <Pressable onPress={closePhotoEditor} disabled={photoBusy} style={styles.photoEditIconButton}>
+                  <Ionicons name="close" size={22} color={colors.onSurface} />
                 </Pressable>
               </View>
-              <Pressable style={styles.photoEditClose} onPress={() => setEditingPhotoIndex(null)}>
-                <Text style={styles.secondaryText}>Close</Text>
-              </Pressable>
+
+              <View style={styles.photoEditPreviewWrap}>
+                {editingPhotoUri ? (
+                  <Image source={{ uri: editingPhotoUri }} style={styles.photoEditPreview} resizeMode="contain" />
+                ) : null}
+              </View>
+
+              <View style={styles.photoEditActions}>
+                <Pressable
+                  style={styles.photoTool}
+                  disabled={photoBusy}
+                  onPress={() => editPhoto("rotate")}
+                >
+                  <Ionicons name="refresh-outline" size={20} color={colors.onSurface} />
+                  <Text style={styles.photoToolText}>Rotate 90°</Text>
+                </Pressable>
+                <Pressable
+                  style={styles.photoTool}
+                  disabled={photoBusy}
+                  onPress={() => editPhoto("crop")}
+                >
+                  <Ionicons name="crop-outline" size={20} color={colors.onSurface} />
+                  <Text style={styles.photoToolText}>Crop Square</Text>
+                </Pressable>
+                <Pressable
+                  style={styles.photoTool}
+                  disabled={photoBusy}
+                  onPress={resetPhotoEdits}
+                >
+                  <Ionicons name="refresh-circle-outline" size={20} color={colors.onSurface} />
+                  <Text style={styles.photoToolText}>Reset</Text>
+                </Pressable>
+              </View>
+
+              <View style={styles.photoEditFooter}>
+                <Pressable style={styles.photoCancelButton} disabled={photoBusy} onPress={closePhotoEditor}>
+                  <Text style={styles.photoCancelText}>Cancel</Text>
+                </Pressable>
+                <Pressable style={styles.photoSaveButton} disabled={photoBusy} onPress={savePhotoEdits}>
+                  <Ionicons name="checkmark" size={19} color={colors.onBrandPrimary} />
+                  <Text style={styles.photoSaveText}>{photoBusy ? "Working…" : "Save changes"}</Text>
+                </Pressable>
+              </View>
             </View>
           </View>
         </Modal>
@@ -494,10 +565,21 @@ const useStyles = makeStyles((colors) => ({
   secondary: { flexDirection: "row", alignItems: "center", height: 48, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, paddingHorizontal: spacing.md, justifyContent: "center" },
   secondaryText: { fontFamily: fontFamily.semibold, color: colors.onSurface },
   photoEditOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.72)", justifyContent: "center", padding: spacing.lg },
-  photoEditCard: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.lg, maxHeight: "90%" },
-  photoEditPreview: { width: "100%", height: 300, borderRadius: radius.md, backgroundColor: colors.surfaceSecondary, marginBottom: spacing.md },
-  photoEditActions: { flexDirection: "row", gap: spacing.sm },
-  photoEditClose: { alignItems: "center", paddingVertical: spacing.md, marginTop: spacing.sm },
+  photoEditCard: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.lg, width: "100%", maxWidth: 520, maxHeight: "92%" },
+  photoEditHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: spacing.md },
+  photoEditTitle: { fontFamily: fontFamily.bold, fontSize: fontSize.lg, color: colors.onSurface },
+  photoEditHint: { fontFamily: fontFamily.regular, fontSize: fontSize.xs, color: colors.muted, marginTop: 3, paddingRight: spacing.md },
+  photoEditIconButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.surfaceSecondary, borderWidth: 1, borderColor: colors.border, alignItems: "center", justifyContent: "center" },
+  photoEditPreviewWrap: { width: "100%", height: 360, borderRadius: radius.md, backgroundColor: "#111111", overflow: "hidden", marginBottom: spacing.md, alignItems: "center", justifyContent: "center" },
+  photoEditPreview: { width: "100%", height: "100%" },
+  photoEditActions: { flexDirection: "row", gap: spacing.sm, marginBottom: spacing.md },
+  photoTool: { flex: 1, minHeight: 72, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surfaceSecondary, alignItems: "center", justifyContent: "center", gap: 5 },
+  photoToolText: { fontFamily: fontFamily.semibold, fontSize: fontSize.xs, color: colors.onSurface },
+  photoEditFooter: { flexDirection: "row", gap: spacing.sm, borderTopWidth: 1, borderTopColor: colors.border, paddingTop: spacing.md },
+  photoCancelButton: { flex: 1, minHeight: 48, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, alignItems: "center", justifyContent: "center" },
+  photoCancelText: { fontFamily: fontFamily.semibold, color: colors.onSurface },
+  photoSaveButton: { flex: 1.5, minHeight: 48, borderRadius: radius.md, backgroundColor: colors.brandPrimary, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: spacing.xs },
+  photoSaveText: { fontFamily: fontFamily.bold, color: colors.onBrandPrimary },
   photoPlaceholder: { height: 140, borderRadius: radius.lg, backgroundColor: colors.surfaceTertiary, alignItems: "center", justifyContent: "center", marginBottom: spacing.md, gap: spacing.sm },
   hint: { fontFamily: fontFamily.regular, fontSize: fontSize.sm, color: colors.muted },
   photoStrip: { gap: spacing.md, paddingVertical: spacing.sm, paddingRight: spacing.md },
