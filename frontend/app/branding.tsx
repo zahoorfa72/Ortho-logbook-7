@@ -2,7 +2,7 @@ import { router } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system";
 import { Image } from "expo-image";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -52,6 +52,9 @@ export default function BrandingScreen() {
   const [draft, setDraft] = useState<BrandingConfig>(branding);
   const [saving, setSaving] = useState(false);
   const [subtitleSelection, setSubtitleSelection] = useState({ start: 0, end: 0 });
+  const [subtitleSizeText, setSubtitleSizeText] = useState(String(branding.pdfSubtitleSize));
+  const [titleSizeText, setTitleSizeText] = useState(String(branding.pdfTitleSize));
+  const subtitleInputRef = useRef<TextInput>(null);
 
   const set = (k: keyof BrandingConfig) => (v: string) =>
     setDraft((d) => ({ ...d, [k]: v }));
@@ -126,6 +129,42 @@ export default function BrandingScreen() {
       onTertiary: palette.onTertiary || d.onTertiary,
       onPrimary: palette.onPrimary || d.onPrimary,
     }));
+  };
+
+  const updateSelectedBold = () => {
+    const { start, end } = subtitleSelection;
+    if (start === end) {
+      toast("Select the letters or words to make bold.", "info");
+      return;
+    }
+    const value = draft.pdfSubtitle;
+    const selected = value.slice(start, end);
+    const before = value.slice(0, start);
+    const after = value.slice(end);
+    const alreadyBold = before.endsWith("**") && after.startsWith("**");
+    const next = alreadyBold
+      ? before.slice(0, -2) + selected + after.slice(2)
+      : before + "**" + selected + "**" + after;
+    const nextEnd = alreadyBold ? end - 4 : end + 4;
+    setDraft(d => ({ ...d, pdfSubtitle: next }));
+    requestAnimationFrame(() => {
+      subtitleInputRef.current?.focus();
+      setSubtitleSelection({ start, end: nextEnd });
+    });
+  };
+
+  const commitSubtitleSize = () => {
+    const n = Number(subtitleSizeText);
+    const value = Number.isFinite(n) ? Math.max(8, Math.min(48, Math.round(n))) : branding.pdfSubtitleSize;
+    setSubtitleSizeText(String(value));
+    setDraft(d => ({ ...d, pdfSubtitleSize: value }));
+  };
+
+  const commitTitleSize = () => {
+    const n = Number(titleSizeText);
+    const value = Number.isFinite(n) ? Math.max(8, Math.min(72, Math.round(n))) : branding.pdfTitleSize;
+    setTitleSizeText(String(value));
+    setDraft(d => ({ ...d, pdfTitleSize: value }));
   };
 
   const onSave = async () => {
@@ -210,6 +249,7 @@ export default function BrandingScreen() {
 
         <Text style={[styles.label, { marginTop: spacing.md }]}>PDF sub-heading</Text>
         <TextInput
+          ref={subtitleInputRef}
           testID="branding-pdf-subtitle-input"
           value={draft.pdfSubtitle}
           onChangeText={set("pdfSubtitle")}
@@ -240,7 +280,7 @@ export default function BrandingScreen() {
         </View>
         <View style={styles.sizeRow}>
           <Text style={styles.colorLabel}>Sub-heading size</Text>
-          <TextInput keyboardType="number-pad" value={String(draft.pdfSubtitleSize)} onChangeText={v => setDraft(d=>({...d,pdfSubtitleSize:Math.max(8,Math.min(48,Number(v)||12))}))} style={styles.smallSizeInput}/>
+          <TextInput keyboardType="number-pad" value={subtitleSizeText} onChangeText={setSubtitleSizeText} onBlur={commitSubtitleSize} onSubmitEditing={commitSubtitleSize} returnKeyType="done" style={styles.smallSizeInput}/>
         </View>
 
         <Text style={[styles.label, { marginTop: spacing.md }]}>PDF heading style</Text>
@@ -253,7 +293,7 @@ export default function BrandingScreen() {
         </View>
         <View style={styles.sizeRow}>
           <Text style={styles.colorLabel}>Heading size</Text>
-          <TextInput keyboardType="number-pad" value={String(draft.pdfTitleSize)} onChangeText={v => setDraft(d=>({...d,pdfTitleSize:Math.max(8,Math.min(72,Number(v)||24))}))} style={styles.smallSizeInput}/>
+          <TextInput keyboardType="number-pad" value={titleSizeText} onChangeText={setTitleSizeText} onBlur={commitTitleSize} onSubmitEditing={commitTitleSize} returnKeyType="done" style={styles.smallSizeInput}/>
         </View>
         <Text style={styles.hint}>Heading and sub-heading styles affect the PDF header only.</Text>
         <Text style={[styles.section, { marginTop: spacing.xl }]}>Colour Presets</Text>
