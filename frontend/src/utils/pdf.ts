@@ -47,6 +47,15 @@ function ordinalSuffix(n: number) {
   return n + (s[(v - 20) % 10] || s[v] || s[0]);
 }
 
+function richSubtitleHtml(text: string, baseWeight: string) {
+  const parts = String(text || "").split("**");
+  return parts.map((part, i) => {
+    const safe = escapeHtml(part);
+    const weight = i % 2 === 1 ? "800" : baseWeight;
+    return `<span style="font-weight:${weight}">${safe}</span>`;
+  }).join("");
+}
+
 function header(branding: BrandingConfig, subtitle: string) {
   const leftLogo = branding.logoBase64
     ? `<img src="${branding.logoBase64}" class="logo" alt="left logo" />`
@@ -61,8 +70,12 @@ function header(branding: BrandingConfig, subtitle: string) {
     .map((l) => l.trim())
     .filter(Boolean)
     .slice(0, 4);
+  const titleWeight = branding.pdfTitleFont === "regular" ? "400" : branding.pdfTitleFont === "medium" ? "500" : branding.pdfTitleFont === "semibold" ? "600" : "800";
+  const subtitleWeight = branding.pdfSubtitleFont === "regular" ? "400" : branding.pdfSubtitleFont === "medium" ? "500" : branding.pdfSubtitleFont === "semibold" ? "600" : "800";
+  const titleSize = Number(branding.pdfTitleSize || 24);
+  const subtitleSize = Number(branding.pdfSubtitleSize || 12);
   const customBlock = customLines.length
-    ? `<div class="pdfCustom">${customLines.map((l) => `<div>${escapeHtml(l)}</div>`).join("")}</div>`
+    ? `<div class="pdfCustom" style="font-weight:${subtitleWeight};font-size:${subtitleSize}px">${customLines.map((l) => `<div>${richSubtitleHtml(l, subtitleWeight)}</div>`).join("")}</div>`
     : "";
   const layout = branding.pdfLogoLayout || "center";
   if (layout === "left") {
@@ -70,9 +83,9 @@ function header(branding: BrandingConfig, subtitle: string) {
       <div class="header headerLeft">
         <div class="logoSide">${leftLogo}</div>
         <div class="titleBlock titleBlockLeft">
-          <div class="title">${escapeHtml(branding.title)}</div>
+          <div class="title" style="font-size:${titleSize}px;font-weight:${titleWeight}">${escapeHtml(branding.title)}</div>
           ${customBlock}
-          <div class="subtitle">${escapeHtml(subtitle)}</div>
+          <div class="subtitle" style="font-size:${subtitleSize}px;font-weight:${subtitleWeight}">${escapeHtml(subtitle)}</div>
           <div class="printed">Generated on ${escapeHtml(new Date().toLocaleString())}</div>
         </div>
       </div>
