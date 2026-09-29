@@ -229,7 +229,7 @@ export default function PatientForm() {
     if (!uri) return;
     setPhotoBusy(true);
     try {
-      let actions: ImageManipulator.Action[] = [];
+      let actions: any[] = [];
       if (action === "rotate") {
         actions = [{ rotate: 90 }];
       } else {
