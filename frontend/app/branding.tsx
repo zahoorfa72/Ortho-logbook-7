@@ -141,15 +141,15 @@ export default function BrandingScreen() {
     const selected = value.slice(start, end);
     const before = value.slice(0, start);
     const after = value.slice(end);
-    const alreadyBold = before.endsWith("**") && after.startsWith("**");
-    const next = alreadyBold
+    const wrapped = before.endsWith("**") && after.startsWith("**");
+    const next = wrapped
       ? before.slice(0, -2) + selected + after.slice(2)
       : before + "**" + selected + "**" + after;
-    const nextEnd = alreadyBold ? end - 4 : end + 4;
+    const nextSelection = wrapped ? { start: Math.max(0, start - 2), end: Math.max(0, end - 2) } : { start: start + 2, end: end + 2 };
     setDraft(d => ({ ...d, pdfSubtitle: next }));
     requestAnimationFrame(() => {
       subtitleInputRef.current?.focus();
-      setSubtitleSelection({ start, end: nextEnd });
+      setSubtitleSelection(nextSelection);
     });
   };
 
@@ -262,11 +262,7 @@ export default function BrandingScreen() {
           style={[styles.input, styles.multilineInput]}
         />
         <View style={styles.styleRow}>
-          <Pressable style={styles.styleChip} onPress={() => {
-            const {start,end}=subtitleSelection;
-            if(start===end) { toast("Select the letters or words to make bold.", "info"); return; }
-            setDraft(d => ({...d, pdfSubtitle: d.pdfSubtitle.slice(0,start) + "**" + d.pdfSubtitle.slice(start,end) + "**" + d.pdfSubtitle.slice(end)}));
-          }}>
+          <Pressable style={styles.styleChip} onPress={updateSelectedBold}>
             <Text style={[styles.styleChipText,{fontFamily:fontFamily.bold}]}>Bold selected</Text>
           </Pressable>
           <Text style={styles.hint}>Only the selected words become bold.</Text>
@@ -280,7 +276,15 @@ export default function BrandingScreen() {
         </View>
         <View style={styles.sizeRow}>
           <Text style={styles.colorLabel}>Sub-heading size</Text>
-          <TextInput keyboardType="number-pad" value={subtitleSizeText} onChangeText={setSubtitleSizeText} onBlur={commitSubtitleSize} onSubmitEditing={commitSubtitleSize} returnKeyType="done" style={styles.smallSizeInput}/>
+          <View style={styles.sizeControls}>
+            <Pressable style={styles.sizeButton} onPress={() => { const n=Math.max(8, Number(draft.pdfSubtitleSize||12)-1); setDraft(d=>({...d,pdfSubtitleSize:n})); setSubtitleSizeText(String(n)); }}>
+              <Ionicons name="remove" size={18} color={colors.onSurface} />
+            </Pressable>
+            <TextInput keyboardType="number-pad" value={subtitleSizeText} onChangeText={setSubtitleSizeText} onBlur={commitSubtitleSize} onSubmitEditing={commitSubtitleSize} returnKeyType="done" style={styles.smallSizeInput}/>
+            <Pressable style={styles.sizeButton} onPress={() => { const n=Math.min(48, Number(draft.pdfSubtitleSize||12)+1); setDraft(d=>({...d,pdfSubtitleSize:n})); setSubtitleSizeText(String(n)); }}>
+              <Ionicons name="add" size={18} color={colors.onSurface} />
+            </Pressable>
+          </View>
         </View>
 
         <Text style={[styles.label, { marginTop: spacing.md }]}>PDF heading style</Text>
@@ -293,7 +297,15 @@ export default function BrandingScreen() {
         </View>
         <View style={styles.sizeRow}>
           <Text style={styles.colorLabel}>Heading size</Text>
-          <TextInput keyboardType="number-pad" value={titleSizeText} onChangeText={setTitleSizeText} onBlur={commitTitleSize} onSubmitEditing={commitTitleSize} returnKeyType="done" style={styles.smallSizeInput}/>
+          <View style={styles.sizeControls}>
+            <Pressable style={styles.sizeButton} onPress={() => { const n=Math.max(8, Number(draft.pdfTitleSize||24)-1); setDraft(d=>({...d,pdfTitleSize:n})); setTitleSizeText(String(n)); }}>
+              <Ionicons name="remove" size={18} color={colors.onSurface} />
+            </Pressable>
+            <TextInput keyboardType="number-pad" value={titleSizeText} onChangeText={setTitleSizeText} onBlur={commitTitleSize} onSubmitEditing={commitTitleSize} returnKeyType="done" style={styles.smallSizeInput}/>
+            <Pressable style={styles.sizeButton} onPress={() => { const n=Math.min(72, Number(draft.pdfTitleSize||24)+1); setDraft(d=>({...d,pdfTitleSize:n})); setTitleSizeText(String(n)); }}>
+              <Ionicons name="add" size={18} color={colors.onSurface} />
+            </Pressable>
+          </View>
         </View>
         <Text style={styles.hint}>Heading and sub-heading styles affect the PDF header only.</Text>
         <Text style={[styles.section, { marginTop: spacing.xl }]}>Colour Presets</Text>
@@ -438,6 +450,8 @@ const useStyles = makeStyles((colors) => ({
   styleChip: { paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.border },
   styleChipText: { fontFamily: fontFamily.medium, fontSize: fontSize.sm },
   sizeRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: spacing.md },
+  sizeControls: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
+  sizeButton: { width: 36, height: 36, borderRadius: 18, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surfaceSecondary, alignItems: "center", justifyContent: "center" },
   smallSizeInput: { width: 72, textAlign: "center", backgroundColor: colors.surfaceSecondary, borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, paddingVertical: spacing.sm, color: colors.onSurface, fontFamily: fontFamily.medium },
   twinLogos: { flexDirection: "row", gap: spacing.md, marginBottom: spacing.sm },
   layoutRow: { flexDirection: "row", gap: spacing.sm, marginBottom: spacing.sm },
