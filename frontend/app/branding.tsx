@@ -51,6 +51,7 @@ export default function BrandingScreen() {
 
   const [draft, setDraft] = useState<BrandingConfig>(branding);
   const [saving, setSaving] = useState(false);
+  const [subtitleSelection, setSubtitleSelection] = useState({ start: 0, end: 0 });
 
   const set = (k: keyof BrandingConfig) => (v: string) =>
     setDraft((d) => ({ ...d, [k]: v }));
@@ -212,16 +213,55 @@ export default function BrandingScreen() {
           testID="branding-pdf-subtitle-input"
           value={draft.pdfSubtitle}
           onChangeText={set("pdfSubtitle")}
-          placeholder={"e.g.\nGovt. Hospital, Karachi\nDr. XYZ — Consultant Orthopaedic Surgeon\nPMDC #12345"}
+
+        <Text style={[styles.label, { marginTop: spacing.md }]}>PDF heading style</Text>
+        <View style={styles.styleRow}>
+          {(["regular","medium","semibold","bold"] as const).map(v => (
+            <Pressable key={v} onPress={() => setDraft(d => ({...d, pdfTitleFont:v}))} style={[styles.styleChip,{backgroundColor:draft.pdfTitleFont===v?colors.brandPrimary:colors.surfaceSecondary}]}>
+              <Text style={[styles.styleChipText,{color:draft.pdfTitleFont===v?colors.onBrandPrimary:colors.onSurface}]}>{v}</Text>
+            </Pressable>
+          ))}
+        </View>
+        <View style={styles.sizeRow}>
+          <Text style={styles.colorLabel}>Heading size</Text>
+          <TextInput keyboardType="number-pad" value={String(draft.pdfTitleSize)} onChangeText={v => setDraft(d=>({...d,pdfTitleSize:Math.max(8,Math.min(72,Number(v)||24))}))} style={styles.smallSizeInput}/>
+        </View>
+        <Text style={styles.hint}>
+          Shown centred, below the app title in the PDF header. Kept short — 3 lines fit best.
+        </Text>
+        <Text style={[styles.label, { marginTop: spacing.md }]}>Selective bold for PDF sub-heading</Text>
+        <TextInput
+          value={draft.pdfSubtitle}
+          onChangeText={set("pdfSubtitle")}
+          onSelectionChange={e => setSubtitleSelection(e.nativeEvent.selection)}
+          placeholder="Select words, then tap Bold. Use **bold** markers automatically."
           placeholderTextColor={colors.muted}
           multiline
           numberOfLines={4}
           maxLength={220}
           style={[styles.input, styles.multilineInput]}
         />
-        <Text style={styles.hint}>
-          Shown centred, below the app title in the PDF header. Kept short — 3 lines fit best.
-        </Text>
+        <View style={styles.styleRow}>
+          <Pressable style={styles.styleChip} onPress={() => {
+            const {start,end}=subtitleSelection;
+            if(start===end) { toast("Select the letters or words to make bold.", "info"); return; }
+            setDraft(d => ({...d, pdfSubtitle: d.pdfSubtitle.slice(0,start) + "**" + d.pdfSubtitle.slice(start,end) + "**" + d.pdfSubtitle.slice(end)}));
+          }}>
+            <Text style={[styles.styleChipText,{fontFamily:fontFamily.bold}]}>Bold selected</Text>
+          </Pressable>
+          <Text style={styles.hint}>Only the selected words are formatted; other text stays normal.</Text>
+        </View>
+        <View style={styles.styleRow}>
+          {(["regular","medium","semibold","bold"] as const).map(v => (
+            <Pressable key={v} onPress={() => setDraft(d => ({...d, pdfSubtitleFont:v}))} style={[styles.styleChip,{backgroundColor:draft.pdfSubtitleFont===v?colors.brandPrimary:colors.surfaceSecondary}]}>
+              <Text style={[styles.styleChipText,{color:draft.pdfSubtitleFont===v?colors.onBrandPrimary:colors.onSurface}]}>{v}</Text>
+            </Pressable>
+          ))}
+        </View>
+        <View style={styles.sizeRow}>
+          <Text style={styles.colorLabel}>Sub-heading size</Text>
+          <TextInput keyboardType="number-pad" value={String(draft.pdfSubtitleSize)} onChangeText={v => setDraft(d=>({...d,pdfSubtitleSize:Math.max(8,Math.min(48,Number(v)||12))}))} style={styles.smallSizeInput}/>
+        </View>
 
         <Text style={[styles.label, { marginTop: spacing.md }]}>PDF header layout</Text>
         <View style={styles.layoutRow}>
@@ -402,6 +442,11 @@ const useStyles = makeStyles((colors) => ({
     fontSize: fontSize.base,
     lineHeight: 20,
   },
+  styleRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.xs, alignItems: "center", marginBottom: spacing.sm },
+  styleChip: { paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.border },
+  styleChipText: { fontFamily: fontFamily.medium, fontSize: fontSize.sm },
+  sizeRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: spacing.md },
+  smallSizeInput: { width: 72, textAlign: "center", backgroundColor: colors.surfaceSecondary, borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, paddingVertical: spacing.sm, color: colors.onSurface, fontFamily: fontFamily.medium },
   twinLogos: { flexDirection: "row", gap: spacing.md, marginBottom: spacing.sm },
   layoutRow: { flexDirection: "row", gap: spacing.sm, marginBottom: spacing.sm },
   layoutOption: {
