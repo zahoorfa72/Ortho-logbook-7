@@ -76,7 +76,6 @@ export default function PatientForm() {
   const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
   const [editingPhotoIndex, setEditingPhotoIndex] = useState<number | null>(null);
   const [photoBusy, setPhotoBusy] = useState(false);
-  const [implantSearch, setImplantSearch] = useState("");
   const [p, setP] = useState<Patient>(empty);
   const selectedImplants = p.implants || [];
   const addImplant = (item: InventoryItem) => {
