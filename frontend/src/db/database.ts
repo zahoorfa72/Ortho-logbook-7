@@ -84,6 +84,9 @@ export function initializeDatabase() {
     CREATE INDEX IF NOT EXISTS idx_history_patient ON patient_history(patient_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_patient_implants_patient ON patient_implants(patient_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_patient_implants_inventory ON patient_implants(inventory_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_inventory_category_size ON inventory(category_id, size);
+    CREATE INDEX IF NOT EXISTS idx_inventory_name ON inventory(name);
+    CREATE INDEX IF NOT EXISTS idx_inventory_size ON inventory(size);
     CREATE INDEX IF NOT EXISTS idx_inventory_movements_item ON inventory_movements(inventory_id, created_at);
   `);
   // Non-destructive migration for databases created by older builds.
