@@ -49,6 +49,10 @@ export type BrandingConfig = {
   logoBase64Right: string; // Right logo (PDF only)
   pdfSubtitle: string;     // 2-3 lines shown below the title in PDF header
   pdfLogoLayout: "center" | "left"; // Header layout: centered title with side logos, or left-aligned
+  pdfTitleFont: "regular" | "medium" | "semibold" | "bold";
+  pdfTitleSize: number;
+  pdfSubtitleFont: "regular" | "medium" | "semibold" | "bold";
+  pdfSubtitleSize: number;
   // Full theme colors
   primary: string;
   onPrimary: string;
@@ -68,6 +72,10 @@ export const defaultBranding: BrandingConfig = {
   logoBase64Right: "",
   pdfSubtitle: "",
   pdfLogoLayout: "center",
+  pdfTitleFont: "bold",
+  pdfTitleSize: 24,
+  pdfSubtitleFont: "regular",
+  pdfSubtitleSize: 12,
   primary: light.brandPrimary,
   onPrimary: light.onBrandPrimary,
   secondary: light.brandSecondary,
