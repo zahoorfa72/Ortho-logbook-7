@@ -188,8 +188,14 @@ export default function PatientForm() {
 
   // No cropping (allowsEditing:false). Library allows multi-select.
   const addFromLibrary = async () => {
-    if (!(await ensureLibraryPermission())) return;
     try {
+      // Android's system photo picker does not require a runtime media
+      // permission. Avoid requesting permission immediately before launch:
+      // on some Android/Expo builds that can leave ImagePicker's
+      // ActivityResultLauncher unregistered when launch() is called.
+      await new Promise<void>((resolve) => {
+        InteractionManager.runAfterInteractions(() => resolve());
+      });
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ["images"],
         allowsEditing: false,
