@@ -1,3 +1,4 @@
+import { formatInventoryLabel } from "@/src/utils/inventory-label";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useMemo, useState } from "react";
 import {
@@ -281,7 +282,7 @@ export default function Inventory() {
               <View style={styles.row} testID={`inventory-row-${item.id}`}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.itemName} numberOfLines={2}>
-                    {item.category ? item.category + " · " : ""}{item.name}{item.size ? " · " + item.size : ""}
+                    {formatInventoryLabel(item.category, item.name, item.size)}
                   </Text>
                   <View style={styles.metaRow}>
                     <Text style={[styles.qty, low && styles.qtyLow]}>
