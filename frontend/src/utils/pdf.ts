@@ -1,5 +1,6 @@
 import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
+import { formatInventoryLabel } from "./inventory-label";
 import { Platform } from "react-native";
 
 import type { BrandingConfig } from "@/src/theme";
@@ -164,7 +165,7 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
                 <td>${escapeHtml(p.diagnosis)}</td>
                 <td>${escapeHtml(p.procedure)}<br/><span style="color:#7C7872;font-size:10px">${escapeHtml(
                   (p.implants && p.implants.length
-                    ? p.implants.map((x: any) => [x.category, x.name, x.size].filter(Boolean).join(" · ") + (x.quantity > 1 ? ` × ${x.quantity}` : "")).join(" • ")
+                    ? p.implants.map((x: any) => formatInventoryLabel(x.category, x.name, x.size) + (x.quantity > 1 ? ` × ${x.quantity}` : "")).join(" • ")
                     : [p.implant, p.implantII].filter(Boolean).join(" • ")),
                 )}</span></td>
               </tr>
@@ -263,7 +264,7 @@ export function buildInventoryHtml(
         <tr>
           <td>${idx + 1}</td>
           <td>
-            <strong>${escapeHtml([i.category, i.name, i.size].filter(Boolean).join(" · "))}</strong>
+            <strong>${escapeHtml(formatInventoryLabel(i.category, i.name, i.size))}</strong>
             ${low ? '<div style="color:#A24B00;font-size:10px;font-weight:800;margin-top:3px">THIS ITEM IS LOW STOCK</div>' : ""}
           </td>
           <td style="text-align:right">${i.quantity} ${escapeHtml(i.unit || "pcs")}</td>
