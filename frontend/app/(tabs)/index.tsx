@@ -3,6 +3,7 @@ import { router, useFocusEffect } from "expo-router";
 import { useCallback, useMemo, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Pressable,
   RefreshControl,
@@ -65,6 +66,8 @@ export default function Logbook() {
   const { user, logout } = useAuth();
   const toast = useToast();
   const [query, setQuery] = useState("");
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [pinPromptFor, setPinPromptFor] = useState<null | "settings" | "export">(null);
   const [exporting, setExporting] = useState(false);
   const [reminder, setReminder] = useState<ReminderState>({ show: false, lastBackupIso: null, reason: null });
@@ -108,6 +111,19 @@ export default function Logbook() {
     queryKey: ["patients"],
     queryFn: () => api.get("/patients"),
   });
+
+  const togglePatient = (id: string) => setSelectedIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
+  const selectAllPatients = () => setSelectedIds(selectedIds.length === filtered.length ? [] : filtered.map((p) => p.id));
+  const deleteSelectedPatients = () => {
+    if (!selectedIds.length) return;
+    Alert.alert("Delete patients?", `Delete ${selectedIds.length} selected patient record(s)? Used implants will be returned to inventory. This cannot be undone.`, [
+      { text: "Cancel", style: "cancel" },
+      { text: "Delete", style: "destructive", onPress: async () => {
+        try { await api.post("/patients-bulk-delete", { ids: selectedIds }); setSelectedIds([]); setSelectMode(false); refetch(); }
+        catch (e:any) { Alert.alert("Delete failed", e?.message || "Could not delete selected patients."); }
+      }},
+    ]);
+  };
 
   const filtered = useMemo(() => {
     const list = data || [];
@@ -171,6 +187,9 @@ export default function Logbook() {
           </View>
 
           <View style={{ flexDirection: "row", gap: spacing.sm }}>
+            {user?.role === "admin" && (
+              <Pressable testID="patient-select-mode" onPress={() => { setSelectMode(!selectMode); setSelectedIds([]); }} style={styles.iconBtn}><Ionicons name={selectMode ? "close" : "checkmark-circle-outline"} size={22} color={colors.onSurfaceSecondary} /></Pressable>
+            )}
             {user?.role === "admin" && (
               <Pressable
                 testID="export-pdf-button"
@@ -434,6 +453,9 @@ const useStyles = makeStyles((colors) => ({
     textTransform: "uppercase",
     letterSpacing: 0.5,
   },
+  headerAction: { flexDirection:"row", alignItems:"center", gap:4, paddingHorizontal:spacing.sm, paddingVertical:spacing.xs, borderRadius:radius.sm, backgroundColor:colors.surfaceSecondary },
+  headerActionText: { fontFamily:fontFamily.semibold, fontSize:fontSize.sm, color:colors.brandPrimary },
+  selectedCard: { borderWidth:2, borderColor:colors.brandPrimary },
   card: {
     backgroundColor: colors.surface,
     borderRadius: radius.md,
