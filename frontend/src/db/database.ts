@@ -114,10 +114,19 @@ export function initializeDatabase() {
 
 function seedPdfInventory() {
   db.execSync("CREATE TABLE IF NOT EXISTS inventory_imports (name TEXT PRIMARY KEY NOT NULL, imported_at TEXT NOT NULL)");
-  const marker = db.getFirstSync<any>("SELECT name FROM inventory_imports WHERE name=?", ["orthopaedic-inventory-pdf-v1"]);
-  if (marker) return;
+  const markerV2 = db.getFirstSync<any>(
+    "SELECT name FROM inventory_imports WHERE name=?",
+    ["orthopaedic-inventory-pdf-v2-available-only"],
+  );
+  if (markerV2) return;
+
+  const markerV1 = db.getFirstSync<any>(
+    "SELECT name FROM inventory_imports WHERE name=?",
+    ["orthopaedic-inventory-pdf-v1"],
+  );
 
   const now = new Date().toISOString();
+
   for (const [categoryName, encodedItems] of PDF_INVENTORY) {
     const category = String(categoryName).trim();
     let categoryRow = db.getFirstSync<any>(
@@ -134,35 +143,59 @@ function seedPdfInventory() {
     }
 
     if (!encodedItems) continue;
+
     for (const entry of String(encodedItems).split(";")) {
       const separator = entry.lastIndexOf("=");
       if (separator <= 0) continue;
+
       const size = entry.slice(0, separator).trim();
       const rawQuantity = Number(entry.slice(separator + 1));
-      const quantity = Math.max(0, Number.isFinite(rawQuantity) ? rawQuantity : 0);
+      const availableQuantity = Math.max(0, Number.isFinite(rawQuantity) ? rawQuantity : 0);
       if (!size) continue;
 
       const existing = db.getFirstSync<any>(
-        "SELECT id FROM inventory WHERE category_id=? AND LOWER(COALESCE(size,''))=LOWER(?) LIMIT 1",
+        "SELECT id, quantity FROM inventory WHERE category_id=? AND LOWER(COALESCE(size,''))=LOWER(?) LIMIT 1",
         [categoryRow.id, size],
       );
-      if (existing) continue;
 
-      const itemId = Math.random().toString(36).slice(2) + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-      db.runSync(
-        "INSERT INTO inventory (id,name,category_id,category,size,quantity,unit,minimum_stock) VALUES (?,?,?,?,?,?,?,?)",
-        [itemId, size, categoryRow.id, category, size, quantity, "pcs", 1],
-      );
-      db.runSync(
-        "INSERT INTO inventory_movements (id,inventory_id,user_id,type,amount,quantity_after,note,created_at) VALUES (?,?,?,?,?,?,?,?)",
-        [Math.random().toString(36).slice(2) + Date.now().toString(36), itemId, null, "import", quantity, quantity, "Imported from Orthopaedic Implants Management PDF", now],
-      );
+      if (!existing) {
+        const itemId = Math.random().toString(36).slice(2) + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+        db.runSync(
+          "INSERT INTO inventory (id,name,category_id,category,size,quantity,unit,minimum_stock) VALUES (?,?,?,?,?,?,?,?)",
+          [itemId, size, categoryRow.id, category, size, availableQuantity, "pcs", 1],
+        );
+        db.runSync(
+          "INSERT INTO inventory_movements (id,inventory_id,user_id,type,amount,quantity_after,note,created_at) VALUES (?,?,?,?,?,?,?,?)",
+          [Math.random().toString(36).slice(2) + Date.now().toString(36), itemId, null, "import", availableQuantity, availableQuantity, "Imported from Orthopaedic Implants Management PDF — Available quantity", now],
+        );
+        continue;
+      }
+
+      // One-time repair for the previous PDF import: use ONLY the PDF's
+      // Available value, but never overwrite stock that was already changed
+      // manually or through patient usage after the original import.
+      if (markerV1) {
+        const laterMovements = db.getFirstSync<any>(
+          "SELECT COUNT(*) AS count FROM inventory_movements WHERE inventory_id=? AND type NOT IN ('import','import-correction')",
+          [existing.id],
+        );
+        if (Number(laterMovements?.count || 0) === 0) {
+          db.runSync(
+            "UPDATE inventory SET quantity=?, name=?, category=?, size=? WHERE id=?",
+            [availableQuantity, size, category, size, existing.id],
+          );
+          db.runSync(
+            "INSERT INTO inventory_movements (id,inventory_id,user_id,type,amount,quantity_after,note,created_at) VALUES (?,?,?,?,?,?,?,?)",
+            [Math.random().toString(36).slice(2) + Date.now().toString(36), existing.id, null, "import-correction", availableQuantity - Number(existing.quantity || 0), availableQuantity, "Corrected PDF import to Available quantity only", now],
+          );
+        }
+      }
     }
   }
 
   db.runSync(
     "INSERT INTO inventory_imports (name,imported_at) VALUES (?,?)",
-    ["orthopaedic-inventory-pdf-v1", now],
+    ["orthopaedic-inventory-pdf-v2-available-only", now],
   );
 }
 
