@@ -347,7 +347,7 @@ export default function Logbook() {
                       { id:"legacy-2", category:"", name:item.implantII, size:"", quantity:1 },
                     ]).filter((x:any) => x.name).map((x:any) => (
                       <Text key={x.id} style={styles.implant} numberOfLines={1}>
-                        {[x.category, x.name, x.size].filter(Boolean).join(" · ")}{x.quantity > 1 ? ` × ${x.quantity}` : ""}
+                        {formatInventoryLabel(x.category, x.name, x.size)}{x.quantity > 1 ? ` × ${x.quantity}` : ""}
                       </Text>
                     ))}
                   </View>
