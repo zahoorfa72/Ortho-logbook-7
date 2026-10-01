@@ -14,6 +14,7 @@ import Ionicons from "@react-native-vector-icons/ionicons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api } from "@/src/api/client";
+import { formatInventoryLabel } from "@/src/utils/inventory-label";
 import { useAuth } from "@/src/auth/AuthContext";
 import { EmptyState } from "@/src/components/EmptyState";
 import { PinPromptModal } from "@/src/components/PinPromptModal";
