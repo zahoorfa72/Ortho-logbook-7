@@ -66,6 +66,8 @@ export default function Inventory() {
   const [historyItem, setHistoryItem] = useState<InventoryItem | null>(null);
   const [pinPromptOpen, setPinPromptOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
   const { data, isLoading, isError, refetch, isRefetching } = useQuery<InventoryItem[]>({
     queryKey: ["inventory", selectedCategoryId],
@@ -184,6 +186,19 @@ export default function Inventory() {
     );
   };
 
+  const toggleInventory = (id: string) => setSelectedIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
+  const selectAllInventory = () => setSelectedIds(selectedIds.length === list.length ? [] : list.map((x) => x.id));
+  const deleteSelectedInventory = () => {
+    if (!selectedIds.length) return;
+    Alert.alert("Delete inventory items?", `Delete ${selectedIds.length} selected item(s)? This cannot be undone.`, [
+      { text:"Cancel", style:"cancel" },
+      { text:"Delete", style:"destructive", onPress: async () => {
+        try { await api.post("/inventory-bulk-delete", { ids:selectedIds }); setSelectedIds([]); setSelectMode(false); invalidate(); }
+        catch(e:any) { toast(e?.message || "Could not delete selected items.", "error"); }
+      }}
+    ]);
+  };
+
   const doExport = useCallback(async () => {
     const items = data || [];
     if (!items.length) {
@@ -211,6 +226,7 @@ export default function Inventory() {
       <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
         <View style={styles.headerTop}>
           <Text style={styles.title}>Inventory</Text>
+          {isAdmin && selectMode ? <View style={{flexDirection:"row",alignItems:"center",gap:spacing.xs,marginLeft:spacing.sm}}><Pressable testID="inventory-select-all" onPress={selectAllInventory} style={styles.iconBtn}><Text style={styles.headerActionText}>{selectedIds.length===list.length && list.length ? "Clear" : "All"}</Text></Pressable>{selectedIds.length ? <Pressable testID="inventory-bulk-delete" onPress={deleteSelectedInventory} style={styles.iconBtn}><Ionicons name="trash-outline" size={20} color={colors.error}/></Pressable>:null}</View>:null}
           <View style={{ flexDirection: "row", gap: spacing.sm }}>
             {isAdmin ? (
               <Pressable
@@ -279,7 +295,7 @@ export default function Inventory() {
           renderItem={({ item }) => {
             const low = item.quantity <= item.minimumStock;
             return (
-              <View style={styles.row} testID={`inventory-row-${item.id}`}>
+              <Pressable style={[styles.row, selectedIds.includes(item.id) && styles.selectedRow]} testID={`inventory-row-${item.id}`} onPress={() => selectMode ? toggleInventory(item.id) : openEdit(item)} onLongPress={() => { if(isAdmin){setSelectMode(true);toggleInventory(item.id);}}}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.itemName} numberOfLines={2}>
                     {formatInventoryLabel(item.category, item.name, item.size)}
@@ -329,7 +345,7 @@ export default function Inventory() {
                     <Ionicons name="add" size={20} color={colors.onSurface} />
                   </Pressable>
                 </View>
-              </View>
+              </Pressable>
             );
           }}
         />
@@ -551,6 +567,8 @@ const useStyles = makeStyles((colors) => ({
   },
   addBtnText: { fontFamily: fontFamily.semibold, fontSize: fontSize.base, color: colors.onBrandPrimary },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
+  headerActionText: { fontFamily:fontFamily.semibold, fontSize:fontSize.sm, color:colors.brandPrimary },
+  selectedRow: { borderWidth:2, borderColor:colors.brandPrimary },
   row: {
     flexDirection: "row",
     alignItems: "center",
