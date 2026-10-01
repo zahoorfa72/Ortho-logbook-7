@@ -330,6 +330,18 @@ export const api = {
         [pid],
       ) as any;
     }
+
+    if (path === "/inventory-bulk-delete") {
+      await requireAdmin();
+      const ids = Array.isArray(body?.ids) ? body.ids.map(String).filter(Boolean) : [];
+      if (!ids.length) return { success: true, deleted: 0 } as any;
+      return db.withTransactionSync(() => {
+        const placeholders = ids.map(() => "?").join(",");
+        const rows = db.getAllSync<any>(`SELECT id FROM inventory WHERE id IN (${placeholders})`, ids);
+        db.runSync(`DELETE FROM inventory WHERE id IN (${placeholders})`, ids);
+        return { success: true, deleted: rows.length } as any;
+      });
+    }
     if (path === "/users") {
       await requireAdmin();
       return db
