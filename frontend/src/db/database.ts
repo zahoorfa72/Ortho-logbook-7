@@ -1,3 +1,5 @@
+import { PDF_INVENTORY } from "../data/pdf-inventory";
+
 import * as SQLite from "expo-sqlite";
 
 export const db = SQLite.openDatabaseSync("ortho-logbook.db");
@@ -107,6 +109,62 @@ export function initializeDatabase() {
   addColumn("inventory", "category", "TEXT");
   addColumn("inventory", "size", "TEXT");
   migrateInventorySchema();
+  seedPdfInventory();
+
+
+function seedPdfInventory() {
+  db.execSync("CREATE TABLE IF NOT EXISTS inventory_imports (name TEXT PRIMARY KEY NOT NULL, imported_at TEXT NOT NULL)");
+  const marker = db.getFirstSync<any>("SELECT name FROM inventory_imports WHERE name=?", ["orthopaedic-inventory-pdf-v1"]);
+  if (marker) return;
+
+  const now = new Date().toISOString();
+  for (const [categoryName, encodedItems] of PDF_INVENTORY) {
+    const category = String(categoryName).trim();
+    let categoryRow = db.getFirstSync<any>(
+      "SELECT id FROM inventory_categories WHERE LOWER(name)=LOWER(?) LIMIT 1",
+      [category],
+    );
+    if (!categoryRow) {
+      const categoryId = Math.random().toString(36).slice(2) + Date.now().toString(36);
+      db.runSync(
+        "INSERT INTO inventory_categories (id,name,created_at) VALUES (?,?,?)",
+        [categoryId, category, now],
+      );
+      categoryRow = { id: categoryId };
+    }
+
+    if (!encodedItems) continue;
+    for (const entry of String(encodedItems).split(";")) {
+      const separator = entry.lastIndexOf("=");
+      if (separator <= 0) continue;
+      const size = entry.slice(0, separator).trim();
+      const rawQuantity = Number(entry.slice(separator + 1));
+      const quantity = Math.max(0, Number.isFinite(rawQuantity) ? rawQuantity : 0);
+      if (!size) continue;
+
+      const existing = db.getFirstSync<any>(
+        "SELECT id FROM inventory WHERE category_id=? AND LOWER(COALESCE(size,''))=LOWER(?) LIMIT 1",
+        [categoryRow.id, size],
+      );
+      if (existing) continue;
+
+      const itemId = Math.random().toString(36).slice(2) + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+      db.runSync(
+        "INSERT INTO inventory (id,name,category_id,category,size,quantity,unit,minimum_stock) VALUES (?,?,?,?,?,?,?,?)",
+        [itemId, size, categoryRow.id, category, size, quantity, "pcs", 1],
+      );
+      db.runSync(
+        "INSERT INTO inventory_movements (id,inventory_id,user_id,type,amount,quantity_after,note,created_at) VALUES (?,?,?,?,?,?,?,?)",
+        [Math.random().toString(36).slice(2) + Date.now().toString(36), itemId, null, "import", quantity, quantity, "Imported from Orthopaedic Implants Management PDF", now],
+      );
+    }
+  }
+
+  db.runSync(
+    "INSERT INTO inventory_imports (name,imported_at) VALUES (?,?)",
+    ["orthopaedic-inventory-pdf-v1", now],
+  );
+}
 
   const legacyCategories = db.getAllSync<any>(
     "SELECT DISTINCT TRIM(category) AS name FROM inventory WHERE TRIM(COALESCE(category,'')) <> ''",
