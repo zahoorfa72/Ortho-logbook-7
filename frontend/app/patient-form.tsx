@@ -16,6 +16,7 @@ import { Field } from "@/src/components/Field";
 import { PrimaryButton } from "@/src/components/PrimaryButton";
 import { Segmented } from "@/src/components/Segmented";
 import { useToast } from "@/src/components/toast";
+import { formatInventoryLabel } from "@/src/utils/inventory-label";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 
 type Patient = {
@@ -530,7 +531,7 @@ export default function PatientForm() {
               .map(x => (
                 <Pressable key={x.id} style={styles.inventoryOption} onPress={() => addImplant(x)}>
                   <Text style={styles.inventoryOptionTitle} numberOfLines={2}>
-                    {[x.category, x.name, x.size].filter(Boolean).join(" · ")}
+                    {formatInventoryLabel(x.category, x.name, x.size)}
                   </Text>
                   <Text style={styles.inventoryOptionDetail}>{x.quantity} {x.quantity === 1 ? "available" : "available"}</Text>
                 </Pressable>
