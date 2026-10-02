@@ -1,4 +1,5 @@
 import * as SQLite from "expo-sqlite";
+import { HOLD_INVENTORY_RESET } from "@/src/data/hold-inventory-reset";
 
 export const db = SQLite.openDatabaseSync("ortho-logbook.db");
 
@@ -76,6 +77,9 @@ export function initializeDatabase() {
       type TEXT NOT NULL, amount REAL NOT NULL, quantity_after REAL NOT NULL,
       note TEXT, created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS app_meta (
+      key TEXT PRIMARY KEY NOT NULL, value TEXT
+    );
     CREATE INDEX IF NOT EXISTS idx_patients_date ON patients(date);
     CREATE INDEX IF NOT EXISTS idx_patients_procedure ON patients(procedure);
     CREATE INDEX IF NOT EXISTS idx_patients_mr ON patients(mr_no);
@@ -111,6 +115,47 @@ export function initializeDatabase() {
   // categories are persistent local data and must never be seeded, cleaned,
   // or deleted during an app update.
   ensureInventoryCategoryLinks();
+  applyHoldInventoryResetOnce();
+}
+
+function applyHoldInventoryResetOnce() {
+  const marker = "hold-inventory-reset-available-v1";
+  const done = db.getFirstSync<any>("SELECT value FROM app_meta WHERE key=?", [marker]);
+  if (done?.value === "done") return;
+
+  db.withTransactionSync(() => {
+    // Explicit one-time user-requested inventory replacement.
+    db.runSync("UPDATE patient_implants SET inventory_id=NULL WHERE inventory_id IS NOT NULL");
+    db.runSync("DELETE FROM inventory_movements");
+    db.runSync("DELETE FROM inventory");
+
+    for (const group of HOLD_INVENTORY_RESET) {
+      const categoryName = String(group.category).trim();
+      let category = db.getFirstSync<any>(
+        "SELECT id FROM inventory_categories WHERE LOWER(name)=LOWER(?) LIMIT 1",
+        [categoryName],
+      );
+      if (!category) {
+        const categoryId = Math.random().toString(36).slice(2) + Date.now().toString(36);
+        db.runSync(
+          "INSERT INTO inventory_categories (id,name,created_at) VALUES (?,?,?)",
+          [categoryId, categoryName, new Date().toISOString()],
+        );
+        category = { id: categoryId };
+      }
+      for (const item of group.items) {
+        const inventoryId =
+          Math.random().toString(36).slice(2) +
+          Date.now().toString(36) +
+          Math.random().toString(36).slice(2);
+        db.runSync(
+          "INSERT INTO inventory (id,name,quantity,unit,minimum_stock,category_id,category,size) VALUES (?,?,?,?,?,?,?,?)",
+          [inventoryId, categoryName, Math.max(0, Number(item.quantity) || 0), "pcs", 0, category.id, categoryName, String(item.size)],
+        );
+      }
+    }
+    db.runSync("INSERT OR REPLACE INTO app_meta (key,value) VALUES (?,?)", [marker, "done"]);
+  });
 }
 
 function ensureInventoryCategoryLinks() {
