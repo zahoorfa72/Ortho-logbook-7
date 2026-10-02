@@ -40,7 +40,7 @@ export const HOLD_INVENTORY_RESET = [
   H("LCP Proximal Tibia Right",holes(3,14),[0,0,2,3,3,3,4,2,0,4,0,0]),
   H("LCP Proximal Tibia Medial Left",holes(3,14),[0,0,5,8,5,3,0,9,0,0,0,0]),
   H("LCP Proximal Tibia Medial Right",holes(3,14),[0,0,5,8,5,3,0,0,0,0,0,0]),
-  H("LCP Y Plate Left",holes(3,14),[0,5,5,5,5,5,0,0,0,0,0,0]),
+  H("LCP Y Plate Left",holes(3,14),[0,0,5,5,5,5,0,0,0,0,0,0]),
   H("LCP Y Plate Right",holes(3,14),[0,5,5,5,5,5,0,0,0,0,0,0]),
   H("LCP Distal Humerus Left",holes(3,14),[0,0,3,4,4,2,6,5,0,1,0,0]),
   H("LCP VA Proximal Tibia Left",holes(3,14),[0,3,0,3,0,3,0,0,0,0,0,0]),
