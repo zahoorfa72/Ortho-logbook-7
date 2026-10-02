@@ -282,6 +282,22 @@ export default function Inventory() {
             style={styles.searchInput}
           />
         </View>
+        <View style={{ marginTop: spacing.sm }}>
+          <SortMenu
+            value={inventorySort}
+            onChange={setInventorySort}
+            testID="inventory-sort"
+            options={[
+              { value: "name-asc", label: "Item — A to Z" },
+              { value: "name-desc", label: "Item — Z to A" },
+              { value: "size-asc", label: "Size — Small to large / A to Z" },
+              { value: "size-desc", label: "Size — Large to small / Z to A" },
+              { value: "qty-desc", label: "Quantity — High to low" },
+              { value: "qty-asc", label: "Quantity — Low to high" },
+              { value: "low-first", label: "Low stock — First" },
+            ]}
+          />
+        </View>
       </View>
 
       {isLoading ? (
