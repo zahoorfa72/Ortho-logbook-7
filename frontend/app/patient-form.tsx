@@ -239,7 +239,7 @@ export default function PatientForm() {
     try {
       let localUri = uri;
       if (uri.startsWith("data:image/")) {
-        const match = uri.match(/^data:image\\/[^;]+;base64,(.+)$/);
+        const match = uri.match(/^data:image\/[^;]+;base64,(.+)$/);
         if (!match?.[1]) throw new Error("Invalid patient photo.");
         const directory = `${FileSystem.cacheDirectory}patient-photo-export/`;
         await FileSystem.makeDirectoryAsync(directory, { intermediates: true }).catch(() => {});
