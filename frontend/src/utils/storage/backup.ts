@@ -166,7 +166,7 @@ function restorePatientPhotos(p:any){
 }
 
 export function restoreBackup(backup:BackupData){
- initializeDatabase();
+ initializeDatabase({ skipInventoryReset: true });
  if(!backup||![2,3,4].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
  db.withTransactionSync(()=>{
   db.runSync("DELETE FROM inventory_movements"); db.runSync("DELETE FROM patient_implants"); db.runSync("DELETE FROM patient_history"); db.runSync("DELETE FROM expenses"); db.runSync("DELETE FROM patients"); db.runSync("DELETE FROM procedures"); db.runSync("DELETE FROM inventory"); db.runSync("DELETE FROM inventory_categories"); db.runSync("DELETE FROM users");
@@ -198,6 +198,7 @@ export function restoreBackup(backup:BackupData){
   for(const h of backup.patientHistory) db.runSync("INSERT INTO patient_history (id,patient_id,user_id,action,snapshot_json,created_at) VALUES (?,?,?,?,?,?)",[h.id,h.patient_id,h.user_id||null,h.action,h.snapshot_json,h.created_at]);
   for(const m of backup.inventoryMovements) db.runSync("INSERT INTO inventory_movements (id,inventory_id,user_id,type,amount,quantity_after,note,created_at) VALUES (?,?,?,?,?,?,?,?)",[m.id,m.inventory_id,m.user_id||null,m.type,Number(m.amount||0),Number(m.quantity_after||0),m.note||null,m.created_at]);
  });
+ markInventoryResetDone();
  return {patients:backup.patients.length,procedures:backup.procedures.length,inventory:backup.inventory.length,expenses:backup.expenses.length,users:backup.users.length,patientHistory:backup.patientHistory.length,inventoryMovements:backup.inventoryMovements.length};
 }
 
@@ -206,7 +207,7 @@ export function restoreBackup(backup:BackupData){
 // - Inventory items with the same name (case-insensitive) sum quantities so
 //   multiple phones' new stock does not overwrite each other.
 export function mergeBackup(backup: BackupData) {
- initializeDatabase();
+ initializeDatabase({ skipInventoryReset: true });
  if(!backup||![2,3,4].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
  const stats = { patients: 0, procedures: 0, inventory: 0, expenses: 0, users: 0, patientHistory: 0, inventoryMovements: 0 };
  db.withTransactionSync(() => {
@@ -274,6 +275,7 @@ export function mergeBackup(backup: BackupData) {
    stats.inventoryMovements++;
   }
  });
+ markInventoryResetDone();
  return stats;
 }
 
