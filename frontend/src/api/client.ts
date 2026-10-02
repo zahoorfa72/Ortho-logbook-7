@@ -318,6 +318,47 @@ export const api = {
         [iid],
       ) as any;
     }
+    if (path.startsWith("/inventory-usage")) {
+      const params = new URLSearchParams(path.split("?")[1] || "");
+      const period = params.get("period") || "all";
+      const year = Number(params.get("year"));
+      const month = Number(params.get("month"));
+      const me = await currentUserRow();
+      if (!me) return [] as any;
+
+      const conditions: string[] = [];
+      const args: any[] = [];
+      if (me.role !== "admin") { conditions.push("p.created_by=?"); args.push(me.id); }
+      if (period === "month" && year && month) { conditions.push("p.date LIKE ?"); args.push(`${year}-${String(month).padStart(2, "0")}-%`); }
+      else if (period === "year" && year) { conditions.push("p.date LIKE ?"); args.push(`${year}-%`); }
+      const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
+
+      const usageRows = db.getAllSync<any>(`
+        SELECT
+          COALESCE(pi.inventory_id, pi.category || '|' || pi.name || '|' || pi.size) AS id,
+          COALESCE(pi.category, '') AS category,
+          COALESCE(pi.name, '') AS name,
+          COALESCE(pi.size, '') AS size,
+          SUM(pi.quantity) AS quantity
+        FROM patient_implants pi
+        JOIN patients p ON p.id=pi.patient_id
+        ${where}
+        GROUP BY pi.inventory_id, pi.category, pi.name, pi.size
+        ORDER BY quantity DESC
+      `, args);
+
+      const values = usageRows.map((r:any) => Number(r.quantity) || 0).sort((a:number,b:number)=>b-a);
+      const highCut = values.length ? values[Math.max(0, Math.floor((values.length - 1) * 0.25))] : 0;
+      const lowCut = values.length ? values[Math.min(values.length - 1, Math.ceil((values.length - 1) * 0.75))] : 0;
+      return usageRows.map((r:any, index:number) => {
+        const q = Number(r.quantity) || 0;
+        let usageLevel: "high"|"medium"|"low" = "medium";
+        if (values.length === 1) usageLevel = "high";
+        else if (q >= highCut && q > lowCut) usageLevel = "high";
+        else if (q <= lowCut && q < highCut) usageLevel = "low";
+        return { id:String(r.id), category:r.category||"", name:r.name||"", size:r.size||"", quantity:q, usageLevel, rank:index+1 };
+      });
+    }
     if (path.startsWith("/inventory")) {
       const q = path.split("?")[1] || "";
       const params = new URLSearchParams(q);
