@@ -110,7 +110,24 @@ export function initializeDatabase() {
   addColumn("inventory", "size", "TEXT");
   migrateInventorySchema();
   seedPdfInventory();
+  cleanupPdfImportedInventoryOnce();
 
+function cleanupPdfImportedInventoryOnce() {
+  db.execSync("CREATE TABLE IF NOT EXISTS inventory_imports (name TEXT PRIMARY KEY NOT NULL, imported_at TEXT NOT NULL)");
+  const marker = "orthopaedic-inventory-pdf-cleanup-v1";
+  if (db.getFirstSync<any>("SELECT name FROM inventory_imports WHERE name=?", [marker])) return;
+  const imported = db.getAllSync<any>("SELECT DISTINCT inventory_id FROM inventory_movements WHERE type='import' AND note LIKE 'Imported from Orthopaedic Implants Management PDF%'");
+  const ids = imported.map((x:any) => String(x.inventory_id || "")).filter(Boolean);
+  if (ids.length) {
+    const placeholders = ids.map(() => "?").join(",");
+    db.withTransactionSync(() => {
+      db.runSync(`DELETE FROM inventory_movements WHERE inventory_id IN (${placeholders})`, ids);
+      db.runSync(`DELETE FROM inventory WHERE id IN (${placeholders})`, ids);
+    });
+  }
+  db.runSync("DELETE FROM inventory_categories WHERE id NOT IN (SELECT DISTINCT category_id FROM inventory WHERE category_id IS NOT NULL AND category_id <> '')");
+  db.runSync("INSERT INTO inventory_imports (name,imported_at) VALUES (?,?)", [marker, new Date().toISOString()]);
+}
 
 function seedPdfInventory() {
   db.execSync("CREATE TABLE IF NOT EXISTS inventory_imports (name TEXT PRIMARY KEY NOT NULL, imported_at TEXT NOT NULL)");
