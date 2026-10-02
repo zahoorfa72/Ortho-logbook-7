@@ -20,6 +20,7 @@ import { router, useLocalSearchParams } from "expo-router";
 import { api } from "@/src/api/client";
 import { useAuth } from "@/src/auth/AuthContext";
 import { EmptyState } from "@/src/components/EmptyState";
+import { SortMenu } from "@/src/components/SortMenu";
 import { Field } from "@/src/components/Field";
 import { PinPromptModal } from "@/src/components/PinPromptModal";
 import { PrimaryButton } from "@/src/components/PrimaryButton";
@@ -63,6 +64,7 @@ export default function Inventory() {
   const [min, setMin] = useState("1");
   const [unit, setUnit] = useState("pcs");
   const [search, setSearch] = useState("");
+  const [inventorySort, setInventorySort] = useState<"name-asc" | "name-desc" | "size-asc" | "size-desc" | "qty-desc" | "qty-asc" | "low-first">("name-asc");
   const [historyItem, setHistoryItem] = useState<InventoryItem | null>(null);
   const [pinPromptOpen, setPinPromptOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -132,14 +134,27 @@ export default function Inventory() {
   });
 
   const list = useMemo(() => {
-    let items = data || [];
-    if (search.trim()) {
+    let items = (data || []).filter((i) => {
       const s = search.trim().toLowerCase();
-      items = items.filter(i => i.name.toLowerCase().includes(s) || i.size.toLowerCase().includes(s) || i.category.toLowerCase().includes(s));
-    }
+      return !s || i.name.toLowerCase().includes(s) || i.size.toLowerCase().includes(s) || i.category.toLowerCase().includes(s);
+    });
     if (tab === "Low Stock") items = items.filter((i) => i.quantity <= i.minimumStock);
+    items = [...items].sort((a, b) => {
+      if (inventorySort === "name-desc") return formatInventoryLabel(b.category, b.name, b.size).localeCompare(formatInventoryLabel(a.category, a.name, a.size), undefined, { numeric: true, sensitivity: "base" });
+      if (inventorySort === "size-asc") return (a.size || "").localeCompare(b.size || "", undefined, { numeric: true, sensitivity: "base" });
+      if (inventorySort === "size-desc") return (b.size || "").localeCompare(a.size || "", undefined, { numeric: true, sensitivity: "base" });
+      if (inventorySort === "qty-desc") return Number(b.quantity) - Number(a.quantity);
+      if (inventorySort === "qty-asc") return Number(a.quantity) - Number(b.quantity);
+      if (inventorySort === "low-first") {
+        const al = a.quantity <= a.minimumStock;
+        const bl = b.quantity <= b.minimumStock;
+        if (al !== bl) return al ? -1 : 1;
+        return Number(a.quantity) - Number(b.quantity);
+      }
+      return formatInventoryLabel(a.category, a.name, a.size).localeCompare(formatInventoryLabel(b.category, b.name, b.size), undefined, { numeric: true, sensitivity: "base" });
+    });
     return items;
-  }, [data, tab, search]);
+  }, [data, tab, search, inventorySort]);
 
   const onSubmit = () => {
     const q = parseInt(qty, 10);
