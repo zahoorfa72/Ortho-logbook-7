@@ -655,7 +655,14 @@ export const api = {
     const inv = path.match(/^\/inventory\/(.+)$/);
     if (inv) {
       await requireAdmin();
-      db.runSync("DELETE FROM inventory WHERE id=?", [inv[1]]);
+      const item = db.getFirstSync<any>("SELECT id FROM inventory WHERE id=? LIMIT 1", [inv[1]]);
+      if (item) {
+        db.withTransactionSync(() => {
+          db.runSync("UPDATE patient_implants SET inventory_id=NULL WHERE inventory_id=?", [inv[1]]);
+          db.runSync("DELETE FROM inventory_movements WHERE inventory_id=?", [inv[1]]);
+          db.runSync("DELETE FROM inventory WHERE id=?", [inv[1]]);
+        });
+      }
       return { success: true } as any;
     }
     throw new Error(`Offline API endpoint not implemented: ${path}`);
