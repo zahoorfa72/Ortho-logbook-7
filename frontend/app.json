@@ -50,7 +50,14 @@
         }
       ],
       "expo-sqlite",
-      "expo-sharing"
+      "expo-sharing",
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Allow Ortho Logbook to access patient photos.",
+          "savePhotosPermission": "Allow Ortho Logbook to save patient photos to this device."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
