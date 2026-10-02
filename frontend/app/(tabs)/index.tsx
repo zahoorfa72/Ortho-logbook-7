@@ -271,6 +271,21 @@ export default function Logbook() {
             </Pressable>
           )}
         </View>
+        <View style={{ marginTop: spacing.sm }}>
+          <SortMenu
+            value={patientSort}
+            onChange={setPatientSort}
+            testID="patient-sort"
+            options={[
+              { value: "date-desc", label: "Date — Newest first" },
+              { value: "date-asc", label: "Date — Oldest first" },
+              { value: "name-asc", label: "Patient name — A to Z" },
+              { value: "name-desc", label: "Patient name — Z to A" },
+              { value: "mr-asc", label: "MR No — low to high" },
+              { value: "mr-desc", label: "MR No — high to low" },
+            ]}
+          />
+        </View>
       </View>
 
       {selectMode ? (
