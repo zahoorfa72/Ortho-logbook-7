@@ -108,7 +108,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }):Promise<
   procedures:db.getAllSync<any>("SELECT * FROM procedures ORDER BY name COLLATE NOCASE"),
   inventoryCategories:db.getAllSync<any>("SELECT * FROM inventory_categories ORDER BY name COLLATE NOCASE"),
   inventory:db.getAllSync<any>("SELECT id,name,category_id,category,size,quantity,unit,minimum_stock FROM inventory ORDER BY COALESCE(category,''),name COLLATE NOCASE,COALESCE(size,'')"),
-  patientImplants,
+  patientImplants:db.getAllSync<any>("SELECT * FROM patient_implants ORDER BY created_at ASC"),
   expenses:(()=>{const f=whereForFilter(filter,"date");return db.getAllSync<any>(`SELECT * FROM expenses${f.sql} ORDER BY date DESC, created_at DESC`,f.args);})(),
   users:db.getAllSync<any>("SELECT * FROM users ORDER BY created_at ASC"),
   patientHistory:embeddedHistory,
