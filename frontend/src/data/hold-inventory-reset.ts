@@ -46,5 +46,5 @@ export const HOLD_INVENTORY_RESET = [
   H("LCP VA Proximal Tibia Left",holes(3,14),[0,3,0,3,0,3,0,0,0,0,0,0]),
   H("LCP VA Proximal Tibia Right",holes(3,14),[0,3,0,3,0,3,0,0,0,0,0,0]),
   H("DCP Recon Plate",holes(3,14),[0,0,5,5,5,5,5,5,5,5,0,0]),
-  H("LCP Distal Radius",["3 Hole","4 Hole","5 Hole","6 Hole","7 Hole","8 Hole"],[5,4,5,0,0,0]),
+  H("LCP Distal Radius",holes(3,14),[5,4,5,0,0,0,0,0,0,0,0,0]),
 ] as const;
