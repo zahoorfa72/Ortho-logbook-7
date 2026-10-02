@@ -34,7 +34,7 @@ function migrateInventorySchema() {
   } catch {}
 }
 
-export function initializeDatabase() {
+export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
   db.execSync(`
     PRAGMA journal_mode = WAL;
     CREATE TABLE IF NOT EXISTS patients (
@@ -115,7 +115,7 @@ export function initializeDatabase() {
   // categories are persistent local data and must never be seeded, cleaned,
   // or deleted during an app update.
   ensureInventoryCategoryLinks();
-  applyHoldInventoryResetOnce();
+  if (!options?.skipInventoryReset) applyHoldInventoryResetOnce();
 }
 
 function applyHoldInventoryResetOnce() {
