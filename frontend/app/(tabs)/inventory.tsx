@@ -141,8 +141,17 @@ export default function Inventory() {
     if (tab === "Low Stock") items = items.filter((i) => i.quantity <= i.minimumStock);
     items = [...items].sort((a, b) => {
       if (inventorySort === "name-desc") return formatInventoryLabel(b.category, b.name, b.size).localeCompare(formatInventoryLabel(a.category, a.name, a.size), undefined, { numeric: true, sensitivity: "base" });
-      if (inventorySort === "size-asc") return (a.size || "").localeCompare(b.size || "", undefined, { numeric: true, sensitivity: "base" });
-      if (inventorySort === "size-desc") return (b.size || "").localeCompare(a.size || "", undefined, { numeric: true, sensitivity: "base" });
+      if (inventorySort === "size-asc" || inventorySort === "size-desc") {
+        const sizeNumber = (value: string) => {
+          const match = String(value || "").match(/-?\d+(?:\.\d+)?/);
+          return match ? Number(match[0]) : Number.POSITIVE_INFINITY;
+        };
+        const an = sizeNumber(a.size);
+        const bn = sizeNumber(b.size);
+        if (an !== bn) return inventorySort === "size-asc" ? an - bn : bn - an;
+        const ac = (a.size || "").localeCompare(b.size || "", undefined, { numeric: true, sensitivity: "base" });
+        return inventorySort === "size-asc" ? ac : -ac;
+      }
       if (inventorySort === "qty-desc") return Number(b.quantity) - Number(a.quantity);
       if (inventorySort === "qty-asc") return Number(a.quantity) - Number(b.quantity);
       if (inventorySort === "low-first") {
@@ -290,8 +299,8 @@ export default function Inventory() {
             options={[
               { value: "name-asc", label: "Item — A to Z" },
               { value: "name-desc", label: "Item — Z to A" },
-              { value: "size-asc", label: "Size — Small to large / A to Z" },
-              { value: "size-desc", label: "Size — Large to small / Z to A" },
+              { value: "size-asc", label: "Size / holes — Low to high" },
+              { value: "size-desc", label: "Size / holes — High to low" },
               { value: "qty-desc", label: "Quantity — High to low" },
               { value: "qty-asc", label: "Quantity — Low to high" },
               { value: "low-first", label: "Low stock — First" },
