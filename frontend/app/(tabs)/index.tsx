@@ -18,6 +18,7 @@ import { api } from "@/src/api/client";
 import { formatInventoryLabel } from "@/src/utils/inventory-label";
 import { useAuth } from "@/src/auth/AuthContext";
 import { EmptyState } from "@/src/components/EmptyState";
+import { SortMenu } from "@/src/components/SortMenu";
 import { PinPromptModal } from "@/src/components/PinPromptModal";
 import { useToast } from "@/src/components/toast";
 import { usesNativeTabs } from "@/src/navigation";
@@ -66,6 +67,7 @@ export default function Logbook() {
   const { user, logout } = useAuth();
   const toast = useToast();
   const [query, setQuery] = useState("");
+  const [patientSort, setPatientSort] = useState<"date-desc" | "date-asc" | "name-asc" | "name-desc" | "mr-asc" | "mr-desc">("date-desc");
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [pinPromptFor, setPinPromptFor] = useState<null | "settings" | "export">(null);
@@ -146,18 +148,25 @@ export default function Logbook() {
   };
 
   const filtered = useMemo(() => {
-    const list = data || [];
     const q = query.trim().toLowerCase();
-
-    if (!q) return list;
-
-    return list.filter((p) =>
+    let list = (data || []).filter((p) =>
+      !q ||
       [p.mrNo, p.name, p.diagnosis, p.procedure, p.implant, p.implantII, ...(p.implants || []).flatMap(x => [x.category, x.name, x.size])]
         .join(" ")
         .toLowerCase()
         .includes(q),
     );
-  }, [data, query]);
+
+    list = [...list].sort((a, b) => {
+      if (patientSort === "name-asc") return (a.name || "").localeCompare(b.name || "", undefined, { numeric: true, sensitivity: "base" });
+      if (patientSort === "name-desc") return (b.name || "").localeCompare(a.name || "", undefined, { numeric: true, sensitivity: "base" });
+      if (patientSort === "mr-asc") return (a.mrNo || "").localeCompare(b.mrNo || "", undefined, { numeric: true, sensitivity: "base" });
+      if (patientSort === "mr-desc") return (b.mrNo || "").localeCompare(a.mrNo || "", undefined, { numeric: true, sensitivity: "base" });
+      if (patientSort === "date-asc") return (a.date || "").localeCompare(b.date || "");
+      return (b.date || "").localeCompare(a.date || "");
+    });
+    return list;
+  }, [data, query, patientSort]);
 
   const doExport = useCallback(async () => {
     if (!filtered.length) {
