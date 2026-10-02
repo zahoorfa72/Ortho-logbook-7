@@ -105,7 +105,7 @@ export default function BackupRestoreScreen() {
               queryClient.clear();
               Alert.alert(
                 "Restore complete",
-                `Replaced with backup:\nPatients: ${result.patients}\nInventory: ${result.inventory}\nProcedures: ${result.procedures}\nUsers: ${result.users}\n\nPlease log in again.`,
+                `Replaced with backup:\nPatients: ${result.patients}\nInventory categories: ${result.inventoryCategories || 0}\nInventory items: ${result.inventory}\nPatient inventory records: ${result.patientImplants || 0}\nProcedures: ${result.procedures}\nUsers: ${result.users}\n\nPlease log in again.`,
                 [{ text: "OK", onPress: () => router.replace("/login") }],
               );
             } else {
@@ -113,7 +113,7 @@ export default function BackupRestoreScreen() {
               queryClient.clear();
               Alert.alert(
                 "Merge complete",
-                `Added:\nNew patients: ${result.patients}\nInventory changes: ${result.inventory}\nNew procedures: ${result.procedures}\nNew users: ${result.users}\nHistory entries: ${result.patientHistory}`,
+                `Added:\nNew patients: ${result.patients}\nInventory changes: ${result.inventory}\nInventory categories: ${result.inventoryCategories || 0}\nPatient inventory records: ${result.patientImplants || 0}\nNew procedures: ${result.procedures}\nNew users: ${result.users}\nHistory entries: ${result.patientHistory}`,
               );
               setSelectedBackup(null);
               setRestorePassword("");
@@ -213,7 +213,7 @@ export default function BackupRestoreScreen() {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Create Encrypted Backup</Text>
           <Text style={styles.cardSub}>
-            All patients, inventory, procedures, expenses, users and history are encrypted before saving.
+            All patients, inventory categories/items, patient inventory selections, procedures, expenses, users and history are encrypted before saving.
           </Text>
           <TextInput
             testID="backup-password-input"
