@@ -109,123 +109,13 @@ export function initializeDatabase() {
   addColumn("inventory", "category", "TEXT");
   addColumn("inventory", "size", "TEXT");
   migrateInventorySchema();
-  seedPdfInventory();
-  cleanupPdfImportedInventoryOnce();
+  // Startup must be strictly non-destructive. User-created inventory and
+  // categories are persistent local data and must never be seeded, cleaned,
+  // or deleted during an app update.
+  ensureInventoryCategoryLinks();
 
-function cleanupPdfImportedInventoryOnce() {
-  db.execSync("CREATE TABLE IF NOT EXISTS inventory_imports (name TEXT PRIMARY KEY NOT NULL, imported_at TEXT NOT NULL)");
-  const marker = "orthopaedic-inventory-pdf-cleanup-v1";
-  if (db.getFirstSync<any>("SELECT name FROM inventory_imports WHERE name=?", [marker])) return;
-  const imported = db.getAllSync<any>("SELECT DISTINCT inventory_id FROM inventory_movements WHERE type='import' AND note LIKE 'Imported from Orthopaedic Implants Management PDF%'");
-  const ids = imported.map((x:any) => String(x.inventory_id || "")).filter(Boolean);
-  const categoryIds = ids.length
-    ? db.getAllSync<any>(`SELECT DISTINCT category_id FROM inventory WHERE id IN (${ids.map(() => "?").join(",")}) AND category_id IS NOT NULL AND category_id <> ''`, ids)
-        .map((x:any) => String(x.category_id))
-    : [];
-  if (ids.length) {
-    const placeholders = ids.map(() => "?").join(",");
-    db.withTransactionSync(() => {
-      db.runSync(`DELETE FROM inventory_movements WHERE inventory_id IN (${placeholders})`, ids);
-      db.runSync(`DELETE FROM inventory WHERE id IN (${placeholders})`, ids);
-    });
-  }
-  if (categoryIds.length) {
-    const placeholders = categoryIds.map(() => "?").join(",");
-    db.runSync(
-      `DELETE FROM inventory_categories WHERE id IN (${placeholders}) AND NOT EXISTS (SELECT 1 FROM inventory WHERE inventory.category_id=inventory_categories.id)`,
-      categoryIds,
-    );
-  }
-  db.runSync("INSERT INTO inventory_imports (name,imported_at) VALUES (?,?)", [marker, new Date().toISOString()]);
-}
 
-function seedPdfInventory() {
-  db.execSync("CREATE TABLE IF NOT EXISTS inventory_imports (name TEXT PRIMARY KEY NOT NULL, imported_at TEXT NOT NULL)");
-  const markerV2 = db.getFirstSync<any>(
-    "SELECT name FROM inventory_imports WHERE name=?",
-    ["orthopaedic-inventory-pdf-v2-available-only"],
-  );
-  if (markerV2) return;
-
-  const markerV1 = db.getFirstSync<any>(
-    "SELECT name FROM inventory_imports WHERE name=?",
-    ["orthopaedic-inventory-pdf-v1"],
-  );
-
-  const now = new Date().toISOString();
-
-  for (const [categoryName, encodedItems] of PDF_INVENTORY) {
-    const category = String(categoryName).trim();
-    let categoryRow = db.getFirstSync<any>(
-      "SELECT id FROM inventory_categories WHERE LOWER(name)=LOWER(?) LIMIT 1",
-      [category],
-    );
-    if (!categoryRow) {
-      const categoryId = Math.random().toString(36).slice(2) + Date.now().toString(36);
-      db.runSync(
-        "INSERT INTO inventory_categories (id,name,created_at) VALUES (?,?,?)",
-        [categoryId, category, now],
-      );
-      categoryRow = { id: categoryId };
-    }
-
-    if (!encodedItems) continue;
-
-    for (const entry of String(encodedItems).split(";")) {
-      const separator = entry.lastIndexOf("=");
-      if (separator <= 0) continue;
-
-      const size = entry.slice(0, separator).trim();
-      const rawQuantity = Number(entry.slice(separator + 1));
-      const availableQuantity = Math.max(0, Number.isFinite(rawQuantity) ? rawQuantity : 0);
-      if (!size) continue;
-
-      const existing = db.getFirstSync<any>(
-        "SELECT id, quantity FROM inventory WHERE category_id=? AND LOWER(COALESCE(size,''))=LOWER(?) LIMIT 1",
-        [categoryRow.id, size],
-      );
-
-      if (!existing) {
-        const itemId = Math.random().toString(36).slice(2) + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-        db.runSync(
-          "INSERT INTO inventory (id,name,category_id,category,size,quantity,unit,minimum_stock) VALUES (?,?,?,?,?,?,?,?)",
-          [itemId, size, categoryRow.id, category, size, availableQuantity, "pcs", 1],
-        );
-        db.runSync(
-          "INSERT INTO inventory_movements (id,inventory_id,user_id,type,amount,quantity_after,note,created_at) VALUES (?,?,?,?,?,?,?,?)",
-          [Math.random().toString(36).slice(2) + Date.now().toString(36), itemId, null, "import", availableQuantity, availableQuantity, "Imported from Orthopaedic Implants Management PDF — Available quantity", now],
-        );
-        continue;
-      }
-
-      // One-time repair for the previous PDF import: use ONLY the PDF's
-      // Available value, but never overwrite stock that was already changed
-      // manually or through patient usage after the original import.
-      if (markerV1) {
-        const laterMovements = db.getFirstSync<any>(
-          "SELECT COUNT(*) AS count FROM inventory_movements WHERE inventory_id=? AND type NOT IN ('import','import-correction')",
-          [existing.id],
-        );
-        if (Number(laterMovements?.count || 0) === 0) {
-          db.runSync(
-            "UPDATE inventory SET quantity=?, name=?, category=?, size=? WHERE id=?",
-            [availableQuantity, size, category, size, existing.id],
-          );
-          db.runSync(
-            "INSERT INTO inventory_movements (id,inventory_id,user_id,type,amount,quantity_after,note,created_at) VALUES (?,?,?,?,?,?,?,?)",
-            [Math.random().toString(36).slice(2) + Date.now().toString(36), existing.id, null, "import-correction", availableQuantity - Number(existing.quantity || 0), availableQuantity, "Corrected PDF import to Available quantity only", now],
-          );
-        }
-      }
-    }
-  }
-
-  db.runSync(
-    "INSERT INTO inventory_imports (name,imported_at) VALUES (?,?)",
-    ["orthopaedic-inventory-pdf-v2-available-only", now],
-  );
-}
-
+function ensureInventoryCategoryLinks() {
   const legacyCategories = db.getAllSync<any>(
     "SELECT DISTINCT TRIM(category) AS name FROM inventory WHERE TRIM(COALESCE(category,'')) <> ''",
   );
