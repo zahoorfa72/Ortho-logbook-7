@@ -294,14 +294,18 @@ const inventory = (categoryId?: string, term?: string) => {
 export const api = {
   async get<T = any>(path: string): Promise<T> {
     initializeDatabase();
-    if (path === "/me") {
+    // Normalize offline API paths so trailing slashes/query strings cannot
+    // accidentally bypass the local SQLite endpoint handlers.
+    const rawPath = String(path || "");
+    const normalizedPath = rawPath.replace(/\/+$/, "").split("?")[0] || "/";
+    if (normalizedPath === "/me") {
       const me = await currentUserRow();
       return (me ? { id: me.id, role: me.role, canEditPatients: Number(me.can_edit_patients) === 1 } : null) as any;
     }
     if (path === "/patients") return (await listPatients()) as any;
     if (path === "/procedures")
       return db.getAllSync<any>("SELECT id,name FROM procedures ORDER BY name COLLATE NOCASE") as any;
-    if (path === "/inventory-categories") return inventoryCategories() as any;
+    if (normalizedPath === "/inventory-categories") return inventoryCategories() as any;
     if (path.startsWith("/inventory-patients/")) {
       const iid = path.split("/").pop() || "";
       return db.getAllSync<any>(
