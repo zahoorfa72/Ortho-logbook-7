@@ -118,8 +118,14 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
   if (!options?.skipInventoryReset) applyHoldInventoryResetOnce();
 }
 
+const INVENTORY_RESET_MARKER = "hold-inventory-reset-available-v5";
+
+export function markInventoryResetDone() {
+  db.runSync("INSERT OR REPLACE INTO app_meta (key,value) VALUES (?,?)", [INVENTORY_RESET_MARKER, "done"]);
+}
+
 function applyHoldInventoryResetOnce() {
-  const marker = "hold-inventory-reset-available-v4";
+  const marker = INVENTORY_RESET_MARKER;
   const done = db.getFirstSync<any>("SELECT value FROM app_meta WHERE key=?", [marker]);
   if (done?.value === "done") return;
 
