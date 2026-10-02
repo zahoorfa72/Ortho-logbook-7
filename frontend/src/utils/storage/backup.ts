@@ -4,12 +4,12 @@ import * as ImageManipulator from "expo-image-manipulator";
 import nacl from "tweetnacl";
 import { db, initializeDatabase } from "@/src/db/database";
 
-const BACKUP_VERSION = 3;
+const BACKUP_VERSION = 4;
 const BACKUP_APP = "Ortho Logbook";
 
 type BackupData = {
   version:number; app:string; createdAt:string;
-  patients:any[]; procedures:any[]; inventory:any[]; expenses:any[]; users:any[];
+  patients:any[]; procedures:any[]; inventoryCategories:any[]; inventory:any[]; patientImplants:any[]; expenses:any[]; users:any[];
   patientHistory:any[]; inventoryMovements:any[];
   filter?: BackupFilter;
 };
@@ -106,7 +106,9 @@ async function createBackupData(filter: BackupFilter = { type: "all" }):Promise<
   version:BACKUP_VERSION,app:BACKUP_APP,createdAt:new Date().toISOString(),
   patients:embeddedPatients,
   procedures:db.getAllSync<any>("SELECT * FROM procedures ORDER BY name COLLATE NOCASE"),
-  inventory:db.getAllSync<any>("SELECT id,name,category,size,quantity,unit,minimum_stock FROM inventory ORDER BY COALESCE(category,''),name COLLATE NOCASE,COALESCE(size,'')"),
+  inventoryCategories:db.getAllSync<any>("SELECT * FROM inventory_categories ORDER BY name COLLATE NOCASE"),
+  inventory:db.getAllSync<any>("SELECT id,name,category_id,category,size,quantity,unit,minimum_stock FROM inventory ORDER BY COALESCE(category,''),name COLLATE NOCASE,COALESCE(size,'')"),
+  patientImplants,
   expenses:(()=>{const f=whereForFilter(filter,"date");return db.getAllSync<any>(`SELECT * FROM expenses${f.sql} ORDER BY date DESC, created_at DESC`,f.args);})(),
   users:db.getAllSync<any>("SELECT * FROM users ORDER BY created_at ASC"),
   patientHistory:embeddedHistory,
@@ -126,7 +128,7 @@ export async function exportBackup(password:string, filter: BackupFilter = { typ
 
 function parseHeader(text:string):EncryptedBackup{
  let b:any;try{b=JSON.parse(text);}catch{throw new Error("The selected backup file is not valid.");}
- if(!b||![2,3].includes(b.version)||b.app!==BACKUP_APP||b.encrypted!==true||b.algorithm!=="XSalsa20-Poly1305"||b.kdf!=="SHA-256")throw new Error("Invalid or unsupported Ortho Logbook backup.");
+ if(!b||![2,3,4].includes(b.version)||b.app!==BACKUP_APP||b.encrypted!==true||b.algorithm!=="XSalsa20-Poly1305"||b.kdf!=="SHA-256")throw new Error("Invalid or unsupported Ortho Logbook backup.");
  if(!b.createdAt||!b.salt||!b.nonce||!b.ciphertext)throw new Error("The backup file is incomplete or damaged.");
  return b;
 }
@@ -139,8 +141,13 @@ export async function decryptBackup(text:string,password:string):Promise<BackupD
   const plain=nacl.secretbox.open(hexToBytes(b.ciphertext),hexToBytes(b.nonce),key);
   if(!plain)throw new Error("Incorrect backup password or damaged backup.");
   const data=JSON.parse(bytesToString(plain)) as BackupData;
-  if(!data||![2,3].includes(data.version)||data.app!==BACKUP_APP)throw new Error("The decrypted backup is invalid.");
-  for(const keyName of ["patients","procedures","inventory","expenses","users","patientHistory","inventoryMovements"]){if(!Array.isArray((data as any)[keyName]))throw new Error("The backup is incomplete or damaged.");}
+  if(!data||![2,3,4].includes(data.version)||data.app!==BACKUP_APP)throw new Error("The decrypted backup is invalid.");
+  for(const keyName of ["patients","procedures","inventory","expenses","users","patientHistory","inventoryMovements"]){
+    if(!Array.isArray((data as any)[keyName]))throw new Error("The backup is incomplete or damaged.");
+  }
+  // v2/v3 backups did not contain these relational inventory tables.
+  data.inventoryCategories=Array.isArray((data as any).inventoryCategories) ? (data as any).inventoryCategories : [];
+  data.patientImplants=Array.isArray((data as any).patientImplants) ? (data as any).patientImplants : [];
   return data;
  }catch(e){if(e instanceof Error&&e.message.includes("Incorrect backup password"))throw e;throw new Error("Unable to decrypt backup. Check the password and backup file.");}
 }
@@ -160,15 +167,32 @@ function restorePatientPhotos(p:any){
 
 export function restoreBackup(backup:BackupData){
  initializeDatabase();
- if(!backup||![2,3].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
+ if(!backup||![2,3,4].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
  db.withTransactionSync(()=>{
-  db.runSync("DELETE FROM inventory_movements"); db.runSync("DELETE FROM patient_history"); db.runSync("DELETE FROM expenses"); db.runSync("DELETE FROM patients"); db.runSync("DELETE FROM procedures"); db.runSync("DELETE FROM inventory"); db.runSync("DELETE FROM users");
+  db.runSync("DELETE FROM inventory_movements"); db.runSync("DELETE FROM patient_implants"); db.runSync("DELETE FROM patient_history"); db.runSync("DELETE FROM expenses"); db.runSync("DELETE FROM patients"); db.runSync("DELETE FROM procedures"); db.runSync("DELETE FROM inventory"); db.runSync("DELETE FROM inventory_categories"); db.runSync("DELETE FROM users");
   for(const p of backup.patients){
    const photos=restorePatientPhotos(p);
-   db.runSync("INSERT INTO patients (id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,address,file_name,photo_uri,photos_json,date,created_at,created_by,updated_at,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",[p.id,p.mr_no,p.name,p.gender||"",p.age||"",p.diagnosis||"",p.procedure||"",p.implant||"",p.implant_ii||"",p.address||"",p.file_name||"",photos.photoUri,photos.photosJson,p.date,p.created_at,p.created_by||null,p.updated_at||null,p.updated_by||null]);
+   db.runSync("INSERT INTO patients (id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,implant_id,implant_ii_id,address,file_name,photo_uri,photos_json,date,created_at,created_by,updated_at,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",[p.id,p.mr_no,p.name,p.gender||"",p.age||"",p.diagnosis||"",p.procedure||"",p.implant||"",p.implant_ii||"",p.implant_id||null,p.implant_ii_id||null,p.address||"",p.file_name||"",photos.photoUri,photos.photosJson,p.date,p.created_at,p.created_by||null,p.updated_at||null,p.updated_by||null]);
   }
   for(const p of backup.procedures) db.runSync("INSERT INTO procedures (id,name) VALUES (?,?)",[p.id,p.name]);
-  for(const i of backup.inventory) db.runSync("INSERT INTO inventory (id,name,category,size,quantity,unit,minimum_stock) VALUES (?,?,?,?,?,?,?)",[i.id,i.name,i.category||"",i.size||"",Number(i.quantity||0),i.unit||"pcs",Number(i.minimum_stock||0)]);
+  const categoryIds=new Map<string,string>();
+  for(const c of backup.inventoryCategories||[]){
+    const cid=String(c.id);
+    db.runSync("INSERT INTO inventory_categories (id,name,created_at) VALUES (?,?,?)",[cid,c.name,c.created_at||new Date().toISOString()]);
+    categoryIds.set(String(c.name||"").toLowerCase(),cid);
+  }
+  for(const i of backup.inventory){
+    let cid=i.category_id||categoryIds.get(String(i.category||"").toLowerCase())||null;
+    if(!cid && i.category){
+      cid=Math.random().toString(36).slice(2)+Date.now().toString(36);
+      db.runSync("INSERT INTO inventory_categories (id,name,created_at) VALUES (?,?,?)",[cid,i.category,new Date().toISOString()]);
+      categoryIds.set(String(i.category).toLowerCase(),cid);
+    }
+    db.runSync("INSERT INTO inventory (id,name,category_id,category,size,quantity,unit,minimum_stock) VALUES (?,?,?,?,?,?,?,?)",[i.id,i.name,cid,i.category||"",i.size||"",Number(i.quantity||0),i.unit||"pcs",Number(i.minimum_stock||0)]);
+  }
+  for(const pi of backup.patientImplants||[]){
+    db.runSync("INSERT INTO patient_implants (id,patient_id,inventory_id,name,category,size,quantity,created_at) VALUES (?,?,?,?,?,?,?,?)",[pi.id,pi.patient_id,pi.inventory_id||null,pi.name,pi.category||null,pi.size||null,Number(pi.quantity||1),pi.created_at]);
+  }
   for(const e of backup.expenses) db.runSync("INSERT INTO expenses (id,description,amount,belongs_to,doctor_id,date,created_at) VALUES (?,?,?,?,?,?,?)",[e.id,e.description,Number(e.amount||0),e.belongs_to||"hospital",e.doctor_id||null,e.date,e.created_at]);
   for(const u of backup.users) db.runSync("INSERT INTO users (id,email,name,password_hash,recovery_code,role,can_edit_patients,disabled,created_at) VALUES (?,?,?,?,?,?,?,?,?)",[u.id,u.email,u.name,u.password_hash,u.recovery_code||null,u.role||"doctor",Number(u.can_edit_patients??1),Number(u.disabled??0),u.created_at]);
   for(const h of backup.patientHistory) db.runSync("INSERT INTO patient_history (id,patient_id,user_id,action,snapshot_json,created_at) VALUES (?,?,?,?,?,?)",[h.id,h.patient_id,h.user_id||null,h.action,h.snapshot_json,h.created_at]);
