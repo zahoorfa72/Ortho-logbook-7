@@ -111,6 +111,8 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
   addColumn("inventory", "category", "TEXT");
   addColumn("inventory", "size", "TEXT");
   migrateInventorySchema();
+  // Every inventory item uses minimum stock = 1, including existing records.
+  db.runSync("UPDATE inventory SET minimum_stock = 1");
   // Startup must be strictly non-destructive. User-created inventory and
   // categories are persistent local data and must never be seeded, cleaned,
   // or deleted during an app update.
