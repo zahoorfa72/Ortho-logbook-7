@@ -4,6 +4,7 @@ import { storage } from "@/src/utils/storage";
 
 const id = () => Crypto.randomUUID();
 const nowIso = () => new Date().toISOString();
+const normalizeRoute = (path: string) => String(path || "").replace(/\/+$/, "").split("?")[0] || "/";
 const currentUser = async () => {
   const uid = await storage.secureGet("ortho_current_user", null);
   return typeof uid === "string" ? uid : null;
@@ -296,17 +297,16 @@ export const api = {
     initializeDatabase();
     // Normalize offline API paths so trailing slashes/query strings cannot
     // accidentally bypass the local SQLite endpoint handlers.
-    const rawPath = String(path || "");
-    const normalizedPath = rawPath.replace(/\/+$/, "").split("?")[0] || "/";
+    const normalizedPath = normalizeRoute(path);
     if (normalizedPath === "/me") {
       const me = await currentUserRow();
       return (me ? { id: me.id, role: me.role, canEditPatients: Number(me.can_edit_patients) === 1 } : null) as any;
     }
-    if (path === "/patients") return (await listPatients()) as any;
-    if (path === "/procedures")
+    if (normalizedPath === "/patients") return (await listPatients()) as any;
+    if (normalizedPath === "/procedures")
       return db.getAllSync<any>("SELECT id,name FROM procedures ORDER BY name COLLATE NOCASE") as any;
     if (normalizedPath === "/inventory-categories") return inventoryCategories() as any;
-    if (path.startsWith("/inventory-patients/")) {
+    if (normalizedPath.startsWith("/inventory-patients/")) {
       const iid = path.split("/").pop() || "";
       return db.getAllSync<any>(
         `SELECT pi.id,pi.patient_id,pi.name,pi.category,pi.size,pi.quantity,p.mr_no,p.name AS patient_name,p.date
@@ -315,14 +315,14 @@ export const api = {
         [iid],
       ) as any;
     }
-    if (path.startsWith("/inventory-history/")) {
+    if (normalizedPath.startsWith("/inventory-history/")) {
       const iid = path.split("/").pop() || "";
       return db.getAllSync<any>(
         "SELECT h.*,u.name AS user_name FROM inventory_movements h LEFT JOIN users u ON u.id=h.user_id WHERE inventory_id=? ORDER BY created_at DESC",
         [iid],
       ) as any;
     }
-    if (path.startsWith("/inventory-usage")) {
+    if (normalizedPath.startsWith("/inventory-usage")) {
       const params = new URLSearchParams(path.split("?")[1] || "");
       const period = params.get("period") || "all";
       const year = Number(params.get("year"));
@@ -363,12 +363,12 @@ export const api = {
         return { id:String(r.id), category:r.category||"", name:r.name||"", size:r.size||"", quantity:q, usageLevel, rank:index+1 };
       });
     }
-    if (path.startsWith("/inventory")) {
+    if (normalizedPath.startsWith("/inventory")) {
       const q = path.split("?")[1] || "";
       const params = new URLSearchParams(q);
       return inventory(params.get("categoryId") || undefined, params.get("q") || "") as any;
     }
-    if (path.startsWith("/patient-history/")) {
+    if (normalizedPath.startsWith("/patient-history/")) {
       const pid = path.split("/").pop() || "";
       return db.getAllSync<any>(
         "SELECT h.*,u.name AS user_name FROM patient_history h LEFT JOIN users u ON u.id=h.user_id WHERE patient_id=? ORDER BY created_at DESC",
@@ -377,7 +377,7 @@ export const api = {
     }
 
 
-    if (path === "/users") {
+    if (normalizedPath === "/users") {
       await requireAdmin();
       return db
         .getAllSync<any>(
@@ -389,7 +389,7 @@ export const api = {
           recoveryCode: u.recovery_code || "",
         })) as any;
     }
-    if (path.startsWith("/stats")) {
+    if (normalizedPath.startsWith("/stats")) {
       const params = new URLSearchParams(path.split("?")[1] || "");
       const year = Number(params.get("year"));
       const month = Number(params.get("month"));
@@ -416,9 +416,103 @@ export const api = {
 
   async post<T = any>(path: string, body?: any): Promise<T> {
     initializeDatabase();
+    const normalizedPath = normalizeRoute(path);
+
+    if (normalizedPath === "/inventory-categories") {
+      await requireAdmin();
+      const name = String(body?.name || "").trim();
+      if (!name) throw new Error("Category name is required.");
+      const duplicate = db.getFirstSync<any>(
+        "SELECT id FROM inventory_categories WHERE LOWER(name)=LOWER(?) LIMIT 1",
+        [name],
+      );
+      if (duplicate) throw new Error("This inventory category already exists.");
+      const categoryId = id();
+      db.runSync(
+        "INSERT INTO inventory_categories (id,name,created_at) VALUES (?,?,?)",
+        [categoryId, name, nowIso()],
+      );
+      return { id: categoryId, name, createdAt: nowIso(), itemCount: 0 } as any;
+    }
+
+    if (normalizedPath === "/inventory") {
+      await requireAdmin();
+      let categoryId = String(body?.categoryId || "").trim();
+      let categoryName = String(body?.category || "").trim();
+      if (!categoryId && !categoryName) throw new Error("Select an inventory category first.");
+
+      if (categoryId) {
+        const cat = db.getFirstSync<any>(
+          "SELECT id,name FROM inventory_categories WHERE id=? LIMIT 1",
+          [categoryId],
+        );
+        if (!cat) throw new Error("Inventory category not found.");
+        categoryName = String(cat.name || categoryName).trim();
+      } else {
+        const cat = db.getFirstSync<any>(
+          "SELECT id,name FROM inventory_categories WHERE LOWER(name)=LOWER(?) LIMIT 1",
+          [categoryName],
+        );
+        if (cat) {
+          categoryId = cat.id;
+          categoryName = String(cat.name || categoryName).trim();
+        } else {
+          categoryId = id();
+          db.runSync(
+            "INSERT INTO inventory_categories (id,name,created_at) VALUES (?,?,?)",
+            [categoryId, categoryName, nowIso()],
+          );
+        }
+      }
+
+      const size = String(body?.size || "").trim();
+      const quantity = Math.max(0, Number(body?.quantity) || 0);
+      const minimumStock = Math.max(0, Number(body?.minimumStock) || 0);
+      const unit = String(body?.unit || "pcs").trim() || "pcs";
+      if (quantity <= 0) throw new Error("Enter quantity received above 0.");
+
+      const existing = db.getFirstSync<any>(
+        "SELECT * FROM inventory WHERE category_id=? AND LOWER(COALESCE(size,''))=LOWER(?) LIMIT 1",
+        [categoryId, size],
+      );
+      if (existing) {
+        const next = Number(existing.quantity || 0) + quantity;
+        db.runSync(
+          "UPDATE inventory SET name=?,category_id=?,category=?,size=?,quantity=?,unit=?,minimum_stock=? WHERE id=?",
+          [categoryName, categoryId, categoryName, size, next, unit, minimumStock, existing.id],
+        );
+        const uid = await currentUser();
+        movement(existing.id, "purchase", quantity, next, body?.note || "Stock received", uid);
+        return { id: existing.id, name: categoryName, categoryId, category: categoryName, size, quantity: next, unit, minimumStock } as any;
+      }
+
+      const inventoryId = id();
+      db.runSync(
+        "INSERT INTO inventory (id,name,quantity,unit,minimum_stock,category_id,category,size) VALUES (?,?,?,?,?,?,?,?)",
+        [inventoryId, categoryName, quantity, unit, minimumStock, categoryId, categoryName, size],
+      );
+      const uid = await currentUser();
+      movement(inventoryId, "purchase", quantity, quantity, body?.note || "Stock received", uid);
+      return { id: inventoryId, name: categoryName, categoryId, category: categoryName, size, quantity, unit, minimumStock } as any;
+    }
+
+    if (normalizedPath === "/procedures") {
+      await requireAdmin();
+      const name = String(body?.name || "").trim();
+      if (!name) throw new Error("Procedure name is required.");
+      const duplicate = db.getFirstSync<any>(
+        "SELECT id FROM procedures WHERE LOWER(name)=LOWER(?) LIMIT 1",
+        [name],
+      );
+      if (duplicate) throw new Error("This procedure already exists.");
+      const procedure = { id: id(), name };
+      db.runSync("INSERT INTO procedures (id,name) VALUES (?,?)", [procedure.id, procedure.name]);
+      return procedure as any;
+    }
+
     // Bulk inventory deletion belongs to POST. It must work offline and
     // must not depend on stock being zero.
-    if (path === "/inventory-bulk-delete") {
+    if (normalizedPath === "/inventory-bulk-delete") {
       await requireAdmin();
       const ids = Array.isArray(body?.ids) ? body.ids.map(String).filter(Boolean) : [];
       if (!ids.length) return { success: true, deleted: 0 } as any;
@@ -444,8 +538,8 @@ export const api = {
         return { success: true, deleted: rows.length } as any;
       });
     }
-    if (path === "/patients") return (await savePatient(body, false)) as any;
-    if (path === "/patients-bulk-delete") {
+    if (normalizedPath === "/patients") return (await savePatient(body, false)) as any;
+    if (normalizedPath === "/patients-bulk-delete") {
       const me = await currentUserRow();
       if (!me) throw new Error("Not signed in.");
       const ids = Array.isArray(body?.ids) ? body.ids.map(String).filter(Boolean) : [];
@@ -469,7 +563,7 @@ export const api = {
         return { success: true, deleted: allowed.length } as any;
       });
     }
-    if (path === "/users") {
+    if (normalizedPath === "/users") {
       await requireAdmin();
       const password = String(body?.password || "");
       if (password.length < 6) throw new Error("Password must be at least 6 characters.");
@@ -501,7 +595,7 @@ export const api = {
     }
     // Admin resets a staff's password. Returns nothing sensitive back to
     // caller — the admin already typed the new password themselves.
-    const rp = path.match(/^\/users\/(.+)\/reset-password$/);
+    const rp = normalizedPath.match(/^\/users\/(.+)\/reset-password$/);
     if (rp) {
       await requireAdmin();
       const password = String(body?.password || "");
@@ -517,7 +611,7 @@ export const api = {
       return { ok: true } as any;
     }
     // Admin regenerates a staff's recovery code (used for self-service reset).
-    const rc = path.match(/^\/users\/(.+)\/regenerate-recovery-code$/);
+    const rc = normalizedPath.match(/^\/users\/(.+)\/regenerate-recovery-code$/);
     if (rc) {
       await requireAdmin();
       const target = db.getFirstSync<any>("SELECT id FROM users WHERE id=?", [rc[1]]);
@@ -531,14 +625,15 @@ export const api = {
 
   async put<T = any>(path: string, body?: any): Promise<T> {
     initializeDatabase();
-    const pm = path.match(/^\/patients\/(.+)$/);
+    const normalizedPath = normalizeRoute(path);
+    const pm = normalizedPath.match(/^\/patients\/(.+)$/);
     if (pm) {
       const existing = db.getFirstSync<any>("SELECT created_by FROM patients WHERE id=?", [pm[1]]);
       if (!existing) throw new Error("Patient not found.");
       await assertRecordAccess(existing.created_by);
       return (await savePatient(body, true)) as any;
     }
-    const cm = path.match(/^\/inventory-categories\/(.+)$/);
+    const cm = normalizedPath.match(/^\/inventory-categories\/(.+)$/);
     if (cm) {
       await requireAdmin();
       const name = String(body?.name || "").trim();
@@ -551,22 +646,52 @@ export const api = {
       db.runSync("UPDATE inventory SET category=? WHERE category_id=?",[name,cm[1]]);
       return { id:cm[1], name } as any;
     }
-    const im = path.match(/^\/inventory\/(.+)$/);
+    const im = normalizedPath.match(/^\/inventory\/(.+)$/);
     if (im) {
       await requireAdmin();
       const item = db.getFirstSync<any>("SELECT * FROM inventory WHERE id=?", [im[1]]);
       if (!item) throw new Error("Inventory item not found.");
-      const next = Number(body?.quantity ?? item.quantity);
+      const next = Math.max(0, Number(body?.quantity ?? item.quantity));
       const delta = next - Number(item.quantity);
       const uid = await currentUser();
+      let categoryId = String(body?.categoryId || item.category_id || "").trim();
+      let categoryName = String(body?.category || item.category || "").trim();
+      if (categoryId) {
+        const cat = db.getFirstSync<any>("SELECT id,name FROM inventory_categories WHERE id=? LIMIT 1", [categoryId]);
+        if (!cat) throw new Error("Inventory category not found.");
+        categoryName = String(cat.name || categoryName).trim();
+      } else if (categoryName) {
+        const cat = db.getFirstSync<any>("SELECT id,name FROM inventory_categories WHERE LOWER(name)=LOWER(?) LIMIT 1", [categoryName]);
+        if (cat) categoryId = cat.id;
+      }
+      if (!categoryId && categoryName) {
+        categoryId = id();
+        db.runSync("INSERT INTO inventory_categories (id,name,created_at) VALUES (?,?,?)", [categoryId, categoryName, nowIso()]);
+      }
       db.runSync(
-        "UPDATE inventory SET name=?,category=?,size=?,quantity=?,unit=?,minimum_stock=? WHERE id=?",
-        [String(body.name).trim(), String(body.category || "").trim(), String(body.size || "").trim(), next, String(body.unit || "pcs"), Number(body.minimumStock || 0), im[1]],
+        "UPDATE inventory SET name=?,category_id=?,category=?,size=?,quantity=?,unit=?,minimum_stock=? WHERE id=?",
+        [String(body?.name || item.name || categoryName).trim(), categoryId || null, categoryName, String(body?.size ?? item.size ?? "").trim(), next, String(body?.unit || item.unit || "pcs"), Math.max(0, Number(body?.minimumStock ?? item.minimum_stock) || 0), im[1]],
       );
       if (delta) movement(im[1], "adjust", delta, next, body?.note || "Manual adjustment", uid);
       return { ...body, id: im[1], quantity: next } as any;
     }
-    const um = path.match(/^\/users\/(.+)$/);
+    const proc = normalizedPath.match(/^\/procedures\/(.+)$/);
+    if (proc) {
+      await requireAdmin();
+      const name = String(body?.name || "").trim();
+      if (!name) throw new Error("Procedure name is required.");
+      const duplicate = db.getFirstSync<any>(
+        "SELECT id FROM procedures WHERE LOWER(name)=LOWER(?) AND id<>? LIMIT 1",
+        [name, proc[1]],
+      );
+      if (duplicate) throw new Error("This procedure already exists.");
+      const existing = db.getFirstSync<any>("SELECT id FROM procedures WHERE id=? LIMIT 1", [proc[1]]);
+      if (!existing) throw new Error("Procedure not found.");
+      db.runSync("UPDATE procedures SET name=? WHERE id=?", [name, proc[1]]);
+      return { id: proc[1], name } as any;
+    }
+
+        const um = normalizedPath.match(/^\/users\/(.+)$/);
     if (um) {
       await requireAdmin();
       db.runSync(
@@ -580,7 +705,8 @@ export const api = {
 
   async del<T = any>(path: string): Promise<T> {
     initializeDatabase();
-    const pm = path.match(/^\/patients\/(.+)$/);
+    const normalizedPath = normalizeRoute(path);
+    const pm = normalizedPath.match(/^\/patients\/(.+)$/);
     if (pm) {
       if (!(await canEdit())) throw new Error("You do not have permission to delete patient records.");
       const patient = db.getFirstSync<any>("SELECT * FROM patients WHERE id=?", [pm[1]]);
@@ -596,7 +722,7 @@ export const api = {
       }
       return { success: true } as any;
     }
-    const cat = path.match(/^\/inventory-categories\/(.+)$/);
+    const cat = normalizedPath.match(/^\/inventory-categories\/(.+)$/);
     if (cat) {
       await requireAdmin();
       const count = db.getFirstSync<any>("SELECT COUNT(*) AS n FROM inventory WHERE category_id=?",[cat[1]]);
@@ -604,13 +730,13 @@ export const api = {
       db.runSync("DELETE FROM inventory_categories WHERE id=?",[cat[1]]);
       return {success:true} as any;
     }
-    const proc = path.match(/^\/procedures\/(.+)$/);
+    const proc = normalizedPath.match(/^\/procedures\/(.+)$/);
     if (proc) {
       await requireAdmin();
       db.runSync("DELETE FROM procedures WHERE id=?", [proc[1]]);
       return { success: true } as any;
     }
-    const inv = path.match(/^\/inventory\/(.+)$/);
+    const inv = normalizedPath.match(/^\/inventory\/(.+)$/);
     if (inv) {
       await requireAdmin();
       const item = db.getFirstSync<any>("SELECT id FROM inventory WHERE id=? LIMIT 1", [inv[1]]);
