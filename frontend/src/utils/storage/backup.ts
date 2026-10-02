@@ -172,7 +172,7 @@ export function restoreBackup(backup:BackupData){
   db.runSync("DELETE FROM inventory_movements"); db.runSync("DELETE FROM patient_implants"); db.runSync("DELETE FROM patient_history"); db.runSync("DELETE FROM expenses"); db.runSync("DELETE FROM patients"); db.runSync("DELETE FROM procedures"); db.runSync("DELETE FROM inventory"); db.runSync("DELETE FROM inventory_categories"); db.runSync("DELETE FROM users");
   for(const p of backup.patients){
    const photos=restorePatientPhotos(p);
-   db.runSync("INSERT INTO patients (id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,implant_id,implant_ii_id,address,file_name,photo_uri,photos_json,date,created_at,created_by,updated_at,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",[p.id,p.mr_no,p.name,p.gender||"",p.age||"",p.diagnosis||"",p.procedure||"",p.implant||"",p.implant_ii||"",p.implant_id||null,p.implant_ii_id||null,p.address||"",p.file_name||"",photos.photoUri,photos.photosJson,p.date,p.created_at,p.created_by||null,p.updated_at||null,p.updated_by||null]);
+   db.runSync("INSERT INTO patients (id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,implant_id,implant_ii_id,address,file_name,photo_uri,photos_json,date,created_at,created_by,updated_at,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",[p.id,p.mr_no,p.name,p.gender||"",p.age||"",p.diagnosis||"",p.procedure||"",p.implant||"",p.implant_ii||"",p.implant_id||null,p.implant_ii_id||null,p.address||"",p.file_name||"",photos.photoUri,photos.photosJson,p.date,p.created_at,p.created_by||null,p.updated_at||null,p.updated_by||null]);
   }
   for(const p of backup.procedures) db.runSync("INSERT INTO procedures (id,name) VALUES (?,?)",[p.id,p.name]);
   const categoryIds=new Map<string,string>();
@@ -214,7 +214,7 @@ export function mergeBackup(backup: BackupData) {
   for (const p of backup.patients) {
    if (has("patients", p.id)) continue;
    const photos=restorePatientPhotos(p);
-   db.runSync("INSERT INTO patients (id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,implant_id,implant_ii_id,address,file_name,photo_uri,photos_json,date,created_at,created_by,updated_at,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",[p.id,p.mr_no,p.name,p.gender||"",p.age||"",p.diagnosis||"",p.procedure||"",p.implant||"",p.implant_ii||"",p.implant_id||null,p.implant_ii_id||null,p.address||"",p.file_name||"",photos.photoUri,photos.photosJson,p.date,p.created_at,p.created_by||null,p.updated_at||null,p.updated_by||null]);
+   db.runSync("INSERT INTO patients (id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,implant_id,implant_ii_id,address,file_name,photo_uri,photos_json,date,created_at,created_by,updated_at,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",[p.id,p.mr_no,p.name,p.gender||"",p.age||"",p.diagnosis||"",p.procedure||"",p.implant||"",p.implant_ii||"",p.implant_id||null,p.implant_ii_id||null,p.address||"",p.file_name||"",photos.photoUri,photos.photosJson,p.date,p.created_at,p.created_by||null,p.updated_at||null,p.updated_by||null]);
    stats.patients++;
   }
   for (const p of backup.procedures) {
