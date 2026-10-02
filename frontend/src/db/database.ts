@@ -111,7 +111,7 @@ export function initializeDatabase() {
   // categories are persistent local data and must never be seeded, cleaned,
   // or deleted during an app update.
   ensureInventoryCategoryLinks();
-
+}
 
 function ensureInventoryCategoryLinks() {
   const legacyCategories = db.getAllSync<any>(
