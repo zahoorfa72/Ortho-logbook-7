@@ -118,6 +118,10 @@ function cleanupPdfImportedInventoryOnce() {
   if (db.getFirstSync<any>("SELECT name FROM inventory_imports WHERE name=?", [marker])) return;
   const imported = db.getAllSync<any>("SELECT DISTINCT inventory_id FROM inventory_movements WHERE type='import' AND note LIKE 'Imported from Orthopaedic Implants Management PDF%'");
   const ids = imported.map((x:any) => String(x.inventory_id || "")).filter(Boolean);
+  const categoryIds = ids.length
+    ? db.getAllSync<any>(`SELECT DISTINCT category_id FROM inventory WHERE id IN (${ids.map(() => "?").join(",")}) AND category_id IS NOT NULL AND category_id <> ''`, ids)
+        .map((x:any) => String(x.category_id))
+    : [];
   if (ids.length) {
     const placeholders = ids.map(() => "?").join(",");
     db.withTransactionSync(() => {
@@ -125,7 +129,13 @@ function cleanupPdfImportedInventoryOnce() {
       db.runSync(`DELETE FROM inventory WHERE id IN (${placeholders})`, ids);
     });
   }
-  db.runSync("DELETE FROM inventory_categories WHERE id NOT IN (SELECT DISTINCT category_id FROM inventory WHERE category_id IS NOT NULL AND category_id <> '')");
+  if (categoryIds.length) {
+    const placeholders = categoryIds.map(() => "?").join(",");
+    db.runSync(
+      `DELETE FROM inventory_categories WHERE id IN (${placeholders}) AND NOT EXISTS (SELECT 1 FROM inventory WHERE inventory.category_id=inventory_categories.id)`,
+      categoryIds,
+    );
+  }
   db.runSync("INSERT INTO inventory_imports (name,imported_at) VALUES (?,?)", [marker, new Date().toISOString()]);
 }
 
