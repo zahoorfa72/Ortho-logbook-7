@@ -267,6 +267,11 @@ export default function Inventory() {
               </Pressable>
             ) : null}
             {isAdmin ? (
+              <Pressable testID="inventory-usage-button" style={styles.iconBtn} onPress={() => router.push("/inventory-usage")}>
+                <Ionicons name="analytics-outline" size={20} color={colors.brandPrimary} />
+              </Pressable>
+            ) : null}
+            {isAdmin ? (
               <Pressable testID="categories-button" style={styles.iconBtn} onPress={() => router.push("/categories" as any)}>
                 <Ionicons name="layers-outline" size={20} color={colors.brandPrimary} />
               </Pressable>
