@@ -373,17 +373,6 @@ export const api = {
     }
 
 
-    if (path === "/inventory-bulk-delete") {
-      await requireAdmin();
-      const ids = Array.isArray(body?.ids) ? body.ids.map(String).filter(Boolean) : [];
-      if (!ids.length) return { success: true, deleted: 0 } as any;
-      return db.withTransactionSync(() => {
-        const placeholders = ids.map(() => "?").join(",");
-        const rows = db.getAllSync<any>(`SELECT id FROM inventory WHERE id IN (${placeholders})`, ids);
-        db.runSync(`DELETE FROM inventory WHERE id IN (${placeholders})`, ids);
-        return { success: true, deleted: rows.length } as any;
-      });
-    }
     if (path === "/users") {
       await requireAdmin();
       return db
@@ -446,6 +435,21 @@ export const api = {
           db.runSync(`DELETE FROM patients WHERE id IN (${ph})`, allowedIds);
         }
         return { success: true, deleted: allowed.length } as any;
+      });
+    }
+    if (path === "/inventory-bulk-delete") {
+      await requireAdmin();
+      const ids = Array.isArray(body?.ids) ? body.ids.map(String).filter(Boolean) : [];
+      if (!ids.length) return { success: true, deleted: 0 } as any;
+      return db.withTransactionSync(() => {
+        const placeholders = ids.map(() => "?").join(",");
+        const rows = db.getAllSync<any>(`SELECT id FROM inventory WHERE id IN (${placeholders})`, ids);
+        // Bulk deletion is item-only: categories are never touched.
+        // Detach historical patient references before removing the inventory row.
+        db.runSync(`UPDATE patient_implants SET inventory_id=NULL WHERE inventory_id IN (${placeholders})`, ids);
+        db.runSync(`DELETE FROM inventory_movements WHERE inventory_id IN (${placeholders})`, ids);
+        db.runSync(`DELETE FROM inventory WHERE id IN (${placeholders})`, ids);
+        return { success: true, deleted: rows.length } as any;
       });
     }
     if (path === "/inventory-categories") {
