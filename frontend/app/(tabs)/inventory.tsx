@@ -217,7 +217,14 @@ export default function Inventory() {
     Alert.alert("Delete inventory items?", `Delete ${selectedIds.length} selected item(s)? This cannot be undone.`, [
       { text:"Cancel", style:"cancel" },
       { text:"Delete", style:"destructive", onPress: async () => {
-        try { await api.post("/inventory-bulk-delete", { ids:selectedIds }); setSelectedIds([]); setSelectMode(false); invalidate(); }
+        try {
+          await api.post("/inventory-bulk-delete", { ids: selectedIds });
+          setSelectedIds([]);
+          setSelectMode(false);
+          invalidate();
+          queryClient.invalidateQueries({ queryKey: ["inventory-categories"] });
+          toast("Selected inventory items deleted.", "success");
+        }
         catch(e:any) { toast(e?.message || "Could not delete selected items.", "error"); }
       }}
     ]);
