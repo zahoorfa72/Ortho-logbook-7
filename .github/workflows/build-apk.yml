@@ -127,7 +127,7 @@ jobs:
             echo ""
             echo "# Pinned by CI (build-apk.yml)"
             echo "android.ndkVersion=${NDK_VERSION}"
-            echo "org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=768g -Dfile.encoding=UTF-8"
+            echo "org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=768m -Dfile.encoding=UTF-8"
             echo "org.gradle.parallel=false"
             echo "org.gradle.caching=true"
             echo "org.gradle.configureondemand=false"
