@@ -307,7 +307,7 @@ export const api = {
       return db.getAllSync<any>("SELECT id,name FROM procedures ORDER BY name COLLATE NOCASE") as any;
     if (normalizedPath === "/inventory-categories") return inventoryCategories() as any;
     if (normalizedPath.startsWith("/inventory-patients/")) {
-      const iid = path.split("/").pop() || "";
+      const iid = normalizedPath.split("/").pop() || "";
       return db.getAllSync<any>(
         `SELECT pi.id,pi.patient_id,pi.name,pi.category,pi.size,pi.quantity,p.mr_no,p.name AS patient_name,p.date
          FROM patient_implants pi JOIN patients p ON p.id=pi.patient_id
@@ -369,7 +369,7 @@ export const api = {
       return inventory(params.get("categoryId") || undefined, params.get("q") || "") as any;
     }
     if (normalizedPath.startsWith("/patient-history/")) {
-      const pid = path.split("/").pop() || "";
+      const pid = normalizedPath.split("/").pop() || "";
       return db.getAllSync<any>(
         "SELECT h.*,u.name AS user_name FROM patient_history h LEFT JOIN users u ON u.id=h.user_id WHERE patient_id=? ORDER BY created_at DESC",
         [pid],
