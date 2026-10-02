@@ -332,30 +332,6 @@ export const api = {
     }
 
 
-    if (path === "/patients-bulk-delete") {
-      const me = await currentUserRow();
-      if (!me) throw new Error("Not signed in.");
-      const ids = Array.isArray(body?.ids) ? body.ids.map(String).filter(Boolean) : [];
-      if (!ids.length) return { success: true, deleted: 0 } as any;
-      return db.withTransactionSync(() => {
-        const placeholders = ids.map(() => "?").join(",");
-        const rows = db.getAllSync<any>(`SELECT * FROM patients WHERE id IN (${placeholders})`, ids);
-        const allowed = rows.filter((p:any) => me.role === "admin" || p.created_by === me.id);
-        for (const patient of allowed) {
-          restoreStock(hydratePatientImplants(patient.id, fromPatient(patient)), me.id);
-          db.runSync(
-            "INSERT INTO patient_history (id,patient_id,user_id,action,snapshot_json,created_at) VALUES (?,?,?,?,?,?)",
-            [id(), patient.id, me.id, "delete", snapshot(fromPatient(patient)), nowIso()],
-          );
-        }
-        const allowedIds = allowed.map((p:any) => p.id);
-        if (allowedIds.length) {
-          const ph = allowedIds.map(() => "?").join(",");
-          db.runSync(`DELETE FROM patients WHERE id IN (${ph})`, allowedIds);
-        }
-        return { success: true, deleted: allowed.length } as any;
-      });
-    }
     if (path === "/inventory-bulk-delete") {
       await requireAdmin();
       const ids = Array.isArray(body?.ids) ? body.ids.map(String).filter(Boolean) : [];
@@ -407,6 +383,30 @@ export const api = {
   async post<T = any>(path: string, body?: any): Promise<T> {
     initializeDatabase();
     if (path === "/patients") return (await savePatient(body, false)) as any;
+    if (path === "/patients-bulk-delete") {
+      const me = await currentUserRow();
+      if (!me) throw new Error("Not signed in.");
+      const ids = Array.isArray(body?.ids) ? body.ids.map(String).filter(Boolean) : [];
+      if (!ids.length) return { success: true, deleted: 0 } as any;
+      return db.withTransactionSync(() => {
+        const placeholders = ids.map(() => "?").join(",");
+        const rows = db.getAllSync<any>(`SELECT * FROM patients WHERE id IN (${placeholders})`, ids);
+        const allowed = rows.filter((p:any) => me.role === "admin" || p.created_by === me.id);
+        for (const patient of allowed) {
+          restoreStock(hydratePatientImplants(patient.id, fromPatient(patient)), me.id);
+          db.runSync(
+            "INSERT INTO patient_history (id,patient_id,user_id,action,snapshot_json,created_at) VALUES (?,?,?,?,?,?)",
+            [id(), patient.id, me.id, "delete", snapshot(fromPatient(patient)), nowIso()],
+          );
+        }
+        const allowedIds = allowed.map((p:any) => p.id);
+        if (allowedIds.length) {
+          const ph = allowedIds.map(() => "?").join(",");
+          db.runSync(`DELETE FROM patients WHERE id IN (${ph})`, allowedIds);
+        }
+        return { success: true, deleted: allowed.length } as any;
+      });
+    }
     if (path === "/inventory-categories") {
       await requireAdmin();
       const name = String(body?.name || "").trim();
