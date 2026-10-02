@@ -207,14 +207,14 @@ export function restoreBackup(backup:BackupData){
 //   multiple phones' new stock does not overwrite each other.
 export function mergeBackup(backup: BackupData) {
  initializeDatabase();
- if(!backup||![2,3].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
+ if(!backup||![2,3,4].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
  const stats = { patients: 0, procedures: 0, inventory: 0, expenses: 0, users: 0, patientHistory: 0, inventoryMovements: 0 };
  db.withTransactionSync(() => {
   const has = (table: string, id: string) => !!db.getFirstSync<any>(`SELECT id FROM ${table} WHERE id=?`, [id]);
   for (const p of backup.patients) {
    if (has("patients", p.id)) continue;
    const photos=restorePatientPhotos(p);
-   db.runSync("INSERT INTO patients (id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,address,file_name,photo_uri,photos_json,date,created_at,created_by,updated_at,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",[p.id,p.mr_no,p.name,p.gender||"",p.age||"",p.diagnosis||"",p.procedure||"",p.implant||"",p.implant_ii||"",p.address||"",p.file_name||"",photos.photoUri,photos.photosJson,p.date,p.created_at,p.created_by||null,p.updated_at||null,p.updated_by||null]);
+   db.runSync("INSERT INTO patients (id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,implant_id,implant_ii_id,address,file_name,photo_uri,photos_json,date,created_at,created_by,updated_at,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",[p.id,p.mr_no,p.name,p.gender||"",p.age||"",p.diagnosis||"",p.procedure||"",p.implant||"",p.implant_ii||"",p.implant_id||null,p.implant_ii_id||null,p.address||"",p.file_name||"",photos.photoUri,photos.photosJson,p.date,p.created_at,p.created_by||null,p.updated_at||null,p.updated_by||null]);
    stats.patients++;
   }
   for (const p of backup.procedures) {
@@ -222,15 +222,35 @@ export function mergeBackup(backup: BackupData) {
    if (existing) continue;
    try { db.runSync("INSERT INTO procedures (id,name) VALUES (?,?)", [p.id, p.name]); stats.procedures++; } catch {}
   }
+  const categoryIds = new Map<string,string>();
+  for (const c of backup.inventoryCategories || []) {
+   const existing = db.getFirstSync<any>("SELECT id FROM inventory_categories WHERE LOWER(name)=LOWER(?) LIMIT 1", [c.name]);
+   const cid = existing?.id || String(c.id);
+   if (!existing) {
+    db.runSync("INSERT INTO inventory_categories (id,name,created_at) VALUES (?,?,?)", [cid,c.name,c.created_at||new Date().toISOString()]);
+   }
+   categoryIds.set(String(c.name||"").toLowerCase(), cid);
+  }
   for (const i of backup.inventory) {
-   const existing = db.getFirstSync<any>("SELECT id,quantity,minimum_stock,category,size FROM inventory WHERE LOWER(name)=LOWER(?) AND LOWER(COALESCE(size,''))=LOWER(?) LIMIT 1", [i.name, i.size||""]);
+   const categoryName = String(i.category||"").trim();
+   let categoryId = i.category_id || categoryIds.get(categoryName.toLowerCase()) || null;
+   if (!categoryId && categoryName) {
+    categoryId = Math.random().toString(36).slice(2)+Date.now().toString(36);
+    db.runSync("INSERT INTO inventory_categories (id,name,created_at) VALUES (?,?,?)",[categoryId,categoryName,new Date().toISOString()]);
+    categoryIds.set(categoryName.toLowerCase(),categoryId);
+   }
+   const existing = db.getFirstSync<any>("SELECT id,quantity,minimum_stock,category_id,category,size FROM inventory WHERE LOWER(name)=LOWER(?) AND LOWER(COALESCE(size,''))=LOWER(?) AND LOWER(COALESCE(category,''))=LOWER(?) LIMIT 1", [i.name, i.size||"", categoryName]);
    if (existing) {
     const q = Number(existing.quantity || 0) + Number(i.quantity || 0);
-    db.runSync("UPDATE inventory SET quantity=?,minimum_stock=?,category=?,size=? WHERE id=?", [q, Math.max(Number(existing.minimum_stock||0), Number(i.minimum_stock||0)), i.category||existing.category||"", i.size||existing.size||"", existing.id]);
+    db.runSync("UPDATE inventory SET quantity=?,minimum_stock=?,category_id=?,category=?,size=? WHERE id=?", [q, Math.max(Number(existing.minimum_stock||0), Number(i.minimum_stock||0)), categoryId, categoryName||existing.category||"", i.size||existing.size||"", existing.id]);
    } else {
-    db.runSync("INSERT INTO inventory (id,name,category,size,quantity,unit,minimum_stock) VALUES (?,?,?,?,?,?,?)", [i.id, i.name, i.category||"", i.size||"", Number(i.quantity||0), i.unit||"pcs", Number(i.minimum_stock||0)]);
+    db.runSync("INSERT INTO inventory (id,name,category_id,category,size,quantity,unit,minimum_stock) VALUES (?,?,?,?,?,?,?,?)", [i.id, i.name, categoryId, categoryName, i.size||"", Number(i.quantity||0), i.unit||"pcs", Number(i.minimum_stock||0)]);
    }
    stats.inventory++;
+  }
+  for (const pi of backup.patientImplants || []) {
+   if (has("patient_implants", pi.id)) continue;
+   db.runSync("INSERT INTO patient_implants (id,patient_id,inventory_id,name,category,size,quantity,created_at) VALUES (?,?,?,?,?,?,?,?)", [pi.id,pi.patient_id,pi.inventory_id||null,pi.name,pi.category||null,pi.size||null,Number(pi.quantity||1),pi.created_at]);
   }
   for (const e of backup.expenses) {
    if (has("expenses", e.id)) continue;
