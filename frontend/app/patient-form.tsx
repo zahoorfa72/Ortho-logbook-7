@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { router, useLocalSearchParams } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import * as ImageManipulator from "expo-image-manipulator";
+import { Asset, requestPermissionsAsync } from "expo-media-library";
 import * as FileSystem from "expo-file-system/legacy";
 import { useMemo, useState } from "react";
 import { Image, InteractionManager, Modal, Pressable, ScrollView, Text, View } from "react-native";
@@ -229,6 +230,33 @@ export default function PatientForm() {
       }
     } catch (e: any) {
       toast(e?.message || "Could not save the camera photo.", "error");
+    }
+  };
+
+  const savePhotoToDevice = async (uri: string) => {
+    if (!uri) return;
+    setPhotoBusy(true);
+    try {
+      let localUri = uri;
+      if (uri.startsWith("data:image/")) {
+        const match = uri.match(/^data:image\\/[^;]+;base64,(.+)$/);
+        if (!match?.[1]) throw new Error("Invalid patient photo.");
+        const directory = `${FileSystem.cacheDirectory}patient-photo-export/`;
+        await FileSystem.makeDirectoryAsync(directory, { intermediates: true }).catch(() => {});
+        localUri = `${directory}patient-photo-${Date.now()}.jpg`;
+        await FileSystem.writeAsStringAsync(localUri, match[1], { encoding: FileSystem.EncodingType.Base64 });
+      }
+      const permission = await requestPermissionsAsync(true, ["photo"]);
+      if (!permission.granted) {
+        toast("Photo permission is required to save the picture to your device.", "error");
+        return;
+      }
+      await Asset.create(localUri);
+      toast("Patient photo saved to your device.", "success");
+    } catch (e: any) {
+      toast(e?.message || "Could not save the patient photo.", "error");
+    } finally {
+      setPhotoBusy(false);
     }
   };
 
@@ -584,6 +612,10 @@ export default function PatientForm() {
           )}
           {!!selectedPhoto && (
             <View style={styles.photoViewerToolbar}>
+              <Pressable style={styles.photoViewerAction} onPress={() => selectedPhoto && savePhotoToDevice(selectedPhoto)} disabled={photoBusy}>
+                <Ionicons name="download-outline" size={19} color="#FFFFFF" />
+                <Text style={styles.photoViewerActionText}>{photoBusy ? "Saving..." : "Save to device"}</Text>
+              </Pressable>
               <Pressable style={styles.photoViewerAction} onPress={() => {
                 const idx = p.photos.indexOf(selectedPhoto);
                 if (idx >= 0) { setSelectedPhoto(null); openPhotoEditor(idx); }
