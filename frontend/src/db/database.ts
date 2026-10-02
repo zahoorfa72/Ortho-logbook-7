@@ -128,6 +128,7 @@ function applyHoldInventoryResetOnce() {
     db.runSync("UPDATE patient_implants SET inventory_id=NULL WHERE inventory_id IS NOT NULL");
     db.runSync("DELETE FROM inventory_movements");
     db.runSync("DELETE FROM inventory");
+    db.runSync("DELETE FROM inventory_categories");
 
     for (const group of HOLD_INVENTORY_RESET) {
       const categoryName = String(group.category).trim();
