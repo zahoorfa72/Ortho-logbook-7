@@ -94,13 +94,15 @@ export default function InventoryUsage() {
 
         {period !== "all" ? (
           <View style={styles.selectorRow}>
-            <Pressable style={styles.selector} onPress={() => setYear(y => y <= YEARS[YEARS.length - 1] ? YEARS[0] : y - 1)}>
-              <Ionicons name="chevron-back" size={18} color={colors.onSurfaceSecondary} />
+            <View style={styles.selector}>
+              <Pressable onPress={() => setYear(y => Math.max(YEARS[YEARS.length - 1], y - 1))}>
+                <Ionicons name="chevron-back" size={18} color={colors.onSurfaceSecondary} />
+              </Pressable>
               <Text style={styles.selectorText}>{year}</Text>
               <Pressable onPress={() => setYear(y => Math.min(YEARS[0], y + 1))}>
                 <Ionicons name="chevron-forward" size={18} color={colors.onSurfaceSecondary} />
               </Pressable>
-            </Pressable>
+            </View>
             {period === "month" ? (
               <View style={styles.monthWrap}>
                 <Pressable onPress={() => setMonth(m => m === 1 ? 12 : m - 1)}><Ionicons name="chevron-back" size={18} color={colors.onSurfaceSecondary} /></Pressable>
