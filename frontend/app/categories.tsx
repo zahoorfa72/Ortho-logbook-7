@@ -130,6 +130,19 @@ export default function InventoryCategories() {
             style={styles.searchInput}
           />
         </View>
+        <View style={{ marginTop: spacing.sm }}>
+          <SortMenu
+            value={categorySort}
+            onChange={setCategorySort}
+            testID="category-sort"
+            options={[
+              { value: "name-asc", label: "Category — A to Z" },
+              { value: "name-desc", label: "Category — Z to A" },
+              { value: "count-desc", label: "Number of items — High to low" },
+              { value: "count-asc", label: "Number of items — Low to high" },
+            ]}
+          />
+        </View>
       </View>
 
       {q.isLoading ? (
