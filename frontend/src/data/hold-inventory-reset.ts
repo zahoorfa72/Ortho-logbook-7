@@ -3,7 +3,7 @@ const mms=(a:number,b:number,step:number)=>Array.from({length:Math.floor((b-a)/s
 const items=(sizes:string[],q:number[])=>sizes.map((size,i)=>({size,quantity:Math.max(0,Number(q[i]||0))}));
 const H=(category:string,sizes:string[],q:number[])=>({category,items:items(sizes,q)});
 export const HOLD_INVENTORY_RESET = [
-  H("DCP",holes(6,15),[0,3,22,0,15,9,6,3,3,3]),
+  H("DCP Small",holes(6,14),[0,3,22,0,15,9,6,3,3]),
   H("DCP Narrow",["6 Hole","7 Hole","8 Hole","9 Hole","10 Hole","11 Hole","12 Hole","14 Hole","16 Hole"],[0,13,2,15,21,2,4,3,4]),
   H("DCP Broad",["8 Hole","9 Hole","10 Hole","11 Hole","12 Hole","13 Hole","14 Hole","16 Hole"],[0,0,19,0,10,0,5,2]),
   H("DCP 1/3",holes(5,14),[9,6,7,2,5,5,2,1,0,0]),
