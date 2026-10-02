@@ -10,6 +10,7 @@ import { useAuth } from "@/src/auth/AuthContext";
 import { useToast } from "@/src/components/toast";
 import { Field } from "@/src/components/Field";
 import { PrimaryButton } from "@/src/components/PrimaryButton";
+import { SortMenu } from "@/src/components/SortMenu";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 
 type Category = { id: string; name: string; itemCount: number };
@@ -22,6 +23,7 @@ export default function InventoryCategories() {
   const qc = useQueryClient();
   const { user } = useAuth();
   const [search, setSearch] = useState("");
+  const [categorySort, setCategorySort] = useState<"name-asc" | "name-desc" | "count-desc" | "count-asc">("name-asc");
   const [name, setName] = useState("");
   const [showAdd, setShowAdd] = useState(false);
   const [editCategory, setEditCategory] = useState<Category | null>(null);
@@ -65,8 +67,14 @@ export default function InventoryCategories() {
 
   const list = useMemo(() => {
     const s = search.trim().toLowerCase();
-    return (q.data || []).filter(c => !s || c.name.toLowerCase().includes(s));
-  }, [q.data, search]);
+    const items = (q.data || []).filter(c => !s || c.name.toLowerCase().includes(s));
+    return [...items].sort((a, b) => {
+      if (categorySort === "name-desc") return b.name.localeCompare(a.name, undefined, { numeric: true, sensitivity: "base" });
+      if (categorySort === "count-desc") return Number(b.itemCount) - Number(a.itemCount) || a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+      if (categorySort === "count-asc") return Number(a.itemCount) - Number(b.itemCount) || a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+      return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
+    });
+  }, [q.data, search, categorySort]);
 
   const create = () => {
     if (!name.trim()) {
