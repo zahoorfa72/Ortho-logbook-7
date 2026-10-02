@@ -127,8 +127,7 @@ export function markInventoryResetDone() {
 }
 
 function seedHoldInventory() {
-  db.withTransactionSync(() => {
-    for (const group of HOLD_INVENTORY_RESET) {
+  for (const group of HOLD_INVENTORY_RESET) {
       const categoryName = String(group.category).trim();
       let category = db.getFirstSync<any>(
         "SELECT id FROM inventory_categories WHERE LOWER(name)=LOWER(?) LIMIT 1",
@@ -152,8 +151,7 @@ function seedHoldInventory() {
           [inventoryId, categoryName, Math.max(0, Number(item.quantity) || 0), "pcs", 1, category.id, categoryName, String(item.size)],
         );
       }
-    }
-  });
+  }
 }
 
 function applyHoldInventoryResetOnce() {
