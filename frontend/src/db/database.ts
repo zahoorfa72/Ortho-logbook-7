@@ -119,7 +119,7 @@ export function initializeDatabase() {
 }
 
 function applyHoldInventoryResetOnce() {
-  const marker = "hold-inventory-reset-available-v2";
+  const marker = "hold-inventory-reset-available-v3";
   const done = db.getFirstSync<any>("SELECT value FROM app_meta WHERE key=?", [marker]);
   if (done?.value === "done") return;
 
