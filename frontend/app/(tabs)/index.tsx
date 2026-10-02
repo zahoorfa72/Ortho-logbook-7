@@ -115,14 +115,34 @@ export default function Logbook() {
   const togglePatient = (id: string) => setSelectedIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
   const selectAllPatients = () => setSelectedIds(selectedIds.length === filtered.length ? [] : filtered.map((p) => p.id));
   const deleteSelectedPatients = () => {
-    if (!selectedIds.length) return;
-    Alert.alert("Delete patients?", `Delete ${selectedIds.length} selected patient record(s)? Used implants will be returned to inventory. This cannot be undone.`, [
-      { text: "Cancel", style: "cancel" },
-      { text: "Delete", style: "destructive", onPress: async () => {
-        try { await api.post("/patients-bulk-delete", { ids: selectedIds }); setSelectedIds([]); setSelectMode(false); refetch(); }
-        catch (e:any) { Alert.alert("Delete failed", e?.message || "Could not delete selected patients."); }
-      }},
-    ]);
+    if (!selectedIds.length) {
+      Alert.alert("No patients selected", "Select at least one patient first.");
+      return;
+    }
+    Alert.alert(
+      "Delete patients?",
+      `Delete ${selectedIds.length} selected patient record(s)? Used implants will be returned to inventory. This cannot be undone.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              const result = await api.post<{ success: boolean; deleted: number }>("/patients-bulk-delete", { ids: selectedIds });
+              setSelectedIds([]);
+              setSelectMode(false);
+              await refetch();
+              if (result.deleted < selectedIds.length) {
+                Alert.alert("Completed", `${result.deleted} patient record(s) deleted. Some records could not be deleted because you do not have permission.`);
+              }
+            } catch (e:any) {
+              Alert.alert("Delete failed", e?.message || "Could not delete selected patients.");
+            }
+          },
+        },
+      ],
+    );
   };
 
   const filtered = useMemo(() => {
@@ -244,6 +264,26 @@ export default function Logbook() {
         </View>
       </View>
 
+      {selectMode ? (
+        <View style={styles.selectionBar}>
+          <Pressable onPress={selectAllPatients} style={styles.selectionAction}>
+            <Ionicons name={selectedIds.length === filtered.length && filtered.length > 0 ? "checkbox" : "square-outline"} size={20} color={colors.brandPrimary} />
+            <Text style={styles.selectionActionText}>
+              {selectedIds.length === filtered.length && filtered.length > 0 ? "Clear All" : "Select All"}
+            </Text>
+          </Pressable>
+          <Text style={styles.selectionCount}>{selectedIds.length} selected</Text>
+          <Pressable
+            onPress={deleteSelectedPatients}
+            disabled={selectedIds.length === 0}
+            style={[styles.deleteSelectionAction, selectedIds.length === 0 && { opacity: 0.45 }]}
+          >
+            <Ionicons name="trash-outline" size={19} color={colors.danger || colors.onSurfaceSecondary} />
+            <Text style={[styles.deleteSelectionText, { color: colors.danger || colors.onSurfaceSecondary }]}>Delete</Text>
+          </Pressable>
+        </View>
+      ) : null}
+
       {reminder.show ? (
         <View style={styles.reminder} testID="backup-reminder-banner">
           <View style={styles.reminderIcon}>
@@ -323,12 +363,29 @@ export default function Logbook() {
           renderItem={({ item }) => (
             <Pressable
               testID={`patient-card-${item.id}`}
-              style={styles.card}
-              onPress={() =>
-                router.push({ pathname: "/patient-form", params: { id: item.id } })
-              }
+              style={[styles.card, selectMode && selectedIds.includes(item.id) && styles.selectedCard]}
+              onPress={() => {
+                if (selectMode) togglePatient(item.id);
+                else router.push({ pathname: "/patient-form", params: { id: item.id } });
+              }}
+              onLongPress={() => {
+                if (!selectMode) {
+                  setSelectMode(true);
+                  setSelectedIds([item.id]);
+                }
+              }}
+              delayLongPress={350}
             >
               <View style={styles.cardTop}>
+                {selectMode ? (
+                  <View style={styles.patientSelectIndicator}>
+                    <Ionicons
+                      name={selectedIds.includes(item.id) ? "checkbox" : "square-outline"}
+                      size={23}
+                      color={selectedIds.includes(item.id) ? colors.brandPrimary : colors.muted}
+                    />
+                  </View>
+                ) : null}
                 <Text style={styles.mrNo}>{item.mrNo || "—"}</Text>
                 <Text style={styles.date}>{item.date}</Text>
               </View>
@@ -455,6 +512,13 @@ const useStyles = makeStyles((colors) => ({
   },
   headerAction: { flexDirection:"row", alignItems:"center", gap:4, paddingHorizontal:spacing.sm, paddingVertical:spacing.xs, borderRadius:radius.sm, backgroundColor:colors.surfaceSecondary },
   headerActionText: { fontFamily:fontFamily.semibold, fontSize:fontSize.sm, color:colors.brandPrimary },
+  selectionBar: { flexDirection:"row", alignItems:"center", marginHorizontal:spacing.lg, marginTop:spacing.md, padding:spacing.sm, borderRadius:radius.md, backgroundColor:colors.surface, borderWidth:1, borderColor:colors.border },
+  selectionAction: { flexDirection:"row", alignItems:"center", gap:spacing.xs, paddingHorizontal:spacing.sm, paddingVertical:spacing.xs },
+  selectionActionText: { fontFamily:fontFamily.semibold, fontSize:fontSize.sm, color:colors.brandPrimary },
+  selectionCount: { flex:1, textAlign:"center", fontFamily:fontFamily.semibold, fontSize:fontSize.sm, color:colors.muted },
+  deleteSelectionAction: { flexDirection:"row", alignItems:"center", gap:spacing.xs, paddingHorizontal:spacing.sm, paddingVertical:spacing.xs },
+  deleteSelectionText: { fontFamily:fontFamily.semibold, fontSize:fontSize.sm },
+  patientSelectIndicator: { marginRight:spacing.sm },
   selectedCard: { borderWidth:2, borderColor:colors.brandPrimary },
   card: {
     backgroundColor: colors.surface,
