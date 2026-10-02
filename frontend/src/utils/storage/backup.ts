@@ -2,7 +2,7 @@ import * as Crypto from "expo-crypto";
 import { File } from "expo-file-system";
 import * as ImageManipulator from "expo-image-manipulator";
 import nacl from "tweetnacl";
-import { db, initializeDatabase } from "@/src/db/database";
+import { db, initializeDatabase, markInventoryResetDone } from "@/src/db/database";
 
 const BACKUP_VERSION = 4;
 const BACKUP_APP = "Ortho Logbook";
