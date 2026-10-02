@@ -65,6 +65,7 @@ export default function RootLayout() {
                     <Stack.Screen name="settings" />
                     <Stack.Screen name="branding" />
                     <Stack.Screen name="admin-pin" />
+                    <Stack.Screen name="inventory-usage" options={{ headerShown: false }} />
                     <Stack.Screen name="join-clinic" />
                   </Stack>
 
