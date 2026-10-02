@@ -412,6 +412,34 @@ export const api = {
 
   async post<T = any>(path: string, body?: any): Promise<T> {
     initializeDatabase();
+    // Bulk inventory deletion belongs to POST. It must work offline and
+    // must not depend on stock being zero.
+    if (path === "/inventory-bulk-delete") {
+      await requireAdmin();
+      const ids = Array.isArray(body?.ids) ? body.ids.map(String).filter(Boolean) : [];
+      if (!ids.length) return { success: true, deleted: 0 } as any;
+      return db.withTransactionSync(() => {
+        const placeholders = ids.map(() => "?").join(",");
+        const rows = db.getAllSync<any>(
+          `SELECT id FROM inventory WHERE id IN (${placeholders})`,
+          ids,
+        );
+        // Preserve patient records/history: only detach the deleted inventory ID.
+        db.runSync(
+          `UPDATE patient_implants SET inventory_id=NULL WHERE inventory_id IN (${placeholders})`,
+          ids,
+        );
+        db.runSync(
+          `DELETE FROM inventory_movements WHERE inventory_id IN (${placeholders})`,
+          ids,
+        );
+        db.runSync(
+          `DELETE FROM inventory WHERE id IN (${placeholders})`,
+          ids,
+        );
+        return { success: true, deleted: rows.length } as any;
+      });
+    }
     if (path === "/patients") return (await savePatient(body, false)) as any;
     if (path === "/patients-bulk-delete") {
       const me = await currentUserRow();
@@ -436,84 +464,6 @@ export const api = {
         }
         return { success: true, deleted: allowed.length } as any;
       });
-    }
-    if (path === "/inventory-bulk-delete") {
-      await requireAdmin();
-      const ids = Array.isArray(body?.ids) ? body.ids.map(String).filter(Boolean) : [];
-      if (!ids.length) return { success: true, deleted: 0 } as any;
-      return db.withTransactionSync(() => {
-        const placeholders = ids.map(() => "?").join(",");
-        const rows = db.getAllSync<any>(`SELECT id FROM inventory WHERE id IN (${placeholders})`, ids);
-        // Bulk deletion is item-only: categories are never touched.
-        // Detach historical patient references before removing the inventory row.
-        db.runSync(`UPDATE patient_implants SET inventory_id=NULL WHERE inventory_id IN (${placeholders})`, ids);
-        db.runSync(`DELETE FROM inventory_movements WHERE inventory_id IN (${placeholders})`, ids);
-        db.runSync(`DELETE FROM inventory WHERE id IN (${placeholders})`, ids);
-        return { success: true, deleted: rows.length } as any;
-      });
-    }
-    if (path === "/inventory-categories") {
-      await requireAdmin();
-      const name = String(body?.name || "").trim();
-      if (!name) throw new Error("Category name is required.");
-      const existing = db.getFirstSync<any>("SELECT id,name FROM inventory_categories WHERE LOWER(name)=LOWER(?) LIMIT 1",[name]);
-      if (existing) throw new Error("This inventory category already exists.");
-      const item = { id:id(), name, createdAt:nowIso() };
-      db.runSync("INSERT INTO inventory_categories (id,name,created_at) VALUES (?,?,?)",[item.id,item.name,item.createdAt]);
-      return item as any;
-    }
-    if (path === "/procedures") {
-      await requireAdmin();
-      const name = String(body?.name || "").trim();
-      if (!name) throw new Error("Procedure name is required.");
-      const item = { id: id(), name };
-      db.runSync("INSERT INTO procedures (id,name) VALUES (?,?)", [item.id, item.name]);
-      return item as any;
-    }
-    const procPut = path.match(/^\/procedures\/(.+)$/);
-    if (procPut) {
-      await requireAdmin();
-      const name = String(body?.name || "").trim();
-      if (!name) throw new Error("Procedure name is required.");
-      const duplicate = db.getFirstSync<any>("SELECT id FROM procedures WHERE LOWER(name)=LOWER(?) AND id<>? LIMIT 1",[name,procPut[1]]);
-      if (duplicate) throw new Error("A procedure with this name already exists.");
-      db.runSync("UPDATE procedures SET name=? WHERE id=?",[name,procPut[1]]);
-      return { id:procPut[1], name } as any;
-    }
-    if (path === "/inventory") {
-      await requireAdmin();
-      const name = String(body?.name || "").trim();
-      const category = String(body?.category || "").trim();
-      const categoryId = String(body?.categoryId || "").trim();
-      const size = String(body?.size || "").trim();
-      const quantity = Number(body?.quantity || 0);
-      const minimumStock = Number(body?.minimumStock || 0);
-      const unit = String(body?.unit || "pcs").trim() || "pcs";
-      if (!name) throw new Error("Inventory item name is required.");
-      if (!Number.isFinite(quantity) || quantity <= 0) throw new Error("Quantity must be greater than 0.");
-      if (!Number.isFinite(minimumStock) || minimumStock < 0) throw new Error("Minimum stock cannot be negative.");
-      const uid = await currentUser();
-      let categoryName = category;
-      if (categoryId) {
-        const cat = db.getFirstSync<any>("SELECT name FROM inventory_categories WHERE id=? LIMIT 1",[categoryId]);
-        if (!cat) throw new Error("Selected category was not found.");
-        categoryName = cat.name;
-      }
-      if (!categoryId && !categoryName) throw new Error("Select an inventory category.");
-      const existing = db.getFirstSync<any>(
-        "SELECT id,name,quantity,unit,minimum_stock,category,size FROM inventory WHERE LOWER(name)=LOWER(?) AND LOWER(COALESCE(size,''))=LOWER(?) AND COALESCE(category_id,'')=COALESCE(?, '') LIMIT 1",
-        [name, size, categoryId || null],
-      );
-      if (existing) {
-        const next = Number(existing.quantity) + quantity;
-        db.runSync("UPDATE inventory SET quantity=?,unit=?,minimum_stock=?,category_id=?,category=? WHERE id=?", [next, unit, minimumStock, categoryId || null, categoryName, existing.id]);
-        movement(existing.id, "receive", quantity, next, "Stock received", uid);
-        return { id: existing.id, name: existing.name, quantity: next, unit, minimumStock } as any;
-      }
-      const item = { id: id(), name, categoryId, category: categoryName, size, quantity, unit, minimumStock };
-      db.runSync("INSERT INTO inventory (id,name,category_id,category,size,quantity,unit,minimum_stock) VALUES (?,?,?,?,?,?,?,?)", [item.id, name, categoryId || null, categoryName, size, quantity, unit, minimumStock]);
-      movement(item.id, "receive", quantity, quantity, "Initial stock", uid);
-      return item as any;
     }
     if (path === "/users") {
       await requireAdmin();
