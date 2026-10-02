@@ -643,7 +643,7 @@ export const api = {
       const cat = db.getFirstSync<any>("SELECT id FROM inventory_categories WHERE id=? LIMIT 1",[cm[1]]);
       if (!cat) throw new Error("Category not found.");
       db.runSync("UPDATE inventory_categories SET name=? WHERE id=?",[name,cm[1]]);
-      db.runSync("UPDATE inventory SET category=? WHERE category_id=?",[name,cm[1]]);
+      db.runSync("UPDATE inventory SET name=?,category=? WHERE category_id=?",[name,name,cm[1]]);
       return { id:cm[1], name } as any;
     }
     const im = normalizedPath.match(/^\/inventory\/(.+)$/);
