@@ -126,18 +126,8 @@ export function markInventoryResetDone() {
   db.runSync("INSERT OR REPLACE INTO app_meta (key,value) VALUES (?,?)", [INVENTORY_RESET_MARKER, "done"]);
 }
 
-function applyHoldInventoryResetOnce() {
-  const marker = INVENTORY_RESET_MARKER;
-  const done = db.getFirstSync<any>("SELECT value FROM app_meta WHERE key=?", [marker]);
-  if (done?.value === "done") return;
-
+function seedHoldInventory() {
   db.withTransactionSync(() => {
-    // Explicit one-time user-requested inventory replacement.
-    db.runSync("UPDATE patient_implants SET inventory_id=NULL WHERE inventory_id IS NOT NULL");
-    db.runSync("DELETE FROM inventory_movements");
-    db.runSync("DELETE FROM inventory");
-    db.runSync("DELETE FROM inventory_categories");
-
     for (const group of HOLD_INVENTORY_RESET) {
       const categoryName = String(group.category).trim();
       let category = db.getFirstSync<any>(
@@ -163,6 +153,29 @@ function applyHoldInventoryResetOnce() {
         );
       }
     }
+  });
+}
+
+function applyHoldInventoryResetOnce() {
+  const marker = INVENTORY_RESET_MARKER;
+  const done = db.getFirstSync<any>("SELECT value FROM app_meta WHERE key=?", [marker]);
+  const count = Number(db.getFirstSync<any>("SELECT COUNT(*) AS count FROM inventory")?.count || 0);
+
+  // Never overwrite existing inventory. If a previous restore/clear left the
+  // local database empty, recover the requested offline inventory seed even
+  // when the one-time marker was already completed.
+  if (done?.value === "done") {
+    if (count === 0) seedHoldInventory();
+    return;
+  }
+
+  db.withTransactionSync(() => {
+    // Explicit one-time user-requested inventory replacement.
+    db.runSync("UPDATE patient_implants SET inventory_id=NULL WHERE inventory_id IS NOT NULL");
+    db.runSync("DELETE FROM inventory_movements");
+    db.runSync("DELETE FROM inventory");
+    db.runSync("DELETE FROM inventory_categories");
+    seedHoldInventory();
     db.runSync("INSERT OR REPLACE INTO app_meta (key,value) VALUES (?,?)", [marker, "done"]);
   });
 }
