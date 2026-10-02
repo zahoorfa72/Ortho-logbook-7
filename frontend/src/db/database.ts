@@ -1,5 +1,3 @@
-import { PDF_INVENTORY } from "../data/pdf-inventory";
-
 import * as SQLite from "expo-sqlite";
 
 export const db = SQLite.openDatabaseSync("ortho-logbook.db");
