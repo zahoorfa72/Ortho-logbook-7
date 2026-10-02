@@ -97,6 +97,7 @@ export default function Inventory() {
     mutationFn: (item: InventoryItem) =>
       api.put(`/inventory/${item.id}`, {
         name: item.name,
+        categoryId: item.categoryId,
         category: item.category,
         size: item.size,
         quantity: item.quantity,
@@ -125,6 +126,8 @@ export default function Inventory() {
     mutationFn: (item: InventoryItem) =>
       api.put(`/inventory/${item.id}`, {
         name: item.name,
+        categoryId: item.categoryId,
+        category: item.category,
         quantity: item.quantity,
         unit: item.unit,
         minimumStock: item.minimumStock,
@@ -172,7 +175,7 @@ export default function Inventory() {
       return;
     }
     if (!selectedCategoryId && !category.trim()) { toast("Select an inventory category first.", "error"); return; }
-    addStock.mutate({ name: size.trim() || "Inventory Item", categoryId: selectedCategoryId, category: category.trim(), size: size.trim(), quantity: q, minimumStock: parseInt(min, 10) || 1, unit: unit.trim() || "pcs" });
+    addStock.mutate({ name: category.trim(), categoryId: selectedCategoryId, category: category.trim(), size: size.trim(), quantity: q, minimumStock: Math.max(0, parseInt(min, 10) || 0), unit: unit.trim() || "pcs" });
   };
 
   const changeQty = (item: InventoryItem, delta: number) => {
