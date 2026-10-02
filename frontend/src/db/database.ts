@@ -157,7 +157,7 @@ function applyHoldInventoryResetOnce() {
           Math.random().toString(36).slice(2);
         db.runSync(
           "INSERT INTO inventory (id,name,quantity,unit,minimum_stock,category_id,category,size) VALUES (?,?,?,?,?,?,?,?)",
-          [inventoryId, categoryName, Math.max(0, Number(item.quantity) || 0), "pcs", (Math.max(0, Number(item.quantity) || 0) > 0 ? 1 : 0), category.id, categoryName, String(item.size)],
+          [inventoryId, categoryName, Math.max(0, Number(item.quantity) || 0), "pcs", 1, category.id, categoryName, String(item.size)],
         );
       }
     }
