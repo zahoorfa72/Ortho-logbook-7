@@ -262,7 +262,13 @@ export default function Logbook() {
     const list = filteredForPdf();
     if (!list.length) { toast("No patients match the selected PDF dates.", "info"); return; }
     setExporting(true);
-    try { const html = buildPatientListHtml(branding, list, pdfFromDate, pdfToDate); setPdfFilterOpen(false); await generateAndSharePdf(html, "Patient List"); }
+    try {
+      let effectiveFrom = pdfFromDate; let effectiveTo = pdfToDate;
+      const y = Number(pdfYear); const m = Number(pdfMonth);
+      if (y && m >= 1 && m <= 12) { effectiveFrom = effectiveFrom || String(y) + "-" + String(m).padStart(2,"0") + "-01"; effectiveTo = effectiveTo || String(y) + "-" + String(m).padStart(2,"0") + "-" + String(new Date(y,m,0).getDate()).padStart(2,"0"); }
+      else if (y) { effectiveFrom = effectiveFrom || String(y) + "-01-01"; effectiveTo = effectiveTo || String(y) + "-12-31"; }
+      const html = buildPatientListHtml(branding, list, effectiveFrom, effectiveTo); setPdfFilterOpen(false); await generateAndSharePdf(html, "Patient List");
+    }
     catch(e:any) { toast(e?.message || "Could not create PDF.", "error"); }
     finally { setExporting(false); }
   }, [branding,filteredForPdf,pdfFromDate,pdfToDate,toast]);
