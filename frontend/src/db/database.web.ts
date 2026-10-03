@@ -20,3 +20,8 @@ export const db = {
 export function initializeDatabase() {
   // no-op on web
 }
+
+
+export function repairDatabaseData() {
+  return false;
+}
