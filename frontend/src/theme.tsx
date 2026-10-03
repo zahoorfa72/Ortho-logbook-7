@@ -53,6 +53,13 @@ export type BrandingConfig = {
   pdfTitleSize: number;
   pdfSubtitleFont: "regular" | "medium" | "semibold" | "bold";
   pdfSubtitleSize: number;
+  pdfTableHeaderColor: string;
+  pdfTableStripeColor: string;
+  pdfFooterText: string;
+  pdfMargin: number;
+  pdfShowGeneratedAt: boolean;
+  pdfPageSize: "A4" | "Letter";
+  pdfOrientation: "portrait" | "landscape";
   // Full theme colors
   primary: string;
   onPrimary: string;
@@ -76,6 +83,13 @@ export const defaultBranding: BrandingConfig = {
   pdfTitleSize: 24,
   pdfSubtitleFont: "regular",
   pdfSubtitleSize: 12,
+  pdfTableHeaderColor: light.brandTertiary,
+  pdfTableStripeColor: "#FAFAF7",
+  pdfFooterText: "Offline Report",
+  pdfMargin: 28,
+  pdfShowGeneratedAt: true,
+  pdfPageSize: "A4",
+  pdfOrientation: "portrait",
   primary: light.brandPrimary,
   onPrimary: light.onBrandPrimary,
   secondary: light.brandSecondary,
