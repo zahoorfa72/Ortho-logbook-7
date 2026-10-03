@@ -256,9 +256,9 @@ export function restoreBackup(backup:BackupData){
       [restoreRowId(rec.id,"implant-record",usedImplantRecordIds),String(rec.name||"Unnamed implant"),rec.category||"",rec.size||"",rec.manufacturer||"",rec.model||"",rec.lot_number||"",rec.serial_number||"",rec.expiry_date||"",rec.supplier||"",Number(rec.quantity||0),rec.unit||"pcs",Number(rec.purchase_price||0),rec.notes||"",rec.bill_files_json||"[]",rec.created_at||new Date().toISOString(),rec.updated_at||rec.created_at||new Date().toISOString(),rec.created_by||null,rec.updated_by||null]);
   }
   const usedExpenseIds=new Set<string>();
+  const userIdMap=new Map<string,string>();
   for(const e of expenses) db.runSync("INSERT INTO expenses (id,description,amount,belongs_to,doctor_id,date,created_at) VALUES (?,?,?,?,?,?,?)",[restoreRowId(e.id,"expense",usedExpenseIds),String(e.description||""),Number(e.amount||0),e.belongs_to||"hospital",userIdMap.get(String(e.doctor_id||""))||e.doctor_id||null,e.date||new Date().toISOString().slice(0,10),e.created_at||new Date().toISOString()]);
   const usedUserIds=new Set<string>();
-  const userIdMap=new Map<string,string>();
   for(const u of users) { const restoredUserId=restoreRowId(u.id,"user",usedUserIds); if(u.id) userIdMap.set(String(u.id),restoredUserId); db.runSync("INSERT INTO users (id,email,name,password_hash,recovery_code,role,can_edit_patients,disabled,created_at) VALUES (?,?,?,?,?,?,?,?,?)",[restoredUserId,String(u.email||""),u.name||"User",u.password_hash||"",u.recovery_code||null,u.role||"doctor",Number(u.can_edit_patients??1),Number(u.disabled??0),u.created_at||new Date().toISOString()]); }
   const usedHistoryIds=new Set<string>();
   for(const h of patientHistory) db.runSync("INSERT INTO patient_history (id,patient_id,user_id,action,snapshot_json,created_at) VALUES (?,?,?,?,?,?)",[restoreRowId(h.id,"history",usedHistoryIds),patientIdMap.get(String(h.patient_id||""))||h.patient_id,userIdMap.get(String(h.user_id||""))||h.user_id||null,h.action||"snapshot",h.snapshot_json||"{}",h.created_at||new Date().toISOString()]);
