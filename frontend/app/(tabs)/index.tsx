@@ -225,27 +225,6 @@ export default function Logbook() {
     return list;
   }, [patientsWithOperationCounts, query, patientSort]);
 
-  const doExport = useCallback(async () => {
-    if (!filtered.length) {
-      toast("No patients to export.", "info");
-      return;
-    }
-    setExporting(true);
-    try {
-      const html = buildPatientListHtml(branding, filtered);
-      await generateAndSharePdf(html, "Patient List");
-    } catch (e: any) {
-      toast(e?.message || "Could not create PDF.", "error");
-    } finally {
-      setExporting(false);
-    }
-  }, [branding, filtered, toast]);
-
-  const requestExport = useCallback(async () => {
-    if (await hasAdminPin()) setPinPromptFor("export");
-    else doExport();
-  }, [doExport]);
-
   const availableYears = useMemo(() => [...new Set((data || []).map(p => String(p.date || "").slice(0,4)).filter(Boolean))].sort().reverse(), [data]);
   const filteredForPdf = useCallback(() => {
     let list = [...(data || [])];
