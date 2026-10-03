@@ -126,9 +126,11 @@ function restoreStock(p: Patient, userId: string | null) {
 }
 
 function deletePatientRows(ids: string[], me: any) {
-  return db.withTransactionSync(() => {
-    const cleanIds = [...new Set(ids.map(String).filter(Boolean))];
-    if (!cleanIds.length) return 0;
+  const cleanIds = [...new Set(ids.map(String).filter(Boolean))];
+  if (!cleanIds.length) return 0;
+  let deletedCount = 0;
+
+  db.withTransactionSync(() => {
     const placeholders = cleanIds.map(() => "?").join(",");
     const rows = db.getAllSync<any>(
       `SELECT * FROM patients WHERE id IN (${placeholders})`,
@@ -145,7 +147,7 @@ function deletePatientRows(ids: string[], me: any) {
     }
 
     const allowedIds = allowed.map((p: any) => p.id);
-    if (!allowedIds.length) return 0;
+    if (!allowedIds.length) return;
 
     const allowedPlaceholders = allowedIds.map(() => "?").join(",");
     // A hard delete must remove the relational inventory selections as well.
@@ -166,20 +168,24 @@ function deletePatientRows(ids: string[], me: any) {
       )?.n || 0,
     );
     if (remaining > 0) throw new Error("Patient deletion did not complete.");
-    return allowed.length;
+    deletedCount = allowed.length;
   });
+
+  return deletedCount;
 }
 
 function deleteInventoryRows(ids: string[]) {
-  return db.withTransactionSync(() => {
-    const cleanIds = [...new Set(ids.map(String).filter(Boolean))];
-    if (!cleanIds.length) return 0;
+  const cleanIds = [...new Set(ids.map(String).filter(Boolean))];
+  if (!cleanIds.length) return 0;
+  let deletedCount = 0;
+
+  db.withTransactionSync(() => {
     const placeholders = cleanIds.map(() => "?").join(",");
     const rows = db.getAllSync<any>(
       `SELECT id FROM inventory WHERE id IN (${placeholders})`,
       cleanIds,
     );
-    if (!rows.length) return 0;
+    if (!rows.length) return;
 
     // Detach patient selections first so deleted inventory IDs can never
     // resurrect through relational/backup data.
@@ -203,8 +209,10 @@ function deleteInventoryRows(ids: string[]) {
       )?.n || 0,
     );
     if (remaining > 0) throw new Error("Inventory deletion did not complete.");
-    return rows.length;
+    deletedCount = rows.length;
   });
+
+  return deletedCount;
 }
 
 function hydratePatientImplants(patientId:string, p:Patient): Patient {
