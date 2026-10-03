@@ -245,7 +245,7 @@ export async function buildPatientDetailHtml(
     } catch { return ""; }
   };
   const pages=await Promise.all(patients.map(async (p,idx)=>{
-    const rows=fields.filter(f=>f.key!=="photos").map(f=>{
+    const rows=fields.filter(f=>f.key!=="photos" && f.key!=="implants").map(f=>{
       let value="";
       if(f.key==="date") value=p.date;
       else if(f.key==="mrNo") value=p.mrNo;
@@ -254,11 +254,16 @@ export async function buildPatientDetailHtml(
       else if(f.key==="age") value=p.age;
       else if(f.key==="address") value=p.address||"";
       else if(f.key==="diagnosis") value=p.diagnosis;
-      else if(f.key==="procedure") value=p.procedure;
+      else if(f.key==="procedure") {
+        const implantText=(p.implants&&p.implants.length
+          ? p.implants.map((x:any)=>formatInventoryLabel(x.category,x.name,x.size)+(Number(x.quantity)>1?" × "+x.quantity:"")).join(" • ")
+          : [p.implant,p.implantII].filter(Boolean).join(" • "));
+        value=p.procedure || "";
+        if(implantText) value += (value ? "\n" : "") + "Implant: " + implantText;
+      }
       else if(f.key==="fileName") value=p.fileName||"";
-      else if(f.key==="implants") value=(p.implants&&p.implants.length?p.implants.map((x:any)=>formatInventoryLabel(x.category,x.name,x.size)+(Number(x.quantity)>1?" × "+x.quantity:"")).join(" • "):[p.implant,p.implantII].filter(Boolean).join(" • "));
       else value=String((p.customData||{})[f.key]||"");
-      return "<tr><th>"+escapeHtml(f.label)+"</th><td>"+escapeHtml(value||"—")+"</td></tr>";
+      return "<tr><th>"+escapeHtml(f.label)+"</th><td class='detailValue'>"+escapeHtml(value||"—")+"</td></tr>";
     }).join("");
     const rawPhotos=Array.isArray(p.photos)?p.photos.filter(Boolean):[];
     const selectedPhotos=photoMode==="all"?rawPhotos:(photoMode==="first"?rawPhotos.slice(0,1):[]);
