@@ -39,7 +39,7 @@ import {
   evaluateReminder,
   type ReminderState,
 } from "@/src/utils/backup-reminder";
-import { buildPatientListHtml, buildPatientDetailHtml, generateAndSharePdf } from "@/src/utils/pdf";
+import { buildPatientListHtml, generateAndSharePdf } from "@/src/utils/pdf";
 
 type Patient = {
   id: string;
