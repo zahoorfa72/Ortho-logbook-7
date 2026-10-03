@@ -203,9 +203,10 @@ export function restoreBackup(backup:BackupData){
 }
 
 // Merge mode: add records from an incoming backup without wiping current data.
-// - Rows with same PK id are skipped (idempotent).
-// - Inventory items with the same name (case-insensitive) sum quantities so
-//   multiple phones' new stock does not overwrite each other.
+// - Rows with the same primary-key id are always skipped, making repeated
+//   imports of the same backup idempotent.
+// - Inventory items from a different source phone can still be combined by
+//   matching name + category + size and summing quantities.
 export function mergeBackup(backup: BackupData) {
  initializeDatabase({ skipInventoryReset: true });
  if(!backup||![2,3,4].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
@@ -233,6 +234,12 @@ export function mergeBackup(backup: BackupData) {
    categoryIds.set(String(c.name||"").toLowerCase(), cid);
   }
   for (const i of backup.inventory) {
+   const sourceId = String(i.id || "");
+   // Critical: importing the same backup again must never add its quantity again.
+   // If this exact inventory row already exists by primary key, it was already
+   // imported from this backup/source and must be skipped.
+   if (sourceId && has("inventory", sourceId)) continue;
+
    const categoryName = String(i.category||"").trim();
    let categoryId = i.category_id || categoryIds.get(categoryName.toLowerCase()) || null;
    if (!categoryId && categoryName) {
@@ -240,10 +247,14 @@ export function mergeBackup(backup: BackupData) {
     db.runSync("INSERT INTO inventory_categories (id,name,created_at) VALUES (?,?,?)",[categoryId,categoryName,new Date().toISOString()]);
     categoryIds.set(categoryName.toLowerCase(),categoryId);
    }
+
+   // A different phone may have created the same item with a different id.
+   // In that case combine the new stock once. Re-importing the same backup is
+   // already blocked above by the source id check.
    const existing = db.getFirstSync<any>("SELECT id,quantity,minimum_stock,category_id,category,size FROM inventory WHERE LOWER(name)=LOWER(?) AND LOWER(COALESCE(size,''))=LOWER(?) AND LOWER(COALESCE(category,''))=LOWER(?) LIMIT 1", [i.name, i.size||"", categoryName]);
    if (existing) {
     const q = Number(existing.quantity || 0) + Number(i.quantity || 0);
-    db.runSync("UPDATE inventory SET quantity=?,minimum_stock=?,category_id=?,category=?,size=? WHERE id=?", [q, Math.max(Number(existing.minimum_stock||0), Number(i.minimum_stock||0)), categoryId, categoryName||existing.category||"", i.size||existing.size||"", existing.id]);
+    db.runSync("UPDATE inventory SET quantity=?,minimum_stock=?,category_id=?,category=?,size=? WHERE id=?", [q, Math.max(Number(existing.minimum_stock||0), Number(i.minimum_stock||0)), categoryId || existing.category_id || null, categoryName||existing.category||"", i.size||existing.size||"", existing.id]);
    } else {
     db.runSync("INSERT INTO inventory (id,name,category_id,category,size,quantity,unit,minimum_stock) VALUES (?,?,?,?,?,?,?,?)", [i.id, i.name, categoryId, categoryName, i.size||"", Number(i.quantity||0), i.unit||"pcs", Number(i.minimum_stock||0)]);
    }
