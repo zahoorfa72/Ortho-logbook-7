@@ -38,9 +38,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const saved = await storage.secureGet(CURRENT_USER_KEY, null);
         if (typeof saved === "string" && saved) {
           const restored = getUserById(saved);
-          if (restored) setUser(restored); else await storage.secureRemove(CURRENT_USER_KEY);
+          if (restored) setUser(restored);
+          else await storage.secureRemove(CURRENT_USER_KEY);
         }
-      } finally { setInitializing(false); }
+      } catch (e) {
+        console.error("[auth] startup restore failed:", e);
+        setUser(null);
+        try { await storage.secureRemove(CURRENT_USER_KEY); } catch {}
+      } finally {
+        setInitializing(false);
+      }
     })();
   }, []);
 
