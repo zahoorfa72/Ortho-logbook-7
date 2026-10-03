@@ -1,7 +1,8 @@
+import { useEffect, useState } from "react";
 import { useFonts } from "expo-font";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import { LogBox, View } from "react-native";
+import { LogBox, Pressable, Text, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -16,10 +17,39 @@ import { ThemeProvider } from "@/src/theme";
 
 LogBox.ignoreAllLogs(true);
 
-export default function RootLayout() {
-  initializeDatabase();
-  repairDatabaseData();
+function DatabaseBootstrap({ children }: { children: React.ReactNode }) {
+  const [ready, setReady] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
+  const repair = () => {
+    try {
+      initializeDatabase();
+      repairDatabaseData();
+      setError(null);
+      setReady(true);
+    } catch (e:any) {
+      setError(String(e?.message || e || "Local database could not be opened."));
+    }
+  };
+
+  useEffect(() => { repair(); }, []);
+
+  if (error) {
+    return (
+      <View style={{ flex: 1, backgroundColor: "#FFFFFF", justifyContent: "center", padding: 24 }}>
+        <Text style={{ fontSize: 22, fontWeight: "700", textAlign: "center", marginBottom: 12 }}>Database recovery required</Text>
+        <Text selectable style={{ fontSize: 14, textAlign: "center", marginBottom: 20 }}>{error}</Text>
+        <Pressable onPress={repair} style={{ alignSelf: "center", paddingHorizontal: 24, paddingVertical: 14, borderRadius: 12, backgroundColor: "#111827" }}>
+          <Text style={{ color: "#FFFFFF", fontWeight: "700" }}>Repair and continue</Text>
+        </Pressable>
+      </View>
+    );
+  }
+  if (!ready) return <View style={{ flex: 1, backgroundColor: "#FFFFFF" }} />;
+  return <>{children}</>;
+}
+
+export default function RootLayout() {
   const [loaded] = useFonts({
     "PlusJakartaSans-Regular": require("../assets/fonts/PlusJakartaSans-Regular.ttf"),
     "PlusJakartaSans-Medium": require("../assets/fonts/PlusJakartaSans-Medium.ttf"),
@@ -36,7 +66,8 @@ export default function RootLayout() {
 
   return (
     <ErrorBoundary>
-      <GestureHandlerRootView style={{ flex: 1 }}>
+      <DatabaseBootstrap>
+        <GestureHandlerRootView style={{ flex: 1 }}>
         <SafeAreaProvider>
           <ThemeProvider>
             <QueryClientProvider client={queryClient}>
@@ -77,6 +108,7 @@ export default function RootLayout() {
           </ThemeProvider>
         </SafeAreaProvider>
       </GestureHandlerRootView>
+      </DatabaseBootstrap>
     </ErrorBoundary>
   );
 }
