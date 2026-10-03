@@ -190,8 +190,25 @@ export function restoreBackup(backup:BackupData){
     }
     db.runSync("INSERT INTO inventory (id,name,category_id,category,size,quantity,unit,minimum_stock) VALUES (?,?,?,?,?,?,?,?)",[i.id,i.name,cid,i.category||"",i.size||"",Number(i.quantity||0),i.unit||"pcs",Number(i.minimum_stock||0)]);
   }
+  // Restore patient inventory selections without creating duplicate rows.
+  // Older backups/restore versions could contain the same patient + implant more
+  // than once. Combine identical selections into one row and keep the quantity.
   for(const pi of backup.patientImplants||[]){
-    db.runSync("INSERT INTO patient_implants (id,patient_id,inventory_id,name,category,size,quantity,created_at) VALUES (?,?,?,?,?,?,?,?)",[pi.id,pi.patient_id,pi.inventory_id||null,pi.name,pi.category||null,pi.size||null,Number(pi.quantity||1),pi.created_at]);
+    const patientId=String(pi.patient_id||"");
+    const inventoryId=String(pi.inventory_id||"");
+    const name=String(pi.name||"").trim();
+    const category=String(pi.category||"").trim();
+    const size=String(pi.size||"").trim();
+    const qty=Math.max(1,Number(pi.quantity)||1);
+    const existing=db.getFirstSync<any>(
+      "SELECT id,quantity FROM patient_implants WHERE patient_id=? AND COALESCE(inventory_id,'')=? AND LOWER(TRIM(COALESCE(name,'')))=LOWER(?) AND LOWER(TRIM(COALESCE(category,'')))=LOWER(?) AND LOWER(TRIM(COALESCE(size,'')))=LOWER(?) LIMIT 1",
+      [patientId,inventoryId,name,category,size]
+    );
+    if(existing){
+      db.runSync("UPDATE patient_implants SET quantity=? WHERE id=?",[Number(existing.quantity||0)+qty,existing.id]);
+      continue;
+    }
+    db.runSync("INSERT INTO patient_implants (id,patient_id,inventory_id,name,category,size,quantity,created_at) VALUES (?,?,?,?,?,?,?,?)",[pi.id,patientId,pi.inventory_id||null,name,pi.category||null,pi.size||null,qty,pi.created_at]);
   }
   for(const e of backup.expenses) db.runSync("INSERT INTO expenses (id,description,amount,belongs_to,doctor_id,date,created_at) VALUES (?,?,?,?,?,?,?)",[e.id,e.description,Number(e.amount||0),e.belongs_to||"hospital",e.doctor_id||null,e.date,e.created_at]);
   for(const u of backup.users) db.runSync("INSERT INTO users (id,email,name,password_hash,recovery_code,role,can_edit_patients,disabled,created_at) VALUES (?,?,?,?,?,?,?,?,?)",[u.id,u.email,u.name,u.password_hash,u.recovery_code||null,u.role||"doctor",Number(u.can_edit_patients??1),Number(u.disabled??0),u.created_at]);
@@ -262,7 +279,20 @@ export function mergeBackup(backup: BackupData) {
   }
   for (const pi of backup.patientImplants || []) {
    if (has("patient_implants", pi.id)) continue;
-   db.runSync("INSERT INTO patient_implants (id,patient_id,inventory_id,name,category,size,quantity,created_at) VALUES (?,?,?,?,?,?,?,?)", [pi.id,pi.patient_id,pi.inventory_id||null,pi.name,pi.category||null,pi.size||null,Number(pi.quantity||1),pi.created_at]);
+   const patientId=String(pi.patient_id||"");
+   const inventoryId=String(pi.inventory_id||"");
+   const name=String(pi.name||"").trim();
+   const category=String(pi.category||"").trim();
+   const size=String(pi.size||"").trim();
+   const qty=Math.max(1,Number(pi.quantity)||1);
+   // Stronger than the row id: old backups may have regenerated IDs for the
+   // same patient selection. Never add the same patient + implant selection twice.
+   const existing=db.getFirstSync<any>(
+     "SELECT id FROM patient_implants WHERE patient_id=? AND COALESCE(inventory_id,'')=? AND LOWER(TRIM(COALESCE(name,'')))=LOWER(?) AND LOWER(TRIM(COALESCE(category,'')))=LOWER(?) AND LOWER(TRIM(COALESCE(size,'')))=LOWER(?) LIMIT 1",
+     [patientId,inventoryId,name,category,size]
+   );
+   if (existing) continue;
+   db.runSync("INSERT INTO patient_implants (id,patient_id,inventory_id,name,category,size,quantity,created_at) VALUES (?,?,?,?,?,?,?,?)", [pi.id,patientId,pi.inventory_id||null,name,pi.category||null,pi.size||null,qty,pi.created_at]);
   }
   for (const e of backup.expenses) {
    if (has("expenses", e.id)) continue;
