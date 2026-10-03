@@ -11,13 +11,14 @@ import { AuthProvider } from "@/src/auth/AuthContext";
 import { ErrorBoundary } from "@/src/components/error-boundary";
 import { ToastProvider } from "@/src/components/toast";
 import { queryClient } from "@/src/query-client";
-import { initializeDatabase } from "@/src/db/database";
+import { initializeDatabase, repairDatabaseData } from "@/src/db/database";
 import { ThemeProvider } from "@/src/theme";
 
 LogBox.ignoreAllLogs(true);
 
 export default function RootLayout() {
   initializeDatabase();
+  repairDatabaseData();
 
   const [loaded] = useFonts({
     "PlusJakartaSans-Regular": require("../assets/fonts/PlusJakartaSans-Regular.ttf"),
