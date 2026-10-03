@@ -24,6 +24,10 @@ export default function TabsLayout() {
           <NativeTabs.Trigger.Icon sf="shippingbox.fill" />
           <NativeTabs.Trigger.Label>Inventory</NativeTabs.Trigger.Label>
         </NativeTabs.Trigger>
+        <NativeTabs.Trigger name="implants">
+          <NativeTabs.Trigger.Icon sf="cross.case.fill" />
+          <NativeTabs.Trigger.Label>Implants</NativeTabs.Trigger.Label>
+        </NativeTabs.Trigger>
         <NativeTabs.Trigger name="procedures">
           <NativeTabs.Trigger.Icon sf="cross.case.fill" />
           <NativeTabs.Trigger.Label>Procedures</NativeTabs.Trigger.Label>
@@ -66,6 +70,15 @@ export default function TabsLayout() {
           title: "Inventory",
           tabBarIcon: ({ color, size, focused }) => (
             <Ionicons name={focused ? "cube" : "cube-outline"} size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="implants"
+        options={{
+          title: "Implants",
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons name={focused ? "medkit" : "medkit-outline"} size={size} color={color} />
           ),
         }}
       />
