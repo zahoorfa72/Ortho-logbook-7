@@ -1,10 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { router, useLocalSearchParams } from "expo-router";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import * as ImageManipulator from "expo-image-manipulator";
 import { Asset, requestPermissionsAsync } from "expo-media-library";
 import * as FileSystem from "expo-file-system/legacy";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { Image, InteractionManager, Modal, Pressable, ScrollView, Text, View } from "react-native";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
@@ -80,6 +80,8 @@ export default function PatientForm() {
   const [editingPhotoOriginal, setEditingPhotoOriginal] = useState<string | null>(null);
   const [editingPhotoUri, setEditingPhotoUri] = useState<string | null>(null);
   const [photoBusy, setPhotoBusy] = useState(false);
+  const [imagePickerReady, setImagePickerReady] = useState(false);
+  const imagePickerOpening = useRef(false);
   const [cropScale, setCropScale] = useState(0.78);
   const [cropX, setCropX] = useState(0.5);
   const [cropY, setCropY] = useState(0.5);
@@ -147,6 +149,15 @@ export default function PatientForm() {
 
   const set = (key: keyof Patient) => (v: any) => setP((x) => ({ ...x, [key]: v }));
 
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      setImagePickerReady(false);
+      const timer = setTimeout(() => { if (!cancelled) setImagePickerReady(true); }, 350);
+      return () => { cancelled = true; clearTimeout(timer); imagePickerOpening.current = false; setImagePickerReady(false); };
+    }, []),
+  );
+
   async function ensureLibraryPermission() {
     const perm = await ImagePicker.getMediaLibraryPermissionsAsync();
     if (perm.granted) return true;
@@ -190,33 +201,26 @@ export default function PatientForm() {
 
   // No cropping (allowsEditing:false). Library allows multi-select.
   const addFromLibrary = async () => {
+    if (!imagePickerReady || imagePickerOpening.current) return;
+    imagePickerOpening.current = true;
     try {
-      // Android's system photo picker does not require a runtime media
-      // permission. Avoid requesting permission immediately before launch:
-      // on some Android/Expo builds that can leave ImagePicker's
-      // ActivityResultLauncher unregistered when launch() is called.
-      await new Promise<void>((resolve) => {
-        InteractionManager.runAfterInteractions(() => resolve());
-      });
+      await new Promise<void>((resolve) => InteractionManager.runAfterInteractions(() => setTimeout(resolve, 50)));
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ["images"],
-        allowsEditing: false,
-        allowsMultipleSelection: true,
-        selectionLimit: 20,
-        quality: 0.9,
+        mediaTypes: ["images"], allowsEditing: false, allowsMultipleSelection: true,
+        selectionLimit: 20, quality: 0.9,
       });
       if (result.canceled) return;
-      const uris = result.assets.map((a) => a.uri).filter(Boolean);
       const permanentUris: string[] = [];
-      for (const uri of uris) permanentUris.push(await persistPhoto(uri));
+      for (const uri of result.assets.map((x) => x.uri).filter(Boolean)) permanentUris.push(await persistPhoto(uri));
       setP((x) => ({ ...x, photos: [...x.photos, ...permanentUris] }));
-    } catch (e: any) {
-      toast(e?.message || "Could not save the selected photo.", "error");
-    }
+    } catch (e: any) { toast(e?.message || "Could not save the selected photo.", "error"); }
+    finally { imagePickerOpening.current = false; }
   };
 
   const addFromCamera = async () => {
+    if (!imagePickerReady || imagePickerOpening.current) return;
     if (!(await ensureCameraPermission())) return;
+    imagePickerOpening.current = true;
     try {
       const result = await ImagePicker.launchCameraAsync({
         allowsEditing: false,
@@ -230,6 +234,8 @@ export default function PatientForm() {
       }
     } catch (e: any) {
       toast(e?.message || "Could not save the camera photo.", "error");
+    } finally {
+      imagePickerOpening.current = false;
     }
   };
 
@@ -418,8 +424,8 @@ export default function PatientForm() {
         ) : null}
         <Text style={styles.section}>Patient photos</Text>
         <View style={styles.photoActions}>
-          <PrimaryButton title={`Add from Gallery${p.photos.length ? " (+)" : ""}`} onPress={addFromLibrary} testID="add-photo-library-button" />
-          <Pressable style={styles.secondary} onPress={addFromCamera} testID="add-photo-camera-button">
+          <PrimaryButton title={`Add from Gallery${p.photos.length ? " (+)" : ""}`} onPress={addFromLibrary} disabled={!imagePickerReady || photoBusy} testID="add-photo-library-button" />
+          <Pressable style={[styles.secondary, (!imagePickerReady || photoBusy) && { opacity: 0.5 }]} onPress={addFromCamera} disabled={!imagePickerReady || photoBusy} testID="add-photo-camera-button">
             <Ionicons name="camera" size={18} color={colors.onSurface} />
             <Text style={styles.secondaryText}> Take Photo</Text>
           </Pressable>
