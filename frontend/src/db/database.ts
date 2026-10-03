@@ -72,6 +72,18 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
       name TEXT NOT NULL, category TEXT, size TEXT, quantity REAL NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS patient_custom_fields (
+      id TEXT PRIMARY KEY NOT NULL, key TEXT NOT NULL UNIQUE, label TEXT NOT NULL,
+      type TEXT NOT NULL DEFAULT 'text', sort_order INTEGER NOT NULL DEFAULT 0,
+      enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS implant_records (
+      id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, category TEXT, size TEXT,
+      manufacturer TEXT, model TEXT, lot_number TEXT, serial_number TEXT, expiry_date TEXT,
+      supplier TEXT, quantity REAL NOT NULL DEFAULT 0, unit TEXT NOT NULL DEFAULT 'pcs',
+      purchase_price REAL NOT NULL DEFAULT 0, notes TEXT, bill_files_json TEXT,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL, created_by TEXT, updated_by TEXT
+    );
     CREATE TABLE IF NOT EXISTS inventory_movements (
       id TEXT PRIMARY KEY NOT NULL, inventory_id TEXT NOT NULL, user_id TEXT,
       type TEXT NOT NULL, amount REAL NOT NULL, quantity_after REAL NOT NULL,
@@ -84,6 +96,9 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
     CREATE INDEX IF NOT EXISTS idx_patients_procedure ON patients(procedure);
     CREATE INDEX IF NOT EXISTS idx_patients_mr ON patients(mr_no);
     CREATE INDEX IF NOT EXISTS idx_patients_name ON patients(name);
+    CREATE INDEX IF NOT EXISTS idx_patient_custom_fields_order ON patient_custom_fields(sort_order, label);
+    CREATE INDEX IF NOT EXISTS idx_implant_records_name ON implant_records(name);
+    CREATE INDEX IF NOT EXISTS idx_implant_records_category ON implant_records(category);
     CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date);
     CREATE INDEX IF NOT EXISTS idx_history_patient ON patient_history(patient_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_patient_implants_patient ON patient_implants(patient_id, created_at);
@@ -100,6 +115,7 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
   addColumn("inventory", "category", "TEXT");
   addColumn("inventory", "size", "TEXT");
   addColumn("patients", "photos_json", "TEXT");
+  addColumn("patients", "custom_data_json", "TEXT");
   addColumn("patients", "created_by", "TEXT");
   addColumn("patients", "updated_at", "TEXT");
   addColumn("patients", "updated_by", "TEXT");
