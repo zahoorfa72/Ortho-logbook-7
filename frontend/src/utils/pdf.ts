@@ -146,14 +146,14 @@ function footer(branding: BrandingConfig) {
 }
 
 export function buildPatientListHtml(branding: BrandingConfig, patients: Patient[]): string {
-  const rows =
+  const groups = new Map<string, Patient[]>();\n  const keyOf = (p: Patient) => (p.name || "").trim().toLowerCase() + "|" + (p.mrNo || "").trim().toLowerCase();\n  for (const p of patients) {\n    if (!p.name?.trim() || !p.mrNo?.trim()) continue;\n    const key = keyOf(p); const list = groups.get(key) || []; list.push(p); groups.set(key, list);\n  }\n  const counts = new Map<string, number>();\n  for (const list of groups.values()) {\n    const sorted = [...list].sort((a,b) => String(a.date || "").localeCompare(String(b.date || "")) || String(a.id || "").localeCompare(String(b.id || "")));\n    sorted.forEach((p, i) => counts.set(p.id, i + 1));\n  }\n  const rows =
     patients.length === 0
       ? `<tr><td colspan="7"><div class="empty">No patients recorded.</div></td></tr>`
       : patients
           .map((p, idx) => {
             const badge =
-              p.operationCount && p.operationCount > 1
-                ? `<span class="badge">${escapeHtml(ordinalSuffix(p.operationCount))} time</span>`
+              (counts.get(p.id) || p.operationCount || 1) > 1
+                ? `<span class="badge">${escapeHtml(ordinalSuffix(counts.get(p.id) || p.operationCount || 1))} time</span>`
                 : "";
             return `
               <tr>
