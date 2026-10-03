@@ -2,7 +2,7 @@ import * as Crypto from "expo-crypto";
 import { File } from "expo-file-system";
 import * as ImageManipulator from "expo-image-manipulator";
 import nacl from "tweetnacl";
-import { db, initializeDatabase, markInventoryResetDone } from "@/src/db/database";
+import { db, initializeDatabase, markInventoryResetDone, repairDatabaseData } from "@/src/db/database";
 
 const BACKUP_VERSION = 5;
 const BACKUP_APP = "Ortho Logbook";
@@ -316,6 +316,7 @@ export function restoreBackup(backup:BackupData){
     db.runSync("INSERT INTO inventory_movements (id,inventory_id,user_id,type,amount,quantity_after,note,created_at) VALUES (?,?,?,?,?,?,?,?)",[restoreRowId(m.id,"movement",usedMovementIds),inventoryId,userIdMap.get(String(m.user_id||""))||null,restoreText(m.type,"adjust"),restoreReal(m.amount,0),restoreReal(m.quantity_after,0,0),restoreText(m.note)||null,restoreText(m.created_at,new Date().toISOString())]);
   }
  });
+ repairDatabaseData();
  markInventoryResetDone();
  return {patients:patients.length,procedures:procedures.length,inventory:inventory.length,inventoryCategories:inventoryCategories.length,patientImplants:patientImplants.length,expenses:expenses.length,users:users.length,patientHistory:patientHistory.length,inventoryMovements:inventoryMovements.length};
 }
