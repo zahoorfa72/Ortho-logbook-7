@@ -42,16 +42,28 @@ function parsePhotos(raw: any, legacyUri: string | null | undefined): string[] {
   return legacyUri ? [String(legacyUri)] : [];
 }
 
+const safeText = (v:any) => String(v ?? "");
 const fromPatient = (r: any): Patient => {
   const photos = parsePhotos(r.photos_json, r.photo_uri);
+  let customData:Record<string,string> = {};
+  try {
+    const v=JSON.parse(String(r.custom_data_json||"{}"));
+    if(v && typeof v==="object" && !Array.isArray(v)){
+      for(const [k,val] of Object.entries(v)){
+        customData[String(k)] = val == null ? "" : typeof val === "string" ? val : String(val);
+      }
+    }
+  } catch {}
   return {
-    id: r.id, mrNo: r.mr_no, name: r.name || "", gender: r.gender || "",
-    age: r.age || "", diagnosis: r.diagnosis || "", procedure: r.procedure || "",
-    implant: r.implant || "", implantII: r.implant_ii || "", implantId: r.implant_id || "", implantIIId: r.implant_ii_id || "", address: r.address || "",
-    fileName: r.file_name || "", photoUri: photos[0] || "", photos,
-    date: r.date, createdAt: r.created_at, createdBy: r.created_by,
-    updatedAt: r.updated_at, updatedBy: r.updated_by,
-    customData: (() => { try { const v=JSON.parse(String(r.custom_data_json||"{}")); return v && typeof v==="object" ? v : {}; } catch { return {}; } })(),
+    id: safeText(r.id), mrNo: safeText(r.mr_no), name: safeText(r.name),
+    gender: safeText(r.gender), age: safeText(r.age), diagnosis: safeText(r.diagnosis),
+    procedure: safeText(r.procedure), implant: safeText(r.implant), implantII: safeText(r.implant_ii),
+    implantId: safeText(r.implant_id), implantIIId: safeText(r.implant_ii_id),
+    address: safeText(r.address), fileName: safeText(r.file_name),
+    photoUri: photos[0] || "", photos,
+    date: safeText(r.date), createdAt: safeText(r.created_at), createdBy: safeText(r.created_by),
+    updatedAt: safeText(r.updated_at), updatedBy: safeText(r.updated_by),
+    customData,
   };
 };
 
