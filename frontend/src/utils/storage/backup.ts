@@ -235,14 +235,14 @@ export function restoreBackup(backup:BackupData){
 //   matching name + category + size and summing quantities.
 export function mergeBackup(backup: BackupData) {
  initializeDatabase({ skipInventoryReset: true });
- if(!backup||![2,3,4].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
+ if(!backup||![2,3,4,5].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
  const stats = { patients: 0, procedures: 0, inventory: 0, expenses: 0, users: 0, patientHistory: 0, inventoryMovements: 0 };
  db.withTransactionSync(() => {
   const has = (table: string, id: string) => !!db.getFirstSync<any>(`SELECT id FROM ${table} WHERE id=?`, [id]);
   for (const p of backup.patients) {
    if (has("patients", p.id)) continue;
    const photos=restorePatientPhotos(p);
-   db.runSync("INSERT INTO patients (id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,implant_id,implant_ii_id,address,file_name,photo_uri,photos_json,date,created_at,created_by,updated_at,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",[p.id,p.mr_no,p.name,p.gender||"",p.age||"",p.diagnosis||"",p.procedure||"",p.implant||"",p.implant_ii||"",p.implant_id||null,p.implant_ii_id||null,p.address||"",p.file_name||"",photos.photoUri,photos.photosJson,p.date,p.created_at,p.created_by||null,p.updated_at||null,p.updated_by||null]);
+   db.runSync("INSERT INTO patients (id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,implant_id,address,file_name,photo_uri,photos_json,custom_data_json,date,created_at,created_by,updated_at,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",[p.id,p.mr_no,p.name,p.gender||"",p.age||"",p.diagnosis||"",p.procedure||"",p.implant||"",p.implant_ii||"",p.implant_id||null,p.address||"",p.file_name||"",photos.photoUri,photos.photosJson,p.custom_data_json||"{}",p.date,p.created_at,p.created_by||null,p.updated_at||null,p.updated_by||null]);
    stats.patients++;
   }
   for (const p of backup.procedures) {
