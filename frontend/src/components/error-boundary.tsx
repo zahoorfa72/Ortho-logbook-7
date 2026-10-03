@@ -51,7 +51,7 @@ function ErrorFallback({ error, resetError }: { error: Error; resetError: () => 
       <View style={styles.content}>
         <Text style={styles.title}>Something went wrong</Text>
         <Text style={styles.message}>Please reload the app to continue.</Text>
-        {__DEV__ ? <Text style={styles.devMessage}>{error.message}</Text> : null}
+        <Text style={styles.devMessage}>{error.message}</Text>
         <Pressable
           onPress={handleReload}
           testID="error-fallback-reload"
@@ -60,13 +60,13 @@ function ErrorFallback({ error, resetError }: { error: Error; resetError: () => 
         >
           <Text style={styles.buttonText}>Reload app</Text>
         </Pressable>
-        {__DEV__ ? (
+        {true ? (
           <Pressable onPress={() => setShowDetails((v) => !v)} accessibilityRole="button" hitSlop={8}>
             <Text style={styles.detailsToggle}>{showDetails ? "Hide details" : "Show details"}</Text>
           </Pressable>
         ) : null}
       </View>
-      {__DEV__ && showDetails ? (
+      {showDetails ? (
         <ScrollView style={styles.details} contentContainerStyle={styles.detailsContent}>
           <Text selectable style={styles.detailsText}>
             {error.stack ?? error.message}
