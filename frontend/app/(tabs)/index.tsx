@@ -147,9 +147,9 @@ export default function Logbook() {
     );
   };
 
-  const filtered = useMemo(() => {
+  const patientsWithOperationCounts = useMemo(() => {\n    const source = data || [];\n    const groups = new Map<string, Patient[]>();\n    const keyOf = (p: Patient) => (p.name || "").trim().toLowerCase() + "|" + (p.mrNo || "").trim().toLowerCase();\n    for (const p of source) {\n      if (!p.name?.trim() || !p.mrNo?.trim()) continue;\n      const key = keyOf(p);\n      const list = groups.get(key) || []; list.push(p); groups.set(key, list);\n    }\n    const counts = new Map<string, { operationCount:number; totalOperations:number }>();\n    for (const list of groups.values()) {\n      const sorted = [...list].sort((a,b) => String(a.date || "").localeCompare(String(b.date || "")) || String(a.id || "").localeCompare(String(b.id || "")));\n      sorted.forEach((p, i) => counts.set(p.id, { operationCount:i + 1, totalOperations:sorted.length }));\n    }\n    return source.map((p) => ({ ...p, ...(counts.get(p.id) || {}) }));\n  }, [data]);\n\n  const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    let list = (data || []).filter((p) =>
+    let list = patientsWithOperationCounts.filter((p) =>
       !q ||
       [p.mrNo, p.name, p.diagnosis, p.procedure, p.implant, p.implantII, ...(p.implants || []).flatMap(x => [x.category, x.name, x.size])]
         .join(" ")
@@ -166,7 +166,7 @@ export default function Logbook() {
       return (b.date || "").localeCompare(a.date || "");
     });
     return list;
-  }, [data, query, patientSort]);
+  }, [patientsWithOperationCounts, query, patientSort]);
 
   const doExport = useCallback(async () => {
     if (!filtered.length) {
