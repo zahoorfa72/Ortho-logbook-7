@@ -125,6 +125,88 @@ function restoreStock(p: Patient, userId: string | null) {
   }
 }
 
+function deletePatientRows(ids: string[], me: any) {
+  return db.withTransactionSync(() => {
+    const cleanIds = [...new Set(ids.map(String).filter(Boolean))];
+    if (!cleanIds.length) return 0;
+    const placeholders = cleanIds.map(() => "?").join(",");
+    const rows = db.getAllSync<any>(
+      `SELECT * FROM patients WHERE id IN (${placeholders})`,
+      cleanIds,
+    );
+    const allowed = rows.filter((p: any) => me.role === "admin" || p.created_by === me.id);
+
+    for (const patient of allowed) {
+      restoreStock(hydratePatientImplants(patient.id, fromPatient(patient)), me.id);
+      db.runSync(
+        "INSERT INTO patient_history (id,patient_id,user_id,action,snapshot_json,created_at) VALUES (?,?,?,?,?,?)",
+        [id(), patient.id, me.id, "delete", snapshot(fromPatient(patient)), nowIso()],
+      );
+    }
+
+    const allowedIds = allowed.map((p: any) => p.id);
+    if (!allowedIds.length) return 0;
+
+    const allowedPlaceholders = allowedIds.map(() => "?").join(",");
+    // A hard delete must remove the relational inventory selections as well.
+    // Otherwise deleted patients can still appear in inventory usage/backup data.
+    db.runSync(
+      `DELETE FROM patient_implants WHERE patient_id IN (${allowedPlaceholders})`,
+      allowedIds,
+    );
+    db.runSync(
+      `DELETE FROM patients WHERE id IN (${allowedPlaceholders})`,
+      allowedIds,
+    );
+
+    const remaining = Number(
+      db.getFirstSync<any>(
+        `SELECT COUNT(*) AS n FROM patients WHERE id IN (${allowedPlaceholders})`,
+        allowedIds,
+      )?.n || 0,
+    );
+    if (remaining > 0) throw new Error("Patient deletion did not complete.");
+    return allowed.length;
+  });
+}
+
+function deleteInventoryRows(ids: string[]) {
+  return db.withTransactionSync(() => {
+    const cleanIds = [...new Set(ids.map(String).filter(Boolean))];
+    if (!cleanIds.length) return 0;
+    const placeholders = cleanIds.map(() => "?").join(",");
+    const rows = db.getAllSync<any>(
+      `SELECT id FROM inventory WHERE id IN (${placeholders})`,
+      cleanIds,
+    );
+    if (!rows.length) return 0;
+
+    // Detach patient selections first so deleted inventory IDs can never
+    // resurrect through relational/backup data.
+    db.runSync(
+      `UPDATE patient_implants SET inventory_id=NULL WHERE inventory_id IN (${placeholders})`,
+      cleanIds,
+    );
+    db.runSync(
+      `DELETE FROM inventory_movements WHERE inventory_id IN (${placeholders})`,
+      cleanIds,
+    );
+    db.runSync(
+      `DELETE FROM inventory WHERE id IN (${placeholders})`,
+      cleanIds,
+    );
+
+    const remaining = Number(
+      db.getFirstSync<any>(
+        `SELECT COUNT(*) AS n FROM inventory WHERE id IN (${placeholders})`,
+        cleanIds,
+      )?.n || 0,
+    );
+    if (remaining > 0) throw new Error("Inventory deletion did not complete.");
+    return rows.length;
+  });
+}
+
 function hydratePatientImplants(patientId:string, p:Patient): Patient {
   const rows = db.getAllSync<any>(
     "SELECT id,inventory_id,name,category,size,quantity FROM patient_implants WHERE patient_id=? ORDER BY created_at ASC",
@@ -515,53 +597,16 @@ export const api = {
     if (normalizedPath === "/inventory-bulk-delete") {
       await requireAdmin();
       const ids = Array.isArray(body?.ids) ? body.ids.map(String).filter(Boolean) : [];
-      if (!ids.length) return { success: true, deleted: 0 } as any;
-      return db.withTransactionSync(() => {
-        const placeholders = ids.map(() => "?").join(",");
-        const rows = db.getAllSync<any>(
-          `SELECT id FROM inventory WHERE id IN (${placeholders})`,
-          ids,
-        );
-        // Preserve patient records/history: only detach the deleted inventory ID.
-        db.runSync(
-          `UPDATE patient_implants SET inventory_id=NULL WHERE inventory_id IN (${placeholders})`,
-          ids,
-        );
-        db.runSync(
-          `DELETE FROM inventory_movements WHERE inventory_id IN (${placeholders})`,
-          ids,
-        );
-        db.runSync(
-          `DELETE FROM inventory WHERE id IN (${placeholders})`,
-          ids,
-        );
-        return { success: true, deleted: rows.length } as any;
-      });
+      const deleted = deleteInventoryRows(ids);
+      return { success: true, deleted } as any;
     }
     if (normalizedPath === "/patients") return (await savePatient(body, false)) as any;
     if (normalizedPath === "/patients-bulk-delete") {
       const me = await currentUserRow();
       if (!me) throw new Error("Not signed in.");
       const ids = Array.isArray(body?.ids) ? body.ids.map(String).filter(Boolean) : [];
-      if (!ids.length) return { success: true, deleted: 0 } as any;
-      return db.withTransactionSync(() => {
-        const placeholders = ids.map(() => "?").join(",");
-        const rows = db.getAllSync<any>(`SELECT * FROM patients WHERE id IN (${placeholders})`, ids);
-        const allowed = rows.filter((p:any) => me.role === "admin" || p.created_by === me.id);
-        for (const patient of allowed) {
-          restoreStock(hydratePatientImplants(patient.id, fromPatient(patient)), me.id);
-          db.runSync(
-            "INSERT INTO patient_history (id,patient_id,user_id,action,snapshot_json,created_at) VALUES (?,?,?,?,?,?)",
-            [id(), patient.id, me.id, "delete", snapshot(fromPatient(patient)), nowIso()],
-          );
-        }
-        const allowedIds = allowed.map((p:any) => p.id);
-        if (allowedIds.length) {
-          const ph = allowedIds.map(() => "?").join(",");
-          db.runSync(`DELETE FROM patients WHERE id IN (${ph})`, allowedIds);
-        }
-        return { success: true, deleted: allowed.length } as any;
-      });
+      const deleted = deletePatientRows(ids, me);
+      return { success: true, deleted } as any;
     }
     if (normalizedPath === "/users") {
       await requireAdmin();
@@ -713,12 +758,8 @@ export const api = {
       if (patient) {
         await assertRecordAccess(patient.created_by);
         const uid = await currentUser();
-        restoreStock(hydratePatientImplants(pm[1], fromPatient(patient)), uid);
-        db.runSync(
-          "INSERT INTO patient_history (id,patient_id,user_id,action,snapshot_json,created_at) VALUES (?,?,?,?,?,?)",
-          [id(), pm[1], uid, "delete", snapshot(fromPatient(patient)), nowIso()],
-        );
-        db.runSync("DELETE FROM patients WHERE id=?", [pm[1]]);
+        const deleted = deletePatientRows([pm[1]], { ...(await currentUserRow()), id: uid });
+        if (deleted !== 1) throw new Error("Patient deletion did not complete.");
       }
       return { success: true } as any;
     }
@@ -739,15 +780,9 @@ export const api = {
     const inv = normalizedPath.match(/^\/inventory\/(.+)$/);
     if (inv) {
       await requireAdmin();
-      const item = db.getFirstSync<any>("SELECT id FROM inventory WHERE id=? LIMIT 1", [inv[1]]);
-      if (item) {
-        db.withTransactionSync(() => {
-          db.runSync("UPDATE patient_implants SET inventory_id=NULL WHERE inventory_id=?", [inv[1]]);
-          db.runSync("DELETE FROM inventory_movements WHERE inventory_id=?", [inv[1]]);
-          db.runSync("DELETE FROM inventory WHERE id=?", [inv[1]]);
-        });
-      }
-      return { success: true } as any;
+      const deleted = deleteInventoryRows([inv[1]]);
+      if (deleted > 0) return { success: true, deleted } as any;
+      return { success: true, deleted: 0 } as any;
     }
     throw new Error(`Offline API endpoint not implemented: ${path}`);
   },
