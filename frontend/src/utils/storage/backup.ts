@@ -176,6 +176,10 @@ function restoreRowId(value:any, prefix:string, used:Set<string>){
   return next;
 }
 function restoreArray(value:any){return Array.isArray(value)?value:[];}
+function restoreText(value:any,fallback=""){const v=String(value ?? "").trim();return v || fallback;}
+function restoreReal(value:any,fallback=0,min=-Infinity){const n=typeof value==="number" ? value : Number(String(value ?? "").replace(/,/g,"").trim());if(!Number.isFinite(n)) return fallback;return Math.max(min,n);}
+function restoreJsonObject(value:any){try{const parsed=JSON.parse(String(value ?? "{}"));return parsed && typeof parsed==="object" && !Array.isArray(parsed) ? JSON.stringify(parsed) : "{}";}catch{return "{}";}}
+function restoreJsonArray(value:any){try{const parsed=JSON.parse(String(value ?? "[]"));return Array.isArray(parsed) ? JSON.stringify(parsed) : "[]";}catch{return "[]";}}
 
 export function restoreBackup(backup:BackupData){
  initializeDatabase({ skipInventoryReset: true });
@@ -199,20 +203,42 @@ export function restoreBackup(backup:BackupData){
    const photos=restorePatientPhotos(p);
    const restoredPatientId=restoreRowId(p.id,"patient",usedPatientIds);
    if(p.id) patientIdMap.set(String(p.id),restoredPatientId);
-   db.runSync("INSERT INTO patients (id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,implant_id,implant_ii_id,address,file_name,photo_uri,photos_json,custom_data_json,date,created_at,created_by,updated_at,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",[restoredPatientId,p.mr_no||"",p.name||"Unnamed patient",p.gender||"",p.age||"",p.diagnosis||"",p.procedure||"",p.implant||"",p.implant_ii||"",p.implant_id||null,p.implant_ii_id||null,p.address||"",p.file_name||"",photos.photoUri,photos.photosJson,p.custom_data_json||"{}",p.date||new Date().toISOString().slice(0,10),p.created_at||new Date().toISOString(),p.created_by||null,p.updated_at||null,p.updated_by||null]);
+   const patientDate=restoreText(p.date,new Date().toISOString().slice(0,10));
+   const patientCreatedAt=restoreText(p.created_at,new Date().toISOString());
+   db.runSync("INSERT INTO patients (id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,implant_id,implant_ii_id,address,file_name,photo_uri,photos_json,custom_data_json,date,created_at,created_by,updated_at,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",[restoredPatientId,restoreText(p.mr_no),restoreText(p.name,"Unnamed patient"),restoreText(p.gender),restoreText(p.age),restoreText(p.diagnosis),restoreText(p.procedure),restoreText(p.implant),restoreText(p.implant_ii),restoreText(p.implant_id)||null,restoreText(p.implant_ii_id)||null,restoreText(p.address),restoreText(p.file_name),photos.photoUri,photos.photosJson,restoreJsonObject(p.custom_data_json),patientDate,patientCreatedAt,restoreText(p.created_by)||null,restoreText(p.updated_at)||null,restoreText(p.updated_by)||null]);
   }
   const usedProcedureIds=new Set<string>();
-  for(const p of procedures) db.runSync("INSERT INTO procedures (id,name) VALUES (?,?)",[restoreRowId(p.id,"procedure",usedProcedureIds),p.name||"Unnamed procedure"]);
+  const usedProcedureNames=new Set<string>();
+  for(const p of procedures){
+    const name=restoreText(p.name,"Unnamed procedure");
+    const key=name.toLowerCase();
+    if(usedProcedureNames.has(key)) continue;
+    usedProcedureNames.add(key);
+    db.runSync("INSERT INTO procedures (id,name) VALUES (?,?)",[restoreRowId(p.id,"procedure",usedProcedureIds),name]);
+  }
   const usedCustomFieldIds=new Set<string>();
+  const usedCustomFieldKeys=new Set<string>();
   for(const f of patientCustomFields){
-    db.runSync("INSERT OR REPLACE INTO patient_custom_fields (id,key,label,type,sort_order,enabled,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)",[restoreRowId(f.id,"custom-field",usedCustomFieldIds),String(f.key||("field-"+Date.now())),String(f.label||"Custom field"),f.type||"text",Number(f.sort_order||0),Number(f.enabled??1),f.created_at||new Date().toISOString(),f.updated_at||f.created_at||new Date().toISOString()]);
+    const key=restoreText(f.key,"field-"+Crypto.randomUUID().slice(0,8));
+    const keyLower=key.toLowerCase();
+    if(usedCustomFieldKeys.has(keyLower)) continue;
+    usedCustomFieldKeys.add(keyLower);
+    const type=["text","number","date","multiline"].includes(String(f.type)) ? String(f.type) : "text";
+    const createdAt=restoreText(f.created_at,new Date().toISOString());
+    const updatedAt=restoreText(f.updated_at,createdAt);
+    db.runSync("INSERT OR REPLACE INTO patient_custom_fields (id,key,label,type,sort_order,enabled,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)",[restoreRowId(f.id,"custom-field",usedCustomFieldIds),key,restoreText(f.label,"Custom field"),type,Math.trunc(restoreReal(f.sort_order,0)),restoreReal(f.enabled,1,0)>0?1:0,createdAt,updatedAt]);
   }
   const categoryIds=new Map<string,string>();
   const usedCategoryIds=new Set<string>();
+  const usedCategoryNames=new Set<string>();
   for(const c of inventoryCategories){
+    const name=restoreText(c.name,"Unnamed category");
+    const nameKey=name.toLowerCase();
+    if(usedCategoryNames.has(nameKey)) continue;
+    usedCategoryNames.add(nameKey);
     const cid=restoreRowId(c.id,"category",usedCategoryIds);
-    db.runSync("INSERT INTO inventory_categories (id,name,created_at) VALUES (?,?,?)",[cid,c.name,c.created_at||new Date().toISOString()]);
-    categoryIds.set(String(c.name||"").toLowerCase(),cid);
+    db.runSync("INSERT INTO inventory_categories (id,name,created_at) VALUES (?,?,?)",[cid,name,restoreText(c.created_at,new Date().toISOString())]);
+    categoryIds.set(nameKey,cid);
   }
   const usedInventoryIds=new Set<string>();
   const inventoryIdMap=new Map<string,string>();
@@ -220,12 +246,16 @@ export function restoreBackup(backup:BackupData){
     let cid=i.category_id||categoryIds.get(String(i.category||"").toLowerCase())||null;
     if(!cid && i.category){
       cid=Math.random().toString(36).slice(2)+Date.now().toString(36);
-      db.runSync("INSERT INTO inventory_categories (id,name,created_at) VALUES (?,?,?)",[cid,i.category,new Date().toISOString()]);
-      categoryIds.set(String(i.category).toLowerCase(),cid);
+      const autoCategoryName=restoreText(i.category,"Uncategorized");
+      db.runSync("INSERT INTO inventory_categories (id,name,created_at) VALUES (?,?,?)",[cid,autoCategoryName,new Date().toISOString()]);
+      categoryIds.set(autoCategoryName.toLowerCase(),cid);
     }
     const restoredInventoryId=restoreRowId(i.id,"inventory",usedInventoryIds);
     if(i.id) inventoryIdMap.set(String(i.id),restoredInventoryId);
-    db.runSync("INSERT INTO inventory (id,name,category_id,category,size,quantity,unit,minimum_stock) VALUES (?,?,?,?,?,?,?,?)",[restoredInventoryId,String(i.name||"Unnamed item"),cid,i.category||"",i.size||"",Number(i.quantity||0),i.unit||"pcs",Number(i.minimum_stock||0)]);
+    const itemName=restoreText(i.name,"Unnamed item");
+    const itemCategory=restoreText(i.category);
+    const itemSize=restoreText(i.size);
+    db.runSync("INSERT INTO inventory (id,name,category_id,category,size,quantity,unit,minimum_stock) VALUES (?,?,?,?,?,?,?,?)",[restoredInventoryId,itemName,cid,itemCategory,itemSize,restoreReal(i.quantity,0,0),restoreText(i.unit,"pcs"),restoreReal(i.minimum_stock,0,0)]);
   }
   // Restore patient inventory selections without creating duplicate rows.
   // Older backups/restore versions could contain the same patient + implant more
@@ -238,8 +268,9 @@ export function restoreBackup(backup:BackupData){
     const category=String(pi.category||"").trim();
     const size=String(pi.size||"").trim();
     const qty=Math.max(1,Number(pi.quantity)||1);
-    const mappedPatientId=patientIdMap.get(patientId)||patientId;
-    const mappedInventoryId=inventoryId ? (inventoryIdMap.get(inventoryId)||inventoryId) : "";
+    const mappedPatientId=patientIdMap.get(patientId)||"";
+    if(!mappedPatientId) continue;
+    const mappedInventoryId=inventoryId ? (inventoryIdMap.get(inventoryId)||"") : "";
     const existing=db.getFirstSync<any>(
       "SELECT id,quantity FROM patient_implants WHERE patient_id=? AND COALESCE(inventory_id,'')=? AND LOWER(TRIM(COALESCE(name,'')))=LOWER(?) AND LOWER(TRIM(COALESCE(category,'')))=LOWER(?) AND LOWER(TRIM(COALESCE(size,'')))=LOWER(?) LIMIT 1",
       [mappedPatientId,mappedInventoryId,name,category,size]
@@ -248,22 +279,42 @@ export function restoreBackup(backup:BackupData){
       db.runSync("UPDATE patient_implants SET quantity=? WHERE id=?",[Number(existing.quantity||0)+qty,existing.id]);
       continue;
     }
-    db.runSync("INSERT INTO patient_implants (id,patient_id,inventory_id,name,category,size,quantity,created_at) VALUES (?,?,?,?,?,?,?,?)",[restoreRowId(pi.id,"patient-implant",usedPatientImplantIds),mappedPatientId,mappedInventoryId||null,name,pi.category||null,pi.size||null,qty,pi.created_at||new Date().toISOString()]);
+    if(!name) continue;
+    db.runSync("INSERT INTO patient_implants (id,patient_id,inventory_id,name,category,size,quantity,created_at) VALUES (?,?,?,?,?,?,?,?)",[restoreRowId(pi.id,"patient-implant",usedPatientImplantIds),mappedPatientId,mappedInventoryId||null,name,restoreText(pi.category)||null,restoreText(pi.size)||null,restoreReal(pi.quantity,1,1),restoreText(pi.created_at,new Date().toISOString())]);
   }
   const usedImplantRecordIds=new Set<string>();
   for(const rec of implantRecords){
+    const recName=restoreText(rec.name,"Unnamed implant");
+    const createdAt=restoreText(rec.created_at,new Date().toISOString());
     db.runSync("INSERT INTO implant_records (id,name,category,size,manufacturer,model,lot_number,serial_number,expiry_date,supplier,quantity,unit,purchase_price,notes,bill_files_json,created_at,updated_at,created_by,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-      [restoreRowId(rec.id,"implant-record",usedImplantRecordIds),String(rec.name||"Unnamed implant"),rec.category||"",rec.size||"",rec.manufacturer||"",rec.model||"",rec.lot_number||"",rec.serial_number||"",rec.expiry_date||"",rec.supplier||"",Number(rec.quantity||0),rec.unit||"pcs",Number(rec.purchase_price||0),rec.notes||"",rec.bill_files_json||"[]",rec.created_at||new Date().toISOString(),rec.updated_at||rec.created_at||new Date().toISOString(),rec.created_by||null,rec.updated_by||null]);
+      [restoreRowId(rec.id,"implant-record",usedImplantRecordIds),recName,restoreText(rec.category),restoreText(rec.size),restoreText(rec.manufacturer),restoreText(rec.model),restoreText(rec.lot_number),restoreText(rec.serial_number),restoreText(rec.expiry_date),restoreText(rec.supplier),restoreReal(rec.quantity,0,0),restoreText(rec.unit,"pcs"),restoreReal(rec.purchase_price,0,0),restoreText(rec.notes),restoreJsonArray(rec.bill_files_json),createdAt,restoreText(rec.updated_at,createdAt),restoreText(rec.created_by)||null,restoreText(rec.updated_by)||null]);
   }
   const usedUserIds=new Set<string>();
   const userIdMap=new Map<string,string>();
-  for(const u of users) { const restoredUserId=restoreRowId(u.id,"user",usedUserIds); if(u.id) userIdMap.set(String(u.id),restoredUserId); db.runSync("INSERT INTO users (id,email,name,password_hash,recovery_code,role,can_edit_patients,disabled,created_at) VALUES (?,?,?,?,?,?,?,?,?)",[restoredUserId,String(u.email||""),u.name||"User",u.password_hash||"",u.recovery_code||null,u.role||"doctor",Number(u.can_edit_patients??1),Number(u.disabled??0),u.created_at||new Date().toISOString()]); }
+  const usedUserEmails=new Set<string>();
+  for(const u of users) {
+    const restoredUserId=restoreRowId(u.id,"user",usedUserIds);
+    if(u.id) userIdMap.set(String(u.id),restoredUserId);
+    const baseEmail=restoreText(u.email).toLowerCase();
+    const email=baseEmail && !usedUserEmails.has(baseEmail) ? baseEmail : ("restored-"+Crypto.randomUUID().slice(0,12)+"@local.invalid");
+    usedUserEmails.add(email);
+    const role=["admin","doctor","staff"].includes(String(u.role)) ? String(u.role) : "doctor";
+    db.runSync("INSERT INTO users (id,email,name,password_hash,recovery_code,role,can_edit_patients,disabled,created_at) VALUES (?,?,?,?,?,?,?,?,?)",[restoredUserId,email,restoreText(u.name,"User"),restoreText(u.password_hash),restoreText(u.recovery_code)||null,role,restoreReal(u.can_edit_patients,1,0)>0?1:0,restoreReal(u.disabled,0,0)>0?1:0,restoreText(u.created_at,new Date().toISOString())]);
+  }
   const usedExpenseIds=new Set<string>();
-  for(const e of expenses) db.runSync("INSERT INTO expenses (id,description,amount,belongs_to,doctor_id,date,created_at) VALUES (?,?,?,?,?,?,?)",[restoreRowId(e.id,"expense",usedExpenseIds),String(e.description||""),Number(e.amount||0),e.belongs_to||"hospital",userIdMap.get(String(e.doctor_id||""))||e.doctor_id||null,e.date||new Date().toISOString().slice(0,10),e.created_at||new Date().toISOString()]);
+  for(const e of expenses) db.runSync("INSERT INTO expenses (id,description,amount,belongs_to,doctor_id,date,created_at) VALUES (?,?,?,?,?,?,?)",[restoreRowId(e.id,"expense",usedExpenseIds),restoreText(e.description),restoreReal(e.amount,0,0),restoreText(e.belongs_to,"hospital"),userIdMap.get(String(e.doctor_id||""))||null,restoreText(e.date,new Date().toISOString().slice(0,10)),restoreText(e.created_at,new Date().toISOString())]);
   const usedHistoryIds=new Set<string>();
-  for(const h of patientHistory) db.runSync("INSERT INTO patient_history (id,patient_id,user_id,action,snapshot_json,created_at) VALUES (?,?,?,?,?,?)",[restoreRowId(h.id,"history",usedHistoryIds),patientIdMap.get(String(h.patient_id||""))||h.patient_id,userIdMap.get(String(h.user_id||""))||h.user_id||null,h.action||"snapshot",h.snapshot_json||"{}",h.created_at||new Date().toISOString()]);
+  for(const h of patientHistory){
+    const patientId=patientIdMap.get(String(h.patient_id||""));
+    if(!patientId) continue;
+    db.runSync("INSERT INTO patient_history (id,patient_id,user_id,action,snapshot_json,created_at) VALUES (?,?,?,?,?,?)",[restoreRowId(h.id,"history",usedHistoryIds),patientId,userIdMap.get(String(h.user_id||""))||null,restoreText(h.action,"snapshot"),restoreText(h.snapshot_json,"{}"),restoreText(h.created_at,new Date().toISOString())]);
+  }
   const usedMovementIds=new Set<string>();
-  for(const m of inventoryMovements) db.runSync("INSERT INTO inventory_movements (id,inventory_id,user_id,type,amount,quantity_after,note,created_at) VALUES (?,?,?,?,?,?,?,?)",[restoreRowId(m.id,"movement",usedMovementIds),inventoryIdMap.get(String(m.inventory_id||""))||m.inventory_id,userIdMap.get(String(m.user_id||""))||m.user_id||null,m.type||"adjust",Number(m.amount||0),Number(m.quantity_after||0),m.note||null,m.created_at||new Date().toISOString()]);
+  for(const m of inventoryMovements){
+    const inventoryId=inventoryIdMap.get(String(m.inventory_id||""));
+    if(!inventoryId) continue;
+    db.runSync("INSERT INTO inventory_movements (id,inventory_id,user_id,type,amount,quantity_after,note,created_at) VALUES (?,?,?,?,?,?,?,?)",[restoreRowId(m.id,"movement",usedMovementIds),inventoryId,userIdMap.get(String(m.user_id||""))||null,restoreText(m.type,"adjust"),restoreReal(m.amount,0),restoreReal(m.quantity_after,0,0),restoreText(m.note)||null,restoreText(m.created_at,new Date().toISOString())]);
+  }
  });
  markInventoryResetDone();
  return {patients:patients.length,procedures:procedures.length,inventory:inventory.length,inventoryCategories:inventoryCategories.length,patientImplants:patientImplants.length,expenses:expenses.length,users:users.length,patientHistory:patientHistory.length,inventoryMovements:inventoryMovements.length};
