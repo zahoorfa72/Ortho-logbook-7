@@ -2,6 +2,7 @@ import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
 import { formatInventoryLabel } from "./inventory-label";
 import { Platform } from "react-native";
+import * as FileSystem from "expo-file-system/legacy";
 
 import type { BrandingConfig } from "@/src/theme";
 
@@ -17,7 +18,11 @@ type Patient = {
   implantII: string;
   date: string;
   operationCount?: number; // Nth-time operated (1 = first, 2 = 2nd time, ...)
+  address?: string; fileName?: string; photos?: string[]; customData?: Record<string,string>;
+  implants?: any[];
 };
+
+type PatientPdfField = { key:string; label:string };
 
 type InventoryItem = {
   id: string;
@@ -221,6 +226,61 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
       </body>
     </html>
   `;
+}
+
+export async function buildPatientDetailHtml(
+  branding: BrandingConfig,
+  patients: Patient[],
+  fields: PatientPdfField[],
+  photoMode: "none" | "first" | "all" = "first",
+): Promise<string> {
+  const photoToData = async (uri:string) => {
+    if(!uri) return "";
+    if(uri.startsWith("data:")) return uri;
+    try {
+      const base64=await FileSystem.readAsStringAsync(uri,{encoding:FileSystem.EncodingType.Base64});
+      return "data:image/jpeg;base64,"+base64;
+    } catch { return ""; }
+  };
+  const pages=await Promise.all(patients.map(async (p,idx)=>{
+    const rows=fields.filter(f=>f.key!=="photos").map(f=>{
+      let value="";
+      if(f.key==="date") value=p.date;
+      else if(f.key==="mrNo") value=p.mrNo;
+      else if(f.key==="name") value=p.name;
+      else if(f.key==="gender") value=p.gender;
+      else if(f.key==="age") value=p.age;
+      else if(f.key==="address") value=p.address||"";
+      else if(f.key==="diagnosis") value=p.diagnosis;
+      else if(f.key==="procedure") value=p.procedure;
+      else if(f.key==="fileName") value=p.fileName||"";
+      else if(f.key==="implants") value=(p.implants&&p.implants.length?p.implants.map((x:any)=>formatInventoryLabel(x.category,x.name,x.size)+(Number(x.quantity)>1?" × "+x.quantity:"")).join(" • "):[p.implant,p.implantII].filter(Boolean).join(" • "));
+      else value=String((p.customData||{})[f.key]||"");
+      return "<tr><th>"+escapeHtml(f.label)+"</th><td>"+escapeHtml(value||"—")+"</td></tr>";
+    }).join("");
+    const rawPhotos=Array.isArray(p.photos)?p.photos.filter(Boolean):[];
+    const selectedPhotos=photoMode==="all"?rawPhotos:(photoMode==="first"?rawPhotos.slice(0,1):[]);
+    const photos=[];
+    for(const uri of selectedPhotos){const src=await photoToData(uri);if(src)photos.push("<img src='"+src+"' class='patientPhoto' />");}
+    return "<section class='patientPage'>"+
+      "<div class='patientNumber'>Patient "+(idx+1)+" of "+patients.length+"</div>"+
+      "<div class='patientName'>"+escapeHtml(p.name||"Unnamed patient")+"</div>"+
+      (p.mrNo?"<div class='patientMr'>MR No: "+escapeHtml(p.mrNo)+"</div>":"")+
+      "<table class='detailTable'><tbody>"+rows+"</tbody></table>"+
+      (photos.length?"<div class='photoGrid'>"+photos.join("")+"</div>":"")+
+      "</section>";
+  }));
+  return "<html><head><meta charset='utf-8'/>"+styles(branding)+"<style>.patientPage{page-break-after:always;border:1px solid #E2DFD8;border-radius:14px;padding:20px;margin-bottom:18px}.patientPage:last-child{page-break-after:auto}.patientNumber{font-size:10px;color:#7C7872;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px}.patientName{font-size:22px;font-weight:800;color:"+branding.primary+"}.patientMr{font-size:12px;color:#3A3A3C;margin-top:4px;margin-bottom:16px}.detailTable th{width:28%;background:"+branding.tertiary+"}.photoGrid{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}.patientPhoto{width:220px;height:220px;object-fit:cover;border-radius:10px;border:1px solid #E2DFD8}</style></head><body>"+header(branding,"Detailed Patient Report — "+patients.length+" record"+(patients.length===1?"":"s"))+pages.join("")+footer(branding)+"</body></html>";
+}
+
+export function buildImplantRecordsHtml(branding: BrandingConfig, records:any[]): string {
+  const rows=records.map((r:any,i:number)=>{
+    let bills:any[]=[];try{const x=JSON.parse(r.bill_files_json||"[]");if(Array.isArray(x))bills=x;}catch{}
+    const detail=[r.category,r.size,r.manufacturer,r.model].filter(Boolean).join(" · ");
+    const trace=[r.lot_number&&"Lot: "+r.lot_number,r.serial_number&&"SN: "+r.serial_number,r.expiry_date&&"Expiry: "+r.expiry_date].filter(Boolean).join(" · ");
+    return "<tr><td>"+(i+1)+"</td><td><strong>"+escapeHtml(r.name)+"</strong><br/><span style='color:#7C7872;font-size:10px'>"+escapeHtml(detail)+"</span></td><td>"+escapeHtml(trace||"—")+"</td><td style='text-align:right'>"+Number(r.quantity||0)+" "+escapeHtml(r.unit||"pcs")+"</td><td>"+escapeHtml(r.supplier||"—")+"</td><td>"+(bills.length?escapeHtml(bills.map((b:any)=>b.name||"Bill").join(", ")):"—")+"</td></tr>";
+  }).join("");
+  return "<html><head><meta charset='utf-8'/>"+styles(branding)+"</head><body>"+header(branding,"Detailed Implant Records — "+records.length+" record"+(records.length===1?"":"s"))+"<table><thead><tr><th>#</th><th>Implant / Details</th><th>Traceability</th><th style='text-align:right'>Quantity</th><th>Supplier</th><th>Attached Bills</th></tr></thead><tbody>"+(rows||"<tr><td colspan='6'><div class='empty'>No implant records.</div></td></tr>")+"</tbody></table>"+footer(branding)+"</body></html>";
 }
 
 export function buildStatsHtml(
