@@ -147,7 +147,43 @@ export default function Logbook() {
     );
   };
 
-  const patientsWithOperationCounts = useMemo(() => {\n    const source = data || [];\n    const groups = new Map<string, Patient[]>();\n    const keyOf = (p: Patient) => (p.name || "").trim().toLowerCase() + "|" + (p.mrNo || "").trim().toLowerCase();\n    for (const p of source) {\n      if (!p.name?.trim() || !p.mrNo?.trim()) continue;\n      const key = keyOf(p);\n      const list = groups.get(key) || []; list.push(p); groups.set(key, list);\n    }\n    const counts = new Map<string, { operationCount:number; totalOperations:number }>();\n    for (const list of groups.values()) {\n      const sorted = [...list].sort((a,b) => String(a.date || "").localeCompare(String(b.date || "")) || String(a.id || "").localeCompare(String(b.id || "")));\n      sorted.forEach((p, i) => counts.set(p.id, { operationCount:i + 1, totalOperations:sorted.length }));\n    }\n    return source.map((p) => ({ ...p, ...(counts.get(p.id) || {}) }));\n  }, [data]);\n\n  const filtered = useMemo(() => {
+  const patientsWithOperationCounts = useMemo(() => {
+    const source = data || [];
+    const groups = new Map<string, Patient[]>();
+
+    const keyOf = (p: Patient) =>
+      (p.name || "").trim().toLowerCase() +
+      "|" +
+      (p.mrNo || "").trim().toLowerCase();
+
+    for (const p of source) {
+      if (!p.name?.trim() || !p.mrNo?.trim()) continue;
+      const key = keyOf(p);
+      const list = groups.get(key) || [];
+      list.push(p);
+      groups.set(key, list);
+    }
+
+    const counts = new Map<string, { operationCount: number; totalOperations: number }>();
+
+    for (const list of groups.values()) {
+      const sorted = [...list].sort(
+        (a, b) =>
+          String(a.date || "").localeCompare(String(b.date || "")) ||
+          String(a.id || "").localeCompare(String(b.id || "")),
+      );
+      sorted.forEach((p, i) =>
+        counts.set(p.id, {
+          operationCount: i + 1,
+          totalOperations: sorted.length,
+        }),
+      );
+    }
+
+    return source.map((p) => ({ ...p, ...(counts.get(p.id) || {}) }));
+  }, [data]);
+
+  const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     let list = patientsWithOperationCounts.filter((p) =>
       !q ||
