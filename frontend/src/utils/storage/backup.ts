@@ -164,7 +164,10 @@ function restorePatientPhotos(p:any){
     try{const parsed=JSON.parse(String(photosJson));if(Array.isArray(parsed))photos=parsed.filter((x)=>typeof x==="string"&&x.length>0);}catch{}
   }
   const primary=photos[0]||p.photo_uri||"";
-  return {photoUri:primary,photosJson:photos.length?JSON.stringify(photos):null};
+  // Portable data URIs are already stored in photos_json. Do not duplicate
+  // the first base64 photo into photo_uri; this can nearly double database size.
+  const photoUri=primary.startsWith("data:") ? "" : primary;
+  return {photoUri,photosJson:photos.length?JSON.stringify(photos):null};
 }
 
 function restoreRowId(value:any, prefix:string, used:Set<string>){
