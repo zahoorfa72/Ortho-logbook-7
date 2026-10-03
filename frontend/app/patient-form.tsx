@@ -61,6 +61,11 @@ export default function PatientForm() {
     staleTime: 10000,
   });
   const existing = useMemo(() => (id ? patients?.find((p) => p.id === id) : undefined), [id, patients]);
+  const { data: detailedExisting } = useQuery<Patient | null>({
+    queryKey: ["patient-detail", id],
+    queryFn: () => api.get("/patients/" + encodeURIComponent(String(id))),
+    enabled: isEdit && !!id,
+  });
 
   // Type-ahead sources: procedure catalogue + any procedure names used on past
   // records; implants come from inventory only (saving validates stock).
@@ -115,12 +120,13 @@ export default function PatientForm() {
     implants:(prev.implants || []).map(x => x.id === id ? { ...x, quantity:Math.max(1,x.quantity + delta) } : x),
   }));
   const [ready, setReady] = useState(false);
-  if (existing && !ready) {
+  if ((detailedExisting || existing) && !ready) {
+    const source = detailedExisting || existing!;
     // Normalise legacy records that only had photoUri.
-    const photos = Array.isArray(existing.photos) && existing.photos.length
-      ? existing.photos
-      : existing.photoUri ? [existing.photoUri] : [];
-    setP({ ...existing, photos, customData: existing.customData || {} });
+    const photos = Array.isArray(source.photos) && source.photos.length
+      ? source.photos
+      : source.photoUri ? [source.photoUri] : [];
+    setP({ ...source, photos, customData: source.customData || {} });
     setReady(true);
   }
 
