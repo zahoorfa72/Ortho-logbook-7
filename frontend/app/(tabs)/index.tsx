@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { router, useFocusEffect } from "expo-router";
 import { useCallback, useMemo, useState } from "react";
 import {
@@ -66,6 +66,7 @@ export default function Logbook() {
   const insets = useSafeAreaInsets();
   const { user, logout } = useAuth();
   const toast = useToast();
+  const queryClient = useQueryClient();
   const [query, setQuery] = useState("");
   const [patientSort, setPatientSort] = useState<"date-desc" | "date-asc" | "name-asc" | "name-desc" | "mr-asc" | "mr-desc">("date-desc");
   const [selectMode, setSelectMode] = useState(false);
@@ -130,14 +131,17 @@ export default function Logbook() {
           text: "Delete",
           style: "destructive",
           onPress: async () => {
+            const idsToDelete = [...selectedIds];
             try {
-              const result = await api.post<{ success: boolean; deleted: number }>("/patients-bulk-delete", { ids: selectedIds });
+              const result = await api.post<{ success: boolean; deleted: number }>("/patients-bulk-delete", { ids: idsToDelete });
+              if (result.deleted !== idsToDelete.length) {
+                throw new Error(`Only ${result.deleted} of ${idsToDelete.length} selected patient record(s) were deleted.`);
+              }
+              // Refresh directly from SQLite after the transaction has committed.
               setSelectedIds([]);
               setSelectMode(false);
+              queryClient.invalidateQueries({ queryKey: ["patients"] });
               await refetch();
-              if (result.deleted < selectedIds.length) {
-                Alert.alert("Completed", `${result.deleted} patient record(s) deleted. Some records could not be deleted because you do not have permission.`);
-              }
             } catch (e:any) {
               Alert.alert("Delete failed", e?.message || "Could not delete selected patients.");
             }
