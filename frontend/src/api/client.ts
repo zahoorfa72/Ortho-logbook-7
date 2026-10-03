@@ -446,6 +446,22 @@ export const api = {
       return db.getAllSync<any>("SELECT * FROM implant_records ORDER BY COALESCE(category,''),name COLLATE NOCASE,COALESCE(size,'')") as any;
     }
     if (normalizedPath === "/inventory-categories") return inventoryCategories() as any;
+    if (normalizedPath === "/inventory-details") {
+      await requireAdmin();
+      return db.getAllSync<any>(
+        `SELECT m.id,m.inventory_id,m.type,m.amount,m.quantity_after,m.note,m.created_at,
+                i.name,i.category,i.size,i.unit,u.name AS user_name
+         FROM inventory_movements m
+         JOIN inventory i ON i.id=m.inventory_id
+         LEFT JOIN users u ON u.id=m.user_id
+         WHERE m.amount > 0 AND m.type IN ("purchase","adjust")
+         ORDER BY m.created_at DESC`
+      ).map((r:any)=>({
+        id:r.id,inventoryId:r.inventory_id,type:r.type,amount:Number(r.amount)||0,
+        quantityAfter:Number(r.quantity_after)||0,note:r.note||"",createdAt:r.created_at,
+        name:r.name||"",category:r.category||"",size:r.size||"",unit:r.unit||"pcs",userName:r.user_name||"Unknown"
+      })) as any;
+    }
     if (normalizedPath.startsWith("/inventory-patients/")) {
       const iid = normalizedPath.split("/").pop() || "";
       return db.getAllSync<any>(
