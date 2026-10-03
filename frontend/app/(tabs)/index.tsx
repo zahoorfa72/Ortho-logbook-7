@@ -22,6 +22,7 @@ import { useAuth } from "@/src/auth/AuthContext";
 import { EmptyState } from "@/src/components/EmptyState";
 import { SortMenu } from "@/src/components/SortMenu";
 import { PinPromptModal } from "@/src/components/PinPromptModal";
+import { PrimaryButton } from "@/src/components/PrimaryButton";
 import { useToast } from "@/src/components/toast";
 import { usesNativeTabs } from "@/src/navigation";
 import {
