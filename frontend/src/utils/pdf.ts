@@ -62,6 +62,17 @@ function richSubtitleHtml(text: string, baseWeight: string) {
   }).join("");
 }
 
+function subtitleLinesHtml(branding: BrandingConfig) {
+  const configured = Array.isArray(branding.pdfSubtitleLines) ? branding.pdfSubtitleLines : [];
+  const lines = configured.length ? configured : String(branding.pdfSubtitle || "").split("\n").map(text => ({ text, size: Number(branding.pdfSubtitleSize || 12), font: branding.pdfSubtitleFont || "regular", bold: false }));
+  return lines.slice(0, 4).filter((line: any) => String(line?.text || "").trim()).map((line: any) => {
+    const font = line.font === "regular" ? "400" : line.font === "medium" ? "500" : line.font === "semibold" ? "600" : "800";
+    const weight = line.bold ? "800" : font;
+    const size = Math.max(8, Math.min(48, Number(line.size) || 12));
+    return `<div style="font-size:${size}px;font-weight:${weight};line-height:1.35">${richSubtitleHtml(String(line.text), weight)}</div>`;
+  }).join("");
+}
+
 function header(branding: BrandingConfig, subtitle: string) {
   const leftLogo = branding.logoBase64
     ? `<img src="${branding.logoBase64}" class="logo" alt="left logo" />`
@@ -71,18 +82,11 @@ function header(branding: BrandingConfig, subtitle: string) {
     : branding.logoBase64
     ? `<img src="${branding.logoBase64}" class="logo" alt="right logo" />`
     : `<div class="logoPlaceholder">${escapeHtml(branding.title.slice(0, 2).toUpperCase())}</div>`;
-  const customLines = (branding.pdfSubtitle || "")
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean)
-    .slice(0, 4);
   const titleWeight = branding.pdfTitleFont === "regular" ? "400" : branding.pdfTitleFont === "medium" ? "500" : branding.pdfTitleFont === "semibold" ? "600" : "800";
   const subtitleWeight = branding.pdfSubtitleFont === "regular" ? "400" : branding.pdfSubtitleFont === "medium" ? "500" : branding.pdfSubtitleFont === "semibold" ? "600" : "800";
   const titleSize = Number(branding.pdfTitleSize || 24);
   const subtitleSize = Number(branding.pdfSubtitleSize || 12);
-  const customBlock = customLines.length
-    ? `<div class="pdfCustom" style="font-weight:${subtitleWeight};font-size:${subtitleSize}px">${customLines.map((l) => `<div>${richSubtitleHtml(l, subtitleWeight)}</div>`).join("")}</div>`
-    : "";
+  const customBlock = subtitleLinesHtml(branding);
   const layout = branding.pdfLogoLayout || "center";
   if (layout === "left") {
     return `
@@ -117,10 +121,10 @@ function styles(branding: BrandingConfig) {
       * { box-sizing: border-box; }
       body { font-family: -apple-system, Helvetica, Arial, sans-serif; color: #1C1C1E; margin: 0; padding: ${Number(branding.pdfMargin || 28)}px; }
       @page { size: ${branding.pdfPageSize || "A4"} ${branding.pdfOrientation || "portrait"}; margin: ${Number(branding.pdfMargin || 28)}px; }
-      .header { display: flex; align-items: center; gap: 18px; border-bottom: 3px solid ${branding.primary}; padding-bottom: 16px; margin-bottom: 24px; }
+      .header { display: flex; align-items: center; gap: 18px; border-bottom: 3px solid ${branding.primary}; padding-bottom: 10px; margin-bottom: 12px; }
       .logoSide { flex: 0 0 auto; }
-      .logo { width: 78px; height: 78px; border-radius: 12px; object-fit: contain; background: ${branding.tertiary}; display: block; }
-      .logoPlaceholder { width: 78px; height: 78px; border-radius: 12px; background: ${branding.primary}; color: ${branding.onPrimary}; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 26px; }
+      .logo { width: 62px; height: 62px; border-radius: 12px; object-fit: contain; background: ${branding.tertiary}; display: block; }
+      .logoPlaceholder { width: 62px; height: 62px; border-radius: 12px; background: ${branding.primary}; color: ${branding.onPrimary}; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 26px; }
       .titleBlock { flex: 1; text-align: center; }
       .titleBlockLeft { text-align: left; padding-left: 4px; }
       .headerLeft .logoSide { flex: 0 0 auto; }
@@ -128,9 +132,9 @@ function styles(branding: BrandingConfig) {
       .pdfCustom { margin-top: 4px; font-size: 12px; color: #3A3A3C; line-height: 1.5; font-weight: 500; }
       .subtitle { font-size: 12px; color: #3A3A3C; margin-top: 8px; font-weight: 600; }
       .printed { font-size: 10px; color: #7C7872; margin-top: 4px; }
-      table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 12px; }
-      th { text-align: left; padding: 10px 8px; background: ${branding.pdfTableHeaderColor || branding.tertiary}; color: ${branding.onTertiary}; font-weight: 700; border-bottom: 2px solid ${branding.primary}; }
-      td { padding: 9px 8px; border-bottom: 1px solid #E2DFD8; vertical-align: top; }
+      table { width: 100%; border-collapse: collapse; margin-bottom: 6px; font-size: 9.5px; }
+      th { text-align: left; padding: 5px 5px; background: ${branding.pdfTableHeaderColor || branding.tertiary}; color: ${branding.onTertiary}; font-weight: 700; border-bottom: 2px solid ${branding.primary}; }
+      td { padding: 4px 5px; border-bottom: 1px solid #E2DFD8; vertical-align: top; }
       tr:nth-child(even) td { background: ${branding.pdfTableStripeColor || "#FAFAF7"}; }
       .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; background: ${branding.primary}; color: ${branding.onPrimary}; font-size: 10px; font-weight: 700; margin-left: 6px; }
       .badgeWarn { background: #C27803; color: #FFF; }
@@ -142,7 +146,7 @@ function styles(branding: BrandingConfig) {
       .barFill { height: 100%; background: ${branding.primary}; }
       .section { margin-top: 20px; font-size: 14px; font-weight: 800; color: ${branding.primary}; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; }
       .footer { margin-top: 30px; padding-top: 12px; border-top: 1px solid #E2DFD8; font-size: 10px; color: #7C7872; text-align: center; }
-      .empty { padding: 30px; text-align: center; color: #7C7872; font-style: italic; }
+      .listPage { page-break-after: always; break-inside: avoid; }\n      .listPage:last-child { page-break-after: auto; }\n      .listPage table { page-break-inside: avoid; }\n      .empty { padding: 30px; text-align: center; color: #7C7872; font-style: italic; }
     </style>
   `;
 }
@@ -152,7 +156,7 @@ function footer(branding: BrandingConfig) {
   return `<div class="footer">${escapeHtml(branding.title)} — ${escapeHtml(suffix)}</div>`;
 }
 
-export function buildPatientListHtml(branding: BrandingConfig, patients: Patient[]): string {
+export function buildPatientListHtml(branding: BrandingConfig, patients: Patient[], fromDate?: string, toDate?: string): string {
   const groups = new Map<string, Patient[]>();
 
   const keyOf = (p: Patient) =>
@@ -209,7 +213,7 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
     <html>
       <head><meta charset="utf-8"/>${styles(branding)}</head>
       <body>
-        ${header(branding, `Patient List — ${patients.length} record${patients.length === 1 ? "" : "s"}`)}
+        ${header(branding, `Patient List — ${patients.length} record${patients.length === 1 ? "" : "s"}${fromDate || toDate ? ` — ${fromDate || "Start"} to ${toDate || "End"}` : ""}`)}
         <table>
           <thead>
             <tr>
