@@ -36,6 +36,8 @@ const COLOR_FIELDS: {
   { key: "surface", label: "Surface", desc: "Cards, inputs" },
   { key: "text", label: "Text", desc: "Body text colour" },
   { key: "mutedText", label: "Muted Text", desc: "Labels, hints" },
+  { key: "pdfTableHeaderColor", label: "PDF Header", desc: "Table heading background" },
+  { key: "pdfTableStripeColor", label: "PDF Stripe", desc: "Alternating table rows" },
 ];
 
 function isHex(v: string) {
@@ -54,6 +56,7 @@ export default function BrandingScreen() {
   const [subtitleSelection, setSubtitleSelection] = useState({ start: 0, end: 0 });
   const [subtitleSizeText, setSubtitleSizeText] = useState(String(branding.pdfSubtitleSize));
   const [titleSizeText, setTitleSizeText] = useState(String(branding.pdfTitleSize));
+  const [pdfMarginText, setPdfMarginText] = useState(String(branding.pdfMargin));
   const subtitleInputRef = useRef<TextInput>(null);
 
   const set = (k: keyof BrandingConfig) => (v: string) =>
@@ -178,9 +181,12 @@ export default function BrandingScreen() {
         return;
       }
     }
+    const margin=Math.max(12,Math.min(60,Math.round(Number(pdfMarginText)||28)));
+    const nextDraft={...draft,pdfMargin:margin};
+    setPdfMarginText(String(margin));
     setSaving(true);
     try {
-      await setBranding(draft);
+      await setBranding(nextDraft);
       toast("Branding updated.", "success");
       router.back();
     } finally {
@@ -308,6 +314,20 @@ export default function BrandingScreen() {
           </View>
         </View>
         <Text style={styles.hint}>Heading and sub-heading styles affect the PDF header only.</Text>
+        <Text style={[styles.section, { marginTop: spacing.xl }]}>PDF Layout & Design</Text>
+        <Text style={styles.label}>Table header colour</Text>
+        <TextInput value={String(draft.pdfTableHeaderColor)} onChangeText={v=>setDraft(d=>({...d,pdfTableHeaderColor:v}))} placeholder="#DCE5E1" placeholderTextColor={colors.muted} style={styles.input} />
+        <Text style={styles.label}>Alternating row colour</Text>
+        <TextInput value={String(draft.pdfTableStripeColor)} onChangeText={v=>setDraft(d=>({...d,pdfTableStripeColor:v}))} placeholder="#FAFAF7" placeholderTextColor={colors.muted} style={styles.input} />
+        <Text style={styles.label}>PDF footer text</Text>
+        <TextInput value={draft.pdfFooterText} onChangeText={v=>setDraft(d=>({...d,pdfFooterText:v}))} placeholder="Offline Report" placeholderTextColor={colors.muted} style={styles.input} />
+        <Text style={styles.label}>Page size</Text>
+        <View style={styles.styleRow}>{(["A4","Letter"] as const).map(v=><Pressable key={v} onPress={()=>setDraft(d=>({...d,pdfPageSize:v}))} style={[styles.styleChip,{backgroundColor:draft.pdfPageSize===v?colors.brandPrimary:colors.surfaceSecondary}]}><Text style={[styles.styleChipText,{color:draft.pdfPageSize===v?colors.onBrandPrimary:colors.onSurface}]}>{v}</Text></Pressable>)}</View>
+        <Text style={styles.label}>Orientation</Text>
+        <View style={styles.styleRow}>{(["portrait","landscape"] as const).map(v=><Pressable key={v} onPress={()=>setDraft(d=>({...d,pdfOrientation:v}))} style={[styles.styleChip,{backgroundColor:draft.pdfOrientation===v?colors.brandPrimary:colors.surfaceSecondary}]}><Text style={[styles.styleChipText,{color:draft.pdfOrientation===v?colors.onBrandPrimary:colors.onSurface}]}>{v}</Text></Pressable>)}</View>
+        <Text style={styles.label}>Page margin (points)</Text>
+        <View style={styles.sizeControls}><Pressable style={styles.sizeButton} onPress={()=>{const n=Math.max(12,Number(draft.pdfMargin||28)-2);setDraft(d=>({...d,pdfMargin:n}));setPdfMarginText(String(n));}}><Ionicons name="remove" size={18} color={colors.onSurface}/></Pressable><TextInput keyboardType="number-pad" value={pdfMarginText} onChangeText={setPdfMarginText} onBlur={()=>{const n=Math.max(12,Math.min(60,Math.round(Number(pdfMarginText)||28)));setPdfMarginText(String(n));setDraft(d=>({...d,pdfMargin:n}));}} style={styles.smallSizeInput}/><Pressable style={styles.sizeButton} onPress={()=>{const n=Math.min(60,Number(draft.pdfMargin||28)+2);setDraft(d=>({...d,pdfMargin:n}));setPdfMarginText(String(n));}}><Ionicons name="add" size={18} color={colors.onSurface}/></Pressable></View>
+        <Pressable style={[styles.toggleRow,{backgroundColor:draft.pdfShowGeneratedAt?colors.brandTertiary:colors.surfaceSecondary}]} onPress={()=>setDraft(d=>({...d,pdfShowGeneratedAt:!d.pdfShowGeneratedAt}))}><View style={{flex:1}}><Text style={styles.colorLabel}>Show generated date/time</Text><Text style={styles.colorDesc}>Display report generation time in the PDF header</Text></View><Ionicons name={draft.pdfShowGeneratedAt?"checkmark-circle":"ellipse-outline"} size={24} color={draft.pdfShowGeneratedAt?colors.brandPrimary:colors.muted}/></Pressable>
         <Text style={[styles.section, { marginTop: spacing.xl }]}>Colour Presets</Text>
         <View style={styles.presets}>
           {BRANDING_PRESETS.map((p) => (
@@ -488,6 +508,7 @@ const useStyles = makeStyles((colors) => ({
     borderColor: colors.border,
     backgroundColor: colors.surface,
   },
+  toggleRow:{flexDirection:"row",alignItems:"center",gap:spacing.md,padding:spacing.md,borderRadius:radius.md,borderWidth:1,borderColor:colors.border,marginBottom:spacing.md},
   slotBtnText: { fontFamily: fontFamily.semibold, fontSize: fontSize.xs, color: colors.onSurface },
   logoRow: { flexDirection: "row", gap: spacing.md, alignItems: "flex-start", marginBottom: spacing.sm },
   logoPreview: {
