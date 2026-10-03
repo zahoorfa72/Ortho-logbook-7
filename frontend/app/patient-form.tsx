@@ -24,7 +24,7 @@ type Patient = {
   id: string; mrNo: string; name: string; gender: string; age: string;
   diagnosis: string; procedure: string; implant: string; implantII: string; implants?: SelectedImplant[];
   address: string; fileName: string; photoUri: string; photos: string[]; date: string;
-  operationCount?: number; totalOperations?: number;
+  operationCount?: number; totalOperations?: number; customData?: Record<string,string>;
 };
 type Procedure = { id: string; name: string };
 type InventoryItem = { id: string; name: string; category: string; categoryId?: string; size: string; quantity: number };
@@ -34,7 +34,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 const empty = (): Patient => ({
   id: "", mrNo: "", name: "", gender: "", age: "", diagnosis: "",
   procedure: "", implant: "", implantII: "", address: "", fileName: "",
-  photoUri: "", photos: [], date: today(), implants: [],
+  photoUri: "", photos: [], date: today(), implants: [], customData: {},
 });
 
 export default function PatientForm() {
@@ -50,6 +50,10 @@ export default function PatientForm() {
 
   const { data: patients } = useQuery<Patient[]>({ queryKey: ["patients"], queryFn: () => api.get("/patients") });
   const { data: procedures } = useQuery<Procedure[]>({ queryKey: ["procedures"], queryFn: () => api.get("/procedures") });
+  const { data: customFields = [] } = useQuery<any[]>({
+    queryKey: ["patient-custom-fields"],
+    queryFn: () => api.get("/patient-custom-fields"),
+  });
   const { data: inventory = [] } = useQuery<InventoryItem[]>({
     queryKey: ["inventory", "patient-search", implantSearch.trim().toLowerCase()],
     queryFn: () => api.get("/inventory?q=" + encodeURIComponent(implantSearch.trim())),
@@ -116,7 +120,7 @@ export default function PatientForm() {
     const photos = Array.isArray(existing.photos) && existing.photos.length
       ? existing.photos
       : existing.photoUri ? [existing.photoUri] : [];
-    setP({ ...existing, photos });
+    setP({ ...existing, photos, customData: existing.customData || {} });
     setReady(true);
   }
 
@@ -600,6 +604,29 @@ export default function PatientForm() {
         )}
         <Field label="File / Reference" testID="patient-file-input" value={p.fileName} onChangeText={set("fileName")} placeholder="File reference" />
         <Field label="Date" testID="patient-date-input" value={p.date} onChangeText={set("date")} placeholder="YYYY-MM-DD" />
+        {!!customFields.length && (
+          <>
+            <Text style={styles.section}>Additional Patient Fields</Text>
+            {customFields.map((f:any) => {
+              const value=String((p.customData || {})[f.key] || "");
+              const update=(v:string)=>setP(prev=>({ ...prev, customData:{ ...(prev.customData || {}), [f.key]:v } }));
+              return (
+                <Field
+                  key={f.id}
+                  label={f.label}
+                  value={value}
+                  onChangeText={update}
+                  placeholder={f.type === "date" ? "YYYY-MM-DD" : f.label}
+                  keyboardType={f.type === "number" ? "numeric" : "default"}
+                  multiline={f.type === "multiline"}
+                  textAlignVertical={f.type === "multiline" ? "top" : "center"}
+                  style={f.type === "multiline" ? { minHeight: 100 } : undefined}
+                  testID={"patient-custom-field-" + f.id}
+                />
+              );
+            })}
+          </>
+        )}
         {isEdit && (
           <Pressable style={styles.history} onPress={() => router.push({ pathname: "/patient-history", params: { id } })}>
             <Ionicons name="time-outline" size={20} color={colors.brandPrimary} />
