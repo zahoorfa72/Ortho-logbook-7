@@ -51,6 +51,10 @@ type Patient = {
   implant: string;
   implantII: string;
   date: string;
+  address: string;
+  fileName: string;
+  photos: string[];
+  customData?: Record<string,string>;
   operationCount?: number;
   totalOperations?: number;
   implants?: { id:string; inventoryId:string; name:string; category:string; size:string; quantity:number }[];
