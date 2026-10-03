@@ -53,6 +53,7 @@ export type BrandingConfig = {
   pdfTitleSize: number;
   pdfSubtitleFont: "regular" | "medium" | "semibold" | "bold";
   pdfSubtitleSize: number;
+  pdfSubtitleLines?: { text: string; size: number; font: "regular" | "medium" | "semibold" | "bold"; bold: boolean }[];
   pdfTableHeaderColor: string;
   pdfTableStripeColor: string;
   pdfFooterText: string;
@@ -83,6 +84,12 @@ export const defaultBranding: BrandingConfig = {
   pdfTitleSize: 24,
   pdfSubtitleFont: "regular",
   pdfSubtitleSize: 12,
+  pdfSubtitleLines: [
+    { text: "", size: 12, font: "regular", bold: false },
+    { text: "", size: 12, font: "regular", bold: false },
+    { text: "", size: 12, font: "regular", bold: false },
+    { text: "", size: 12, font: "regular", bold: false },
+  ],
   pdfTableHeaderColor: light.brandTertiary,
   pdfTableStripeColor: "#FAFAF7",
   pdfFooterText: "Offline Report",
