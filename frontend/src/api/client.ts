@@ -755,12 +755,12 @@ export const api = {
       let bills:any[]=Array.isArray(body?.billFiles)?body.billFiles:[];
       if(!Array.isArray(body?.billFiles)){ try { bills=JSON.parse(String(existing.bill_files_json||"[]")); } catch { bills=[]; } }
       const values=[
-        String(body?.name??existing.name).trim(),String(body?.category??existing.category||"").trim(),String(body?.size??existing.size||"").trim(),
-        String(body?.manufacturer??existing.manufacturer||"").trim(),String(body?.model??existing.model||"").trim(),
-        String(body?.lotNumber??existing.lot_number||"").trim(),String(body?.serialNumber??existing.serial_number||"").trim(),
-        String(body?.expiryDate??existing.expiry_date||"").trim(),String(body?.supplier??existing.supplier||"").trim(),
-        Math.max(0,Number(body?.quantity??existing.quantity)||0),String(body?.unit??existing.unit||"pcs").trim()||"pcs",
-        Math.max(0,Number(body?.purchasePrice??existing.purchase_price)||0),String(body?.notes??existing.notes||"").trim(),
+        String(body?.name??existing.name).trim(),String((body?.category ?? existing.category) || "").trim(),String((body?.size ?? existing.size) || "").trim(),
+        String((body?.manufacturer ?? existing.manufacturer) || "").trim(),String((body?.model ?? existing.model) || "").trim(),
+        String((body?.lotNumber ?? existing.lot_number) || "").trim(),String((body?.serialNumber ?? existing.serial_number) || "").trim(),
+        String((body?.expiryDate ?? existing.expiry_date) || "").trim(),String((body?.supplier ?? existing.supplier) || "").trim(),
+        Math.max(0,Number(body?.quantity ?? existing.quantity) || 0),String((body?.unit ?? existing.unit) || "pcs").trim()||"pcs",
+        Math.max(0,Number(body?.purchasePrice ?? existing.purchase_price) || 0),String((body?.notes ?? existing.notes) || "").trim(),
         JSON.stringify(bills),now,uid,ir[1]
       ];
       if(!values[0]) throw new Error("Implant name is required.");
