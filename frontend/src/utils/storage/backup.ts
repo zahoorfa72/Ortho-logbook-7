@@ -143,7 +143,7 @@ export async function decryptBackup(text:string,password:string):Promise<BackupD
   const plain=nacl.secretbox.open(hexToBytes(b.ciphertext),hexToBytes(b.nonce),key);
   if(!plain)throw new Error("Incorrect backup password or damaged backup.");
   const data=JSON.parse(bytesToString(plain)) as BackupData;
-  if(!data||![2,3,4].includes(data.version)||data.app!==BACKUP_APP)throw new Error("The decrypted backup is invalid.");
+  if(!data||![2,3,4,5].includes(data.version)||data.app!==BACKUP_APP)throw new Error("The decrypted backup is invalid.");
   for(const keyName of ["patients","procedures","inventory","expenses","users","patientHistory","inventoryMovements"]){
     if(!Array.isArray((data as any)[keyName]))throw new Error("The backup is incomplete or damaged.");
   }
