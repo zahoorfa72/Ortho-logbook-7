@@ -4,7 +4,7 @@ import * as ImagePicker from "expo-image-picker";
 import * as ImageManipulator from "expo-image-manipulator";
 import { Asset, requestPermissionsAsync } from "expo-media-library";
 import * as FileSystem from "expo-file-system/legacy";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Image, InteractionManager, Modal, Pressable, ScrollView, Text, View } from "react-native";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
@@ -120,15 +120,16 @@ export default function PatientForm() {
     implants:(prev.implants || []).map(x => x.id === id ? { ...x, quantity:Math.max(1,x.quantity + delta) } : x),
   }));
   const [ready, setReady] = useState(false);
-  if ((detailedExisting || existing) && !ready) {
-    const source = detailedExisting || existing!;
+  useEffect(() => {
+    const source = isEdit ? detailedExisting : existing;
+    if (!source) return;
     // Normalise legacy records that only had photoUri.
     const photos = Array.isArray(source.photos) && source.photos.length
       ? source.photos
       : source.photoUri ? [source.photoUri] : [];
     setP({ ...source, photos, customData: source.customData || {} });
     setReady(true);
-  }
+  }, [isEdit, detailedExisting, existing]);
 
   // Duplicate-tracking: for the current draft, how many earlier records share
   // the same trimmed lowercased name + MR number? This is only for the header
