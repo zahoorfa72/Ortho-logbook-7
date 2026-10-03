@@ -78,12 +78,13 @@ export default function Logbook() {
   const [patientSort, setPatientSort] = useState<"date-desc" | "date-asc" | "name-asc" | "name-desc" | "mr-asc" | "mr-desc">("date-desc");
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [pinPromptFor, setPinPromptFor] = useState<null | "settings" | "export" | "detail-export">(null);
+  const [pinPromptFor, setPinPromptFor] = useState<null | "settings" | "export">(null);
   const [exporting, setExporting] = useState(false);
-  const [detailExportOpen, setDetailExportOpen] = useState(false);
-  const [detailDate, setDetailDate] = useState("");
-  const [detailPhotoMode, setDetailPhotoMode] = useState<"none"|"first"|"all">("first");
-  const [detailFields, setDetailFields] = useState<string[]>(["date","mrNo","name","gender","age","address","diagnosis","procedure","implants","fileName"]);
+  const [pdfFilterOpen, setPdfFilterOpen] = useState(false);
+  const [pdfFromDate, setPdfFromDate] = useState("");
+  const [pdfToDate, setPdfToDate] = useState("");
+  const [pdfMonth, setPdfMonth] = useState("");
+  const [pdfYear, setPdfYear] = useState("");
   const [reminder, setReminder] = useState<ReminderState>({ show: false, lastBackupIso: null, reason: null });
 
   // Re-evaluate the daily backup reminder whenever the Logbook tab regains focus.
@@ -245,43 +246,27 @@ export default function Logbook() {
     else doExport();
   }, [doExport]);
 
-  const detailDates = useMemo(
-    () => [...new Set((data || []).map(p => p.date).filter(Boolean))].sort((a,b) => b.localeCompare(a)),
-    [data],
-  );
-  const detailFieldOptions = useMemo(() => [
-    {key:"date",label:"Date"},{key:"mrNo",label:"MR No"},{key:"name",label:"Patient Name"},
-    {key:"gender",label:"Gender"},{key:"age",label:"Age"},{key:"address",label:"Address"},
-    {key:"diagnosis",label:"Diagnosis"},{key:"procedure",label:"Procedure"},
-    {key:"implants",label:"Inventory Used"},{key:"fileName",label:"File / Reference"},
-    ...customFields.map((f:any)=>({key:f.key,label:f.label})),
-  ], [customFields]);
-  const openDetailExport = useCallback(() => {
-    setDetailDate(detailDates[0] || new Date().toISOString().slice(0,10));
-    setDetailFields(detailFieldOptions.map(x=>x.key));
-    setDetailPhotoMode("first");
-    setDetailExportOpen(true);
-  }, [detailDates,detailFieldOptions]);
-  const doDetailExport = useCallback(async () => {
-    const basicPatients=(data || []).filter(p=>p.date===detailDate);
-    if(!basicPatients.length){toast("No patients found for "+detailDate+".","info");return;}
-    const fields=detailFieldOptions.filter(x=>detailFields.includes(x.key));
-    if(!fields.length){toast("Select at least one patient field for the PDF.","error");return;}
+  const availableYears = useMemo(() => [...new Set((data || []).map(p => String(p.date || "").slice(0,4)).filter(Boolean))].sort().reverse(), [data]);
+  const filteredForPdf = useCallback(() => {
+    let list = [...(data || [])];
+    const year = Number(pdfYear); const month = Number(pdfMonth);
+    if (year) list = list.filter(p => String(p.date || "").startsWith(String(year) + "-"));
+    if (month >= 1 && month <= 12 && year) list = list.filter(p => String(p.date || "").startsWith(String(year) + "-" + String(month).padStart(2,"0") + "-"));
+    if (pdfFromDate) list = list.filter(p => String(p.date || "") >= pdfFromDate);
+    if (pdfToDate) list = list.filter(p => String(p.date || "") <= pdfToDate);
+    return list;
+  }, [data,pdfFromDate,pdfToDate,pdfMonth,pdfYear]);
+  const openPdfFilter = useCallback(() => { setPdfFromDate(""); setPdfToDate(""); setPdfMonth(""); setPdfYear(""); setPdfFilterOpen(true); }, []);
+  const doExport = useCallback(async () => {
+    if (pdfFromDate && pdfToDate && pdfFromDate > pdfToDate) { toast("From date cannot be after To date.", "error"); return; }
+    const list = filteredForPdf();
+    if (!list.length) { toast("No patients match the selected PDF dates.", "info"); return; }
     setExporting(true);
-    try{
-      const patientsForDate = await api.get<Patient[]>("/patients-detail?date="+encodeURIComponent(detailDate));
-      if(!patientsForDate.length){toast("No patients found for "+detailDate+".","info");return;}
-      const html=await buildPatientDetailHtml(branding,patientsForDate,fields,detailPhotoMode);
-      setDetailExportOpen(false);
-      await generateAndSharePdf(html,"Patient Detailed Report "+detailDate);
-    }catch(e:any){toast(e?.message||"Could not create patient PDF.","error");}
-    finally{setExporting(false);}
-  },[branding,data,detailDate,detailFields,detailFieldOptions,detailPhotoMode,toast]);
-  const requestDetailExport = useCallback(async () => {
-    if (await hasAdminPin()) setPinPromptFor("detail-export");
-    else openDetailExport();
-  }, [openDetailExport]);
-
+    try { const html = buildPatientListHtml(branding, list, pdfFromDate, pdfToDate); setPdfFilterOpen(false); await generateAndSharePdf(html, "Patient List"); }
+    catch(e:any) { toast(e?.message || "Could not create PDF.", "error"); }
+    finally { setExporting(false); }
+  }, [branding,filteredForPdf,pdfFromDate,pdfToDate,toast]);
+  const requestExport = useCallback(async () => { if (await hasAdminPin()) setPinPromptFor("export"); else openPdfFilter(); }, [openPdfFilter]);
   const requestSettings = useCallback(async () => {
     if (await hasAdminPin()) setPinPromptFor("settings");
     else router.push("/settings");
@@ -311,11 +296,6 @@ export default function Logbook() {
           <View style={{ flexDirection: "row", gap: spacing.sm }}>
             {user?.role === "admin" && (
               <Pressable testID="patient-select-mode" onPress={() => { setSelectMode(!selectMode); setSelectedIds([]); }} style={styles.iconBtn}><Ionicons name={selectMode ? "close" : "checkmark-circle-outline"} size={22} color={colors.onSurfaceSecondary} /></Pressable>
-            )}
-            {user?.role === "admin" && (
-              <Pressable testID="patient-detail-pdf-button" onPress={requestDetailExport} style={styles.iconBtn} hitSlop={8} disabled={exporting}>
-                <Ionicons name="document-attach-outline" size={22} color={colors.onSurfaceSecondary} />
-              </Pressable>
             )}
             {user?.role === "admin" && (
               <Pressable
@@ -566,20 +546,19 @@ export default function Logbook() {
         <Ionicons name="add" size={30} color={colors.onBrandPrimary} />
       </Pressable>
 
-      <Modal visible={detailExportOpen} transparent animationType="slide" onRequestClose={()=>setDetailExportOpen(false)}>
-        <View style={styles.pdfModalOverlay}>
-          <View style={[styles.pdfModalCard,{paddingBottom:insets.bottom+spacing.lg}]}>
-            <View style={styles.pdfModalHeader}><Text style={styles.pdfModalTitle}>Detailed Patient PDF</Text><Pressable onPress={()=>setDetailExportOpen(false)}><Ionicons name="close" size={24} color={colors.onSurface}/></Pressable></View>
-            <Text style={styles.pdfModalLabel}>Choose date</Text>
-            <TextInput value={detailDate} onChangeText={setDetailDate} placeholder="YYYY-MM-DD" placeholderTextColor={colors.muted} style={styles.pdfDateInput}/>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pdfDateRow}>{detailDates.map(d=><Pressable key={d} onPress={()=>setDetailDate(d)} style={[styles.pdfDateChip,detailDate===d&&styles.pdfDateChipActive]}><Text style={[styles.pdfDateText,detailDate===d&&styles.pdfDateTextActive]}>{d}</Text></Pressable>)}</ScrollView>
-            <Text style={styles.pdfModalLabel}>Patient fields in PDF</Text>
-            <ScrollView style={styles.pdfFieldList} nestedScrollEnabled>{detailFieldOptions.map(f=><Pressable key={f.key} onPress={()=>setDetailFields(v=>v.includes(f.key)?v.filter(x=>x!==f.key):v.concat(f.key))} style={styles.pdfFieldRow}><Ionicons name={detailFields.includes(f.key)?"checkbox":"square-outline"} size={23} color={detailFields.includes(f.key)?colors.brandPrimary:colors.muted}/><Text style={styles.pdfFieldText}>{f.label}</Text></Pressable>)}</ScrollView>
-            <Text style={styles.pdfModalLabel}>Patient photos</Text>
-            <View style={styles.pdfPhotoModes}>{([["none","No photos"],["first","First photo"],["all","All photos"]] as const).map(([v,l])=><Pressable key={v} onPress={()=>setDetailPhotoMode(v)} style={[styles.pdfPhotoMode,detailPhotoMode===v&&styles.pdfPhotoModeActive]}><Text style={[styles.pdfPhotoModeText,detailPhotoMode===v&&styles.pdfPhotoModeTextActive]}>{l}</Text></Pressable>)}</View>
-            <PrimaryButton title={"Create PDF for "+detailDate} onPress={doDetailExport} loading={exporting} testID="create-patient-detail-pdf"/>
-          </View>
-        </View>
+      <Modal visible={pdfFilterOpen} transparent animationType="slide" onRequestClose={() => setPdfFilterOpen(false)}>
+        <View style={styles.pdfModalOverlay}><View style={[styles.pdfModalCard,{paddingBottom:insets.bottom+spacing.lg}]}>
+          <View style={styles.pdfModalHeader}><Text style={styles.pdfModalTitle}>Patient List PDF</Text><Pressable onPress={()=>setPdfFilterOpen(false)}><Ionicons name="close" size={24} color={colors.onSurface}/></Pressable></View>
+          <Text style={styles.pdfModalLabel}>From date</Text>
+          <TextInput value={pdfFromDate} onChangeText={setPdfFromDate} placeholder="YYYY-MM-DD (optional)" placeholderTextColor={colors.muted} style={styles.pdfDateInput}/>
+          <Text style={styles.pdfModalLabel}>To date</Text>
+          <TextInput value={pdfToDate} onChangeText={setPdfToDate} placeholder="YYYY-MM-DD (optional)" placeholderTextColor={colors.muted} style={styles.pdfDateInput}/>
+          <Text style={styles.pdfModalLabel}>Month / Year (optional)</Text>
+          <View style={styles.pdfFilterRow}><TextInput value={pdfMonth} onChangeText={v=>setPdfMonth(v.replace(/[^0-9]/g,"").slice(0,2))} placeholder="Month 1-12" placeholderTextColor={colors.muted} keyboardType="number-pad" style={[styles.pdfDateInput,{flex:1}]}/><TextInput value={pdfYear} onChangeText={v=>setPdfYear(v.replace(/[^0-9]/g,"").slice(0,4))} placeholder="Year" placeholderTextColor={colors.muted} keyboardType="number-pad" style={[styles.pdfDateInput,{flex:1}]}/></View>
+          {availableYears.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pdfDateRow}>{availableYears.map(y=><Pressable key={y} onPress={()=>setPdfYear(y)} style={[styles.pdfDateChip,pdfYear===y&&styles.pdfDateChipActive]}><Text style={[styles.pdfDateText,pdfYear===y&&styles.pdfDateTextActive]}>{y}</Text></Pressable>)}</ScrollView> : null}
+          <Text style={styles.pdfModalHint}>This uses the original patient-list PDF. It is compacted so about 13-15 patients fit on one A4 portrait page, with the selected From/To dates shown in the PDF header.</Text>
+          <PrimaryButton title="Create Patient List PDF" onPress={doExport} loading={exporting} testID="create-patient-list-pdf"/>
+        </View></View>
       </Modal>
 
       <PinPromptModal
@@ -594,7 +573,6 @@ export default function Logbook() {
           const kind = pinPromptFor;
           setPinPromptFor(null);
           if (kind === "export") doExport();
-          if (kind === "detail-export") openDetailExport();
           if (kind === "settings") router.push("/settings");
         }}
         onCancel={() => setPinPromptFor(null)}
@@ -772,9 +750,6 @@ const useStyles = makeStyles((colors) => ({
   pdfFieldList:{maxHeight:220,borderWidth:1,borderColor:colors.border,borderRadius:radius.md},
   pdfFieldRow:{flexDirection:"row",alignItems:"center",gap:spacing.sm,padding:spacing.md,borderBottomWidth:1,borderBottomColor:colors.divider},
   pdfFieldText:{fontFamily:fontFamily.medium,fontSize:fontSize.base,color:colors.onSurface},
-  pdfPhotoModes:{flexDirection:"row",gap:spacing.sm,flexWrap:"wrap",marginBottom:spacing.lg},
-  pdfPhotoMode:{paddingHorizontal:spacing.md,paddingVertical:spacing.sm,borderRadius:radius.pill,borderWidth:1,borderColor:colors.border,backgroundColor:colors.surfaceSecondary},
-  pdfPhotoModeActive:{backgroundColor:colors.brandPrimary,borderColor:colors.brandPrimary},
-  pdfPhotoModeText:{fontFamily:fontFamily.semibold,fontSize:fontSize.sm,color:colors.muted},
-  pdfPhotoModeTextActive:{color:colors.onBrandPrimary},
+  pdfFilterRow:{flexDirection:"row",gap:spacing.sm},
+  pdfModalHint:{fontFamily:fontFamily.regular,fontSize:fontSize.xs,color:colors.muted,marginVertical:spacing.md,lineHeight:16},
 }));
