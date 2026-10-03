@@ -183,51 +183,28 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
     sorted.forEach((p, i) => counts.set(p.id, i + 1));
   }
 
-  const rows =
-    patients.length === 0
-      ? `<tr><td colspan="7"><div class="empty">No patients recorded.</div></td></tr>`
-      : patients
-          .map((p, idx) => {
-            const badge =
-              (counts.get(p.id) || p.operationCount || 1) > 1
-                ? `<span class="badge">${escapeHtml(ordinalSuffix(counts.get(p.id) || p.operationCount || 1))} time</span>`
-                : "";
-            return `
-              <tr>
-                <td>${idx + 1}</td>
-                <td>${escapeHtml(p.date)}</td>
-                <td><strong>${escapeHtml(p.mrNo || "—")}</strong></td>
-                <td>${escapeHtml(p.name || "—")}${badge}</td>
-                <td>${escapeHtml([p.gender, p.age].filter(Boolean).join(" • "))}</td>
-                <td>${escapeHtml(p.diagnosis)}</td>
-                <td>${escapeHtml(p.procedure)}<br/><span style="color:#7C7872;font-size:10px">${escapeHtml(
-                  (p.implants && p.implants.length
-                    ? p.implants.map((x: any) => formatInventoryLabel(x.category, x.name, x.size) + (x.quantity > 1 ? ` × ${x.quantity}` : "")).join(" • ")
-                    : [p.implant, p.implantII].filter(Boolean).join(" • ")),
-                )}</span></td>
-              </tr>
-            `;
-          })
-          .join("");
+  const pageTables: string[] = [];
+  const pageSize = 14;
+  for (let start = 0; start < patients.length || (patients.length === 0 && start === 0); start += pageSize) {
+    const page = patients.slice(start, start + pageSize);
+    let rows = "";
+    page.forEach((p, idx) => {
+      const badge = (counts.get(p.id) || p.operationCount || 1) > 1 ? '<span class="badge">' + escapeHtml(ordinalSuffix(counts.get(p.id) || p.operationCount || 1)) + ' time</span>' : "";
+      const implants = p.implants && p.implants.length
+        ? p.implants.map((x: any) => formatInventoryLabel(x.category, x.name, x.size) + (x.quantity > 1 ? " × " + x.quantity : "")).join(" • ")
+        : [p.implant, p.implantII].filter(Boolean).join(" • ");
+      rows += "<tr><td>" + (start + idx + 1) + "</td><td>" + escapeHtml(p.date) + "</td><td><strong>" + escapeHtml(p.mrNo || "—") + "</strong></td><td>" + escapeHtml(p.name || "—") + badge + "</td><td>" + escapeHtml([p.gender, p.age].filter(Boolean).join(" • ")) + "</td><td>" + escapeHtml(p.diagnosis) + "</td><td>" + escapeHtml(p.procedure) + "<br/><span style='color:#7C7872;font-size:9px'>" + escapeHtml(implants) + "</span></td></tr>";
+    });
+    if (!rows) rows = '<tr><td colspan="7"><div class="empty">No patients recorded.</div></td></tr>';
+    pageTables.push("<section class=\"listPage\"><table><thead><tr><th style=\"width:26px\">#</th><th style=\"width:68px\">Date</th><th style=\"width:60px\">MR No</th><th>Patient</th><th style=\"width:76px\">Gender/Age</th><th>Diagnosis</th><th>Procedure / Implant</th></tr></thead><tbody>" + rows + "</tbody></table></section>");
+  }
+  const tables = pageTables.join("");
   return `
     <html>
       <head><meta charset="utf-8"/>${styles(branding)}</head>
       <body>
         ${header(branding, `Patient List — ${patients.length} record${patients.length === 1 ? "" : "s"}${fromDate || toDate ? ` — ${fromDate || "Start"} to ${toDate || "End"}` : ""}`)}
-        <table>
-          <thead>
-            <tr>
-              <th style="width:32px">#</th>
-              <th style="width:80px">Date</th>
-              <th style="width:70px">MR No</th>
-              <th>Patient</th>
-              <th style="width:100px">Gender/Age</th>
-              <th>Diagnosis</th>
-              <th>Procedure / Implant</th>
-            </tr>
-          </thead>
-          <tbody>${rows}</tbody>
-        </table>
+        ${tables}
         ${footer(branding)}
       </body>
     </html>
