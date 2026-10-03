@@ -192,6 +192,63 @@ function applyHoldInventoryResetOnce() {
   });
 }
 
+export function repairDatabaseData() {
+  try {
+    db.withTransactionSync(() => {
+      // Remove only impossible relational rows created by legacy restores.
+      db.runSync("DELETE FROM patient_implants WHERE patient_id NOT IN (SELECT id FROM patients)");
+      db.runSync("DELETE FROM inventory_movements WHERE inventory_id NOT IN (SELECT id FROM inventory)");
+      db.runSync("DELETE FROM patient_history WHERE patient_id NOT IN (SELECT id FROM patients)");
+
+      // Normalize data that older backup formats could store in unexpected shapes.
+      const patients = db.getAllSync<any>("SELECT id,custom_data_json,photos_json FROM patients");
+      for (const p of patients) {
+        let custom = "{}";
+        try {
+          const v = JSON.parse(String(p.custom_data_json ?? "{}"));
+          if (v && typeof v === "object" && !Array.isArray(v)) {
+            const safe:any = {};
+            for (const [k,val] of Object.entries(v)) safe[String(k)] = val == null ? "" : typeof val === "string" ? val : String(val);
+            custom = JSON.stringify(safe);
+          }
+        } catch {}
+        let photos:string[] = [];
+        try {
+          const v = JSON.parse(String(p.photos_json ?? "[]"));
+          if (Array.isArray(v)) photos = v.filter((x:any) => typeof x === "string" && x.length > 0);
+        } catch {}
+        db.runSync("UPDATE patients SET custom_data_json=?,photos_json=? WHERE id=?", [custom, photos.length ? JSON.stringify(photos) : null, p.id]);
+      }
+
+      const fields = db.getAllSync<any>("SELECT id,type,sort_order,enabled FROM patient_custom_fields");
+      for (const f of fields) {
+        const type = ["text","number","date","multiline"].includes(String(f.type)) ? String(f.type) : "text";
+        const order = Number.isFinite(Number(f.sort_order)) ? Math.trunc(Number(f.sort_order)) : 0;
+        const enabled = Number(f.enabled) > 0 ? 1 : 0;
+        db.runSync("UPDATE patient_custom_fields SET type=?,sort_order=?,enabled=? WHERE id=?", [type,order,enabled,f.id]);
+      }
+
+      const implantRecords = db.getAllSync<any>("SELECT id,bill_files_json FROM implant_records");
+      for (const r of implantRecords) {
+        let safe = "[]";
+        try { const v = JSON.parse(String(r.bill_files_json ?? "[]")); if (Array.isArray(v)) safe = JSON.stringify(v); } catch {}
+        db.runSync("UPDATE implant_records SET bill_files_json=? WHERE id=?", [safe,r.id]);
+      }
+
+      // Invalid role values are harmlessly normalized to the existing doctor role.
+      db.runSync("UPDATE users SET role='doctor' WHERE role NOT IN ('admin','doctor','staff') OR role IS NULL OR role=''");
+      db.runSync("UPDATE users SET can_edit_patients=CASE WHEN can_edit_patients>0 THEN 1 ELSE 0 END");
+      db.runSync("UPDATE users SET disabled=CASE WHEN disabled>0 THEN 1 ELSE 0 END");
+
+      ensureInventoryCategoryLinks();
+    });
+    return true;
+  } catch (e) {
+    console.error("[database] repairDatabaseData failed:", e);
+    return false;
+  }
+}
+
 function ensureInventoryCategoryLinks() {
   const legacyCategories = db.getAllSync<any>(
     "SELECT DISTINCT TRIM(category) AS name FROM inventory WHERE TRIM(COALESCE(category,'')) <> ''",
