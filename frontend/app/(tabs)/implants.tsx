@@ -1,6 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import { router } from "expo-router";
-import { ActivityIndicator, Alert, FlatList, Modal, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
+import { ActivityIndicator, Alert, FlatList, Modal, Pressable, RefreshControl, ScrollView, Text, TextInput, View } from "react-native";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system/legacy";
 import Ionicons from "@react-native-vector-icons/ionicons";
@@ -43,7 +42,7 @@ export default function ImplantsScreen(){
         <Pressable onPress={openAdd} style={styles.addBtn}><Ionicons name="add" size={19} color={colors.onBrandPrimary}/><Text style={styles.addText}>Add</Text></Pressable>
       </View>
     </View>
-    <View style={styles.search}><Ionicons name="search" size={18} color={colors.muted}/><TextInputShim value={search} onChangeText={setSearch} colors={colors}/></View>
+    <View style={styles.search}><Ionicons name="search" size={18} color={colors.muted}/><TextInput value={search} onChangeText={setSearch} placeholder="Search implant, size, lot, supplier..." placeholderTextColor={colors.muted} style={{flex:1,color:colors.onSurface,paddingVertical:spacing.sm}}/></View>
     {selectMode&&selected.length?<Pressable style={styles.deleteBar} onPress={()=>Alert.alert("Delete selected implants?","Delete "+selected.length+" selected record(s)?",[{text:"Cancel",style:"cancel"},{text:"Delete",style:"destructive",onPress:()=>remove(selected)}])}><Ionicons name="trash-outline" size={19} color={colors.error}/><Text style={styles.deleteText}>Delete {selected.length} selected</Text></Pressable>:null}
     {isLoading?<View style={styles.center}><ActivityIndicator size="large" color={colors.brandPrimary}/></View>:<FlatList data={list} keyExtractor={x=>x.id} refreshControl={<RefreshControl refreshing={isRefetching} onRefresh={refetch}/>} contentContainerStyle={{padding:spacing.lg,paddingBottom:insets.bottom+spacing.xxl}} ListEmptyComponent={<EmptyState icon="medkit-outline" title="No detailed implants" subtitle="Add a detailed implant record from this tab."/>} renderItem={({item})=>{
       let billCount=0;try{billCount=JSON.parse(item.bill_files_json||"[]").length}catch{}
@@ -76,11 +75,6 @@ export default function ImplantsScreen(){
       <Pressable style={styles.cancel} onPress={()=>setModal(false)}><Text style={styles.cancelText}>Cancel</Text></Pressable>
     </ScrollView></View></View></Modal>
   </View>;
-}
-
-function TextInputShim({value,onChangeText,placeholder,colors,}:any){
-  const [TextInput]=useState(()=>require("react-native").TextInput);
-  return <TextInput value={value} onChangeText={onChangeText} placeholder={placeholder||"Search implant, size, lot, supplier..."} placeholderTextColor={colors.muted} style={{flex:1,color:colors.onSurface,paddingVertical:spacing.sm}}/>;
 }
 
 const useStyles=makeStyles(colors=>({
