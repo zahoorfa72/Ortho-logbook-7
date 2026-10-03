@@ -200,8 +200,11 @@ export function repairDatabaseData() {
       db.runSync("DELETE FROM inventory_movements WHERE inventory_id NOT IN (SELECT id FROM inventory)");
       db.runSync("DELETE FROM patient_history WHERE patient_id NOT IN (SELECT id FROM patients)");
 
-      // Normalize data that older backup formats could store in unexpected shapes.
-      const patients = db.getAllSync<any>("SELECT id,custom_data_json,photos_json FROM patients");
+      // Normalize only lightweight patient metadata here. Do NOT read photos_json
+      // during startup: restored photos can contain large base64 data and must
+      // stay out of the startup memory path. Photos are validated when a backup
+      // is exported or an individual patient is opened.
+      const patients = db.getAllSync<any>("SELECT id,custom_data_json FROM patients");
       for (const p of patients) {
         let custom = "{}";
         try {
@@ -212,12 +215,7 @@ export function repairDatabaseData() {
             custom = JSON.stringify(safe);
           }
         } catch {}
-        let photos:string[] = [];
-        try {
-          const v = JSON.parse(String(p.photos_json ?? "[]"));
-          if (Array.isArray(v)) photos = v.filter((x:any) => typeof x === "string" && x.length > 0);
-        } catch {}
-        db.runSync("UPDATE patients SET custom_data_json=?,photos_json=? WHERE id=?", [custom, photos.length ? JSON.stringify(photos) : null, p.id]);
+        db.runSync("UPDATE patients SET custom_data_json=? WHERE id=?", [custom, p.id]);
       }
 
       const fields = db.getAllSync<any>("SELECT id,type,sort_order,enabled FROM patient_custom_fields");
