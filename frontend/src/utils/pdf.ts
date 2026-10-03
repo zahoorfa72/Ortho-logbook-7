@@ -115,7 +115,8 @@ function styles(branding: BrandingConfig) {
   return `
     <style>
       * { box-sizing: border-box; }
-      body { font-family: -apple-system, Helvetica, Arial, sans-serif; color: #1C1C1E; margin: 0; padding: ${Number(branding.pdfMargin || 28)}px; }\n      @page { size: ${branding.pdfPageSize || "A4"} ${branding.pdfOrientation || "portrait"}; margin: ${Number(branding.pdfMargin || 28)}px; }
+      body { font-family: -apple-system, Helvetica, Arial, sans-serif; color: #1C1C1E; margin: 0; padding: ${Number(branding.pdfMargin || 28)}px; }
+      @page { size: ${branding.pdfPageSize || "A4"} ${branding.pdfOrientation || "portrait"}; margin: ${Number(branding.pdfMargin || 28)}px; }
       .header { display: flex; align-items: center; gap: 18px; border-bottom: 3px solid ${branding.primary}; padding-bottom: 16px; margin-bottom: 24px; }
       .logoSide { flex: 0 0 auto; }
       .logo { width: 78px; height: 78px; border-radius: 12px; object-fit: contain; background: ${branding.tertiary}; display: block; }
@@ -147,7 +148,8 @@ function styles(branding: BrandingConfig) {
 }
 
 function footer(branding: BrandingConfig) {
-  return `<div class="footer">${escapeHtml(branding.title)} — Offline Report</div>`;
+  const suffix = String(branding.pdfFooterText || "Offline Report").trim();
+  return `<div class="footer">${escapeHtml(branding.title)} — ${escapeHtml(suffix)}</div>`;
 }
 
 export function buildPatientListHtml(branding: BrandingConfig, patients: Patient[]): string {
