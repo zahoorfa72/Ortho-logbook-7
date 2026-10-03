@@ -113,11 +113,13 @@ export default function Inventory() {
   });
 
   const removeItem = useMutation({
-    mutationFn: (id: string) => api.del(`/inventory/${id}`),
-    onSuccess: () => {
-      invalidate();
-      toast("Item deleted.", "success");
+    mutationFn: (id: string) => api.del<{ success: boolean; deleted: number }>(`/inventory/${id}`),
+    onSuccess: async () => {
       setEditItem(null);
+      queryClient.invalidateQueries({ queryKey: ["inventory"] });
+      await refetch();
+      queryClient.invalidateQueries({ queryKey: ["inventory-categories"] });
+      toast("Item deleted.", "success");
     },
     onError: (e: any) => toast(e?.message || "Delete failed.", "error"),
   });
@@ -220,11 +222,16 @@ export default function Inventory() {
     Alert.alert("Delete inventory items?", `Delete ${selectedIds.length} selected item(s)? This cannot be undone.`, [
       { text:"Cancel", style:"cancel" },
       { text:"Delete", style:"destructive", onPress: async () => {
+        const idsToDelete = [...selectedIds];
         try {
-          await api.post("/inventory-bulk-delete", { ids: selectedIds });
+          const result = await api.post<{ success: boolean; deleted: number }>("/inventory-bulk-delete", { ids: idsToDelete });
+          if (result.deleted !== idsToDelete.length) {
+            throw new Error(`Only ${result.deleted} of ${idsToDelete.length} selected inventory item(s) were deleted.`);
+          }
           setSelectedIds([]);
           setSelectMode(false);
-          invalidate();
+          queryClient.invalidateQueries({ queryKey: ["inventory"] });
+          await refetch();
           queryClient.invalidateQueries({ queryKey: ["inventory-categories"] });
           toast("Selected inventory items deleted.", "success");
         }
