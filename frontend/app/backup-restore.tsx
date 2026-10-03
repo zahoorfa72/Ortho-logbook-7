@@ -89,7 +89,7 @@ export default function BackupRestoreScreen() {
     const title = isReplace ? "Replace with backup?" : "Merge backup?";
     const message = isReplace
       ? "This wipes all current data and replaces it with the backup. You will be logged out."
-      : "New records will be added. Same-name inventory items will sum their quantities. Existing records stay.";
+      : "New records will be added. Re-importing the same backup will not add inventory again. Inventory from a different phone can be combined by item.";
     Alert.alert(title, message, [
       { text: "Cancel", style: "cancel" },
       {
@@ -311,7 +311,7 @@ export default function BackupRestoreScreen() {
                 </Text>
               ) : (
                 <Text style={styles.merge}>
-                  Merge mode adds only new records. Same-name inventory items sum quantities. Nothing is deleted.
+                  Merge mode adds only new records. The same backup can be imported repeatedly without duplicating inventory. Inventory from a different phone can be combined by item. Nothing is deleted.
                 </Text>
               )}
               <Pressable
