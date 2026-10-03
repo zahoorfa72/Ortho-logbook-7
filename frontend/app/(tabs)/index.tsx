@@ -10,6 +10,8 @@ import {
   Text,
   TextInput,
   View,
+  Modal,
+  ScrollView,
 } from "react-native";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -36,7 +38,7 @@ import {
   evaluateReminder,
   type ReminderState,
 } from "@/src/utils/backup-reminder";
-import { buildPatientListHtml, generateAndSharePdf } from "@/src/utils/pdf";
+import { buildPatientListHtml, buildPatientDetailHtml, generateAndSharePdf } from "@/src/utils/pdf";
 
 type Patient = {
   id: string;
@@ -71,8 +73,12 @@ export default function Logbook() {
   const [patientSort, setPatientSort] = useState<"date-desc" | "date-asc" | "name-asc" | "name-desc" | "mr-asc" | "mr-desc">("date-desc");
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [pinPromptFor, setPinPromptFor] = useState<null | "settings" | "export">(null);
+  const [pinPromptFor, setPinPromptFor] = useState<null | "settings" | "export" | "detail-export">(null);
   const [exporting, setExporting] = useState(false);
+  const [detailExportOpen, setDetailExportOpen] = useState(false);
+  const [detailDate, setDetailDate] = useState("");
+  const [detailPhotoMode, setDetailPhotoMode] = useState<"none"|"first"|"all">("first");
+  const [detailFields, setDetailFields] = useState<string[]>(["date","mrNo","name","gender","age","address","diagnosis","procedure","implants","fileName"]);
   const [reminder, setReminder] = useState<ReminderState>({ show: false, lastBackupIso: null, reason: null });
 
   // Re-evaluate the daily backup reminder whenever the Logbook tab regains focus.
@@ -103,6 +109,11 @@ export default function Logbook() {
   }, [reminder.lastBackupIso]);
 
   const bottomChrome = usesNativeTabs ? insets.bottom : 0;
+
+  const { data: customFields = [] } = useQuery<any[]>({
+    queryKey: ["patient-custom-fields"],
+    queryFn: () => api.get("/patient-custom-fields"),
+  });
 
   const {
     data,
@@ -229,6 +240,41 @@ export default function Logbook() {
     else doExport();
   }, [doExport]);
 
+  const detailDates = useMemo(
+    () => [...new Set((data || []).map(p => p.date).filter(Boolean))].sort((a,b) => b.localeCompare(a)),
+    [data],
+  );
+  const detailFieldOptions = useMemo(() => [
+    {key:"date",label:"Date"},{key:"mrNo",label:"MR No"},{key:"name",label:"Patient Name"},
+    {key:"gender",label:"Gender"},{key:"age",label:"Age"},{key:"address",label:"Address"},
+    {key:"diagnosis",label:"Diagnosis"},{key:"procedure",label:"Procedure"},
+    {key:"implants",label:"Inventory Used"},{key:"fileName",label:"File / Reference"},
+    ...customFields.map((f:any)=>({key:f.key,label:f.label})),
+  ], [customFields]);
+  const openDetailExport = useCallback(() => {
+    setDetailDate(detailDates[0] || new Date().toISOString().slice(0,10));
+    setDetailFields(detailFieldOptions.map(x=>x.key));
+    setDetailPhotoMode("first");
+    setDetailExportOpen(true);
+  }, [detailDates,detailFieldOptions]);
+  const doDetailExport = useCallback(async () => {
+    const patientsForDate=(data || []).filter(p=>p.date===detailDate);
+    if(!patientsForDate.length){toast("No patients found for "+detailDate+".","info");return;}
+    const fields=detailFieldOptions.filter(x=>detailFields.includes(x.key));
+    if(!fields.length){toast("Select at least one patient field for the PDF.","error");return;}
+    setExporting(true);
+    try{
+      const html=await buildPatientDetailHtml(branding,patientsForDate,fields,detailPhotoMode);
+      setDetailExportOpen(false);
+      await generateAndSharePdf(html,"Patient Detailed Report "+detailDate);
+    }catch(e:any){toast(e?.message||"Could not create patient PDF.","error");}
+    finally{setExporting(false);}
+  },[branding,data,detailDate,detailFields,detailFieldOptions,detailPhotoMode,toast]);
+  const requestDetailExport = useCallback(async () => {
+    if (await hasAdminPin()) setPinPromptFor("detail-export");
+    else openDetailExport();
+  }, [openDetailExport]);
+
   const requestSettings = useCallback(async () => {
     if (await hasAdminPin()) setPinPromptFor("settings");
     else router.push("/settings");
@@ -258,6 +304,11 @@ export default function Logbook() {
           <View style={{ flexDirection: "row", gap: spacing.sm }}>
             {user?.role === "admin" && (
               <Pressable testID="patient-select-mode" onPress={() => { setSelectMode(!selectMode); setSelectedIds([]); }} style={styles.iconBtn}><Ionicons name={selectMode ? "close" : "checkmark-circle-outline"} size={22} color={colors.onSurfaceSecondary} /></Pressable>
+            )}
+            {user?.role === "admin" && (
+              <Pressable testID="patient-detail-pdf-button" onPress={requestDetailExport} style={styles.iconBtn} hitSlop={8} disabled={exporting}>
+                <Ionicons name="document-attach-outline" size={22} color={colors.onSurfaceSecondary} />
+              </Pressable>
             )}
             {user?.role === "admin" && (
               <Pressable
@@ -508,6 +559,22 @@ export default function Logbook() {
         <Ionicons name="add" size={30} color={colors.onBrandPrimary} />
       </Pressable>
 
+      <Modal visible={detailExportOpen} transparent animationType="slide" onRequestClose={()=>setDetailExportOpen(false)}>
+        <View style={styles.pdfModalOverlay}>
+          <View style={[styles.pdfModalCard,{paddingBottom:insets.bottom+spacing.lg}]}>
+            <View style={styles.pdfModalHeader}><Text style={styles.pdfModalTitle}>Detailed Patient PDF</Text><Pressable onPress={()=>setDetailExportOpen(false)}><Ionicons name="close" size={24} color={colors.onSurface}/></Pressable></View>
+            <Text style={styles.pdfModalLabel}>Choose date</Text>
+            <TextInput value={detailDate} onChangeText={setDetailDate} placeholder="YYYY-MM-DD" placeholderTextColor={colors.muted} style={styles.pdfDateInput}/>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pdfDateRow}>{detailDates.map(d=><Pressable key={d} onPress={()=>setDetailDate(d)} style={[styles.pdfDateChip,detailDate===d&&styles.pdfDateChipActive]}><Text style={[styles.pdfDateText,detailDate===d&&styles.pdfDateTextActive]}>{d}</Text></Pressable>)}</ScrollView>
+            <Text style={styles.pdfModalLabel}>Patient fields in PDF</Text>
+            <ScrollView style={styles.pdfFieldList} nestedScrollEnabled>{detailFieldOptions.map(f=><Pressable key={f.key} onPress={()=>setDetailFields(v=>v.includes(f.key)?v.filter(x=>x!==f.key):v.concat(f.key))} style={styles.pdfFieldRow}><Ionicons name={detailFields.includes(f.key)?"checkbox":"square-outline"} size={23} color={detailFields.includes(f.key)?colors.brandPrimary:colors.muted}/><Text style={styles.pdfFieldText}>{f.label}</Text></Pressable>)}</ScrollView>
+            <Text style={styles.pdfModalLabel}>Patient photos</Text>
+            <View style={styles.pdfPhotoModes}>{([["none","No photos"],["first","First photo"],["all","All photos"]] as const).map(([v,l])=><Pressable key={v} onPress={()=>setDetailPhotoMode(v)} style={[styles.pdfPhotoMode,detailPhotoMode===v&&styles.pdfPhotoModeActive]}><Text style={[styles.pdfPhotoModeText,detailPhotoMode===v&&styles.pdfPhotoModeTextActive]}>{l}</Text></Pressable>)}</View>
+            <PrimaryButton title={"Create PDF for "+detailDate} onPress={doDetailExport} loading={exporting} testID="create-patient-detail-pdf"/>
+          </View>
+        </View>
+      </Modal>
+
       <PinPromptModal
         visible={pinPromptFor !== null}
         title="Admin PIN required"
@@ -520,6 +587,7 @@ export default function Logbook() {
           const kind = pinPromptFor;
           setPinPromptFor(null);
           if (kind === "export") doExport();
+          if (kind === "detail-export") openDetailExport();
           if (kind === "settings") router.push("/settings");
         }}
         onCancel={() => setPinPromptFor(null)}
@@ -683,4 +751,23 @@ const useStyles = makeStyles((colors) => ({
     alignItems: "center",
     justifyContent: "center",
   },
+  pdfModalOverlay:{flex:1,backgroundColor:"rgba(15,23,42,0.45)",justifyContent:"flex-end"},
+  pdfModalCard:{backgroundColor:colors.surface,borderTopLeftRadius:radius.lg,borderTopRightRadius:radius.lg,padding:spacing.lg,maxHeight:"92%"},
+  pdfModalHeader:{flexDirection:"row",alignItems:"center",justifyContent:"space-between",marginBottom:spacing.md},
+  pdfModalTitle:{fontFamily:fontFamily.bold,fontSize:fontSize.xl,color:colors.onSurface},
+  pdfModalLabel:{fontFamily:fontFamily.semibold,fontSize:fontSize.sm,color:colors.onSurfaceSecondary,marginTop:spacing.md,marginBottom:spacing.sm},
+  pdfDateInput:{borderWidth:1,borderColor:colors.border,borderRadius:radius.md,padding:spacing.md,color:colors.onSurface,backgroundColor:colors.surfaceSecondary,fontSize:fontSize.base},
+  pdfDateRow:{gap:spacing.sm,paddingVertical:spacing.sm},
+  pdfDateChip:{paddingHorizontal:spacing.md,paddingVertical:spacing.sm,borderRadius:radius.pill,borderWidth:1,borderColor:colors.border,backgroundColor:colors.surfaceSecondary},
+  pdfDateChipActive:{backgroundColor:colors.brandPrimary,borderColor:colors.brandPrimary},
+  pdfDateText:{fontFamily:fontFamily.semibold,fontSize:fontSize.sm,color:colors.muted},
+  pdfDateTextActive:{color:colors.onBrandPrimary},
+  pdfFieldList:{maxHeight:220,borderWidth:1,borderColor:colors.border,borderRadius:radius.md},
+  pdfFieldRow:{flexDirection:"row",alignItems:"center",gap:spacing.sm,padding:spacing.md,borderBottomWidth:1,borderBottomColor:colors.divider},
+  pdfFieldText:{fontFamily:fontFamily.medium,fontSize:fontSize.base,color:colors.onSurface},
+  pdfPhotoModes:{flexDirection:"row",gap:spacing.sm,flexWrap:"wrap",marginBottom:spacing.lg},
+  pdfPhotoMode:{paddingHorizontal:spacing.md,paddingVertical:spacing.sm,borderRadius:radius.pill,borderWidth:1,borderColor:colors.border,backgroundColor:colors.surfaceSecondary},
+  pdfPhotoModeActive:{backgroundColor:colors.brandPrimary,borderColor:colors.brandPrimary},
+  pdfPhotoModeText:{fontFamily:fontFamily.semibold,fontSize:fontSize.sm,color:colors.muted},
+  pdfPhotoModeTextActive:{color:colors.onBrandPrimary},
 }));
