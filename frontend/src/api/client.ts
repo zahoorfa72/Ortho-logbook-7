@@ -397,6 +397,12 @@ export const api = {
     if (normalizedPath === "/patients") return (await listPatients()) as any;
     if (normalizedPath === "/procedures")
       return db.getAllSync<any>("SELECT id,name FROM procedures ORDER BY name COLLATE NOCASE") as any;
+    if (normalizedPath === "/patient-custom-fields")
+      return db.getAllSync<any>("SELECT id,key,label,type,sort_order,enabled,created_at,updated_at FROM patient_custom_fields WHERE enabled=1 ORDER BY sort_order ASC,label COLLATE NOCASE") as any;
+    if (normalizedPath === "/implant-records") {
+      await requireAdmin();
+      return db.getAllSync<any>("SELECT * FROM implant_records ORDER BY COALESCE(category,''),name COLLATE NOCASE,COALESCE(size,'')") as any;
+    }
     if (normalizedPath === "/inventory-categories") return inventoryCategories() as any;
     if (normalizedPath.startsWith("/inventory-patients/")) {
       const iid = normalizedPath.split("/").pop() || "";
@@ -510,6 +516,37 @@ export const api = {
     initializeDatabase();
     const normalizedPath = normalizeRoute(path);
 
+    if (normalizedPath === "/patient-custom-fields") {
+      await requireAdmin();
+      const label=String(body?.label||"").trim();
+      const type=["text","number","date","multiline"].includes(String(body?.type)) ? String(body.type) : "text";
+      if(!label) throw new Error("Field name is required.");
+      if(db.getFirstSync<any>("SELECT id FROM patient_custom_fields WHERE LOWER(label)=LOWER(?) LIMIT 1",[label])) throw new Error("This patient field already exists.");
+      const fieldId=id();
+      const key=(label.toLowerCase().replace(/[^a-z0-9]+/g,"_").replace(/^_+|_+$/g,"")||"field")+"_"+fieldId.slice(0,8);
+      const maxOrder=Number(db.getFirstSync<any>("SELECT COALESCE(MAX(sort_order),0) AS n FROM patient_custom_fields")?.n||0);
+      db.runSync("INSERT INTO patient_custom_fields (id,key,label,type,sort_order,enabled,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)",[fieldId,key,label,type,maxOrder+1,1,nowIso(),nowIso()]);
+      return {id:fieldId,key,label,type,sort_order:maxOrder+1,enabled:1} as any;
+    }
+    if (normalizedPath === "/implant-records") {
+      await requireAdmin();
+      const now=nowIso();
+      const uid=await currentUser();
+      const record={
+        id:id(), name:String(body?.name||"").trim(), category:String(body?.category||"").trim(), size:String(body?.size||"").trim(),
+        manufacturer:String(body?.manufacturer||"").trim(), model:String(body?.model||"").trim(),
+        lot_number:String(body?.lotNumber||"").trim(), serial_number:String(body?.serialNumber||"").trim(),
+        expiry_date:String(body?.expiryDate||"").trim(), supplier:String(body?.supplier||"").trim(),
+        quantity:Math.max(0,Number(body?.quantity)||0), unit:String(body?.unit||"pcs").trim()||"pcs",
+        purchase_price:Math.max(0,Number(body?.purchasePrice)||0), notes:String(body?.notes||"").trim(),
+        bill_files_json:JSON.stringify(Array.isArray(body?.billFiles)?body.billFiles:[]),
+        created_at:now,updated_at:now,created_by:uid,updated_by:uid
+      };
+      if(!record.name) throw new Error("Implant name is required.");
+      db.runSync("INSERT INTO implant_records (id,name,category,size,manufacturer,model,lot_number,serial_number,expiry_date,supplier,quantity,unit,purchase_price,notes,bill_files_json,created_at,updated_at,created_by,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        [record.id,record.name,record.category,record.size,record.manufacturer,record.model,record.lot_number,record.serial_number,record.expiry_date,record.supplier,record.quantity,record.unit,record.purchase_price,record.notes,record.bill_files_json,record.created_at,record.updated_at,record.created_by,record.updated_by]);
+      return record as any;
+    }
     if (normalizedPath === "/inventory-categories") {
       await requireAdmin();
       const name = String(body?.name || "").trim();
