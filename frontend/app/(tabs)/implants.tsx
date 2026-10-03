@@ -56,7 +56,7 @@ export default function ImplantsScreen(){
       return <Pressable style={[styles.card,selected.includes(item.id)&&styles.selected]} onPress={()=>selectMode?setSelected(v=>v.includes(item.id)?v.filter(x=>x!==item.id):v.concat(item.id)):openEdit(item)} onLongPress={()=>{setSelectMode(true);setSelected(v=>v.includes(item.id)?v:v.concat(item.id))}}>
         <View style={{flex:1}}><Text style={styles.cardTitle}>{title}</Text><Text style={styles.meta}>{meta}</Text>{trace?<Text style={styles.meta}>{trace}</Text>:null}<Text style={styles.meta}>Qty {item.quantity} {item.unit}{billCount?" · "+billCount+" bill"+(billCount===1?"":"s"):""}</Text></View>
         {!selectMode?<Ionicons name="chevron-forward" size={20} color={colors.muted}/>:<Ionicons name={selected.includes(item.id)?"checkbox":"square-outline"} size={23} color={selected.includes(item.id)?colors.brandPrimary:colors.muted}/>}
-      </Pressable>})}/>
+      </Pressable>}} />
     <Modal visible={modal} transparent animationType="slide" onRequestClose={()=>setModal(false)}><View style={styles.overlay}><View style={[styles.sheet,{paddingBottom:insets.bottom+spacing.lg}]}><ScrollView keyboardShouldPersistTaps="handled">
       <View style={styles.sheetHead}><Text style={styles.sheetTitle}>{draft.id?"Edit Implant":"New Implant"}</Text><Pressable onPress={()=>setModal(false)}><Ionicons name="close" size={24} color={colors.onSurface}/></Pressable></View>
       <Field label="Implant name" value={draft.name} onChangeText={v=>setDraft(d=>({...d,name:v}))} placeholder="e.g. Interlocking Nail"/>
