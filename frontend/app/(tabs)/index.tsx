@@ -262,12 +262,14 @@ export default function Logbook() {
     setDetailExportOpen(true);
   }, [detailDates,detailFieldOptions]);
   const doDetailExport = useCallback(async () => {
-    const patientsForDate=(data || []).filter(p=>p.date===detailDate);
-    if(!patientsForDate.length){toast("No patients found for "+detailDate+".","info");return;}
+    const basicPatients=(data || []).filter(p=>p.date===detailDate);
+    if(!basicPatients.length){toast("No patients found for "+detailDate+".","info");return;}
     const fields=detailFieldOptions.filter(x=>detailFields.includes(x.key));
     if(!fields.length){toast("Select at least one patient field for the PDF.","error");return;}
     setExporting(true);
     try{
+      const patientsForDate = await api.get<Patient[]>("/patients-detail?date="+encodeURIComponent(detailDate));
+      if(!patientsForDate.length){toast("No patients found for "+detailDate+".","info");return;}
       const html=await buildPatientDetailHtml(branding,patientsForDate,fields,detailPhotoMode);
       setDetailExportOpen(false);
       await generateAndSharePdf(html,"Patient Detailed Report "+detailDate);
