@@ -146,7 +146,33 @@ function footer(branding: BrandingConfig) {
 }
 
 export function buildPatientListHtml(branding: BrandingConfig, patients: Patient[]): string {
-  const groups = new Map<string, Patient[]>();\n  const keyOf = (p: Patient) => (p.name || "").trim().toLowerCase() + "|" + (p.mrNo || "").trim().toLowerCase();\n  for (const p of patients) {\n    if (!p.name?.trim() || !p.mrNo?.trim()) continue;\n    const key = keyOf(p); const list = groups.get(key) || []; list.push(p); groups.set(key, list);\n  }\n  const counts = new Map<string, number>();\n  for (const list of groups.values()) {\n    const sorted = [...list].sort((a,b) => String(a.date || "").localeCompare(String(b.date || "")) || String(a.id || "").localeCompare(String(b.id || "")));\n    sorted.forEach((p, i) => counts.set(p.id, i + 1));\n  }\n  const rows =
+  const groups = new Map<string, Patient[]>();
+
+  const keyOf = (p: Patient) =>
+    (p.name || "").trim().toLowerCase() +
+    "|" +
+    (p.mrNo || "").trim().toLowerCase();
+
+  for (const p of patients) {
+    if (!p.name?.trim() || !p.mrNo?.trim()) continue;
+    const key = keyOf(p);
+    const list = groups.get(key) || [];
+    list.push(p);
+    groups.set(key, list);
+  }
+
+  const counts = new Map<string, number>();
+
+  for (const list of groups.values()) {
+    const sorted = [...list].sort(
+      (a, b) =>
+        String(a.date || "").localeCompare(String(b.date || "")) ||
+        String(a.id || "").localeCompare(String(b.id || "")),
+    );
+    sorted.forEach((p, i) => counts.set(p.id, i + 1));
+  }
+
+  const rows =
     patients.length === 0
       ? `<tr><td colspan="7"><div class="empty">No patients recorded.</div></td></tr>`
       : patients
