@@ -2,7 +2,7 @@ import { router } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system";
 import { Image } from "expo-image";
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -57,7 +57,6 @@ export default function BrandingScreen() {
   const [subtitleSizeText, setSubtitleSizeText] = useState(String(branding.pdfSubtitleSize));
   const [titleSizeText, setTitleSizeText] = useState(String(branding.pdfTitleSize));
   const [pdfMarginText, setPdfMarginText] = useState(String(branding.pdfMargin));
-  const subtitleInputRef = useRef<TextInput>(null);
 
   const set = (k: keyof BrandingConfig) => (v: string) =>
     setDraft((d) => ({ ...d, [k]: v }));
@@ -134,28 +133,6 @@ export default function BrandingScreen() {
     }));
   };
 
-  const updateSelectedBold = () => {
-    const { start, end } = subtitleSelection;
-    if (start === end) {
-      toast("Select the letters or words to make bold.", "info");
-      return;
-    }
-    const value = draft.pdfSubtitle;
-    const selected = value.slice(start, end);
-    const before = value.slice(0, start);
-    const after = value.slice(end);
-    const wrapped = before.endsWith("**") && after.startsWith("**");
-    const next = wrapped
-      ? before.slice(0, -2) + selected + after.slice(2)
-      : before + "**" + selected + "**" + after;
-    const nextSelection = wrapped ? { start: Math.max(0, start - 2), end: Math.max(0, end - 2) } : { start: start + 2, end: end + 2 };
-    setDraft(d => ({ ...d, pdfSubtitle: next }));
-    requestAnimationFrame(() => {
-      subtitleInputRef.current?.focus();
-      setSubtitleSelection(nextSelection);
-    });
-  };
-
   const commitSubtitleSize = () => {
     const n = Number(subtitleSizeText);
     const value = Number.isFinite(n) ? Math.max(8, Math.min(48, Math.round(n))) : branding.pdfSubtitleSize;
@@ -182,7 +159,10 @@ export default function BrandingScreen() {
       }
     }
     const margin=Math.max(12,Math.min(60,Math.round(Number(pdfMarginText)||28)));
-    const nextDraft={...draft,pdfMargin:margin};
+    const legacyLines = String(draft.pdfSubtitle || "").split("\n").map(text => text.trim()).filter(Boolean).slice(0,4);
+    const hasLineText = Array.isArray(draft.pdfSubtitleLines) && draft.pdfSubtitleLines.some(x => String(x.text || "").trim());
+    const lines = hasLineText ? draft.pdfSubtitleLines : legacyLines.map(text => ({ text, size: draft.pdfSubtitleSize || 12, font: draft.pdfSubtitleFont || "regular", bold: false }));
+    const nextDraft={...draft,pdfMargin:margin,pdfSubtitleLines:lines};
     setPdfMarginText(String(margin));
     setSaving(true);
     try {
@@ -253,46 +233,23 @@ export default function BrandingScreen() {
           on the app login screen. If you upload only one, it is used on both sides.
         </Text>
 
-        <Text style={[styles.label, { marginTop: spacing.md }]}>PDF sub-heading</Text>
-        <TextInput
-          ref={subtitleInputRef}
-          testID="branding-pdf-subtitle-input"
-          value={draft.pdfSubtitle}
-          onChangeText={set("pdfSubtitle")}
-          onSelectionChange={e => setSubtitleSelection(e.nativeEvent.selection)}
-          placeholder="Write 2–3 lines. Select words, then tap Bold."
-          placeholderTextColor={colors.muted}
-          multiline
-          numberOfLines={4}
-          maxLength={220}
-          style={[styles.input, styles.multilineInput]}
-        />
-        <View style={styles.styleRow}>
-          <Pressable style={styles.styleChip} onPress={updateSelectedBold}>
-            <Text style={[styles.styleChipText,{fontFamily:fontFamily.bold}]}>Bold selected</Text>
-          </Pressable>
-          <Text style={styles.hint}>Only the selected words become bold.</Text>
-        </View>
-        <View style={styles.styleRow}>
-          {(["regular","medium","semibold","bold"] as const).map(v => (
-            <Pressable key={v} onPress={() => setDraft(d => ({...d, pdfSubtitleFont:v}))} style={[styles.styleChip,{backgroundColor:draft.pdfSubtitleFont===v?colors.brandPrimary:colors.surfaceSecondary}]}>
-              <Text style={[styles.styleChipText,{color:draft.pdfSubtitleFont===v?colors.onBrandPrimary:colors.onSurface}]}>{v}</Text>
-            </Pressable>
-          ))}
-        </View>
-        <View style={styles.sizeRow}>
-          <Text style={styles.colorLabel}>Sub-heading size</Text>
-          <View style={styles.sizeControls}>
-            <Pressable style={styles.sizeButton} onPress={() => { const n=Math.max(8, Number(draft.pdfSubtitleSize||12)-1); setDraft(d=>({...d,pdfSubtitleSize:n})); setSubtitleSizeText(String(n)); }}>
-              <Ionicons name="remove" size={18} color={colors.onSurface} />
-            </Pressable>
-            <TextInput keyboardType="number-pad" value={subtitleSizeText} onChangeText={setSubtitleSizeText} onBlur={commitSubtitleSize} onSubmitEditing={commitSubtitleSize} returnKeyType="done" style={styles.smallSizeInput}/>
-            <Pressable style={styles.sizeButton} onPress={() => { const n=Math.min(48, Number(draft.pdfSubtitleSize||12)+1); setDraft(d=>({...d,pdfSubtitleSize:n})); setSubtitleSizeText(String(n)); }}>
-              <Ionicons name="add" size={18} color={colors.onSurface} />
-            </Pressable>
-          </View>
-        </View>
-
+        <Text style={[styles.label, { marginTop: spacing.md }]}>PDF sub-heading — each line independently editable</Text>
+        <Text style={styles.hint}>Each line has its own text, size, font and bold setting. The old PDF properties remain in the same Branding setup.</Text>
+        {[0,1,2,3].map((index) => {
+          const defaults = [0,1,2,3].map(() => ({text:"",size:12,font:"regular" as const,bold:false}));
+          const line = (draft.pdfSubtitleLines || defaults)[index] || defaults[index];
+          const updateLine = (patch: Partial<typeof line>) => setDraft(d => {
+            const lines = [...(d.pdfSubtitleLines || defaults)];
+            lines[index] = { ...lines[index], ...patch };
+            return { ...d, pdfSubtitleLines: lines };
+          });
+          return <View key={index} style={styles.subtitleLineCard}>
+            <Text style={styles.subtitleLineLabel}>Line {index + 1}</Text>
+            <TextInput value={line.text} onChangeText={text=>updateLine({text})} placeholder={"Sub-header line "+(index+1)} placeholderTextColor={colors.muted} style={styles.input}/>
+            <View style={styles.styleRow}>{(["regular","medium","semibold","bold"] as const).map(v=><Pressable key={v} onPress={()=>updateLine({font:v})} style={[styles.styleChip,{backgroundColor:line.font===v?colors.brandPrimary:colors.surfaceSecondary}]}><Text style={[styles.styleChipText,{color:line.font===v?colors.onBrandPrimary:colors.onSurface}]}>{v}</Text></Pressable>)}<Pressable onPress={()=>updateLine({bold:!line.bold})} style={[styles.styleChip,{backgroundColor:line.bold?colors.brandPrimary:colors.surfaceSecondary}]}><Text style={[styles.styleChipText,{fontFamily:fontFamily.bold,color:line.bold?colors.onBrandPrimary:colors.onSurface}]}>Bold</Text></Pressable></View>
+            <View style={styles.sizeRow}><Text style={styles.colorLabel}>Line size</Text><View style={styles.sizeControls}><Pressable style={styles.sizeButton} onPress={()=>updateLine({size:Math.max(8,Number(line.size||12)-1)})}><Ionicons name="remove" size={18} color={colors.onSurface}/></Pressable><TextInput keyboardType="number-pad" value={String(line.size||12)} onChangeText={v=>updateLine({size:Math.max(8,Math.min(48,Number(v.replace(/[^0-9]/g,""))||12))})} style={styles.smallSizeInput}/><Pressable style={styles.sizeButton} onPress={()=>updateLine({size:Math.min(48,Number(line.size||12)+1)})}><Ionicons name="add" size={18} color={colors.onSurface}/></Pressable></View></View>
+          </View>;
+        })}
         <Text style={[styles.label, { marginTop: spacing.md }]}>PDF heading style</Text>
         <View style={styles.styleRow}>
           {(["regular","medium","semibold","bold"] as const).map(v => (
@@ -470,6 +427,8 @@ const useStyles = makeStyles((colors) => ({
   styleChip: { paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.border },
   styleChipText: { fontFamily: fontFamily.medium, fontSize: fontSize.sm },
   sizeRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: spacing.md },
+  subtitleLineCard:{padding:spacing.md,borderWidth:1,borderColor:colors.border,borderRadius:radius.md,backgroundColor:colors.surfaceSecondary,marginTop:spacing.sm},
+  subtitleLineLabel:{fontFamily:fontFamily.semibold,fontSize:fontSize.sm,color:colors.onSurface,marginBottom:spacing.xs},
   sizeControls: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
   sizeButton: { width: 36, height: 36, borderRadius: 18, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surfaceSecondary, alignItems: "center", justifyContent: "center" },
   smallSizeInput: { width: 72, textAlign: "center", backgroundColor: colors.surfaceSecondary, borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, paddingVertical: spacing.sm, color: colors.onSurface, fontFamily: fontFamily.medium },
