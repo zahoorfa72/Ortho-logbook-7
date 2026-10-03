@@ -92,7 +92,7 @@ function header(branding: BrandingConfig, subtitle: string) {
           <div class="title" style="font-size:${titleSize}px;font-weight:${titleWeight}">${escapeHtml(branding.title)}</div>
           ${customBlock}
           <div class="subtitle" style="font-size:${subtitleSize}px;font-weight:${subtitleWeight}">${escapeHtml(subtitle)}</div>
-          <div class="printed">Generated on ${escapeHtml(new Date().toLocaleString())}</div>
+          ${branding.pdfShowGeneratedAt === false ? "" : `<div class="printed">Generated on ${escapeHtml(new Date().toLocaleString())}</div>`}
         </div>
       </div>
     `;
@@ -104,7 +104,7 @@ function header(branding: BrandingConfig, subtitle: string) {
         <div class="title" style="font-size:${titleSize}px;font-weight:${titleWeight}">${escapeHtml(branding.title)}</div>
         ${customBlock}
         <div class="subtitle" style="font-size:${subtitleSize}px;font-weight:${subtitleWeight}">${escapeHtml(subtitle)}</div>
-        <div class="printed">Generated on ${escapeHtml(new Date().toLocaleString())}</div>
+        ${branding.pdfShowGeneratedAt === false ? "" : `<div class="printed">Generated on ${escapeHtml(new Date().toLocaleString())}</div>`}
       </div>
       <div class="logoSide">${rightLogo}</div>
     </div>
@@ -115,7 +115,7 @@ function styles(branding: BrandingConfig) {
   return `
     <style>
       * { box-sizing: border-box; }
-      body { font-family: -apple-system, Helvetica, Arial, sans-serif; color: #1C1C1E; margin: 0; padding: 28px; }
+      body { font-family: -apple-system, Helvetica, Arial, sans-serif; color: #1C1C1E; margin: 0; padding: ${Number(branding.pdfMargin || 28)}px; }\n      @page { size: ${branding.pdfPageSize || "A4"} ${branding.pdfOrientation || "portrait"}; margin: ${Number(branding.pdfMargin || 28)}px; }
       .header { display: flex; align-items: center; gap: 18px; border-bottom: 3px solid ${branding.primary}; padding-bottom: 16px; margin-bottom: 24px; }
       .logoSide { flex: 0 0 auto; }
       .logo { width: 78px; height: 78px; border-radius: 12px; object-fit: contain; background: ${branding.tertiary}; display: block; }
@@ -128,9 +128,9 @@ function styles(branding: BrandingConfig) {
       .subtitle { font-size: 12px; color: #3A3A3C; margin-top: 8px; font-weight: 600; }
       .printed { font-size: 10px; color: #7C7872; margin-top: 4px; }
       table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 12px; }
-      th { text-align: left; padding: 10px 8px; background: ${branding.tertiary}; color: ${branding.onTertiary}; font-weight: 700; border-bottom: 2px solid ${branding.primary}; }
+      th { text-align: left; padding: 10px 8px; background: ${branding.pdfTableHeaderColor || branding.tertiary}; color: ${branding.onTertiary}; font-weight: 700; border-bottom: 2px solid ${branding.primary}; }
       td { padding: 9px 8px; border-bottom: 1px solid #E2DFD8; vertical-align: top; }
-      tr:nth-child(even) td { background: #FAFAF7; }
+      tr:nth-child(even) td { background: ${branding.pdfTableStripeColor || "#FAFAF7"}; }
       .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; background: ${branding.primary}; color: ${branding.onPrimary}; font-size: 10px; font-weight: 700; margin-left: 6px; }
       .badgeWarn { background: #C27803; color: #FFF; }
       .kpiRow { display: flex; gap: 12px; margin-bottom: 24px; }
