@@ -641,6 +641,15 @@ export const api = {
 
     // Bulk inventory deletion belongs to POST. It must work offline and
     // must not depend on stock being zero.
+    if (normalizedPath === "/implant-records-bulk-delete") {
+      await requireAdmin();
+      const ids=Array.isArray(body?.ids)?[...new Set(body.ids.map(String).filter(Boolean))]:[];
+      if(!ids.length) return {success:true,deleted:0} as any;
+      const placeholders=ids.map(()=>"?").join(",");
+      const rows=db.getAllSync<any>(`SELECT id FROM implant_records WHERE id IN (${placeholders})`,ids);
+      db.runSync(`DELETE FROM implant_records WHERE id IN (${placeholders})`,ids);
+      return {success:true,deleted:rows.length} as any;
+    }
     if (normalizedPath === "/inventory-bulk-delete") {
       await requireAdmin();
       const ids = Array.isArray(body?.ids) ? body.ids.map(String).filter(Boolean) : [];
@@ -725,7 +734,40 @@ export const api = {
       await assertRecordAccess(existing.created_by);
       return (await savePatient(body, true)) as any;
     }
-    const cm = normalizedPath.match(/^\/inventory-categories\/(.+)$/);
+    const pcf=normalizedPath.match(/^\/patient-custom-fields\/(.+)$/);
+    if(pcf){
+      await requireAdmin();
+      const existing=db.getFirstSync<any>("SELECT * FROM patient_custom_fields WHERE id=? LIMIT 1",[pcf[1]]);
+      if(!existing) throw new Error("Patient field not found.");
+      const label=String(body?.label||"").trim();
+      if(!label) throw new Error("Field name is required.");
+      if(db.getFirstSync<any>("SELECT id FROM patient_custom_fields WHERE LOWER(label)=LOWER(?) AND id<>? LIMIT 1",[label,pcf[1]])) throw new Error("This patient field already exists.");
+      const type=["text","number","date","multiline"].includes(String(body?.type)) ? String(body.type) : "text";
+      db.runSync("UPDATE patient_custom_fields SET label=?,type=?,sort_order=?,updated_at=? WHERE id=?",[label,type,Math.max(0,Number(body?.sort_order??existing.sort_order)||0),nowIso(),pcf[1]]);
+      return db.getFirstSync<any>("SELECT * FROM patient_custom_fields WHERE id=?",[pcf[1]]) as any;
+    }
+    const ir=normalizedPath.match(/^\/implant-records\/(.+)$/);
+    if(ir){
+      await requireAdmin();
+      const existing=db.getFirstSync<any>("SELECT * FROM implant_records WHERE id=? LIMIT 1",[ir[1]]);
+      if(!existing) throw new Error("Implant record not found.");
+      const now=nowIso(); const uid=await currentUser();
+      let bills:any[]=Array.isArray(body?.billFiles)?body.billFiles:[];
+      if(!Array.isArray(body?.billFiles)){ try { bills=JSON.parse(String(existing.bill_files_json||"[]")); } catch { bills=[]; } }
+      const values=[
+        String(body?.name??existing.name).trim(),String(body?.category??existing.category||"").trim(),String(body?.size??existing.size||"").trim(),
+        String(body?.manufacturer??existing.manufacturer||"").trim(),String(body?.model??existing.model||"").trim(),
+        String(body?.lotNumber??existing.lot_number||"").trim(),String(body?.serialNumber??existing.serial_number||"").trim(),
+        String(body?.expiryDate??existing.expiry_date||"").trim(),String(body?.supplier??existing.supplier||"").trim(),
+        Math.max(0,Number(body?.quantity??existing.quantity)||0),String(body?.unit??existing.unit||"pcs").trim()||"pcs",
+        Math.max(0,Number(body?.purchasePrice??existing.purchase_price)||0),String(body?.notes??existing.notes||"").trim(),
+        JSON.stringify(bills),now,uid,ir[1]
+      ];
+      if(!values[0]) throw new Error("Implant name is required.");
+      db.runSync("UPDATE implant_records SET name=?,category=?,size=?,manufacturer=?,model=?,lot_number=?,serial_number=?,expiry_date=?,supplier=?,quantity=?,unit=?,purchase_price=?,notes=?,bill_files_json=?,updated_at=?,updated_by=? WHERE id=?",values);
+      return db.getFirstSync<any>("SELECT * FROM implant_records WHERE id=?",[ir[1]]) as any;
+    }
+        const cm = normalizedPath.match(/^\/inventory-categories\/(.+)$/);
     if (cm) {
       await requireAdmin();
       const name = String(body?.name || "").trim();
@@ -810,6 +852,10 @@ export const api = {
       }
       return { success: true } as any;
     }
+    const pcf=normalizedPath.match(/^\/patient-custom-fields\/(.+)$/);
+    if(pcf){ await requireAdmin(); db.runSync("DELETE FROM patient_custom_fields WHERE id=?",[pcf[1]]); return {success:true} as any; }
+    const ir=normalizedPath.match(/^\/implant-records\/(.+)$/);
+    if(ir){ await requireAdmin(); db.runSync("DELETE FROM implant_records WHERE id=?",[ir[1]]); return {success:true} as any; }
     const cat = normalizedPath.match(/^\/inventory-categories\/(.+)$/);
     if (cat) {
       await requireAdmin();
