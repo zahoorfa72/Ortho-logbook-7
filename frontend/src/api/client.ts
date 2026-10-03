@@ -317,13 +317,19 @@ async function savePatient(p: Patient, editing: boolean) {
   return { ...p, id: patientId };
 }
 
-async function listPatients(): Promise<Patient[]> {
+async function listPatients(options?: { includePhotos?: boolean; date?: string }): Promise<Patient[]> {
   const me = await currentUserRow();
   if (!me) return [];
+  const includePhotos = options?.includePhotos === true;
+  const date = String(options?.date || "").trim();
+  const dateWhere = date ? " AND date=?" : "";
+  const dateArgs = date ? [date] : [];
+  const baseColumns = "id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,implant_id,implant_ii_id,address,file_name,date,created_at,created_by,updated_at,updated_by,custom_data_json";
+  const photoColumns = includePhotos ? ",photo_uri,photos_json" : "";
   const rows = me.role === "admin"
-    ? db.getAllSync<any>("SELECT * FROM patients ORDER BY date DESC, created_at DESC")
-    : db.getAllSync<any>("SELECT * FROM patients WHERE created_by=? ORDER BY date DESC, created_at DESC", [me.id]);
-  const patients = rows.map(fromPatient);
+    ? db.getAllSync<any>(`SELECT ${baseColumns}${photoColumns} FROM patients WHERE 1=1${dateWhere} ORDER BY date DESC, created_at DESC`, dateArgs)
+    : db.getAllSync<any>(`SELECT ${baseColumns}${photoColumns} FROM patients WHERE created_by=?${dateWhere} ORDER BY date DESC, created_at DESC`, [me.id, ...dateArgs]);
+  const patients = rows.map((r) => fromPatient(r));
   if (patients.length) {
     const ids = patients.map((p) => p.id);
     const placeholders = ids.map(() => "?").join(",");
@@ -406,7 +412,31 @@ export const api = {
       const me = await currentUserRow();
       return (me ? { id: me.id, role: me.role, canEditPatients: Number(me.can_edit_patients) === 1 } : null) as any;
     }
-    if (normalizedPath === "/patients") return (await listPatients()) as any;
+    if (normalizedPath === "/patients") return (await listPatients({ includePhotos: false })) as any;
+    if (normalizedPath === "/patients-detail") {
+      const params = new URLSearchParams(path.split("?")[1] || "");
+      return (await listPatients({ includePhotos: true, date: params.get("date") || "" })) as any;
+    }
+    if (normalizedPath.startsWith("/patients/")) {
+      const pid = decodeURIComponent(normalizedPath.slice("/patients/".length));
+      const me = await currentUserRow();
+      if (!me || !pid) return null as any;
+      const baseColumns = "id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,implant_id,implant_ii_id,address,file_name,photo_uri,photos_json,date,created_at,created_by,updated_at,updated_by,custom_data_json";
+      const row = me.role === "admin"
+        ? db.getFirstSync<any>(`SELECT ${baseColumns} FROM patients WHERE id=? LIMIT 1`, [pid])
+        : db.getFirstSync<any>(`SELECT ${baseColumns} FROM patients WHERE id=? AND created_by=? LIMIT 1`, [pid, me.id]);
+      if (!row) return null as any;
+      const patient = fromPatient(row);
+      const implantRows = db.getAllSync<any>(
+        "SELECT id,patient_id,inventory_id,name,category,size,quantity FROM patient_implants WHERE patient_id=? ORDER BY created_at ASC",
+        [pid],
+      );
+      if (implantRows.length) (patient as any).implants = implantRows.map((x:any) => ({
+        id:x.id, inventoryId:x.inventory_id || "", name:x.name || "",
+        category:x.category || "", size:x.size || "", quantity:Number(x.quantity || 1),
+      }));
+      return patient as any;
+    }
     if (normalizedPath === "/procedures")
       return db.getAllSync<any>("SELECT id,name FROM procedures ORDER BY name COLLATE NOCASE") as any;
     if (normalizedPath === "/patient-custom-fields")
