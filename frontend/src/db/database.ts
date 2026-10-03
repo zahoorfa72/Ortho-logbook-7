@@ -158,21 +158,19 @@ function applyHoldInventoryResetOnce() {
   const marker = INVENTORY_RESET_MARKER;
   const done = db.getFirstSync<any>("SELECT value FROM app_meta WHERE key=?", [marker]);
   const count = Number(db.getFirstSync<any>("SELECT COUNT(*) AS count FROM inventory")?.count || 0);
+  const categoryCount = Number(db.getFirstSync<any>("SELECT COUNT(*) AS count FROM inventory_categories")?.count || 0);
+  const patientCount = Number(db.getFirstSync<any>("SELECT COUNT(*) AS count FROM patients")?.count || 0);
 
-  // Never overwrite existing inventory. If a previous restore/clear left the
-  // local database empty, recover the requested offline inventory seed even
-  // when the one-time marker was already completed.
-  if (done?.value === "done") {
-    if (count === 0) seedHoldInventory();
+  // App updates are strictly non-destructive. Once the marker exists, never
+  // seed, replace, or duplicate inventory. An older database without the
+  // marker is seeded only when it is completely fresh.
+  if (done?.value === "done") return;
+  if (count > 0 || categoryCount > 0 || patientCount > 0) {
+    markInventoryResetDone();
     return;
   }
 
   db.withTransactionSync(() => {
-    // Explicit one-time user-requested inventory replacement.
-    db.runSync("UPDATE patient_implants SET inventory_id=NULL WHERE inventory_id IS NOT NULL");
-    db.runSync("DELETE FROM inventory_movements");
-    db.runSync("DELETE FROM inventory");
-    db.runSync("DELETE FROM inventory_categories");
     seedHoldInventory();
     db.runSync("INSERT OR REPLACE INTO app_meta (key,value) VALUES (?,?)", [marker, "done"]);
   });
