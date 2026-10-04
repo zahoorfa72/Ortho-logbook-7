@@ -40,7 +40,9 @@ const COLOR_FIELDS: {
   { key: "pdfTableStripeColor", label: "PDF Stripe", desc: "Alternating table rows" },
 ];
 
-function activeToneColor(v: string) { return v === "light" ? "#7C7872" : v === "dark" ? "#1C1C1E" : "#3A3A3C"; }\n\nfunction isHex(v: string) {
+function activeToneColor(v: string) { return v === "light" ? "#7C7872" : v === "dark" ? "#1C1C1E" : "#3A3A3C"; }
+
+function isHex(v: string) {
   return /^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$/.test(v);
 }
 
