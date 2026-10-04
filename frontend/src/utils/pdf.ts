@@ -157,60 +157,48 @@ function footer(branding: BrandingConfig) {
 }
 
 export function buildPatientListHtml(branding: BrandingConfig, patients: Patient[], fromDate?: string, toDate?: string): string {
+  const fields = Array.isArray(branding.pdfPatientFields) && branding.pdfPatientFields.length
+    ? branding.pdfPatientFields
+    : ["date","mrNo","name","gender","age","diagnosis","procedure"];
+  const labels: Record<string,string> = {date:"Date",mrNo:"MR No",name:"Patient",gender:"Gender",age:"Age",address:"Address",diagnosis:"Diagnosis",procedure:"Procedure / Implant",fileName:"File Name"};
+  const value = (p: Patient, key: string) => {
+    if(key === "procedure"){
+      const implants = p.implants?.length
+        ? p.implants.map((x:any)=>formatInventoryLabel(x.category,x.name,x.size)+(Number(x.quantity)>1?" × "+x.quantity:"")).join(" • ")
+        : [p.implant,p.implantII].filter(Boolean).join(" • ");
+      return [p.procedure, implants ? "Implant: "+implants : ""].filter(Boolean).join(" — ");
+    }
+    if(key === "gender") return p.gender || "";
+    if(key === "age") return p.age || "";
+    if(key === "address") return p.address || "";
+    if(key === "fileName") return p.fileName || "";
+    if(key === "date") return p.date || "";
+    if(key === "mrNo") return p.mrNo || "";
+    if(key === "name") return p.name || "";
+    if(key === "diagnosis") return p.diagnosis || "";
+    return String((p.customData||{})[key] || "");
+  };
   const groups = new Map<string, Patient[]>();
-
-  const keyOf = (p: Patient) =>
-    (p.name || "").trim().toLowerCase() +
-    "|" +
-    (p.mrNo || "").trim().toLowerCase();
-
-  for (const p of patients) {
-    if (!p.name?.trim() || !p.mrNo?.trim()) continue;
-    const key = keyOf(p);
-    const list = groups.get(key) || [];
-    list.push(p);
-    groups.set(key, list);
-  }
-
-  const counts = new Map<string, number>();
-
-  for (const list of groups.values()) {
-    const sorted = [...list].sort(
-      (a, b) =>
-        String(a.date || "").localeCompare(String(b.date || "")) ||
-        String(a.id || "").localeCompare(String(b.id || "")),
-    );
-    sorted.forEach((p, i) => counts.set(p.id, i + 1));
-  }
-
-  const pageTables: string[] = [];
-  const pageSize = 14;
-  for (let start = 0; start < patients.length || (patients.length === 0 && start === 0); start += pageSize) {
-    const page = patients.slice(start, start + pageSize);
-    let rows = "";
-    page.forEach((p, idx) => {
-      const badge = (counts.get(p.id) || p.operationCount || 1) > 1 ? '<span class="badge">' + escapeHtml(ordinalSuffix(counts.get(p.id) || p.operationCount || 1)) + ' time</span>' : "";
-      const implants = p.implants && p.implants.length
-        ? p.implants.map((x: any) => formatInventoryLabel(x.category, x.name, x.size) + (x.quantity > 1 ? " × " + x.quantity : "")).join(" • ")
-        : [p.implant, p.implantII].filter(Boolean).join(" • ");
-      rows += "<tr><td>" + (start + idx + 1) + "</td><td>" + escapeHtml(p.date) + "</td><td><strong>" + escapeHtml(p.mrNo || "—") + "</strong></td><td>" + escapeHtml(p.name || "—") + badge + "</td><td>" + escapeHtml([p.gender, p.age].filter(Boolean).join(" • ")) + "</td><td>" + escapeHtml(p.diagnosis) + "</td><td>" + escapeHtml(p.procedure) + "<br/><span style='color:#7C7872;font-size:9px'>" + escapeHtml(implants) + "</span></td></tr>";
+  const keyOf = (p: Patient) => (p.name||"").trim().toLowerCase()+"|"+(p.mrNo||"").trim().toLowerCase();
+  for(const p of patients){ const key=keyOf(p); const list=groups.get(key)||[]; list.push(p); groups.set(key,list); }
+  const counts = new Map<string,number>();
+  for(const list of groups.values()){ const sorted=[...list].sort((a,b)=>String(a.date||"").localeCompare(String(b.date||""))||String(a.id||"").localeCompare(String(b.id||""))); sorted.forEach((p,i)=>counts.set(p.id,i+1)); }
+  const pageTables:string[]=[]; const pageSize=14;
+  for(let start=0; start<patients.length || (patients.length===0&&start===0); start+=pageSize){
+    const page=patients.slice(start,start+pageSize);
+    let rows="";
+    page.forEach((p,idx)=>{
+      const badge=(counts.get(p.id)||p.operationCount||1)>1 ? '<span class="badge">'+escapeHtml(ordinalSuffix(counts.get(p.id)||p.operationCount||1))+' time</span>' : "";
+      rows += "<tr><td>"+(start+idx+1)+"</td>"+fields.map(k=>"<td>"+(k==="name"?"<strong>":"")+escapeHtml(value(p,k)||"—")+(k==="name"?"</strong>":"")+(k==="name"?badge:"")+"</td>").join("")+"</tr>";
     });
-    if (!rows) rows = '<tr><td colspan="7"><div class="empty">No patients recorded.</div></td></tr>';
-    pageTables.push("<section class=\"listPage\"><table><thead><tr><th style=\"width:26px\">#</th><th style=\"width:68px\">Date</th><th style=\"width:60px\">MR No</th><th>Patient</th><th style=\"width:76px\">Gender/Age</th><th>Diagnosis</th><th>Procedure / Implant</th></tr></thead><tbody>" + rows + "</tbody></table></section>");
+    if(!rows) rows='<tr><td colspan="'+(fields.length+1)+'"><div class="empty">No patients recorded.</div></td></tr>';
+    const heads=fields.map(k=>"<th>"+escapeHtml(labels[k]||k)+"</th>").join("");
+    pageTables.push('<section class="listPage"><table><thead><tr><th style="width:26px">#</th>'+heads+'</tr></thead><tbody>'+rows+'</tbody></table></section>');
   }
-  const tables = pageTables.join("");
-  return `
-    <html>
-      <head><meta charset="utf-8"/>${styles(branding)}</head>
-      <body>
-        ${header(branding, `Patient List — ${patients.length} record${patients.length === 1 ? "" : "s"}${fromDate || toDate ? ` — ${fromDate || "Start"} to ${toDate || "End"}` : ""}`)}
-        ${tables}
-        ${footer(branding)}
-      </body>
-    </html>
-  `;
+  return '<html><head><meta charset="utf-8"/>'+styles(branding)+'<style>table{font-size:'+ (fields.length>6?'8px':'9.5px') +';} th,td{padding:'+(fields.length>6?'3px 4px':'4px 5px')+';}</style></head><body>'+
+    header(branding,'Patient List — '+patients.length+' record'+(patients.length===1?'':'s')+(fromDate||toDate?' — '+(fromDate||'Start')+' to '+(toDate||'End'):'') )+
+    pageTables.join("")+footer(branding)+'</body></html>';
 }
-
 export async function buildPatientDetailHtml(
   branding: BrandingConfig,
   patients: Patient[],
