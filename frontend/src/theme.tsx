@@ -107,9 +107,8 @@ export const defaultBranding: BrandingConfig = {
   pdfSubHeadingField: "procedure",
   pdfHeadingLevels: [
     { fields: ["name"], label: "Main Heading" },
-    { fields: ["mrNo", "age"], label: "Sub-heading 1" },
-    { fields: ["diagnosis"], label: "Sub-heading 2" },
-    { fields: ["procedure"], label: "Sub-heading 3" },
+    { fields: ["procedure"], label: "Sub-heading 1" },
+    { fields: ["implants"], label: "Sub-heading 2" },
   ],
   pdfImplantSubheadingColor: "#8A9690",
   primary: light.brandPrimary,
