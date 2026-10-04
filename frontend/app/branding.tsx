@@ -40,7 +40,7 @@ const COLOR_FIELDS: {
   { key: "pdfTableStripeColor", label: "PDF Stripe", desc: "Alternating table rows" },
 ];
 
-function isHex(v: string) {
+function activeToneColor(v: string) { return v === "light" ? "#7C7872" : v === "dark" ? "#1C1C1E" : "#3A3A3C"; }\n\nfunction isHex(v: string) {
   return /^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$/.test(v);
 }
 
@@ -292,6 +292,23 @@ export default function BrandingScreen() {
         })}
         <Text style={styles.colorLabel}>Implant sub-heading colour</Text>
         <TextInput value={String(draft.pdfImplantSubheadingColor||"#8A9690")} onChangeText={v=>setDraft(d=>({...d,pdfImplantSubheadingColor:v}))} placeholder="#8A9690" placeholderTextColor={colors.muted} style={styles.input} />
+        <Text style={[styles.label, { marginTop: spacing.md }]}>Patient list layout</Text>
+        <Text style={styles.hint}>Control how many patients fit on each PDF list page and how the list text looks. The selected settings apply to the existing PDF design.</Text>
+        <Text style={styles.colorLabel}>Patients per page</Text>
+        <View style={styles.sizeControls}>
+          <Pressable style={styles.sizeButton} onPress={()=>{const n=Math.max(1,Number(draft.pdfPatientsPerPage||20)-1);setDraft(d=>({...d,pdfPatientsPerPage:n}));}}><Ionicons name="remove" size={18} color={colors.onSurface}/></Pressable>
+          <TextInput keyboardType="number-pad" value={String(draft.pdfPatientsPerPage||20)} onChangeText={v=>setDraft(d=>({...d,pdfPatientsPerPage:Math.max(1,Math.min(200,Number(v.replace(/[^0-9]/g,""))||1))}))} style={styles.smallSizeInput}/>
+          <Pressable style={styles.sizeButton} onPress={()=>{const n=Math.min(200,Number(draft.pdfPatientsPerPage||20)+1);setDraft(d=>({...d,pdfPatientsPerPage:n}));}}><Ionicons name="add" size={18} color={colors.onSurface}/></Pressable>
+        </View>
+        <Text style={styles.hint}>Example: 20 or 25 patients per page.</Text>
+        <Text style={styles.colorLabel}>List text size</Text>
+        <View style={styles.styleRow}>{(["small","medium","large"] as const).map(v=><Pressable key={v} onPress={()=>setDraft(d=>({...d,pdfListTextSize:v}))} style={[styles.styleChip,{backgroundColor:draft.pdfListTextSize===v?colors.brandPrimary:colors.surfaceSecondary}]}><Text style={[styles.styleChipText,{color:draft.pdfListTextSize===v?colors.onBrandPrimary:colors.onSurface}]}>{v}</Text></Pressable>)}</View>
+        <Text style={styles.colorLabel}>List text weight</Text>
+        <View style={styles.styleRow}>{(["normal","bold"] as const).map(v=><Pressable key={v} onPress={()=>setDraft(d=>({...d,pdfListTextWeight:v}))} style={[styles.styleChip,{backgroundColor:draft.pdfListTextWeight===v?colors.brandPrimary:colors.surfaceSecondary}]}><Text style={[styles.styleChipText,{color:draft.pdfListTextWeight===v?colors.onBrandPrimary:colors.onSurface}]}>{v}</Text></Pressable>)}</View>
+        <Text style={styles.colorLabel}>List text darkness</Text>
+        <View style={styles.styleRow}>{(["light","normal","dark"] as const).map(v=><Pressable key={v} onPress={()=>setDraft(d=>({...d,pdfListTextTone:v}))} style={[styles.styleChip,{backgroundColor:draft.pdfListTextTone===v?colors.brandPrimary:colors.surfaceSecondary}]}><Text style={[styles.styleChipText,{color:activeToneColor(v)}]}>{v}</Text></Pressable>)}</View>
+        <Text style={styles.colorLabel}>Row spacing</Text>
+        <View style={styles.styleRow}>{(["compact","normal","spacious"] as const).map(v=><Pressable key={v} onPress={()=>setDraft(d=>({...d,pdfListRowSpacing:v}))} style={[styles.styleChip,{backgroundColor:draft.pdfListRowSpacing===v?colors.brandPrimary:colors.surfaceSecondary}]}><Text style={[styles.styleChipText,{color:draft.pdfListRowSpacing===v?colors.onBrandPrimary:colors.onSurface}]}>{v}</Text></Pressable>)}</View>
         <Text style={[styles.label, { marginTop: spacing.md }]}>PDF design</Text>
         <Text style={styles.hint}>These settings change the existing PDF design; they do not create a second PDF setup.</Text>
         <View style={styles.styleRow}>
