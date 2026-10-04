@@ -3,14 +3,17 @@ import { File } from "expo-file-system";
 import * as ImageManipulator from "expo-image-manipulator";
 import nacl from "tweetnacl";
 import { db, initializeDatabase, markInventoryResetDone, repairDatabaseData } from "@/src/db/database";
+import { storage } from "@/src/utils/storage";
+import type { BrandingConfig } from "@/src/theme";
 
-const BACKUP_VERSION = 5;
+const BACKUP_VERSION = 6;
 const BACKUP_APP = "Ortho Logbook";
 
 type BackupData = {
   version:number; app:string; createdAt:string;
   patients:any[]; procedures:any[]; inventoryCategories:any[]; inventory:any[]; patientImplants:any[]; patientCustomFields:any[]; implantRecords:any[]; expenses:any[]; users:any[];
-  patientHistory:any[]; inventoryMovements:any[];
+  patientHistory:any[]; inventoryMovements:any[]; inventoryPurchaseReceipts:any[];
+  branding?: BrandingConfig;
   filter?: BackupFilter;
 };
 type EncryptedBackup = {
@@ -115,6 +118,8 @@ async function createBackupData(filter: BackupFilter = { type: "all" }):Promise<
   users:db.getAllSync<any>("SELECT * FROM users ORDER BY created_at ASC"),
   patientHistory:embeddedHistory,
   inventoryMovements:(()=>{if(filter.type==="all") return db.getAllSync<any>("SELECT * FROM inventory_movements ORDER BY created_at ASC"); const f=filter.type==="date" ? {sql:" WHERE date(created_at)=?",args:[filter.value||""]} : filter.type==="month" ? {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]} : {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]}; return db.getAllSync<any>(`SELECT * FROM inventory_movements${f.sql} ORDER BY created_at ASC`,f.args);})(),
+  inventoryPurchaseReceipts:db.getAllSync<any>("SELECT * FROM inventory_purchase_receipts ORDER BY created_at ASC"),
+  branding: await storage.getItem<BrandingConfig>("ortho_branding", {} as BrandingConfig),
  };
 }
 
@@ -130,7 +135,7 @@ export async function exportBackup(password:string, filter: BackupFilter = { typ
 
 function parseHeader(text:string):EncryptedBackup{
  let b:any;try{b=JSON.parse(text);}catch{throw new Error("The selected backup file is not valid.");}
- if(!b||![2,3,4,5].includes(b.version)||b.app!==BACKUP_APP||b.encrypted!==true||b.algorithm!=="XSalsa20-Poly1305"||b.kdf!=="SHA-256")throw new Error("Invalid or unsupported Ortho Logbook backup.");
+ if(!b||![2,3,4,5,6].includes(b.version)||b.app!==BACKUP_APP||b.encrypted!==true||b.algorithm!=="XSalsa20-Poly1305"||b.kdf!=="SHA-256")throw new Error("Invalid or unsupported Ortho Logbook backup.");
  if(!b.createdAt||!b.salt||!b.nonce||!b.ciphertext)throw new Error("The backup file is incomplete or damaged.");
  return b;
 }
@@ -143,7 +148,7 @@ export async function decryptBackup(text:string,password:string):Promise<BackupD
   const plain=nacl.secretbox.open(hexToBytes(b.ciphertext),hexToBytes(b.nonce),key);
   if(!plain)throw new Error("Incorrect backup password or damaged backup.");
   const data=JSON.parse(bytesToString(plain)) as BackupData;
-  if(!data||![2,3,4,5].includes(data.version)||data.app!==BACKUP_APP)throw new Error("The decrypted backup is invalid.");
+  if(!data||![2,3,4,5,6].includes(data.version)||data.app!==BACKUP_APP)throw new Error("The decrypted backup is invalid.");
   for(const keyName of ["patients","procedures","inventory","expenses","users","patientHistory","inventoryMovements"]){
     if(!Array.isArray((data as any)[keyName]))throw new Error("The backup is incomplete or damaged.");
   }
@@ -186,7 +191,7 @@ function restoreJsonArray(value:any){try{const parsed=JSON.parse(String(value ??
 
 export function restoreBackup(backup:BackupData){
  initializeDatabase({ skipInventoryReset: true });
- if(!backup||![2,3,4,5].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
+ if(!backup||![2,3,4,5,6].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
  const patients=restoreArray((backup as any).patients);
  const procedures=restoreArray((backup as any).procedures);
  const inventoryCategories=restoreArray((backup as any).inventoryCategories);
@@ -199,7 +204,7 @@ export function restoreBackup(backup:BackupData){
  const patientHistory=restoreArray((backup as any).patientHistory);
  const inventoryMovements=restoreArray((backup as any).inventoryMovements);
  db.withTransactionSync(()=>{
-  db.runSync("DELETE FROM inventory_movements"); db.runSync("DELETE FROM patient_implants"); db.runSync("DELETE FROM patient_history"); db.runSync("DELETE FROM expenses"); db.runSync("DELETE FROM patients"); db.runSync("DELETE FROM patient_custom_fields"); db.runSync("DELETE FROM implant_records"); db.runSync("DELETE FROM procedures"); db.runSync("DELETE FROM inventory"); db.runSync("DELETE FROM inventory_categories"); db.runSync("DELETE FROM users");
+  db.runSync("DELETE FROM inventory_movements"); db.runSync("DELETE FROM inventory_purchase_receipts"); db.runSync("DELETE FROM patient_implants"); db.runSync("DELETE FROM patient_history"); db.runSync("DELETE FROM expenses"); db.runSync("DELETE FROM patients"); db.runSync("DELETE FROM patient_custom_fields"); db.runSync("DELETE FROM implant_records"); db.runSync("DELETE FROM procedures"); db.runSync("DELETE FROM inventory"); db.runSync("DELETE FROM inventory_categories"); db.runSync("DELETE FROM users");
   const usedPatientIds=new Set<string>();
   const patientIdMap=new Map<string,string>();
   for(const p of patients){
@@ -312,6 +317,12 @@ export function restoreBackup(backup:BackupData){
     if(!patientId) continue;
     db.runSync("INSERT INTO patient_history (id,patient_id,user_id,action,snapshot_json,created_at) VALUES (?,?,?,?,?,?)",[restoreRowId(h.id,"history",usedHistoryIds),patientId,userIdMap.get(String(h.user_id||""))||null,restoreText(h.action,"snapshot"),restoreText(h.snapshot_json,"{}"),restoreText(h.created_at,new Date().toISOString())]);
   }
+  const usedReceiptIds=new Set<string>();
+  for(const r of inventoryPurchaseReceipts){
+    const inventoryId=inventoryIdMap.get(String(r.inventory_id||""));
+    if(!inventoryId) continue;
+    db.runSync("INSERT INTO inventory_purchase_receipts (id,inventory_id,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",[restoreRowId(r.id,"receipt",usedReceiptIds),inventoryId,r.category_id||null,restoreText(r.category),restoreText(r.size),restoreReal(r.quantity,0,0),restoreText(r.unit,"pcs"),restoreReal(r.minimum_stock,0,0),restoreText(r.added_date),restoreText(r.bill_image),restoreText(r.created_at,new Date().toISOString()),restoreText(r.created_by)||null]);
+  }
   const usedMovementIds=new Set<string>();
   for(const m of inventoryMovements){
     const inventoryId=inventoryIdMap.get(String(m.inventory_id||""));
@@ -419,6 +430,10 @@ export function mergeBackup(backup: BackupData) {
    if (has("patient_history", h.id)) continue;
    db.runSync("INSERT INTO patient_history (id,patient_id,user_id,action,snapshot_json,created_at) VALUES (?,?,?,?,?,?)", [h.id, h.patient_id, h.user_id||null, h.action, h.snapshot_json, h.created_at]);
    stats.patientHistory++;
+  }
+  for (const r of backup.inventoryPurchaseReceipts || []) {
+   if (has("inventory_purchase_receipts", r.id)) continue;
+   db.runSync("INSERT INTO inventory_purchase_receipts (id,inventory_id,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",[r.id,r.inventory_id,r.category_id||null,r.category||"",r.size||"",Number(r.quantity||0),r.unit||"pcs",Number(r.minimum_stock||0),r.added_date||null,r.bill_image||null,r.created_at||new Date().toISOString(),r.created_by||null]);
   }
   for (const m of backup.inventoryMovements) {
    if (has("inventory_movements", m.id)) continue;
