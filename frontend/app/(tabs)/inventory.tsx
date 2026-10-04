@@ -66,6 +66,7 @@ export default function Inventory() {
   const blankRow = (): AddRow => ({id:Math.random().toString(36).slice(2),categoryId:selectedCategoryId,category:selectedCategoryName,size:"",quantity:"",minimumStock:"1",addedDate:new Date().toISOString().slice(0,10),billImage:""});
   const [addRows, setAddRows] = useState<AddRow[]>([blankRow()]);
   const [picker, setPicker] = useState<"category"|"size"|null>(null);
+  const [pickerRowId, setPickerRowId] = useState("");
   const [newCategory, setNewCategory] = useState("");
   const [search, setSearch] = useState("");
   const [inventorySort, setInventorySort] = useState<"name-asc" | "name-desc" | "size-asc" | "size-desc" | "qty-desc" | "qty-asc" | "low-first">("name-asc");
@@ -324,7 +325,7 @@ export default function Inventory() {
               </Pressable>
             ) : null}
             {isAdmin ? (
-              <Pressable testID="add-stock-button" style={styles.addBtn} onPress={() => { setCategory(selectedCategoryName); setAddModal(true); }}>
+              <Pressable testID="add-stock-button" style={styles.addBtn} onPress={() => { setAddRows([blankRow()]); setAddModal(true); }}>
                 <Ionicons name="add" size={20} color={colors.onBrandPrimary} />
                 <Text style={styles.addBtnText}>Add Stock</Text>
               </Pressable>
@@ -451,8 +452,8 @@ export default function Inventory() {
           <KeyboardAwareScrollView bottomOffset={40} keyboardShouldPersistTaps="handled">
             {addRows.map((row,index)=><View key={row.id} style={styles.addRowCard}>
               <View style={styles.addRowHeader}><Text style={styles.addRowTitle}>Item {index+1}</Text>{addRows.length>1?<Pressable onPress={()=>setAddRows(x=>x.filter(r=>r.id!==row.id))}><Ionicons name="trash-outline" size={19} color={colors.error}/></Pressable>:null}</View>
-              <Pressable style={styles.dropdown} onPress={()=>setPicker("category")}><Text style={row.category?styles.dropdownText:styles.dropdownPlaceholder}>{row.category||"Select saved category or create new"}</Text><Ionicons name="chevron-down" size={18} color={colors.muted}/></Pressable>
-              <Pressable style={styles.dropdown} onPress={()=>setPicker("size")}><Text style={row.size?styles.dropdownText:styles.dropdownPlaceholder}>{row.size||"Select saved size or enter new"}</Text><Ionicons name="chevron-down" size={18} color={colors.muted}/></Pressable>
+              <Pressable style={styles.dropdown} onPress={()=>{setPickerRowId(row.id);setPicker("category")}}><Text style={row.category?styles.dropdownText:styles.dropdownPlaceholder}>{row.category||"Select saved category or create new"}</Text><Ionicons name="chevron-down" size={18} color={colors.muted}/></Pressable>
+              <Pressable style={styles.dropdown} onPress={()=>{setPickerRowId(row.id);setPicker("size")}}><Text style={row.size?styles.dropdownText:styles.dropdownPlaceholder}>{row.size||"Select saved size or enter new"}</Text><Ionicons name="chevron-down" size={18} color={colors.muted}/></Pressable>
               {!row.size?<TextInput value={row.size} onChangeText={v=>updateAddRow(row.id,{size:v})} placeholder="New size" placeholderTextColor={colors.muted} style={styles.input}/>:null}
               <View style={styles.twoCol}><TextInput value={row.quantity} onChangeText={v=>updateAddRow(row.id,{quantity:v.replace(/[^0-9.]/g,"")})} placeholder="Quantity" keyboardType="number-pad" placeholderTextColor={colors.muted} style={[styles.input,{flex:1}]}/><TextInput value={row.minimumStock} onChangeText={v=>updateAddRow(row.id,{minimumStock:v.replace(/[^0-9.]/g,"")})} placeholder="Minimum stock" keyboardType="number-pad" placeholderTextColor={colors.muted} style={[styles.input,{flex:1}]}/></View>
               <TextInput value={row.addedDate} onChangeText={v=>updateAddRow(row.id,{addedDate:v})} placeholder="YYYY-MM-DD" placeholderTextColor={colors.muted} style={styles.input}/>
@@ -468,7 +469,7 @@ export default function Inventory() {
       <Modal visible={picker!==null} transparent animationType="fade" onRequestClose={()=>setPicker(null)}>
         <View style={styles.modalOverlay}><View style={styles.pickerCard}>
           <View style={styles.addRowHeader}><Text style={styles.modalTitle}>{picker==="category"?"Select Category":"Select Size"}</Text><Pressable onPress={()=>setPicker(null)}><Ionicons name="close" size={22} color={colors.onSurface}/></Pressable></View>
-          {picker==="category"?<><TextInput value={newCategory} onChangeText={setNewCategory} placeholder="New category" placeholderTextColor={colors.muted} style={styles.input}/>{categories.map((cat:any)=><Pressable key={cat.id} style={styles.pickerItem} onPress={()=>{setAddRows(rows=>rows.map((r,i)=>i===0?{...r,categoryId:cat.id,category:cat.name}:r));setPicker(null);}}><Text style={styles.dropdownText}>{cat.name}</Text></Pressable>)}<Pressable style={styles.addAnother} onPress={createCategory}><Text style={styles.addAnotherText}>+ Create new category</Text></Pressable></>:<><TextInput placeholder="Type new size" placeholderTextColor={colors.muted} style={styles.input} onChangeText={v=>setAddRows(rows=>rows.map((r,i)=>i===0?{...r,size:v}:r))}/>{allSizes.map(s=><Pressable key={s} style={styles.pickerItem} onPress={()=>{setAddRows(rows=>rows.map((r,i)=>i===0?{...r,size:s}:r));setPicker(null);}}><Text style={styles.dropdownText}>{s}</Text></Pressable>)}</>}
+          {picker==="category"?<><TextInput value={newCategory} onChangeText={setNewCategory} placeholder="New category" placeholderTextColor={colors.muted} style={styles.input}/>{categories.map((cat:any)=><Pressable key={cat.id} style={styles.pickerItem} onPress={()=>{setAddRows(rows=>rows.map(r=>r.id===pickerRowId?{...r,categoryId:cat.id,category:cat.name}:r));setPicker(null);}}><Text style={styles.dropdownText}>{cat.name}</Text></Pressable>)}<Pressable style={styles.addAnother} onPress={createCategory}><Text style={styles.addAnotherText}>+ Create new category</Text></Pressable></>:<><TextInput placeholder="Type new size" placeholderTextColor={colors.muted} style={styles.input} onChangeText={v=>setAddRows(rows=>rows.map(r=>r.id===pickerRowId?{...r,size:v}:r))}/>{allSizes.map(s=><Pressable key={s} style={styles.pickerItem} onPress={()=>{setAddRows(rows=>rows.map(r=>r.id===pickerRowId?{...r,size:s}:r));setPicker(null);}}><Text style={styles.dropdownText}>{s}</Text></Pressable>)}</>}
         </View></View>
       </Modal>
 
