@@ -61,6 +61,7 @@ export type BrandingConfig = {
   pdfShowGeneratedAt: boolean;
   pdfPageSize: "A4" | "Letter";
   pdfOrientation: "portrait" | "landscape";
+  pdfPatientFields?: string[];
   // Full theme colors
   primary: string;
   onPrimary: string;
@@ -97,6 +98,7 @@ export const defaultBranding: BrandingConfig = {
   pdfShowGeneratedAt: true,
   pdfPageSize: "A4",
   pdfOrientation: "portrait",
+  pdfPatientFields: ["date","mrNo","name","gender","age","diagnosis","procedure"],
   primary: light.brandPrimary,
   onPrimary: light.onBrandPrimary,
   secondary: light.brandSecondary,
