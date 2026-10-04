@@ -7,12 +7,18 @@
     "preview": {
       "distribution": "internal",
       "environment": "preview",
+      "env": {
+        "EAS_NO_FROZEN_LOCKFILE": "1"
+      },
       "android": {
         "buildType": "apk"
       }
     },
     "production": {
       "environment": "production",
+      "env": {
+        "EAS_NO_FROZEN_LOCKFILE": "1"
+      },
       "android": {
         "buildType": "apk"
       }
