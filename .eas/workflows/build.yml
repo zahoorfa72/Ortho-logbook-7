@@ -2,12 +2,14 @@ name: Build Android APK
 
 on:
   push:
-    branches: ['main']
+    branches: ["main"]
+  workflow_dispatch:
 
 jobs:
   build_android:
     name: Build Android APK
     type: build
+    environment: preview
     params:
       platform: android
       profile: preview
