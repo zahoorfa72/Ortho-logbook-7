@@ -627,6 +627,7 @@ export const api = {
       const items = Array.isArray(body?.items) ? body.items : [];
       if (!items.length) throw new Error("Add at least one inventory item.");
       let added = 0;
+      const uid = await currentUser();
       db.withTransactionSync(() => {
         for (const entry of items) {
           let categoryId = String(entry?.categoryId || "").trim();
@@ -652,12 +653,10 @@ export const api = {
           if(existing){
             const next=Number(existing.quantity||0)+quantity;
             db.runSync("UPDATE inventory SET name=?,category_id=?,category=?,size=?,quantity=?,unit=?,minimum_stock=?,added_date=?,bill_image=? WHERE id=?",[categoryName,categoryId,categoryName,size,next,unit,minimumStock,addedDate,billImage||existing.bill_image||"",existing.id]);
-            const uid=await currentUser();
             movement(existing.id,"purchase",quantity,next,"Stock received",uid);
           } else {
             const inventoryId=id();
             db.runSync("INSERT INTO inventory (id,name,quantity,unit,minimum_stock,category_id,category,size,added_date,bill_image) VALUES (?,?,?,?,?,?,?,?,?,?)",[inventoryId,categoryName,quantity,unit,minimumStock,categoryId,categoryName,size,addedDate,billImage]);
-            const uid=await currentUser();
             movement(inventoryId,"purchase",quantity,quantity,"Stock received",uid);
           }
           added++;
