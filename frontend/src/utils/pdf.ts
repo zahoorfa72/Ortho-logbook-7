@@ -164,6 +164,7 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
   const legacyHierarchy = [
     { fields: [branding.pdfMainHeadingField || "name"], label: "Main Heading" },
     { fields: [branding.pdfSubHeadingField || "procedure"], label: "Sub-heading 1" },
+    { fields: ["implants"], label: "Sub-heading 2" },
   ];
   const hierarchy = Array.isArray(branding.pdfHeadingLevels) && branding.pdfHeadingLevels.length
     ? branding.pdfHeadingLevels.map((x:any) => ({ fields: Array.isArray(x?.fields) ? x.fields.filter(Boolean).map(String) : [], label: String(x?.label || "") })).filter((x:any) => x.fields.length)
