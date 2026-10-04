@@ -650,15 +650,19 @@ export const api = {
           const addedDate=String(entry?.addedDate||new Date().toISOString().slice(0,10)).trim();
           const billImage=String(entry?.billImage||"");
           const existing=db.getFirstSync<any>("SELECT * FROM inventory WHERE category_id=? AND LOWER(COALESCE(size,''))=LOWER(?) LIMIT 1",[categoryId,size]);
+          let inventoryId:String = "";
           if(existing){
             const next=Number(existing.quantity||0)+quantity;
-            db.runSync("UPDATE inventory SET name=?,category_id=?,category=?,size=?,quantity=?,unit=?,minimum_stock=?,added_date=?,bill_image=? WHERE id=?",[categoryName,categoryId,categoryName,size,next,unit,minimumStock,addedDate,billImage||existing.bill_image||"",existing.id]);
+            inventoryId=existing.id;
+            db.runSync("UPDATE inventory SET name=?,category_id=?,category=?,size=?,quantity=?,unit=?,minimum_stock=? WHERE id=?",[categoryName,categoryId,categoryName,size,next,unit,minimumStock,existing.id]);
             movement(existing.id,"purchase",quantity,next,"Stock received",uid);
           } else {
-            const inventoryId=id();
+            inventoryId=id();
             db.runSync("INSERT INTO inventory (id,name,quantity,unit,minimum_stock,category_id,category,size,added_date,bill_image) VALUES (?,?,?,?,?,?,?,?,?,?)",[inventoryId,categoryName,quantity,unit,minimumStock,categoryId,categoryName,size,addedDate,billImage]);
             movement(inventoryId,"purchase",quantity,quantity,"Stock received",uid);
           }
+          db.runSync("INSERT INTO inventory_purchase_receipts (id,inventory_id,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            [id(),inventoryId,categoryId,categoryName,size,quantity,unit,minimumStock,addedDate,billImage,nowIso(),uid]);
           added++;
         }
       });
