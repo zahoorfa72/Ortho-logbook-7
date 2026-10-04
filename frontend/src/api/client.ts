@@ -730,6 +730,14 @@ export const api = {
       return { id: inventoryId, name: categoryName, categoryId, category: categoryName, size, quantity, unit, minimumStock } as any;
     }
 
+    if (normalizedPath === "/inventory-purchase-receipts") {
+      await requireAdmin();
+      const rows = db.getAllSync<any>(
+        "SELECT r.*, i.name FROM inventory_purchase_receipts r LEFT JOIN inventory i ON i.id=r.inventory_id ORDER BY r.added_date DESC, r.created_at DESC",
+      );
+      return rows.map((r:any)=>({...r, quantity:Number(r.quantity||0), minimumStock:Number(r.minimum_stock||0), addedDate:r.added_date||"", billImage:r.bill_image||"", category:r.category||"", size:r.size||""})) as any;
+    }
+
     if (normalizedPath === "/procedures") {
       await requireAdmin();
       const name = String(body?.name || "").trim();
