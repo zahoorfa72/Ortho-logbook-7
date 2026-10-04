@@ -392,13 +392,13 @@ const inventory = (categoryId?: string, term?: string) => {
     const q = "%" + term.trim().toLowerCase() + "%"; args.push(q,q,q);
   }
   const sql = `SELECT i.id,i.name,i.category_id,i.category,i.size,i.quantity,i.unit,i.minimum_stock,
-      c.name AS category_name
+      c.name AS category_name,i.added_date,i.bill_image
       FROM inventory i LEFT JOIN inventory_categories c ON c.id=i.category_id
       ${where.length ? "WHERE " + where.join(" AND ") : ""}
       ORDER BY COALESCE(c.name,i.category,''), i.name COLLATE NOCASE, COALESCE(i.size,'')`;
   return db.getAllSync<any>(sql,args).map((r) => ({
     id:r.id,name:r.name,categoryId:r.category_id||"",category:r.category_name||r.category||"",size:r.size||"",
-    quantity:Number(r.quantity),unit:r.unit||"pcs",minimumStock:Number(r.minimum_stock),
+    quantity:Number(r.quantity),unit:r.unit||"pcs",minimumStock:Number(r.minimum_stock),addedDate:r.added_date||"",billImage:r.bill_image||"",
   }));
 };
 
@@ -622,6 +622,50 @@ export const api = {
       return { id: categoryId, name, createdAt: nowIso(), itemCount: 0 } as any;
     }
 
+    if (normalizedPath === "/inventory-bulk-add") {
+      await requireAdmin();
+      const items = Array.isArray(body?.items) ? body.items : [];
+      if (!items.length) throw new Error("Add at least one inventory item.");
+      let added = 0;
+      db.withTransactionSync(() => {
+        for (const entry of items) {
+          let categoryId = String(entry?.categoryId || "").trim();
+          let categoryName = String(entry?.category || "").trim();
+          if (!categoryId && !categoryName) throw new Error("Every item needs a category.");
+          if (categoryId) {
+            const cat=db.getFirstSync<any>("SELECT id,name FROM inventory_categories WHERE id=? LIMIT 1",[categoryId]);
+            if(!cat) throw new Error("Inventory category not found.");
+            categoryName=String(cat.name||categoryName).trim();
+          } else {
+            const cat=db.getFirstSync<any>("SELECT id,name FROM inventory_categories WHERE LOWER(name)=LOWER(?) LIMIT 1",[categoryName]);
+            if(cat){categoryId=cat.id;categoryName=String(cat.name||categoryName).trim();}
+            else {categoryId=id();db.runSync("INSERT INTO inventory_categories (id,name,created_at) VALUES (?,?,?)",[categoryId,categoryName,nowIso()]);}
+          }
+          const size=String(entry?.size||"").trim();
+          const quantity=Math.max(0,Number(entry?.quantity)||0);
+          const minimumStock=Math.max(0,Number(entry?.minimumStock)||0);
+          if(quantity<=0) throw new Error("Every item needs a quantity above 0.");
+          const unit=String(entry?.unit||"pcs").trim()||"pcs";
+          const addedDate=String(entry?.addedDate||new Date().toISOString().slice(0,10)).trim();
+          const billImage=String(entry?.billImage||"");
+          const existing=db.getFirstSync<any>("SELECT * FROM inventory WHERE category_id=? AND LOWER(COALESCE(size,''))=LOWER(?) LIMIT 1",[categoryId,size]);
+          if(existing){
+            const next=Number(existing.quantity||0)+quantity;
+            db.runSync("UPDATE inventory SET name=?,category_id=?,category=?,size=?,quantity=?,unit=?,minimum_stock=?,added_date=?,bill_image=? WHERE id=?",[categoryName,categoryId,categoryName,size,next,unit,minimumStock,addedDate,billImage||existing.bill_image||"",existing.id]);
+            const uid=await currentUser();
+            movement(existing.id,"purchase",quantity,next,"Stock received",uid);
+          } else {
+            const inventoryId=id();
+            db.runSync("INSERT INTO inventory (id,name,quantity,unit,minimum_stock,category_id,category,size,added_date,bill_image) VALUES (?,?,?,?,?,?,?,?,?,?)",[inventoryId,categoryName,quantity,unit,minimumStock,categoryId,categoryName,size,addedDate,billImage]);
+            const uid=await currentUser();
+            movement(inventoryId,"purchase",quantity,quantity,"Stock received",uid);
+          }
+          added++;
+        }
+      });
+      return {success:true,added} as any;
+    }
+
     if (normalizedPath === "/inventory") {
       await requireAdmin();
       let categoryId = String(body?.categoryId || "").trim();
@@ -665,8 +709,8 @@ export const api = {
       if (existing) {
         const next = Number(existing.quantity || 0) + quantity;
         db.runSync(
-          "UPDATE inventory SET name=?,category_id=?,category=?,size=?,quantity=?,unit=?,minimum_stock=? WHERE id=?",
-          [categoryName, categoryId, categoryName, size, next, unit, minimumStock, existing.id],
+          "UPDATE inventory SET name=?,category_id=?,category=?,size=?,quantity=?,unit=?,minimum_stock=?,added_date=?,bill_image=? WHERE id=?",
+          [categoryName, categoryId, categoryName, size, next, unit, minimumStock, String(body?.addedDate||new Date().toISOString().slice(0,10)), String(body?.billImage||existing.bill_image||""), existing.id],
         );
         const uid = await currentUser();
         movement(existing.id, "purchase", quantity, next, body?.note || "Stock received", uid);
@@ -675,8 +719,8 @@ export const api = {
 
       const inventoryId = id();
       db.runSync(
-        "INSERT INTO inventory (id,name,quantity,unit,minimum_stock,category_id,category,size) VALUES (?,?,?,?,?,?,?,?)",
-        [inventoryId, categoryName, quantity, unit, minimumStock, categoryId, categoryName, size],
+        "INSERT INTO inventory (id,name,quantity,unit,minimum_stock,category_id,category,size,added_date,bill_image) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        [inventoryId, categoryName, quantity, unit, minimumStock, categoryId, categoryName, size, String(body?.addedDate||new Date().toISOString().slice(0,10)), String(body?.billImage||"")],
       );
       const uid = await currentUser();
       movement(inventoryId, "purchase", quantity, quantity, body?.note || "Stock received", uid);
