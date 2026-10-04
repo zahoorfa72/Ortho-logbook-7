@@ -29,11 +29,15 @@ export default function ImplantsScreen(){
   const {data=[],isLoading,isRefetching,refetch}=useQuery<ImplantRecord[]>({queryKey:["implant-records"],queryFn:()=>api.get("/implant-records"),enabled:user?.role==="admin"});
   const {data:stockCategories=[]}=useQuery<any[]>({queryKey:["inventory-categories"],queryFn:()=>api.get("/inventory-categories")});
   const {data:stockInventory=[]}=useQuery<any[]>({queryKey:["inventory","implant-stock-picker"],queryFn:()=>api.get("/inventory")});
+  const {data:stockReceipts=[]}=useQuery<any[]>({
+    queryKey:["inventory-purchase-receipts"],
+    queryFn:()=>api.get("/inventory-purchase-receipts"),
+  });
   const stockSizes=useMemo(()=>[...new Set((stockInventory as any[]).map(x=>String(x.size||"").trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,undefined,{numeric:true,sensitivity:"base"})),[stockInventory]);
   const blankStock=()=>({id:Math.random().toString(36).slice(2),categoryId:"",category:"",size:"",quantity:"",minimumStock:"1",addedDate:new Date().toISOString().slice(0,10),billImage:""});
   const updateStockRow=(id:string,patch:Partial<StockRow>)=>setStockRows(rows=>rows.map(x=>x.id===id?{...x,...patch}:x));
   const pickStockBill=async(id:string)=>{const p=await ImagePicker.requestMediaLibraryPermissionsAsync();if(!p.granted){toast("Photo permission is required for the bill image.","error");return;}const x=await ImagePicker.launchImageLibraryAsync({mediaTypes:["images"],allowsEditing:true,quality:.55,base64:true});if(x.canceled)return;const a=x.assets[0];if(!a?.base64){toast("Could not read bill image.","error");return;}if(a.base64.length>2000000){toast("Bill image is too large. Choose a smaller image.","error");return;}updateStockRow(id,{billImage:"data:"+(a.mimeType||"image/jpeg")+";base64,"+a.base64});};
-  const saveStock=useMutation({mutationFn:()=>api.post("/inventory-bulk-add",{items:stockRows.map(x=>({categoryId:x.categoryId,category:x.category,size:x.size,quantity:Number(x.quantity)||0,minimumStock:Number(x.minimumStock)||0,addedDate:x.addedDate,billImage:x.billImage}))}),onSuccess:()=>{qc.invalidateQueries({queryKey:["inventory"]});qc.invalidateQueries({queryKey:["inventory","implant-stock-picker"]});qc.invalidateQueries({queryKey:["inventory-categories"]});setStockModal(false);setStockRows([]);toast("Stock received and added to Inventory.","success");},onError:(e:any)=>toast(e?.message||"Could not add stock.","error")});
+  const saveStock=useMutation({mutationFn:()=>api.post("/inventory-bulk-add",{items:stockRows.map(x=>({categoryId:x.categoryId,category:x.category,size:x.size,quantity:Number(x.quantity)||0,minimumStock:Number(x.minimumStock)||0,addedDate:x.addedDate,billImage:x.billImage}))}),onSuccess:()=>{qc.invalidateQueries({queryKey:["inventory"]});qc.invalidateQueries({queryKey:["inventory","implant-stock-picker"]});qc.invalidateQueries({queryKey:["inventory-purchase-receipts"]});qc.invalidateQueries({queryKey:["inventory-categories"]});setStockModal(false);setStockRows([]);toast("Stock received and added to Inventory.","success");},onError:(e:any)=>toast(e?.message||"Could not add stock.","error")});
   const openStock=()=>{setStockRows([blankStock()]);setStockModal(true)};
   const submitStock=()=>{for(const x of stockRows){if(!x.category.trim()){toast("Select a category for every stock row.","error");return;}if(Number(x.quantity)<=0){toast("Enter quantity above 0 for every stock row.","error");return;}if(!/^\d{4}-\d{2}-\d{2}$/.test(x.addedDate)){toast("Use YYYY-MM-DD for the date.","error");return;}}saveStock.mutate();};
   const pickerValues=stockPicker==="category"?(Array.isArray(stockCategories)?stockCategories:[]).map(x=>({id:String(x?.id??""),label:String(x?.name??"").trim()})).filter(x=>x.id&&x.label):(Array.isArray(stockSizes)?stockSizes:[]).map(x=>({id:String(x),label:String(x)}));
@@ -70,9 +74,9 @@ export default function ImplantsScreen(){
       ListHeaderComponent={<View style={{marginBottom:spacing.md}}>
         <View style={{flexDirection:"row",alignItems:"center",justifyContent:"space-between",marginBottom:spacing.sm}}>
           <View style={{flex:1}}><Text style={styles.sectionTitle}>Received Stock</Text><Text style={styles.stockHint}>Stock received here is saved in the same Inventory and shown below.</Text></View>
-          <Text style={styles.stockCount}>{stockInventory.length}</Text>
+          <Text style={styles.stockCount}>{stockReceipts.length}</Text>
         </View>
-        {stockInventory.length ? stockInventory.slice(0,50).map((s:any)=><View key={String(s.id)} style={styles.receivedCard}>
+        {stockReceipts.length ? stockReceipts.slice(0,50).map((s:any)=><View key={String(s.id)} style={styles.receivedCard}>
           <View style={{flex:1}}><Text style={styles.receivedTitle}>{s.category||s.name||"Inventory item"}{s.size?" · "+s.size:""}</Text><Text style={styles.meta}>Quantity {Number(s.quantity)||0} {s.unit||"pcs"} · Minimum {Number(s.minimumStock)||0}</Text>{s.addedDate?<Text style={styles.meta}>Received: {s.addedDate}</Text>:null}</View>
           <Ionicons name={Number(s.quantity||0)<=Number(s.minimumStock||0)?"warning-outline":"cube-outline"} size={19} color={Number(s.quantity||0)<=Number(s.minimumStock||0)?colors.warning:colors.brandPrimary}/>
         </View>):<View style={styles.receivedEmpty}><Text style={styles.meta}>No received stock yet.</Text></View>}
