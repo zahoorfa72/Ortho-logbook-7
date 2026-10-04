@@ -574,6 +574,36 @@ export const api = {
     initializeDatabase();
     const normalizedPath = normalizeRoute(path);
 
+    const receiptDelete=normalizedPath.match(/^\/inventory-purchase-receipts\/([^/]+)\/delete$/);
+    if(receiptDelete){
+      await requireAdmin();
+      const rid=decodeURIComponent(receiptDelete[1]);
+      if(rid.startsWith("legacy-")){
+        const inventoryId=rid.slice(7);
+        const item=db.getFirstSync<any>("SELECT * FROM inventory WHERE id=? LIMIT 1",[inventoryId]);
+        if(!item) throw new Error("Receiving entry not found.");
+        const qty=Number(item.quantity||0);
+        if(qty>0) throw new Error("This older entry is linked to the current inventory balance and cannot be deleted safely.");
+        db.runSync("DELETE FROM inventory WHERE id=?",[inventoryId]);
+        return {success:true} as any;
+      }
+      const receipt=db.getFirstSync<any>("SELECT * FROM inventory_purchase_receipts WHERE id=? LIMIT 1",[rid]);
+      if(!receipt) throw new Error("Receiving entry not found.");
+      const inventory=db.getFirstSync<any>("SELECT * FROM inventory WHERE id=? LIMIT 1",[receipt.inventory_id]);
+      if(!inventory) throw new Error("Inventory item for this receipt no longer exists.");
+      const qty=Number(receipt.quantity||0);
+      const current=Number(inventory.quantity||0);
+      if(current<qty) throw new Error("This receipt cannot be deleted because available stock is already lower than its received quantity.");
+      const next=current-qty;
+      const uid=await currentUser();
+      db.withTransactionSync(()=>{
+        db.runSync("UPDATE inventory SET quantity=? WHERE id=?",[next,inventory.id]);
+        db.runSync("DELETE FROM inventory_purchase_receipts WHERE id=?",[rid]);
+        movement(inventory.id,"purchase_delete",-qty,next,"Received stock deleted",uid);
+      });
+      return {success:true} as any;
+    }
+
     if (normalizedPath === "/patient-custom-fields") {
       await requireAdmin();
       const label=String(body?.label||"").trim();
