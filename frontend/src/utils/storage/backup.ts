@@ -203,6 +203,7 @@ export function restoreBackup(backup:BackupData){
  const users=restoreArray((backup as any).users);
  const patientHistory=restoreArray((backup as any).patientHistory);
  const inventoryMovements=restoreArray((backup as any).inventoryMovements);
+ const inventoryPurchaseReceipts=restoreArray((backup as any).inventoryPurchaseReceipts);
  db.withTransactionSync(()=>{
   db.runSync("DELETE FROM inventory_movements"); db.runSync("DELETE FROM inventory_purchase_receipts"); db.runSync("DELETE FROM patient_implants"); db.runSync("DELETE FROM patient_history"); db.runSync("DELETE FROM expenses"); db.runSync("DELETE FROM patients"); db.runSync("DELETE FROM patient_custom_fields"); db.runSync("DELETE FROM implant_records"); db.runSync("DELETE FROM procedures"); db.runSync("DELETE FROM inventory"); db.runSync("DELETE FROM inventory_categories"); db.runSync("DELETE FROM users");
   const usedPatientIds=new Set<string>();
