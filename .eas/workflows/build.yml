@@ -7,8 +7,10 @@ on:
 
 jobs:
   build_android:
-    name: Build Android APK
-    type: build
-    params:
-      platform: android
-      profile: preview
+    name: Configure EAS and build Android APK
+    steps:
+      - uses: eas/checkout
+      - name: Link or create EAS project
+        run: eas init --account zahoorfa72s-team --non-interactive --force
+      - name: Build Android APK
+        run: eas build --platform android --profile preview --non-interactive --no-wait
