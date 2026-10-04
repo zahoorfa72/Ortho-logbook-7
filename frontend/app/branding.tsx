@@ -250,7 +250,23 @@ export default function BrandingScreen() {
             <View style={styles.sizeRow}><Text style={styles.colorLabel}>Line size</Text><View style={styles.sizeControls}><Pressable style={styles.sizeButton} onPress={()=>updateLine({size:Math.max(8,Number(line.size||12)-1)})}><Ionicons name="remove" size={18} color={colors.onSurface}/></Pressable><TextInput keyboardType="number-pad" value={String(line.size||12)} onChangeText={v=>updateLine({size:Math.max(8,Math.min(48,Number(v.replace(/[^0-9]/g,""))||12))})} style={styles.smallSizeInput}/><Pressable style={styles.sizeButton} onPress={()=>updateLine({size:Math.min(48,Number(line.size||12)+1)})}><Ionicons name="add" size={18} color={colors.onSurface}/></Pressable></View></View>
           </View>;
         })}
-        <Text style={[styles.label, { marginTop: spacing.md }]}>PDF heading style</Text>
+        <Text style={[styles.label, { marginTop: spacing.md }]}>Patient fields in PDF</Text>
+        <Text style={styles.hint}>Select only the patient fields you want in the original compact PDF. The layout remains the same.</Text>
+        {[
+          ["date","Date"],["mrNo","MR No"],["name","Patient Name"],["gender","Gender"],["age","Age"],["address","Address"],["diagnosis","Diagnosis"],["procedure","Procedure / Implant"],["fileName","File Name"]
+        ].map(([key,label]) => {
+          const active=(draft.pdfPatientFields||defaultBranding.pdfPatientFields||[]).includes(key);
+          return <Pressable key={key} onPress={()=>setDraft(d=>({...d,pdfPatientFields:active?(d.pdfPatientFields||[]).filter(x=>x!==key):[...(d.pdfPatientFields||defaultBranding.pdfPatientFields||[]),key]}))} style={styles.fieldToggle}>
+            <Ionicons name={active?"checkbox":"square-outline"} size={21} color={active?colors.brandPrimary:colors.muted}/>
+            <Text style={styles.fieldToggleText}>{label}</Text>
+          </Pressable>;
+        })}
+        <Text style={[styles.label, { marginTop: spacing.md }]}>PDF design</Text>
+        <Text style={styles.hint}>These settings change the existing PDF design; they do not create a second PDF setup.</Text>
+        <View style={styles.styleRow}>
+          {(["portrait","landscape"] as const).map(v=><Pressable key={v} onPress={()=>setDraft(d=>({...d,pdfOrientation:v}))} style={[styles.styleChip,{backgroundColor:draft.pdfOrientation===v?colors.brandPrimary:colors.surfaceSecondary}]}><Text style={[styles.styleChipText,{color:draft.pdfOrientation===v?colors.onBrandPrimary:colors.onSurface}]}>{v}</Text></Pressable>)}
+        </View>
+<Text style={[styles.label, { marginTop: spacing.md }]}>PDF heading style</Text>
         <View style={styles.styleRow}>
           {(["regular","medium","semibold","bold"] as const).map(v => (
             <Pressable key={v} onPress={() => setDraft(d => ({...d, pdfTitleFont:v}))} style={[styles.styleChip,{backgroundColor:draft.pdfTitleFont===v?colors.brandPrimary:colors.surfaceSecondary}]}>
@@ -427,7 +443,7 @@ const useStyles = makeStyles((colors) => ({
   styleChip: { paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.border },
   styleChipText: { fontFamily: fontFamily.medium, fontSize: fontSize.sm },
   sizeRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: spacing.md },
-  subtitleLineCard:{padding:spacing.md,borderWidth:1,borderColor:colors.border,borderRadius:radius.md,backgroundColor:colors.surfaceSecondary,marginTop:spacing.sm},
+  fieldToggle:{flexDirection:"row",alignItems:"center",gap:spacing.sm,paddingVertical:spacing.sm},\n  fieldToggleText:{fontFamily:fontFamily.medium,fontSize:fontSize.base,color:colors.onSurface},\n  subtitleLineCard:{padding:spacing.md,borderWidth:1,borderColor:colors.border,borderRadius:radius.md,backgroundColor:colors.surfaceSecondary,marginTop:spacing.sm},
   subtitleLineLabel:{fontFamily:fontFamily.semibold,fontSize:fontSize.sm,color:colors.onSurface,marginBottom:spacing.xs},
   sizeControls: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
   sizeButton: { width: 36, height: 36, borderRadius: 18, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surfaceSecondary, alignItems: "center", justifyContent: "center" },
