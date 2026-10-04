@@ -160,7 +160,7 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
   const fields = Array.isArray(branding.pdfPatientFields) && branding.pdfPatientFields.length
     ? branding.pdfPatientFields
     : ["date","mrNo","name","gender","age","diagnosis","procedure"];
-  const labels: Record<string,string> = {date:"Date",mrNo:"MR No",name:"Patient",gender:"Gender",age:"Age",address:"Address",diagnosis:"Diagnosis",procedure:"Procedure",fileName:"File Name"};
+  const labels: Record<string,string> = {date:"Date",mrNo:"MR No",name:"Patient",gender:"Gender",age:"Age",address:"Address",diagnosis:"Diagnosis",procedure:"Procedure",implants:"Implants",fileName:"File Name"};
   const legacyHierarchy = [
     { fields: [branding.pdfMainHeadingField || "name"], label: "Main Heading" },
     { fields: [branding.pdfSubHeadingField || "procedure"], label: "Sub-heading 1" },
@@ -183,6 +183,7 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
     if(key === "name") return p.name || "";
     if(key === "diagnosis") return p.diagnosis || "";
     if(key === "procedure") return p.procedure || "";
+    if(key === "implants") return implantText(p);
     return String((p.customData||{})[key] || "");
   };
   const implantText = (p: Patient) => {
@@ -208,7 +209,7 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
         const headingClass=level ? " headingLevel"+level : "";
         const styled=level ? "<span class='headingText"+headingClass+"'>"+raw+"</span>" : raw;
         const sub=styled;
-        const implants=(k==="procedure" && isSub)?implantText(p):"";
+        const implants=(k==="procedure" && level>=2)?implantText(p):"";
         const implantHtml=implants?"<span class='implantSubheading'>Implant: "+escapeHtml(implants)+"</span>":"";
         return "<td>"+sub+implantHtml+(k==="name"?badge:"")+"</td>";
       }).join("")+"</tr>";
