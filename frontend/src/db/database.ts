@@ -51,7 +51,7 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
     CREATE TABLE IF NOT EXISTS inventory (
       id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, quantity REAL NOT NULL DEFAULT 0,
       unit TEXT NOT NULL DEFAULT 'pcs', minimum_stock REAL NOT NULL DEFAULT 0,
-      category_id TEXT, category TEXT, size TEXT
+      category_id TEXT, category TEXT, size TEXT, added_date TEXT, bill_image TEXT
     );
     CREATE TABLE IF NOT EXISTS expenses (
       id TEXT PRIMARY KEY NOT NULL, description TEXT NOT NULL, amount REAL NOT NULL,
@@ -114,6 +114,8 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
   addColumn("patients", "implant_ii_id", "TEXT");
   addColumn("inventory", "category", "TEXT");
   addColumn("inventory", "size", "TEXT");
+  addColumn("inventory", "added_date", "TEXT");
+  addColumn("inventory", "bill_image", "TEXT");
   addColumn("patients", "photos_json", "TEXT");
   addColumn("patients", "custom_data_json", "TEXT");
   addColumn("patients", "created_by", "TEXT");
