@@ -118,7 +118,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }):Promise<
   users:db.getAllSync<any>("SELECT * FROM users ORDER BY created_at ASC"),
   patientHistory:embeddedHistory,
   inventoryMovements:(()=>{if(filter.type==="all") return db.getAllSync<any>("SELECT * FROM inventory_movements ORDER BY created_at ASC"); const f=filter.type==="date" ? {sql:" WHERE date(created_at)=?",args:[filter.value||""]} : filter.type==="month" ? {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]} : {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]}; return db.getAllSync<any>(`SELECT * FROM inventory_movements${f.sql} ORDER BY created_at ASC`,f.args);})(),
-  inventoryPurchaseReceipts:db.getAllSync<any>("SELECT * FROM inventory_purchase_receipts ORDER BY created_at ASC"),
+  inventoryPurchaseReceipts:(()=>{const f=whereForFilter(filter,"created_at");return db.getAllSync<any>(`SELECT * FROM inventory_purchase_receipts${f.sql} ORDER BY created_at ASC`,f.args);})(),
   branding: await storage.getItem<BrandingConfig>("ortho_branding", {} as BrandingConfig),
  };
 }
