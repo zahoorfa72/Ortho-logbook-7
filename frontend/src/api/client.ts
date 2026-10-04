@@ -866,6 +866,37 @@ export const api = {
       await assertRecordAccess(existing.created_by);
       return (await savePatient(body, true)) as any;
     }
+    const receiptMatch=normalizedPath.match(/^\/inventory-purchase-receipts\/(.+)$/);
+    if(receiptMatch){
+      await requireAdmin();
+      const rid=decodeURIComponent(receiptMatch[1]);
+      const existing=db.getFirstSync<any>("SELECT * FROM inventory_purchase_receipts WHERE id=? LIMIT 1",[rid]);
+      if(!existing) throw new Error("Receiving entry not found.");
+      const quantity=Math.max(0,Number(body?.quantity)||0);
+      if(quantity<=0) throw new Error("Quantity must be above 0.");
+      const categoryId=String(body?.categoryId||existing.category_id||"").trim();
+      const categoryName=String(body?.category||existing.category||"").trim();
+      const size=String(body?.size??existing.size??"").trim();
+      const minimumStock=Math.max(0,Number(body?.minimumStock)||0);
+      const addedDate=String(body?.addedDate||existing.added_date||"").trim();
+      const billImage=String(body?.billImage??existing.bill_image??"");
+      const oldQty=Number(existing.quantity||0);
+      const inventory=db.getFirstSync<any>("SELECT * FROM inventory WHERE id=? LIMIT 1",[existing.inventory_id]);
+      if(!inventory) throw new Error("Inventory item for this receipt no longer exists.");
+      const nextQty=Number(inventory.quantity||0)-oldQty+quantity;
+      if(nextQty<0) throw new Error("This receipt cannot be edited because available stock is already lower than its original quantity.");
+      const uid=await currentUser();
+      db.withTransactionSync(()=>{
+        db.runSync("UPDATE inventory SET quantity=?,minimum_stock=? WHERE id=?",[nextQty,minimumStock,inventory.id]);
+        if(categoryId || categoryName || size){
+          db.runSync("UPDATE inventory SET category_id=COALESCE(NULLIF(?,''),category_id),category=COALESCE(NULLIF(?,''),category),size=? WHERE id=?",[categoryId,categoryName,size,inventory.id]);
+        }
+        db.runSync("UPDATE inventory_purchase_receipts SET category_id=?,category=?,size=?,quantity=?,minimum_stock=?,added_date=?,bill_image=? WHERE id=?",[categoryId,categoryName,size,quantity,minimumStock,addedDate,billImage,rid]);
+        movement(inventory.id,"purchase_adjustment",quantity-oldQty,nextQty,"Received stock edited",uid);
+      });
+      return {success:true} as any;
+    }
+
     const pcf=normalizedPath.match(/^\/patient-custom-fields\/(.+)$/);
     if(pcf){
       await requireAdmin();
