@@ -265,6 +265,33 @@ export function restoreBackup(backup:BackupData){
     const itemSize=restoreText(i.size);
     db.runSync("INSERT INTO inventory (id,name,category_id,category,size,quantity,unit,minimum_stock) VALUES (?,?,?,?,?,?,?,?)",[restoredInventoryId,itemName,cid,itemCategory,itemSize,restoreReal(i.quantity,0,0),restoreText(i.unit,"pcs"),restoreReal(i.minimum_stock,0,0)]);
   }
+  // Restore every receiving transaction separately. Never merge receipts for the same item.
+  // inventory IDs are remapped when restore has to repair duplicate IDs.
+  const purchaseReceipts=restoreArray((backup as any).inventoryPurchaseReceipts);
+  const usedReceiptIds=new Set<string>();
+  for(const r of purchaseReceipts){
+    const sourceInventoryId=String(r.inventory_id||"");
+    const mappedInventoryId=inventoryIdMap.get(sourceInventoryId)||sourceInventoryId;
+    if(!mappedInventoryId || !db.getFirstSync<any>("SELECT id FROM inventory WHERE id=? LIMIT 1",[mappedInventoryId])) continue;
+    db.runSync(
+      "INSERT INTO inventory_purchase_receipts (id,inventory_id,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+      [
+        restoreRowId(r.id,"purchase-receipt",usedReceiptIds),
+        mappedInventoryId,
+        String(r.category_id||"")||null,
+        restoreText(r.category),
+        restoreText(r.size),
+        restoreReal(r.quantity,0,0),
+        restoreText(r.unit,"pcs"),
+        restoreReal(r.minimum_stock,0,0),
+        restoreText(r.added_date),
+        restoreText(r.bill_image),
+        restoreText(r.created_at,new Date().toISOString()),
+        restoreText(r.created_by)||null,
+      ],
+    );
+  }
+
   // Restore patient inventory selections without creating duplicate rows.
   // Older backups/restore versions could contain the same patient + implant more
   // than once. Combine identical selections into one row and keep the quantity.
