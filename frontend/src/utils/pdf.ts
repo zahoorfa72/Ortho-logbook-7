@@ -161,8 +161,17 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
     ? branding.pdfPatientFields
     : ["date","mrNo","name","gender","age","diagnosis","procedure"];
   const labels: Record<string,string> = {date:"Date",mrNo:"MR No",name:"Patient",gender:"Gender",age:"Age",address:"Address",diagnosis:"Diagnosis",procedure:"Procedure",fileName:"File Name"};
-  const mainField = branding.pdfMainHeadingField || "name";
-  const subField = branding.pdfSubHeadingField || "procedure";
+  const legacyHierarchy = [
+    { fields: [branding.pdfMainHeadingField || "name"], label: "Main Heading" },
+    { fields: [branding.pdfSubHeadingField || "procedure"], label: "Sub-heading 1" },
+  ];
+  const hierarchy = Array.isArray(branding.pdfHeadingLevels) && branding.pdfHeadingLevels.length
+    ? branding.pdfHeadingLevels.map((x:any) => ({ fields: Array.isArray(x?.fields) ? x.fields.filter(Boolean).map(String) : [], label: String(x?.label || "") })).filter((x:any) => x.fields.length)
+    : legacyHierarchy;
+  const levelFor = (key:string) => {
+    const index = hierarchy.findIndex((x:any) => x.fields.includes(key));
+    return index >= 0 ? index + 1 : 0;
+  };
   const implantSubColor = branding.pdfImplantSubheadingColor || "#8A9690";
   const value = (p: Patient, key: string) => {
     if(key === "gender") return p.gender || "";
@@ -195,10 +204,10 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
       const badge=(counts.get(p.id)||p.operationCount||1)>1 ? '<span class="badge">'+escapeHtml(ordinalSuffix(counts.get(p.id)||p.operationCount||1))+' time</span>' : "";
       rows += "<tr><td class='indexCell'>"+(start+idx+1)+"</td>"+fields.map(k=>{
         const raw=escapeHtml(value(p,k)||"—");
-        const isMain=k===mainField;
-        const isSub=k===subField;
-        const main=isMain?"<strong class='mainHeading'>"+raw+"</strong>":raw;
-        const sub=isSub?"<span class='subHeading'>"+raw+"</span>":main;
+        const level=levelFor(k);
+        const headingClass=level ? " headingLevel"+level : "";
+        const styled=level ? "<span class='headingText"+headingClass+"'>"+raw+"</span>" : raw;
+        const sub=styled;
         const implants=(k==="procedure" && isSub)?implantText(p):"";
         const implantHtml=implants?"<span class='implantSubheading'>Implant: "+escapeHtml(implants)+"</span>":"";
         return "<td>"+sub+implantHtml+(k==="name"?badge:"")+"</td>";
@@ -210,7 +219,7 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
   }
   const fontSize=fields.length>7?'7.5px':fields.length>5?'8px':'9px';
   return '<html><head><meta charset="utf-8"/>'+styles(branding)+'<style>'+
-    'table{font-size:'+fontSize+';table-layout:auto;width:100%;border-collapse:collapse}.listPage{page-break-after:always}.listPage:last-child{page-break-after:auto}th,td{padding:2.5px 3.5px;line-height:1.15;vertical-align:middle}.indexHead,.indexCell{width:22px;text-align:center}.mainHeading{font-size:1.03em;font-weight:800;color:'+branding.primary+';display:block}.subHeading{display:block;font-weight:700;color:'+branding.text+'}.implantSubheading{display:block;color:'+implantSubColor+';font-size:.88em;margin-top:1px}.badge{font-size:.78em;color:'+implantSubColor+';margin-left:3px;white-space:nowrap}tbody tr{page-break-inside:avoid}'+
+    'table{font-size:'+fontSize+';table-layout:auto;width:100%;border-collapse:collapse}.listPage{page-break-after:always}.listPage:last-child{page-break-after:auto}th,td{padding:2.5px 3.5px;line-height:1.15;vertical-align:middle}.indexHead,.indexCell{width:22px;text-align:center}.headingText{display:block}.headingLevel1{font-size:1.08em;font-weight:800;color:'+branding.primary+'}.headingLevel2{font-weight:750;color:'+branding.text+'}.headingLevel3{font-weight:700;color:'+branding.text+'}.headingLevel4{font-weight:650;color:#59625E}.implantSubheading{display:block;color:'+implantSubColor+';font-size:.88em;margin-top:1px}.badge{font-size:.78em;color:'+implantSubColor+';margin-left:3px;white-space:nowrap}tbody tr{page-break-inside:avoid}'+
     '</style></head><body>'+
     header(branding,'Patient List — '+patients.length+' record'+(patients.length===1?'':'s')+(fromDate||toDate?' — '+(fromDate||'Start')+' to '+(toDate||'End'):''))+
     pageTables.join("")+footer(branding)+'</body></html>';
