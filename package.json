@@ -1,0 +1,10 @@
+{
+  "name": "ortho-logbook-workspace",
+  "private": true,
+  "version": "1.0.0",
+  "workspaces": [
+    "frontend"
+  ],
+  "main": "expo-router/entry",
+  "packageManager": "yarn@1.22.22"
+}
