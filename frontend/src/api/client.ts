@@ -905,8 +905,8 @@ export const api = {
         db.runSync("INSERT INTO inventory_categories (id,name,created_at) VALUES (?,?,?)", [categoryId, categoryName, nowIso()]);
       }
       db.runSync(
-        "UPDATE inventory SET name=?,category_id=?,category=?,size=?,quantity=?,unit=?,minimum_stock=? WHERE id=?",
-        [String(body?.name || item.name || categoryName).trim(), categoryId || null, categoryName, String(body?.size ?? item.size ?? "").trim(), next, String(body?.unit || item.unit || "pcs"), Math.max(0, Number(body?.minimumStock ?? item.minimum_stock) || 0), im[1]],
+        "UPDATE inventory SET name=?,category_id=?,category=?,size=?,quantity=?,unit=?,minimum_stock=?,added_date=?,bill_image=? WHERE id=?",
+        [String(body?.name || item.name || categoryName).trim(), categoryId || null, categoryName, String(body?.size ?? item.size ?? "").trim(), next, String(body?.unit || item.unit || "pcs"), Math.max(0, Number(body?.minimumStock ?? item.minimum_stock) || 0), String(body?.addedDate ?? item.added_date ?? "").trim(), String(body?.billImage ?? item.bill_image ?? ""), im[1]],
       );
       if (delta) movement(im[1], "adjust", delta, next, body?.note || "Manual adjustment", uid);
       return { ...body, id: im[1], quantity: next } as any;
