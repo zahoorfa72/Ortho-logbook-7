@@ -8,20 +8,26 @@
       "distribution": "internal",
       "environment": "preview",
       "env": {
-        "EAS_NO_FROZEN_LOCKFILE": "1"
+        "EAS_NO_FROZEN_LOCKFILE": "1",
+        "YARN_IGNORE_ENGINES": "1"
       },
       "android": {
         "buildType": "apk"
-      }
+      },
+      "node": "22.23.1",
+      "yarn": "1.22.22"
     },
     "production": {
       "environment": "production",
       "env": {
-        "EAS_NO_FROZEN_LOCKFILE": "1"
+        "EAS_NO_FROZEN_LOCKFILE": "1",
+        "YARN_IGNORE_ENGINES": "1"
       },
       "android": {
         "buildType": "apk"
-      }
+      },
+      "node": "22.23.1",
+      "yarn": "1.22.22"
     }
   }
 }
