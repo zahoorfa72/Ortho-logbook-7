@@ -206,7 +206,7 @@ export default function Inventory() {
     const name=newCategory.trim(); if(!name)return;
     try{
       const cat=await api.post<any>("/inventory-categories",{name});
-      updateAddRow(addRows[0].id,{categoryId:cat.id,category:cat.name});
+      setAddRows(rows=>rows.map(r=>r.id===pickerRowId?{...r,categoryId:cat.id,category:cat.name}:r));
       setNewCategory(""); setPicker(null); queryClient.invalidateQueries({queryKey:["inventory-categories"]});
     }catch(e:any){toast(e?.message||"Could not create category.","error");}
   };
