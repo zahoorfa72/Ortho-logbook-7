@@ -64,6 +64,7 @@ export type BrandingConfig = {
   pdfPatientFields?: string[];
   pdfMainHeadingField?: string;
   pdfSubHeadingField?: string;
+  pdfHeadingLevels?: { fields: string[]; label?: string }[];
   pdfImplantSubheadingColor?: string;
   // Full theme colors
   primary: string;
@@ -104,6 +105,12 @@ export const defaultBranding: BrandingConfig = {
   pdfPatientFields: ["date","mrNo","name","gender","age","diagnosis","procedure"],
   pdfMainHeadingField: "name",
   pdfSubHeadingField: "procedure",
+  pdfHeadingLevels: [
+    { fields: ["name"], label: "Main Heading" },
+    { fields: ["mrNo", "age"], label: "Sub-heading 1" },
+    { fields: ["diagnosis"], label: "Sub-heading 2" },
+    { fields: ["procedure"], label: "Sub-heading 3" },
+  ],
   pdfImplantSubheadingColor: "#8A9690",
   primary: light.brandPrimary,
   onPrimary: light.onBrandPrimary,
