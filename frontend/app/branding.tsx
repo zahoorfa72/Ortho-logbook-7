@@ -261,16 +261,40 @@ export default function BrandingScreen() {
             <Text style={styles.fieldToggleText}>{label}</Text>
           </Pressable>;
         })}
-        <Text style={[styles.label, { marginTop: spacing.md }]}>PDF heading hierarchy</Text>
-        <Text style={styles.hint}>Choose which selected patient field is the main heading and which is its sub-heading. Procedure automatically shows its implants underneath in a lighter colour.</Text>
-        <Text style={styles.colorLabel}>Main heading</Text>
-        <View style={styles.styleRow}>
-          {([["name","Patient Name"],["mrNo","MR No"],["date","Date"],["diagnosis","Diagnosis"],["procedure","Procedure"],["address","Address"]] as const).map(([key,label])=><Pressable key={"main-"+key} onPress={()=>setDraft(d=>({...d,pdfMainHeadingField:key}))} style={[styles.styleChip,{backgroundColor:draft.pdfMainHeadingField===key?colors.brandPrimary:colors.surfaceSecondary}]}><Text style={[styles.styleChipText,{color:draft.pdfMainHeadingField===key?colors.onBrandPrimary:colors.onSurface}]}>{label}</Text></Pressable>)}
-        </View>
-        <Text style={styles.colorLabel}>Sub-heading</Text>
-        <View style={styles.styleRow}>
-          {([["procedure","Procedure"],["diagnosis","Diagnosis"],["mrNo","MR No"],["date","Date"],["address","Address"],["age","Age"]] as const).map(([key,label])=><Pressable key={"sub-"+key} onPress={()=>setDraft(d=>({...d,pdfSubHeadingField:key}))} style={[styles.styleChip,{backgroundColor:draft.pdfSubHeadingField===key?colors.brandPrimary:colors.surfaceSecondary}]}><Text style={[styles.styleChipText,{color:draft.pdfSubHeadingField===key?colors.onBrandPrimary:colors.onSurface}]}>{label}</Text></Pressable>)}
-        </View>
+        <Text style={[styles.label, { marginTop: spacing.md }]}>PDF heading hierarchy — multiple levels</Text>
+        <Text style={styles.hint}>Set any number of patient fields at each heading level. Level 1 is the main heading; Levels 2–4 are independent sub-headings. A field can be removed from every level and remain a normal selected PDF column.</Text>
+        {[
+          {level:1,label:"Main Heading"},
+          {level:2,label:"Sub-heading 1"},
+          {level:3,label:"Sub-heading 2"},
+          {level:4,label:"Sub-heading 3"},
+        ].map(({level,label})=>{
+          const defaults = defaultBranding.pdfHeadingLevels || [];
+          const groups = Array.isArray(draft.pdfHeadingLevels) && draft.pdfHeadingLevels.length ? draft.pdfHeadingLevels : defaults;
+          const selected = groups[level-1]?.fields || [];
+          const allFields = [
+            ["date","Date"],["mrNo","MR No"],["name","Patient Name"],["gender","Gender"],["age","Age"],["address","Address"],["diagnosis","Diagnosis"],["procedure","Procedure"],["fileName","File Name"]
+          ] as const;
+          const toggleField = (key:string) => setDraft(d=>{
+            const base = Array.from({length:4},(_,i)=>({...(d.pdfHeadingLevels?.[i] || defaults[i] || {}), fields:[...((d.pdfHeadingLevels?.[i]?.fields || defaults[i]?.fields || []))]}));
+            for(let i=0;i<4;i++) if(i!==level-1) base[i].fields=base[i].fields.filter((x:string)=>x!==key);
+            base[level-1].fields=base[level-1].fields.includes(key) ? base[level-1].fields.filter((x:string)=>x!==key) : base[level-1].fields.concat(key);
+            base[level-1].label=label;
+            return {...d,pdfHeadingLevels:base};
+          });
+          return <View key={level} style={styles.subtitleLineCard}>
+            <Text style={styles.subtitleLineLabel}>{label}</Text>
+            <View style={styles.styleRow}>
+              {allFields.map(([key,textLabel])=>{
+                const active=selected.includes(key);
+                return <Pressable key={key} onPress={()=>toggleField(key)} style={[styles.styleChip,{backgroundColor:active?colors.brandPrimary:colors.surfaceSecondary}]}>
+                  <Text style={[styles.styleChipText,{color:active?colors.onBrandPrimary:colors.onSurface}]}>{textLabel}</Text>
+                </Pressable>;
+              })}
+            </View>
+          </View>;
+        })}
+        <Text style={styles.hint}>Procedure implants remain directly underneath the Procedure heading in the lighter implant colour. The existing single Main/Sub settings are kept as a legacy fallback for older saved branding.</Text>
         <Text style={styles.colorLabel}>Implant sub-heading colour</Text>
         <TextInput value={String(draft.pdfImplantSubheadingColor||"#8A9690")} onChangeText={v=>setDraft(d=>({...d,pdfImplantSubheadingColor:v}))} placeholder="#8A9690" placeholderTextColor={colors.muted} style={styles.input} />
         <Text style={[styles.label, { marginTop: spacing.md }]}>PDF design</Text>
