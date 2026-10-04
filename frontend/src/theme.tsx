@@ -66,6 +66,11 @@ export type BrandingConfig = {
   pdfSubHeadingField?: string;
   pdfHeadingLevels?: { fields: string[]; label?: string }[];
   pdfImplantSubheadingColor?: string;
+  pdfPatientsPerPage?: number;
+  pdfListTextSize?: "small" | "medium" | "large";
+  pdfListTextWeight?: "normal" | "bold";
+  pdfListTextTone?: "light" | "normal" | "dark";
+  pdfListRowSpacing?: "compact" | "normal" | "spacious";
   // Full theme colors
   primary: string;
   onPrimary: string;
@@ -111,6 +116,11 @@ export const defaultBranding: BrandingConfig = {
     { fields: ["implants"], label: "Sub-heading 2" },
   ],
   pdfImplantSubheadingColor: "#8A9690",
+  pdfPatientsPerPage: 20,
+  pdfListTextSize: "medium",
+  pdfListTextWeight: "normal",
+  pdfListTextTone: "normal",
+  pdfListRowSpacing: "compact",
   primary: light.brandPrimary,
   onPrimary: light.onBrandPrimary,
   secondary: light.brandSecondary,
