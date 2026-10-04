@@ -62,6 +62,9 @@ export type BrandingConfig = {
   pdfPageSize: "A4" | "Letter";
   pdfOrientation: "portrait" | "landscape";
   pdfPatientFields?: string[];
+  pdfMainHeadingField?: string;
+  pdfSubHeadingField?: string;
+  pdfImplantSubheadingColor?: string;
   // Full theme colors
   primary: string;
   onPrimary: string;
@@ -99,6 +102,9 @@ export const defaultBranding: BrandingConfig = {
   pdfPageSize: "A4",
   pdfOrientation: "portrait",
   pdfPatientFields: ["date","mrNo","name","gender","age","diagnosis","procedure"],
+  pdfMainHeadingField: "name",
+  pdfSubHeadingField: "procedure",
+  pdfImplantSubheadingColor: "#8A9690",
   primary: light.brandPrimary,
   onPrimary: light.onBrandPrimary,
   secondary: light.brandSecondary,
