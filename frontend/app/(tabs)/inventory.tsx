@@ -1,6 +1,8 @@
 import { formatInventoryLabel } from "@/src/utils/inventory-label";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useMemo, useState } from "react";
+import * as ImagePicker from "expo-image-picker";
+import * as FileSystem from "expo-file-system";
 import {
   ActivityIndicator,
   Alert,
@@ -40,6 +42,8 @@ type InventoryItem = {
   categoryId: string;
   category: string;
   size: string;
+  addedDate?: string;
+  billImage?: string;
 };
 
 export default function Inventory() {
@@ -58,11 +62,11 @@ export default function Inventory() {
   const [tab, setTab] = useState("All");
   const [addModal, setAddModal] = useState(false);
   const [editItem, setEditItem] = useState<InventoryItem | null>(null);
-  const [category, setCategory] = useState(selectedCategoryName);
-  const [size, setSize] = useState("");
-  const [qty, setQty] = useState("");
-  const [min, setMin] = useState("1");
-  const [unit, setUnit] = useState("pcs");
+  type AddRow = { id:string; categoryId:string; category:string; size:string; quantity:string; minimumStock:string; addedDate:string; billImage:string };
+  const blankRow = (): AddRow => ({id:Math.random().toString(36).slice(2),categoryId:selectedCategoryId,category:selectedCategoryName,size:"",quantity:"",minimumStock:"1",addedDate:new Date().toISOString().slice(0,10),billImage:""});
+  const [addRows, setAddRows] = useState<AddRow[]>([blankRow()]);
+  const [picker, setPicker] = useState<"category"|"size"|null>(null);
+  const [newCategory, setNewCategory] = useState("");
   const [search, setSearch] = useState("");
   const [inventorySort, setInventorySort] = useState<"name-asc" | "name-desc" | "size-asc" | "size-desc" | "qty-desc" | "qty-asc" | "low-first">("name-asc");
   const [historyItem, setHistoryItem] = useState<InventoryItem | null>(null);
@@ -80,17 +84,25 @@ export default function Inventory() {
     queryClient.invalidateQueries({ queryKey: ["inventory"] });
   };
 
+  const { data: categories = [] } = useQuery<any[]>({
+    queryKey:["inventory-categories"],
+    queryFn:()=>api.get<any[]>("/inventory-categories"),
+    enabled:isAdmin,
+  });
+  const allSizes = useMemo(()=>[...new Set((data||[]).map(x=>String(x.size||"").trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,undefined,{numeric:true,sensitivity:"base"})),[data]);
+
   const addStock = useMutation({
-    mutationFn: (body: { name: string; categoryId: string; category: string; size: string; quantity: number; minimumStock: number; unit: string }) =>
-      api.post("/inventory", body),
-    onSuccess: () => {
-      invalidate();
-      queryClient.invalidateQueries({ queryKey: ["inventory-categories"] });
-      toast("Stock added.", "success");
-      setAddModal(false);
-      setCategory(""); setSize(""); setQty(""); setMin("1"); setUnit("pcs");
+    mutationFn: (rows:AddRow[]) => api.post("/inventory-bulk-add", {items:rows.map(r=>({
+      categoryId:r.categoryId, category:r.category, size:r.size, quantity:Number(r.quantity)||0,
+      minimumStock:Number(r.minimumStock)||0, addedDate:r.addedDate, billImage:r.billImage
+    }))}),
+    onSuccess: (result:any) => {
+      invalidate(); queryClient.invalidateQueries({queryKey:["inventory-categories"]});
+      queryClient.invalidateQueries({queryKey:["inventory-details"]});
+      toast((result?.added||addRows.length)+" inventory item(s) saved.","success");
+      setAddModal(false); setAddRows([blankRow()]);
     },
-    onError: (e: any) => toast(e?.message || "Could not add stock.", "error"),
+    onError:(e:any)=>toast(e?.message||"Could not add inventory items.","error"),
   });
 
   const updateItem = useMutation({
@@ -171,13 +183,31 @@ export default function Inventory() {
   }, [data, tab, search, inventorySort]);
 
   const onSubmit = () => {
-    const q = parseInt(qty, 10);
-    if (isNaN(q) || q <= 0) {
-      toast("Enter quantity received above 0.", "error");
-      return;
+    for(const row of addRows){
+      if(!row.category.trim()) { toast("Select a category for every item.","error"); return; }
+      if(Number(row.quantity)<=0) { toast("Enter quantity above 0 for every item.","error"); return; }
+      if(!row.addedDate.match(/^\\d{4}-\\d{2}-\\d{2}$/)) { toast("Use YYYY-MM-DD for the date.","error"); return; }
     }
-    if (!selectedCategoryId && !category.trim()) { toast("Select an inventory category first.", "error"); return; }
-    addStock.mutate({ name: category.trim(), categoryId: selectedCategoryId, category: category.trim(), size: size.trim(), quantity: q, minimumStock: Math.max(0, parseInt(min, 10) || 0), unit: unit.trim() || "pcs" });
+    addStock.mutate(addRows);
+  };
+  const updateAddRow=(id:string,patch:Partial<AddRow>)=>setAddRows(rows=>rows.map(r=>r.id===id?{...r,...patch}:r));
+  const pickBill=async(id:string)=>{
+    const perm=await ImagePicker.requestMediaLibraryPermissionsAsync(); if(!perm.granted){toast("Photo permission is required for the bill image.","error");return;}
+    const result=await ImagePicker.launchImageLibraryAsync({mediaTypes:["images"],allowsEditing:true,quality:0.55,base64:true});
+    if(result.canceled) return;
+    const asset=result.assets[0]; let b64=asset?.base64;
+    if(!b64 && asset?.uri){try{b64=await FileSystem.readAsStringAsync(asset.uri,{encoding:FileSystem.EncodingType.Base64});}catch{}}
+    if(!b64){toast("Could not read bill image.","error");return;}
+    if(b64.length>2_000_000){toast("Bill image is too large. Choose a smaller image.","error");return;}
+    updateAddRow(id,{billImage:"data:"+(asset?.mimeType||"image/jpeg")+";base64,"+b64});
+  };
+  const createCategory=async()=>{
+    const name=newCategory.trim(); if(!name)return;
+    try{
+      const cat=await api.post<any>("/inventory-categories",{name});
+      updateAddRow(addRows[0].id,{categoryId:cat.id,category:cat.name});
+      setNewCategory(""); setPicker(null); queryClient.invalidateQueries({queryKey:["inventory-categories"]});
+    }catch(e:any){toast(e?.message||"Could not create category.","error");}
   };
 
   const changeQty = (item: InventoryItem, delta: number) => {
@@ -413,25 +443,33 @@ export default function Inventory() {
         />
       )}
 
-      {/* Add stock modal */}
-      <Modal visible={addModal} transparent animationType="slide" onRequestClose={() => setAddModal(false)}>
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalCard, { paddingBottom: insets.bottom + spacing.lg }]}>
-            <View style={styles.modalHandle} />
-            <Text style={styles.modalTitle}>Add Stock</Text>
-            <KeyboardAwareScrollView bottomOffset={40} keyboardShouldPersistTaps="handled">
-              <Field label="Category" testID="stock-category-input" value={category} onChangeText={setCategory} placeholder="Select a category" autoCapitalize="words" editable={!selectedCategoryId} />
-              <Field label="Size / Length" testID="stock-size-input" value={size} onChangeText={setSize} placeholder="e.g. 280mm" />
-              <Field label="Quantity Received" testID="stock-qty-input" value={qty} onChangeText={setQty} placeholder="e.g. 20" keyboardType="number-pad" />
-              <Field label="Unit" testID="stock-unit-input" value={unit} onChangeText={setUnit} placeholder="pcs" />
-              <Field label="Minimum Stock Alert" testID="stock-min-input" value={min} onChangeText={setMin} placeholder="1" keyboardType="number-pad" />
-              <PrimaryButton title="Save Stock" testID="stock-save-button" onPress={onSubmit} loading={addStock.isPending} />
-              <Pressable style={styles.cancel} onPress={() => setAddModal(false)} testID="stock-cancel-button">
-                <Text style={styles.cancelText}>Cancel</Text>
-              </Pressable>
-            </KeyboardAwareScrollView>
-          </View>
-        </View>
+      {/* Add inventory modal */}
+      <Modal visible={addModal} transparent animationType="slide" onRequestClose={()=>setAddModal(false)}>
+        <View style={styles.modalOverlay}><View style={[styles.modalCard,{paddingBottom:insets.bottom+spacing.lg}]}>
+          <View style={styles.modalHandle}/><Text style={styles.modalTitle}>Add Inventory</Text>
+          <Text style={styles.modalHint}>Add multiple items together. Only category, size, minimum stock, quantity, date and bill image are required.</Text>
+          <KeyboardAwareScrollView bottomOffset={40} keyboardShouldPersistTaps="handled">
+            {addRows.map((row,index)=><View key={row.id} style={styles.addRowCard}>
+              <View style={styles.addRowHeader}><Text style={styles.addRowTitle}>Item {index+1}</Text>{addRows.length>1?<Pressable onPress={()=>setAddRows(x=>x.filter(r=>r.id!==row.id))}><Ionicons name="trash-outline" size={19} color={colors.error}/></Pressable>:null}</View>
+              <Pressable style={styles.dropdown} onPress={()=>setPicker("category")}><Text style={row.category?styles.dropdownText:styles.dropdownPlaceholder}>{row.category||"Select saved category or create new"}</Text><Ionicons name="chevron-down" size={18} color={colors.muted}/></Pressable>
+              <Pressable style={styles.dropdown} onPress={()=>setPicker("size")}><Text style={row.size?styles.dropdownText:styles.dropdownPlaceholder}>{row.size||"Select saved size or enter new"}</Text><Ionicons name="chevron-down" size={18} color={colors.muted}/></Pressable>
+              {!row.size?<TextInput value={row.size} onChangeText={v=>updateAddRow(row.id,{size:v})} placeholder="New size" placeholderTextColor={colors.muted} style={styles.input}/>:null}
+              <View style={styles.twoCol}><TextInput value={row.quantity} onChangeText={v=>updateAddRow(row.id,{quantity:v.replace(/[^0-9.]/g,"")})} placeholder="Quantity" keyboardType="number-pad" placeholderTextColor={colors.muted} style={[styles.input,{flex:1}]}/><TextInput value={row.minimumStock} onChangeText={v=>updateAddRow(row.id,{minimumStock:v.replace(/[^0-9.]/g,"")})} placeholder="Minimum stock" keyboardType="number-pad" placeholderTextColor={colors.muted} style={[styles.input,{flex:1}]}/></View>
+              <TextInput value={row.addedDate} onChangeText={v=>updateAddRow(row.id,{addedDate:v})} placeholder="YYYY-MM-DD" placeholderTextColor={colors.muted} style={styles.input}/>
+              <Pressable style={styles.billButton} onPress={()=>pickBill(row.id)}><Ionicons name={row.billImage?"checkmark-circle":"image-outline"} size={19} color={colors.brandPrimary}/><Text style={styles.billText}>{row.billImage?"Bill image selected":"Add bill image"}</Text></Pressable>
+            </View>)}
+            <Pressable style={styles.addAnother} onPress={()=>setAddRows(x=>[...x,blankRow()])}><Ionicons name="add-circle-outline" size={20} color={colors.brandPrimary}/><Text style={styles.addAnotherText}>Add another item</Text></Pressable>
+            <PrimaryButton title="Save All Items" testID="stock-save-button" onPress={onSubmit} loading={addStock.isPending}/>
+            <Pressable style={styles.cancel} onPress={()=>setAddModal(false)}><Text style={styles.cancelText}>Cancel</Text></Pressable>
+          </KeyboardAwareScrollView>
+        </View></View>
+      </Modal>
+
+      <Modal visible={picker!==null} transparent animationType="fade" onRequestClose={()=>setPicker(null)}>
+        <View style={styles.modalOverlay}><View style={styles.pickerCard}>
+          <View style={styles.addRowHeader}><Text style={styles.modalTitle}>{picker==="category"?"Select Category":"Select Size"}</Text><Pressable onPress={()=>setPicker(null)}><Ionicons name="close" size={22} color={colors.onSurface}/></Pressable></View>
+          {picker==="category"?<><TextInput value={newCategory} onChangeText={setNewCategory} placeholder="New category" placeholderTextColor={colors.muted} style={styles.input}/>{categories.map((cat:any)=><Pressable key={cat.id} style={styles.pickerItem} onPress={()=>{setAddRows(rows=>rows.map((r,i)=>i===0?{...r,categoryId:cat.id,category:cat.name}:r));setPicker(null);}}><Text style={styles.dropdownText}>{cat.name}</Text></Pressable>)}<Pressable style={styles.addAnother} onPress={createCategory}><Text style={styles.addAnotherText}>+ Create new category</Text></Pressable></>:<><TextInput placeholder="Type new size" placeholderTextColor={colors.muted} style={styles.input} onChangeText={v=>setAddRows(rows=>rows.map((r,i)=>i===0?{...r,size:v}:r))}/>{allSizes.map(s=><Pressable key={s} style={styles.pickerItem} onPress={()=>{setAddRows(rows=>rows.map((r,i)=>i===0?{...r,size:s}:r));setPicker(null);}}><Text style={styles.dropdownText}>{s}</Text></Pressable>)}</>}
+        </View></View>
       </Modal>
 
       {/* Edit modal */}
