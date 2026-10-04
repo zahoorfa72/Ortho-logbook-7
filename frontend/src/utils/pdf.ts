@@ -198,7 +198,7 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
   for(const p of patients){ const key=keyOf(p); const list=groups.get(key)||[]; list.push(p); groups.set(key,list); }
   const counts = new Map<string,number>();
   for(const list of groups.values()){ const sorted=[...list].sort((a,b)=>String(a.date||"").localeCompare(String(b.date||""))||String(a.id||"").localeCompare(String(b.id||""))); sorted.forEach((p,i)=>counts.set(p.id,i+1)); }
-  const pageTables:string[]=[]; const pageSize=16;
+  const pageTables:string[]=[]; const pageSize=Math.max(1, Math.min(200, Number(branding.pdfPatientsPerPage || 20)));
   for(let start=0; start<patients.length || (patients.length===0&&start===0); start+=pageSize){
     const page=patients.slice(start,start+pageSize);
     let rows="";
@@ -219,9 +219,12 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
     const heads=fields.map(k=>"<th>"+escapeHtml(labels[k]||k)+"</th>").join("");
     pageTables.push('<section class="listPage"><table><thead><tr><th class="indexHead">#</th>'+heads+'</tr></thead><tbody>'+rows+'</tbody></table></section>');
   }
-  const fontSize=fields.length>7?'7.5px':fields.length>5?'8px':'9px';
+  const textSize = branding.pdfListTextSize==="small" ? 7.2 : branding.pdfListTextSize==="large" ? 9.4 : 8.2;
+  const textWeight = branding.pdfListTextWeight==="bold" ? 700 : 400;
+  const textTone = branding.pdfListTextTone==="light" ? "#7C7872" : branding.pdfListTextTone==="dark" ? "#1C1C1E" : "#3A3A3C";
+  const rowPadding = branding.pdfListRowSpacing==="spacious" ? "4.5px 4px" : branding.pdfListRowSpacing==="normal" ? "3.5px 3.5px" : "2.5px 3.5px";
   return '<html><head><meta charset="utf-8"/>'+styles(branding)+'<style>'+
-    'table{font-size:'+fontSize+';table-layout:auto;width:100%;border-collapse:collapse}.listPage{page-break-after:always}.listPage:last-child{page-break-after:auto}th,td{padding:2.5px 3.5px;line-height:1.15;vertical-align:middle}.indexHead,.indexCell{width:22px;text-align:center}.headingText{display:block}.headingLevel1{font-size:1.08em;font-weight:800;color:'+branding.primary+'}.headingLevel2{font-weight:750;color:'+branding.text+'}.headingLevel3{font-weight:700;color:'+branding.text+'}.headingLevel4{font-weight:650;color:#59625E}.implantSubheading{display:block;color:'+implantSubColor+';font-size:.88em;margin-top:1px}.badge{font-size:.78em;color:'+implantSubColor+';margin-left:3px;white-space:nowrap}tbody tr{page-break-inside:avoid}'+
+    'table{font-size:'+textSize+'px;table-layout:auto;width:100%;border-collapse:collapse}.listPage{page-break-after:always}.listPage:last-child{page-break-after:auto}th,td{padding:'+rowPadding+';line-height:1.15;vertical-align:middle}td{color:'+textTone+';font-weight:'+textWeight+'}.indexHead,.indexCell{width:22px;text-align:center}.headingText{display:block}.headingLevel1{font-size:1.08em;font-weight:800;color:'+branding.primary+'}.headingLevel2{font-weight:750;color:'+branding.text+'}.headingLevel3{font-weight:700;color:'+branding.text+'}.headingLevel4{font-weight:650;color:#59625E}.implantSubheading{display:block;color:'+implantSubColor+';font-size:.88em;margin-top:1px}.badge{font-size:.78em;color:'+implantSubColor+';margin-left:3px;white-space:nowrap}tbody tr{page-break-inside:avoid}'+
     '</style></head><body>'+
     header(branding,'Patient List — '+patients.length+' record'+(patients.length===1?'':'s')+(fromDate||toDate?' — '+(fromDate||'Start')+' to '+(toDate||'End'):''))+
     pageTables.join("")+footer(branding)+'</body></html>';
