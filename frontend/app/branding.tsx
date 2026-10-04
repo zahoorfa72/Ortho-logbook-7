@@ -261,6 +261,18 @@ export default function BrandingScreen() {
             <Text style={styles.fieldToggleText}>{label}</Text>
           </Pressable>;
         })}
+        <Text style={[styles.label, { marginTop: spacing.md }]}>PDF heading hierarchy</Text>
+        <Text style={styles.hint}>Choose which selected patient field is the main heading and which is its sub-heading. Procedure automatically shows its implants underneath in a lighter colour.</Text>
+        <Text style={styles.colorLabel}>Main heading</Text>
+        <View style={styles.styleRow}>
+          {([["name","Patient Name"],["mrNo","MR No"],["date","Date"],["diagnosis","Diagnosis"],["procedure","Procedure"],["address","Address"]] as const).map(([key,label])=><Pressable key={"main-"+key} onPress={()=>setDraft(d=>({...d,pdfMainHeadingField:key}))} style={[styles.styleChip,{backgroundColor:draft.pdfMainHeadingField===key?colors.brandPrimary:colors.surfaceSecondary}]}><Text style={[styles.styleChipText,{color:draft.pdfMainHeadingField===key?colors.onBrandPrimary:colors.onSurface}]}>{label}</Text></Pressable>)}
+        </View>
+        <Text style={styles.colorLabel}>Sub-heading</Text>
+        <View style={styles.styleRow}>
+          {([["procedure","Procedure"],["diagnosis","Diagnosis"],["mrNo","MR No"],["date","Date"],["address","Address"],["age","Age"]] as const).map(([key,label])=><Pressable key={"sub-"+key} onPress={()=>setDraft(d=>({...d,pdfSubHeadingField:key}))} style={[styles.styleChip,{backgroundColor:draft.pdfSubHeadingField===key?colors.brandPrimary:colors.surfaceSecondary}]}><Text style={[styles.styleChipText,{color:draft.pdfSubHeadingField===key?colors.onBrandPrimary:colors.onSurface}]}>{label}</Text></Pressable>)}
+        </View>
+        <Text style={styles.colorLabel}>Implant sub-heading colour</Text>
+        <TextInput value={String(draft.pdfImplantSubheadingColor||"#8A9690")} onChangeText={v=>setDraft(d=>({...d,pdfImplantSubheadingColor:v}))} placeholder="#8A9690" placeholderTextColor={colors.muted} style={styles.input} />
         <Text style={[styles.label, { marginTop: spacing.md }]}>PDF design</Text>
         <Text style={styles.hint}>These settings change the existing PDF design; they do not create a second PDF setup.</Text>
         <View style={styles.styleRow}>
