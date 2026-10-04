@@ -67,6 +67,7 @@
     "experiments": {
       "typedRoutes": true
     },
-    "description": "Offline-first orthopaedic patient logbook with local records, inventory, statistics and encrypted backup."
+    "description": "Offline-first orthopaedic patient logbook with local records, inventory, statistics and encrypted backup.",
+    "owner": "zahoorfa72s-team"
   }
 }
