@@ -89,6 +89,14 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
       type TEXT NOT NULL, amount REAL NOT NULL, quantity_after REAL NOT NULL,
       note TEXT, created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS inventory_purchase_receipts (
+      id TEXT PRIMARY KEY NOT NULL, inventory_id TEXT NOT NULL, category_id TEXT,
+      category TEXT, size TEXT, quantity REAL NOT NULL DEFAULT 0, unit TEXT NOT NULL DEFAULT 'pcs',
+      minimum_stock REAL NOT NULL DEFAULT 0, added_date TEXT, bill_image TEXT,
+      created_at TEXT NOT NULL, created_by TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_inventory_purchase_receipts_item ON inventory_purchase_receipts(inventory_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_inventory_purchase_receipts_date ON inventory_purchase_receipts(added_date);
     CREATE TABLE IF NOT EXISTS app_meta (
       key TEXT PRIMARY KEY NOT NULL, value TEXT
     );
