@@ -762,29 +762,21 @@ export const api = {
 
     if (normalizedPath === "/inventory-purchase-receipts") {
       await requireAdmin();
-      // Keep every receipt as its own transaction. Also keep legacy inventory
-      // rows visible when they pre-date the receipt-history table, so upgrading
-      // the app never makes an older Received Stock entry disappear.
+      // Received Stock contains only the new transaction records. Do not
+      // synthesize entries from the older aggregate inventory table.
       const receiptRows = db.getAllSync<any>(
-        "SELECT r.*, i.name FROM inventory_purchase_receipts r LEFT JOIN inventory i ON i.id=r.inventory_id ORDER BY r.added_date DESC, r.created_at DESC",
+        "SELECT r.*, i.name FROM inventory_purchase_receipts r LEFT JOIN inventory i ON i.id=r.inventory_id ORDER BY r.created_at DESC",
       );
-      const legacyRows = db.getAllSync<any>(
-        "SELECT i.* FROM inventory i WHERE NOT EXISTS (SELECT 1 FROM inventory_purchase_receipts r WHERE r.inventory_id=i.id) ORDER BY i.added_date DESC, i.id DESC",
-      );
-      const receipts = receiptRows.map((r:any)=>({
-        ...r, legacy:false, quantity:Number(r.quantity||0), minimumStock:Number(r.minimum_stock||0),
-        addedDate:r.added_date||"", billImage:r.bill_image||"", category:r.category||"", size:r.size||"",
-      }));
-      const legacy = legacyRows.map((r:any)=>({
-        id:"legacy-"+String(r.id), inventory_id:r.id, category_id:r.category_id||"",
-        category:r.category||r.name||"", name:r.name||"", size:r.size||"", quantity:Number(r.quantity||0),
-        unit:r.unit||"pcs", minimumStock:Number(r.minimum_stock||0), addedDate:r.added_date||"",
-        billImage:r.bill_image||"", created_at:r.added_date||"", created_by:"", legacy:true,
-      }));
-      return [...receipts, ...legacy].sort((a:any,b:any)=>
-        String(b.addedDate||b.created_at||"").localeCompare(String(a.addedDate||a.created_at||"")) ||
-        String(b.created_at||"").localeCompare(String(a.created_at||""))
-      ) as any;
+      return receiptRows.map((r:any)=>({
+        ...r,
+        legacy:false,
+        quantity:Number(r.quantity||0),
+        minimumStock:Number(r.minimum_stock||0),
+        addedDate:r.added_date||"",
+        billImage:r.bill_image||"",
+        category:r.category||"",
+        size:r.size||"",
+      })) as any;
     }
 
     if (normalizedPath === "/procedures") {
