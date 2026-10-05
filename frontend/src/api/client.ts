@@ -466,6 +466,26 @@ export const api = {
         name:r.name||"",category:r.category||"",size:r.size||"",unit:r.unit||"pcs",userName:r.user_name||"Unknown"
       })) as any;
     }
+    if (normalizedPath === "/stock-receipts") {
+      await requireAdmin();
+      // Received Stock contains only the new transaction records. Do not
+      // synthesize entries from the older aggregate inventory table.
+      const receiptRows = db.getAllSync<any>(
+        "SELECT r.*, i.name FROM stock_receipts r LEFT JOIN inventory i ON i.id=r.inventory_id ORDER BY r.created_at DESC",
+      );
+      return receiptRows.map((r:any)=>({
+        ...r,
+        legacy:false,
+        quantity:Number(r.quantity||0),
+        minimumStock:Number(r.minimum_stock||0),
+        description:r.description||"",
+        addedDate:r.added_date||"",
+        billImage:r.bill_image||"",
+        category:r.category||"",
+        size:r.size||"",
+      })) as any;
+    }
+
     if (normalizedPath.startsWith("/inventory-patients/")) {
       const iid = normalizedPath.split("/").pop() || "";
       return db.getAllSync<any>(
@@ -707,26 +727,6 @@ export const api = {
     if (normalizedPath === "/inventory") {
       await requireAdmin();
       throw new Error("Direct stock entry is disabled. Use Receive Stock.");
-    }
-
-    if (normalizedPath === "/stock-receipts") {
-      await requireAdmin();
-      // Received Stock contains only the new transaction records. Do not
-      // synthesize entries from the older aggregate inventory table.
-      const receiptRows = db.getAllSync<any>(
-        "SELECT r.*, i.name FROM stock_receipts r LEFT JOIN inventory i ON i.id=r.inventory_id ORDER BY r.created_at DESC",
-      );
-      return receiptRows.map((r:any)=>({
-        ...r,
-        legacy:false,
-        quantity:Number(r.quantity||0),
-        minimumStock:Number(r.minimum_stock||0),
-        description:r.description||"",
-        addedDate:r.added_date||"",
-        billImage:r.bill_image||"",
-        category:r.category||"",
-        size:r.size||"",
-      })) as any;
     }
 
     if (normalizedPath === "/procedures") {
