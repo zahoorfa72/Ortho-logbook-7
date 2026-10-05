@@ -34,6 +34,20 @@ export default function ImplantsScreen(){
     queryFn:()=>api.get("/inventory-purchase-receipts"),
   });
   const stockSizes=useMemo(()=>[...new Set((stockInventory as any[]).map(x=>String(x.size||"").trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,undefined,{numeric:true,sensitivity:"base"})),[stockInventory]);
+  // Received Stock is grouped ONLY by the unique Receive Stock save batch.
+  // Never group by date/category/size: three saves on the same date remain three entries.
+  const stockBatches=useMemo(()=>{
+    const groups=new Map<string,{batchId:string;createdAt:string;addedDate:string;items:any[]}>();
+    for(const r of (Array.isArray(stockReceipts)?stockReceipts:[])){
+      const batchId=String(r.batch_id||r.id);
+      const key=batchId;
+      let g=groups.get(key);
+      if(!g){g={batchId,createdAt:String(r.created_at||""),addedDate:String(r.added_date||r.addedDate||""),items:[]};groups.set(key,g);}
+      g.items.push(r);
+      if(String(r.created_at||"")<g.createdAt)g.createdAt=String(r.created_at||"");
+    }
+    return [...groups.values()].sort((a,b)=>String(b.createdAt).localeCompare(String(a.createdAt)));
+  },[stockReceipts]);
   const blankStock=()=>({id:Math.random().toString(36).slice(2),categoryId:"",category:"",size:"",quantity:"",minimumStock:"1",addedDate:new Date().toISOString().slice(0,10),billImage:""});
   const updateStockRow=(id:string,patch:Partial<StockRow>)=>setStockRows(rows=>rows.map(x=>x.id===id?{...x,...patch}:x));
   const pickStockBill=async(id:string)=>{const p=await ImagePicker.requestMediaLibraryPermissionsAsync();if(!p.granted){toast("Photo permission is required for the bill image.","error");return;}const x=await ImagePicker.launchImageLibraryAsync({mediaTypes:["images"],allowsEditing:true,quality:.55,base64:true});if(x.canceled)return;const a=x.assets[0];if(!a?.base64){toast("Could not read bill image.","error");return;}if(a.base64.length>2000000){toast("Bill image is too large. Choose a smaller image.","error");return;}updateStockRow(id,{billImage:"data:"+(a.mimeType||"image/jpeg")+";base64,"+a.base64});};
@@ -80,23 +94,21 @@ export default function ImplantsScreen(){
     {isLoading?<View style={styles.center}><ActivityIndicator size="large" color={colors.brandPrimary}/></View>:<FlatList data={list} keyExtractor={x=>x.id}
       ListHeaderComponent={<View style={{marginBottom:spacing.md}}>
         <View style={{flexDirection:"row",alignItems:"center",justifyContent:"space-between",marginBottom:spacing.sm}}>
-          <View style={{flex:1}}><Text style={styles.sectionTitle}>Received Stock</Text><Text style={styles.stockHint}>Every Receive Stock save is kept as a separate transaction; Inventory quantity may still be combined.</Text></View>
+          <View style={{flex:1}}><Text style={styles.sectionTitle}>Received Stock</Text><Text style={styles.stockHint}>Every Receive Stock save is one separate transaction. Items are grouped only within that save; Inventory quantity may still be combined.</Text></View>
           <Text style={styles.stockCount}>{stockReceipts.length}</Text>
         </View>
-        {stockReceipts.length ? stockReceipts.slice(0,50).map((s:any)=><View key={String(s.id)} style={styles.receivedCard}>
+        {stockBatches.length ? stockBatches.slice(0,50).map((batch)=><View key={batch.batchId} style={styles.receivedCard}>
           <View style={{flex:1}}>
-            <Text style={styles.meta}>Date/time</Text>
-            <Text style={styles.receivedTitle}>{(() => { const raw=String(s.created_at||""); const d=raw ? new Date(raw) : null; return d && !Number.isNaN(d.getTime()) ? d.toLocaleString([], {year:"numeric",month:"short",day:"numeric",hour:"2-digit",minute:"2-digit",hour12:false}) : (s.addedDate||"—"); })()}</Text>
-            <Text style={styles.meta}>Category</Text>
-            <Text style={styles.receivedTitle}>{s.category||s.name||"Inventory item"}</Text>
-            <Text style={styles.meta}>Size</Text>
-            <Text style={styles.receivedTitle}>{s.size||"—"}</Text>
-            <Text style={styles.meta}>Received</Text>
-            <Text style={styles.receivedTitle}>{Number(s.quantity)||0} {s.unit||"pcs"}</Text>
-          </View>
-          <View style={{flexDirection:"row",alignItems:"center",gap:spacing.sm}}>
-            <Pressable onPress={()=>editReceipt(s)} hitSlop={8}><Ionicons name="create-outline" size={20} color={colors.brandPrimary}/></Pressable>
-            <Pressable onPress={()=>deleteReceipt(s)} hitSlop={8}><Ionicons name="trash-outline" size={20} color={colors.error}/></Pressable>
+            <Text style={styles.meta}>Receive Stock transaction</Text>
+            <Text style={styles.receivedTitle}>{(() => { const raw=String(batch.createdAt||""); const d=raw ? new Date(raw) : null; return d && !Number.isNaN(d.getTime()) ? d.toLocaleString([], {year:"numeric",month:"short",day:"numeric",hour:"2-digit",minute:"2-digit",hour12:false}) : (batch.addedDate||"—"); })()}</Text>
+            {batch.items.map((s:any)=><View key={String(s.id)} style={{marginTop:spacing.sm,paddingTop:spacing.sm,borderTopWidth:1,borderTopColor:colors.border}}>
+              <Text style={styles.receivedTitle}>{s.category||s.name||"Inventory item"}{s.size?" · "+s.size:""}</Text>
+              <Text style={styles.meta}>Received {Number(s.quantity)||0} {s.unit||"pcs"}</Text>
+              <View style={{flexDirection:"row",gap:spacing.md,marginTop:spacing.xs}}>
+                <Pressable onPress={()=>editReceipt(s)} hitSlop={8}><Ionicons name="create-outline" size={20} color={colors.brandPrimary}/></Pressable>
+                <Pressable onPress={()=>deleteReceipt(s)} hitSlop={8}><Ionicons name="trash-outline" size={20} color={colors.error}/></Pressable>
+              </View>
+            </View>)}
           </View>
         </View>):<View style={styles.receivedEmpty}><Text style={styles.meta}>No received stock yet.</Text></View>}
       </View>}
