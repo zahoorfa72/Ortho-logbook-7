@@ -173,9 +173,9 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
 }
 
 const INVENTORY_RESET_MARKER = "hold-inventory-reset-available-v5";
-const RECEIPT_HISTORY_RESET_MARKER = "received-stock-history-reset-v5";
-const IMPLANT_PORTAL_CLEANUP_MARKER = "implant-portal-cleanup-v3";
-const LEGACY_RECEIPT_CLEANUP_MARKER = "legacy-receipt-cleanup-v1";
+const RECEIPT_HISTORY_RESET_MARKER = "received-stock-history-reset-v6";
+const IMPLANT_PORTAL_CLEANUP_MARKER = "implant-portal-cleanup-v4";
+const LEGACY_RECEIPT_CLEANUP_MARKER = "legacy-receipt-cleanup-v2";
 
 export function markInventoryResetDone() {
   db.runSync("INSERT OR REPLACE INTO app_meta (key,value) VALUES (?,?)", [INVENTORY_RESET_MARKER, "done"]);
