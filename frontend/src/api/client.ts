@@ -212,6 +212,10 @@ function deleteInventoryRows(ids: string[]) {
       cleanIds,
     );
     db.runSync(
+      `DELETE FROM inventory_purchase_receipts WHERE inventory_id IN (${placeholders})`,
+      cleanIds,
+    );
+    db.runSync(
       `DELETE FROM inventory WHERE id IN (${placeholders})`,
       cleanIds,
     );
