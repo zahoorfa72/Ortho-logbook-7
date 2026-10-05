@@ -97,7 +97,6 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
     );
     CREATE INDEX IF NOT EXISTS idx_inventory_purchase_receipts_item ON inventory_purchase_receipts(inventory_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_inventory_purchase_receipts_date ON inventory_purchase_receipts(added_date);
-    CREATE INDEX IF NOT EXISTS idx_inventory_purchase_receipts_batch ON inventory_purchase_receipts(batch_id, created_at);
     CREATE TABLE IF NOT EXISTS app_meta (
       key TEXT PRIMARY KEY NOT NULL, value TEXT
     );
@@ -136,6 +135,9 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
   addColumn("users", "disabled", "INTEGER NOT NULL DEFAULT 0");
   addColumn("inventory", "category_id", "TEXT");
   addColumn("inventory_purchase_receipts", "batch_id", "TEXT");
+  // IMPORTANT: older local databases do not have batch_id. Add the column
+  // before creating any index that references it.
+  db.execSync(`CREATE INDEX IF NOT EXISTS idx_inventory_purchase_receipts_batch ON inventory_purchase_receipts(batch_id, created_at)`);
   addColumn("inventory", "category", "TEXT");
   addColumn("inventory", "size", "TEXT");
   migrateInventorySchema();
