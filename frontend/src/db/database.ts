@@ -143,10 +143,19 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
   // categories are persistent local data and must never be seeded, cleaned,
   // or deleted during an app update.
   ensureInventoryCategoryLinks();
+  // One-time migration for the Receive Stock history UI. Old aggregate/legacy
+  // receiving data is removed from the receipt-history table only; inventory
+  // quantities themselves are never changed.
+  const receiptHistoryReset=db.getFirstSync<any>("SELECT value FROM app_meta WHERE key=? LIMIT 1",[RECEIPT_HISTORY_RESET_MARKER]);
+  if(!receiptHistoryReset){
+    db.runSync("DELETE FROM inventory_purchase_receipts");
+    db.runSync("INSERT OR REPLACE INTO app_meta (key,value) VALUES (?,?)",[RECEIPT_HISTORY_RESET_MARKER,"done"]);
+  }
   if (!options?.skipInventoryReset) applyHoldInventoryResetOnce();
 }
 
 const INVENTORY_RESET_MARKER = "hold-inventory-reset-available-v5";
+const RECEIPT_HISTORY_RESET_MARKER = "received-stock-history-reset-v1";
 
 export function markInventoryResetDone() {
   db.runSync("INSERT OR REPLACE INTO app_meta (key,value) VALUES (?,?)", [INVENTORY_RESET_MARKER, "done"]);
