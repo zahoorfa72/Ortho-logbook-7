@@ -93,7 +93,7 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
       id TEXT PRIMARY KEY NOT NULL, inventory_id TEXT NOT NULL, batch_id TEXT,
       category_id TEXT, category TEXT, size TEXT, quantity REAL NOT NULL DEFAULT 0, unit TEXT NOT NULL DEFAULT 'pcs',
       minimum_stock REAL NOT NULL DEFAULT 0, added_date TEXT, bill_image TEXT,
-      created_at TEXT NOT NULL, created_by TEXT
+       description TEXT, created_at TEXT NOT NULL, created_by TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_inventory_purchase_receipts_item ON inventory_purchase_receipts(inventory_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_inventory_purchase_receipts_date ON inventory_purchase_receipts(added_date);
@@ -135,6 +135,7 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
   addColumn("users", "disabled", "INTEGER NOT NULL DEFAULT 0");
   addColumn("inventory", "category_id", "TEXT");
   addColumn("inventory_purchase_receipts", "batch_id", "TEXT");
+  addColumn("inventory_purchase_receipts", "description", "TEXT");
   // IMPORTANT: older local databases do not have batch_id. Add the column
   // before creating any index that references it.
   db.execSync(`CREATE INDEX IF NOT EXISTS idx_inventory_purchase_receipts_batch ON inventory_purchase_receipts(batch_id, created_at)`);
@@ -155,6 +156,11 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
     db.runSync("DELETE FROM inventory_purchase_receipts");
     db.runSync("INSERT OR REPLACE INTO app_meta (key,value) VALUES (?,?)",[RECEIPT_HISTORY_RESET_MARKER,"done"]);
   }
+  const legacyReceiptCleanup=db.getFirstSync<any>("SELECT value FROM app_meta WHERE key=? LIMIT 1",[LEGACY_RECEIPT_CLEANUP_MARKER]);
+  if(!legacyReceiptCleanup){
+    db.runSync("DELETE FROM inventory_purchase_receipts WHERE batch_id IS NULL OR TRIM(batch_id)=''");
+    db.runSync("INSERT OR REPLACE INTO app_meta (key,value) VALUES (?,?)",[LEGACY_RECEIPT_CLEANUP_MARKER,"done"]);
+  }
   // Receive Stock is now the authoritative stock-entry workflow. Remove old
   // detailed Implant Portal records once so they cannot remain as duplicate
   // stock data after upgrading to the transaction-based inventory model.
@@ -168,7 +174,8 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
 
 const INVENTORY_RESET_MARKER = "hold-inventory-reset-available-v5";
 const RECEIPT_HISTORY_RESET_MARKER = "received-stock-history-reset-v5";
-const IMPLANT_PORTAL_CLEANUP_MARKER = "implant-portal-cleanup-v2";
+const IMPLANT_PORTAL_CLEANUP_MARKER = "implant-portal-cleanup-v3";
+const LEGACY_RECEIPT_CLEANUP_MARKER = "legacy-receipt-cleanup-v1";
 
 export function markInventoryResetDone() {
   db.runSync("INSERT OR REPLACE INTO app_meta (key,value) VALUES (?,?)", [INVENTORY_RESET_MARKER, "done"]);
