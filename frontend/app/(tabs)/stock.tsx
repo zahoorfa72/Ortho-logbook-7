@@ -48,7 +48,7 @@ export default function StockScreen(){
   });
   const {data:stockReceipts=[],isLoading,isRefetching,refetch}=useQuery<any[]>({
     queryKey:["inventory-purchase-receipts"],
-    queryFn:()=>api.get("/inventory-purchase-receipts"),
+    queryFn:()=>api.get("/stock-receipts"),
   });
 
   const stockBatches=useMemo(()=>{
@@ -71,7 +71,7 @@ export default function StockScreen(){
     mutationFn:()=>{
       if(editingReceipt){
         const row=stockRows[0];
-        return api.put("/inventory-purchase-receipts/"+encodeURIComponent(String(editingReceipt.id)),{
+        return api.put("/stock-receipts/"+encodeURIComponent(String(editingReceipt.id)),{
           categoryId:row?.categoryId,category:row?.category,size:row?.size,
           quantity:Number(row?.quantity)||0,minimumStock:Number(row?.minimumStock)||0,
           addedDate:stockDate,billImage:row?.billImage||"",description:description.trim(),
@@ -124,7 +124,7 @@ export default function StockScreen(){
       {text:"Cancel",style:"cancel"},
       {text:"Delete",style:"destructive",onPress:async()=>{
         try{
-          await api.post("/inventory-purchase-receipts/"+encodeURIComponent(String(r.id))+"/delete",{});
+          await api.post("/stock-receipts/"+encodeURIComponent(String(r.id))+"/delete",{});
           qc.invalidateQueries({queryKey:["inventory"]});
           qc.invalidateQueries({queryKey:["inventory","stock-picker"]});
           qc.invalidateQueries({queryKey:["inventory-purchase-receipts"]});
