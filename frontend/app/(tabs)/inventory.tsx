@@ -56,13 +56,7 @@ export default function Inventory() {
   const selectedCategoryName = typeof params.categoryName === "string" ? params.categoryName : "";
 
   const [tab, setTab] = useState("All");
-  const [addModal, setAddModal] = useState(false);
   const [editItem, setEditItem] = useState<InventoryItem | null>(null);
-  const [category, setCategory] = useState(selectedCategoryName);
-  const [size, setSize] = useState("");
-  const [qty, setQty] = useState("");
-  const [min, setMin] = useState("1");
-  const [unit, setUnit] = useState("pcs");
   const [search, setSearch] = useState("");
   const [inventorySort, setInventorySort] = useState<"name-asc" | "name-desc" | "size-asc" | "size-desc" | "qty-desc" | "qty-asc" | "low-first">("name-asc");
   const [historyItem, setHistoryItem] = useState<InventoryItem | null>(null);
@@ -79,19 +73,6 @@ export default function Inventory() {
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["inventory"] });
   };
-
-  const addStock = useMutation({
-    mutationFn: (body: { name: string; categoryId: string; category: string; size: string; quantity: number; minimumStock: number; unit: string }) =>
-      api.post("/inventory", body),
-    onSuccess: () => {
-      invalidate();
-      queryClient.invalidateQueries({ queryKey: ["inventory-categories"] });
-      toast("Stock added.", "success");
-      setAddModal(false);
-      setCategory(""); setSize(""); setQty(""); setMin("1"); setUnit("pcs");
-    },
-    onError: (e: any) => toast(e?.message || "Could not add stock.", "error"),
-  });
 
   const updateItem = useMutation({
     mutationFn: (item: InventoryItem) =>
@@ -167,16 +148,6 @@ export default function Inventory() {
     });
     return items;
   }, [data, tab, search, inventorySort]);
-
-  const onSubmit = () => {
-    const q = parseInt(qty, 10);
-    if (isNaN(q) || q <= 0) {
-      toast("Enter quantity received above 0.", "error");
-      return;
-    }
-    if (!selectedCategoryId && !category.trim()) { toast("Select an inventory category first.", "error"); return; }
-    addStock.mutate({ name: category.trim(), categoryId: selectedCategoryId, category: category.trim(), size: size.trim(), quantity: q, minimumStock: Math.max(0, parseInt(min, 10) || 0), unit: unit.trim() || "pcs" });
-  };
 
   const changeQty = (item: InventoryItem, delta: number) => {
     const next = Math.max(0, item.quantity + delta);
@@ -286,12 +257,6 @@ export default function Inventory() {
                 <Ionicons name="layers-outline" size={20} color={colors.brandPrimary} />
               </Pressable>
             ) : null}
-            {isAdmin ? (
-              <Pressable testID="add-stock-button" style={styles.addBtn} onPress={() => { setCategory(selectedCategoryName); setAddModal(true); }}>
-                <Ionicons name="add" size={20} color={colors.onBrandPrimary} />
-                <Text style={styles.addBtnText}>Add Stock</Text>
-              </Pressable>
-            ) : null}
           </View>
         </View>
         <Segmented options={["All", "Low Stock"]} value={tab} onChange={setTab} testIDPrefix="inv-tab" />
@@ -344,7 +309,7 @@ export default function Inventory() {
             <EmptyState
               icon="cube-outline"
               title={tab === "Low Stock" ? "No low-stock items" : "Inventory is empty"}
-              subtitle={tab === "Low Stock" ? "All implants are well stocked." : "Tap Add Stock to get started."}
+              subtitle={tab === "Low Stock" ? "All implants are well stocked." : "Use Receive Stock on the Implant Inventory screen to add stock."}
             />
           }
           renderItem={({ item }) => {
@@ -405,27 +370,6 @@ export default function Inventory() {
           }}
         />
       )}
-
-      {/* Add stock modal */}
-      <Modal visible={addModal} transparent animationType="slide" onRequestClose={() => setAddModal(false)}>
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalCard, { paddingBottom: insets.bottom + spacing.lg }]}>
-            <View style={styles.modalHandle} />
-            <Text style={styles.modalTitle}>Add Stock</Text>
-            <KeyboardAwareScrollView bottomOffset={40} keyboardShouldPersistTaps="handled">
-              <Field label="Category" testID="stock-category-input" value={category} onChangeText={setCategory} placeholder="Select a category" autoCapitalize="words" editable={!selectedCategoryId} />
-              <Field label="Size / Length" testID="stock-size-input" value={size} onChangeText={setSize} placeholder="e.g. 280mm" />
-              <Field label="Quantity Received" testID="stock-qty-input" value={qty} onChangeText={setQty} placeholder="e.g. 20" keyboardType="number-pad" />
-              <Field label="Unit" testID="stock-unit-input" value={unit} onChangeText={setUnit} placeholder="pcs" />
-              <Field label="Minimum Stock Alert" testID="stock-min-input" value={min} onChangeText={setMin} placeholder="1" keyboardType="number-pad" />
-              <PrimaryButton title="Save Stock" testID="stock-save-button" onPress={onSubmit} loading={addStock.isPending} />
-              <Pressable style={styles.cancel} onPress={() => setAddModal(false)} testID="stock-cancel-button">
-                <Text style={styles.cancelText}>Cancel</Text>
-              </Pressable>
-            </KeyboardAwareScrollView>
-          </View>
-        </View>
-      </Modal>
 
       {/* Edit modal */}
       <Modal visible={!!editItem} transparent animationType="slide" onRequestClose={() => setEditItem(null)}>
