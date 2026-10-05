@@ -658,6 +658,10 @@ export const api = {
       if (!items.length) throw new Error("Add at least one inventory item.");
       let added = 0;
       const uid = await currentUser();
+      // One tap/save of Receive Stock = exactly one transaction batch.
+      // All rows in this save share this batch_id; a later save gets a new one,
+      // even on the same date/category/size.
+      const batchId = id();
       db.withTransactionSync(() => {
         for (const entry of items) {
           let categoryId = String(entry?.categoryId || "").trim();
@@ -691,8 +695,8 @@ export const api = {
             db.runSync("INSERT INTO inventory (id,name,quantity,unit,minimum_stock,category_id,category,size,added_date,bill_image) VALUES (?,?,?,?,?,?,?,?,?,?)",[inventoryId,categoryName,quantity,unit,minimumStock,categoryId,categoryName,size,addedDate,billImage]);
             movement(inventoryId,"purchase",quantity,quantity,"Stock received",uid);
           }
-          db.runSync("INSERT INTO inventory_purchase_receipts (id,inventory_id,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            [id(),inventoryId,categoryId,categoryName,size,quantity,unit,minimumStock,addedDate,billImage,nowIso(),uid]);
+          db.runSync("INSERT INTO inventory_purchase_receipts (id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            [id(),inventoryId,batchId,categoryId,categoryName,size,quantity,unit,minimumStock,addedDate,billImage,nowIso(),uid]);
           added++;
         }
       });
@@ -748,13 +752,14 @@ export const api = {
         const uid = await currentUser();
         movement(existing.id, "purchase", quantity, next, body?.note || "Stock received", uid);
         db.runSync(
-          "INSERT INTO inventory_purchase_receipts (id,inventory_id,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-          [id(), existing.id, categoryId, categoryName, size, quantity, unit, minimumStock, String(body?.addedDate||new Date().toISOString().slice(0,10)), String(body?.billImage||""), nowIso(), uid],
+          "INSERT INTO inventory_purchase_receipts (id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+          [id(), existing.id, id(), categoryId, categoryName, size, quantity, unit, minimumStock, String(body?.addedDate||new Date().toISOString().slice(0,10)), String(body?.billImage||""), nowIso(), uid],
         );
         return { id: existing.id, name: categoryName, categoryId, category: categoryName, size, quantity: next, unit, minimumStock } as any;
       }
 
       const inventoryId = id();
+      const batchId = id();
       db.runSync(
         "INSERT INTO inventory (id,name,quantity,unit,minimum_stock,category_id,category,size,added_date,bill_image) VALUES (?,?,?,?,?,?,?,?,?,?)",
         [inventoryId, categoryName, quantity, unit, minimumStock, categoryId, categoryName, size, String(body?.addedDate||new Date().toISOString().slice(0,10)), String(body?.billImage||"")],
@@ -762,8 +767,8 @@ export const api = {
       const uid = await currentUser();
       movement(inventoryId, "purchase", quantity, quantity, body?.note || "Stock received", uid);
       db.runSync(
-        "INSERT INTO inventory_purchase_receipts (id,inventory_id,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-        [id(), inventoryId, categoryId, categoryName, size, quantity, unit, minimumStock, String(body?.addedDate||new Date().toISOString().slice(0,10)), String(body?.billImage||""), nowIso(), uid],
+        "INSERT INTO inventory_purchase_receipts (id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        [id(), inventoryId, batchId, categoryId, categoryName, size, quantity, unit, minimumStock, String(body?.addedDate||new Date().toISOString().slice(0,10)), String(body?.billImage||""), nowIso(), uid],
       );
       return { id: inventoryId, name: categoryName, categoryId, category: categoryName, size, quantity, unit, minimumStock } as any;
     }
