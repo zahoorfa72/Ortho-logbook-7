@@ -743,6 +743,10 @@ export const api = {
         );
         const uid = await currentUser();
         movement(existing.id, "purchase", quantity, next, body?.note || "Stock received", uid);
+        db.runSync(
+          "INSERT INTO inventory_purchase_receipts (id,inventory_id,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+          [id(), existing.id, categoryId, categoryName, size, quantity, unit, minimumStock, String(body?.addedDate||new Date().toISOString().slice(0,10)), String(body?.billImage||""), nowIso(), uid],
+        );
         return { id: existing.id, name: categoryName, categoryId, category: categoryName, size, quantity: next, unit, minimumStock } as any;
       }
 
@@ -753,6 +757,10 @@ export const api = {
       );
       const uid = await currentUser();
       movement(inventoryId, "purchase", quantity, quantity, body?.note || "Stock received", uid);
+      db.runSync(
+        "INSERT INTO inventory_purchase_receipts (id,inventory_id,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        [id(), inventoryId, categoryId, categoryName, size, quantity, unit, minimumStock, String(body?.addedDate||new Date().toISOString().slice(0,10)), String(body?.billImage||""), nowIso(), uid],
+      );
       return { id: inventoryId, name: categoryName, categoryId, category: categoryName, size, quantity, unit, minimumStock } as any;
     }
 
