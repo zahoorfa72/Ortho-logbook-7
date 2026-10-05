@@ -578,15 +578,6 @@ export const api = {
     if(receiptDelete){
       await requireAdmin();
       const rid=decodeURIComponent(receiptDelete[1]);
-      if(rid.startsWith("legacy-")){
-        const inventoryId=rid.slice(7);
-        const item=db.getFirstSync<any>("SELECT * FROM inventory WHERE id=? LIMIT 1",[inventoryId]);
-        if(!item) throw new Error("Receiving entry not found.");
-        const qty=Number(item.quantity||0);
-        if(qty>0) throw new Error("This older entry is linked to the current inventory balance and cannot be deleted safely.");
-        db.runSync("DELETE FROM inventory WHERE id=?",[inventoryId]);
-        return {success:true} as any;
-      }
       const receipt=db.getFirstSync<any>("SELECT * FROM inventory_purchase_receipts WHERE id=? LIMIT 1",[rid]);
       if(!receipt) throw new Error("Receiving entry not found.");
       const inventory=db.getFirstSync<any>("SELECT * FROM inventory WHERE id=? LIMIT 1",[receipt.inventory_id]);
@@ -896,25 +887,88 @@ export const api = {
       if(!existing) throw new Error("Receiving entry not found.");
       const quantity=Math.max(0,Number(body?.quantity)||0);
       if(quantity<=0) throw new Error("Quantity must be above 0.");
-      const categoryId=String(body?.categoryId||existing.category_id||"").trim();
-      const categoryName=String(body?.category||existing.category||"").trim();
-      const size=String(body?.size??existing.size??"").trim();
-      const minimumStock=Math.max(0,Number(body?.minimumStock)||0);
-      const addedDate=String(body?.addedDate||existing.added_date||"").trim();
-      const billImage=String(body?.billImage??existing.bill_image??"");
+
       const oldQty=Number(existing.quantity||0);
-      const inventory=db.getFirstSync<any>("SELECT * FROM inventory WHERE id=? LIMIT 1",[existing.inventory_id]);
-      if(!inventory) throw new Error("Inventory item for this receipt no longer exists.");
-      const nextQty=Number(inventory.quantity||0)-oldQty+quantity;
-      if(nextQty<0) throw new Error("This receipt cannot be edited because available stock is already lower than its original quantity.");
+      const oldInventory=db.getFirstSync<any>("SELECT * FROM inventory WHERE id=? LIMIT 1",[existing.inventory_id]);
+      if(!oldInventory) throw new Error("Inventory item for this receipt no longer exists.");
+
+      const categoryId=String(body?.categoryId||existing.category_id||oldInventory.category_id||"").trim();
+      const categoryName=String(body?.category||existing.category||oldInventory.category||"").trim();
+      const size=String(body?.size??existing.size??oldInventory.size??"").trim();
+      const minimumStock=Math.max(0,Number(body?.minimumStock)||0);
+      const addedDate=String(body?.addedDate||existing.added_date||new Date().toISOString().slice(0,10)).trim();
+      const billImage=String(body?.billImage??existing.bill_image??"");
       const uid=await currentUser();
+
       db.withTransactionSync(()=>{
-        db.runSync("UPDATE inventory SET quantity=?,minimum_stock=? WHERE id=?",[nextQty,minimumStock,inventory.id]);
-        if(categoryId || categoryName || size){
-          db.runSync("UPDATE inventory SET category_id=COALESCE(NULLIF(?,''),category_id),category=COALESCE(NULLIF(?,''),category),size=? WHERE id=?",[categoryId,categoryName,size,inventory.id]);
+        const sameInventory =
+          String(oldInventory.category_id||"")===categoryId &&
+          String(oldInventory.size||"").trim().toLowerCase()===size.toLowerCase();
+
+        if(sameInventory){
+          const nextQty=Number(oldInventory.quantity||0)-oldQty+quantity;
+          if(nextQty<0) throw new Error("This receipt cannot be edited because available stock is already lower than its original quantity.");
+          db.runSync(
+            "UPDATE inventory SET quantity=?,minimum_stock=? WHERE id=?",
+            [nextQty,minimumStock,oldInventory.id],
+          );
+          db.runSync(
+            "UPDATE inventory_purchase_receipts SET category_id=?,category=?,size=?,quantity=?,minimum_stock=?,added_date=?,bill_image=? WHERE id=?",
+            [categoryId,categoryName,size,quantity,minimumStock,addedDate,billImage,rid],
+          );
+          const aggregateMin=Number(db.getFirstSync<any>(
+            "SELECT COALESCE(MAX(minimum_stock),0) AS n FROM inventory_purchase_receipts WHERE inventory_id=?",
+            [oldInventory.id],
+          )?.n||0);
+          db.runSync("UPDATE inventory SET minimum_stock=? WHERE id=?",[aggregateMin,oldInventory.id]);
+          movement(oldInventory.id,"purchase_adjustment",quantity-oldQty,nextQty,"Received stock edited",uid);
+          return;
         }
-        db.runSync("UPDATE inventory_purchase_receipts SET category_id=?,category=?,size=?,quantity=?,minimum_stock=?,added_date=?,bill_image=? WHERE id=?",[categoryId,categoryName,size,quantity,minimumStock,addedDate,billImage,rid]);
-        movement(inventory.id,"purchase_adjustment",quantity-oldQty,nextQty,"Received stock edited",uid);
+
+        // A receipt is its own transaction. Editing its category/size must
+        // move only this receipt to the target inventory item; never rename or
+        // overwrite the shared inventory row used by other receipts.
+        const oldNext=Number(oldInventory.quantity||0)-oldQty;
+        if(oldNext<0) throw new Error("This receipt cannot be edited because available stock is already lower than its original quantity.");
+        db.runSync("UPDATE inventory SET quantity=? WHERE id=?",[oldNext,oldInventory.id]);
+        const oldMin=Number(db.getFirstSync<any>(
+          "SELECT COALESCE(MAX(minimum_stock),0) AS n FROM inventory_purchase_receipts WHERE inventory_id=? AND id<>?",
+          [oldInventory.id,rid],
+        )?.n||0);
+        db.runSync("UPDATE inventory SET minimum_stock=? WHERE id=?",[oldMin,oldInventory.id]);
+
+        let target=db.getFirstSync<any>(
+          "SELECT * FROM inventory WHERE category_id=? AND LOWER(COALESCE(size,''))=LOWER(?) LIMIT 1",
+          [categoryId,size],
+        );
+        if(target && target.id===oldInventory.id) target=null;
+
+        if(target){
+          const targetNext=Number(target.quantity||0)+quantity;
+          db.runSync(
+            "UPDATE inventory SET name=?,category=?,quantity=?,unit=?,minimum_stock=? WHERE id=?",
+            [categoryName,categoryName,targetNext,String(existing.unit||target.unit||"pcs"),minimumStock,target.id],
+          );
+        }else{
+          const targetId=id();
+          db.runSync(
+            "INSERT INTO inventory (id,name,quantity,unit,minimum_stock,category_id,category,size,added_date,bill_image) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            [targetId,categoryName,quantity,String(existing.unit||"pcs"),minimumStock,categoryId||null,categoryName,size,addedDate,billImage],
+          );
+          target=db.getFirstSync<any>("SELECT * FROM inventory WHERE id=? LIMIT 1",[targetId]);
+        }
+
+        db.runSync(
+          "UPDATE inventory_purchase_receipts SET inventory_id=?,category_id=?,category=?,size=?,quantity=?,minimum_stock=?,added_date=?,bill_image=? WHERE id=?",
+          [target.id,categoryId,categoryName,size,quantity,minimumStock,addedDate,billImage,rid],
+        );
+        const targetMin=Number(db.getFirstSync<any>(
+          "SELECT COALESCE(MAX(minimum_stock),0) AS n FROM inventory_purchase_receipts WHERE inventory_id=?",
+          [target.id],
+        )?.n||0);
+        db.runSync("UPDATE inventory SET minimum_stock=? WHERE id=?",[targetMin,target.id]);
+        movement(oldInventory.id,"purchase_adjustment",-oldQty,oldNext,"Received stock moved during edit",uid);
+        movement(target.id,"purchase_adjustment",quantity,Number(target.quantity||0),"Received stock moved during edit",uid);
       });
       return {success:true} as any;
     }
