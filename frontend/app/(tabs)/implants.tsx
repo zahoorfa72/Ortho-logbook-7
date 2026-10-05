@@ -84,8 +84,20 @@ export default function ImplantsScreen(){
           <Text style={styles.stockCount}>{stockReceipts.length}</Text>
         </View>
         {stockReceipts.length ? stockReceipts.slice(0,50).map((s:any)=><View key={String(s.id)} style={styles.receivedCard}>
-          <View style={{flex:1}}><Text style={styles.receivedTitle}>{s.category||s.name||"Inventory item"}{s.size?" · "+s.size:""}</Text><Text style={styles.meta}>Quantity {Number(s.quantity)||0} {s.unit||"pcs"} · Minimum {Number(s.minimumStock)||0}</Text>{s.addedDate?<Text style={styles.meta}>Received: {s.addedDate}</Text>:null}</View>
-          <View style={{flexDirection:"row",alignItems:"center",gap:spacing.sm}}><Pressable onPress={()=>editReceipt(s)} hitSlop={8}><Ionicons name="create-outline" size={20} color={colors.brandPrimary}/></Pressable><Pressable onPress={()=>deleteReceipt(s)} hitSlop={8}><Ionicons name="trash-outline" size={20} color={colors.error}/></Pressable></View>
+          <View style={{flex:1}}>
+            <Text style={styles.meta}>Date/time</Text>
+            <Text style={styles.receivedTitle}>{s.created_at ? new Date(String(s.created_at)).toLocaleString([], {month:"short",day:"numeric",hour:"2-digit",minute:"2-digit",hour12:false}) : (s.addedDate||"")}</Text>
+            <Text style={styles.meta}>Category</Text>
+            <Text style={styles.receivedTitle}>{s.category||s.name||"Inventory item"}</Text>
+            <Text style={styles.meta}>Size</Text>
+            <Text style={styles.receivedTitle}>{s.size||"—"}</Text>
+            <Text style={styles.meta}>Received</Text>
+            <Text style={styles.receivedTitle}>{Number(s.quantity)||0} {s.unit||"pcs"}</Text>
+          </View>
+          <View style={{flexDirection:"row",alignItems:"center",gap:spacing.sm}}>
+            <Pressable onPress={()=>editReceipt(s)} hitSlop={8}><Ionicons name="create-outline" size={20} color={colors.brandPrimary}/></Pressable>
+            <Pressable onPress={()=>deleteReceipt(s)} hitSlop={8}><Ionicons name="trash-outline" size={20} color={colors.error}/></Pressable>
+          </View>
         </View>):<View style={styles.receivedEmpty}><Text style={styles.meta}>No received stock yet.</Text></View>}
       </View>}
       refreshControl={<RefreshControl refreshing={isRefetching} onRefresh={refetch}/>} contentContainerStyle={{padding:spacing.lg,paddingBottom:insets.bottom+spacing.xxl}} ListEmptyComponent={<EmptyState icon="medkit-outline" title="No detailed implants" subtitle="Add a detailed implant record from this tab."/>} renderItem={({item})=>{
