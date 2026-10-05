@@ -706,72 +706,7 @@ export const api = {
 
     if (normalizedPath === "/inventory") {
       await requireAdmin();
-      let categoryId = String(body?.categoryId || "").trim();
-      let categoryName = String(body?.category || "").trim();
-      if (!categoryId && !categoryName) throw new Error("Select an inventory category first.");
-
-      if (categoryId) {
-        const cat = db.getFirstSync<any>(
-          "SELECT id,name FROM inventory_categories WHERE id=? LIMIT 1",
-          [categoryId],
-        );
-        if (!cat) throw new Error("Inventory category not found.");
-        categoryName = String(cat.name || categoryName).trim();
-      } else {
-        const cat = db.getFirstSync<any>(
-          "SELECT id,name FROM inventory_categories WHERE LOWER(name)=LOWER(?) LIMIT 1",
-          [categoryName],
-        );
-        if (cat) {
-          categoryId = cat.id;
-          categoryName = String(cat.name || categoryName).trim();
-        } else {
-          categoryId = id();
-          db.runSync(
-            "INSERT INTO inventory_categories (id,name,created_at) VALUES (?,?,?)",
-            [categoryId, categoryName, nowIso()],
-          );
-        }
-      }
-
-      const size = String(body?.size || "").trim();
-      const quantity = Math.max(0, Number(body?.quantity) || 0);
-      const minimumStock = Math.max(0, Number(body?.minimumStock) || 0);
-      const unit = String(body?.unit || "pcs").trim() || "pcs";
-      if (quantity <= 0) throw new Error("Enter quantity received above 0.");
-
-      const existing = db.getFirstSync<any>(
-        "SELECT * FROM inventory WHERE category_id=? AND LOWER(COALESCE(size,''))=LOWER(?) LIMIT 1",
-        [categoryId, size],
-      );
-      if (existing) {
-        const next = Number(existing.quantity || 0) + quantity;
-        db.runSync(
-          "UPDATE inventory SET name=?,category_id=?,category=?,size=?,quantity=?,unit=?,minimum_stock=?,added_date=?,bill_image=? WHERE id=?",
-          [categoryName, categoryId, categoryName, size, next, unit, minimumStock, String(body?.addedDate||new Date().toISOString().slice(0,10)), String(body?.billImage||existing.bill_image||""), existing.id],
-        );
-        const uid = await currentUser();
-        movement(existing.id, "purchase", quantity, next, body?.note || "Stock received", uid);
-        db.runSync(
-          "INSERT INTO inventory_purchase_receipts (id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,description,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-          [id(), existing.id, id(), categoryId, categoryName, size, quantity, unit, minimumStock, String(body?.addedDate||new Date().toISOString().slice(0,10)), String(body?.billImage||""), String(body?.description||body?.note||"").trim(), nowIso(), uid],
-        );
-        return { id: existing.id, name: categoryName, categoryId, category: categoryName, size, quantity: next, unit, minimumStock } as any;
-      }
-
-      const inventoryId = id();
-      const batchId = id();
-      db.runSync(
-        "INSERT INTO inventory (id,name,quantity,unit,minimum_stock,category_id,category,size,added_date,bill_image) VALUES (?,?,?,?,?,?,?,?,?,?)",
-        [inventoryId, categoryName, quantity, unit, minimumStock, categoryId, categoryName, size, String(body?.addedDate||new Date().toISOString().slice(0,10)), String(body?.billImage||"")],
-      );
-      const uid = await currentUser();
-      movement(inventoryId, "purchase", quantity, quantity, body?.note || "Stock received", uid);
-      db.runSync(
-        "INSERT INTO inventory_purchase_receipts (id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,description,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        [id(), inventoryId, batchId, categoryId, categoryName, size, quantity, unit, minimumStock, String(body?.addedDate||new Date().toISOString().slice(0,10)), String(body?.billImage||""), String(body?.description||body?.note||"").trim(), nowIso(), uid],
-      );
-      return { id: inventoryId, name: categoryName, categoryId, category: categoryName, size, quantity, unit, minimumStock } as any;
+      throw new Error("Direct stock entry is disabled. Use Receive Stock.");
     }
 
     if (normalizedPath === "/inventory-purchase-receipts") {
