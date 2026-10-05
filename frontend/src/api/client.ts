@@ -683,6 +683,7 @@ export const api = {
           const unit=String(entry?.unit||"pcs").trim()||"pcs";
           const addedDate=String(entry?.addedDate||new Date().toISOString().slice(0,10)).trim();
           const billImage=String(entry?.billImage||"");
+          const description=String(body?.description||"").trim();
           const existing=db.getFirstSync<any>("SELECT * FROM inventory WHERE category_id=? AND LOWER(COALESCE(size,''))=LOWER(?) LIMIT 1",[categoryId,size]);
           let inventoryId:String = "";
           if(existing){
@@ -695,8 +696,8 @@ export const api = {
             db.runSync("INSERT INTO inventory (id,name,quantity,unit,minimum_stock,category_id,category,size,added_date,bill_image) VALUES (?,?,?,?,?,?,?,?,?,?)",[inventoryId,categoryName,quantity,unit,minimumStock,categoryId,categoryName,size,addedDate,billImage]);
             movement(inventoryId,"purchase",quantity,quantity,"Stock received",uid);
           }
-          db.runSync("INSERT INTO inventory_purchase_receipts (id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            [id(),inventoryId,batchId,categoryId,categoryName,size,quantity,unit,minimumStock,addedDate,billImage,nowIso(),uid]);
+          db.runSync("INSERT INTO inventory_purchase_receipts (id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,description,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            [id(),inventoryId,batchId,categoryId,categoryName,size,quantity,unit,minimumStock,addedDate,billImage,description,nowIso(),uid]);
           added++;
         }
       });
@@ -753,7 +754,7 @@ export const api = {
         movement(existing.id, "purchase", quantity, next, body?.note || "Stock received", uid);
         db.runSync(
           "INSERT INTO inventory_purchase_receipts (id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-          [id(), existing.id, id(), categoryId, categoryName, size, quantity, unit, minimumStock, String(body?.addedDate||new Date().toISOString().slice(0,10)), String(body?.billImage||""), nowIso(), uid],
+          [id(), existing.id, id(), categoryId, categoryName, size, quantity, unit, minimumStock, String(body?.addedDate||new Date().toISOString().slice(0,10)), String(body?.billImage||""), String(body?.description||body?.note||"").trim(), nowIso(), uid],
         );
         return { id: existing.id, name: categoryName, categoryId, category: categoryName, size, quantity: next, unit, minimumStock } as any;
       }
@@ -785,6 +786,7 @@ export const api = {
         legacy:false,
         quantity:Number(r.quantity||0),
         minimumStock:Number(r.minimum_stock||0),
+        description:r.description||"",
         addedDate:r.added_date||"",
         billImage:r.bill_image||"",
         category:r.category||"",
@@ -920,6 +922,7 @@ export const api = {
       const minimumStock=Math.max(0,Number(body?.minimumStock)||0);
       const addedDate=String(body?.addedDate||existing.added_date||new Date().toISOString().slice(0,10)).trim();
       const billImage=String(body?.billImage??existing.bill_image??"");
+      const description=String(body?.description??existing.description??"").trim();
       const uid=await currentUser();
 
       db.withTransactionSync(()=>{
@@ -935,8 +938,8 @@ export const api = {
             [nextQty,minimumStock,oldInventory.id],
           );
           db.runSync(
-            "UPDATE inventory_purchase_receipts SET category_id=?,category=?,size=?,quantity=?,minimum_stock=?,added_date=?,bill_image=? WHERE id=?",
-            [categoryId,categoryName,size,quantity,minimumStock,addedDate,billImage,rid],
+            "UPDATE inventory_purchase_receipts SET category_id=?,category=?,size=?,quantity=?,minimum_stock=?,added_date=?,bill_image=?,description=? WHERE id=?",
+            [categoryId,categoryName,size,quantity,minimumStock,addedDate,billImage,description,rid],
           );
           const aggregateMin=Number(db.getFirstSync<any>(
             "SELECT COALESCE(MAX(minimum_stock),0) AS n FROM inventory_purchase_receipts WHERE inventory_id=?",
@@ -981,8 +984,8 @@ export const api = {
         }
 
         db.runSync(
-          "UPDATE inventory_purchase_receipts SET inventory_id=?,category_id=?,category=?,size=?,quantity=?,minimum_stock=?,added_date=?,bill_image=? WHERE id=?",
-          [target.id,categoryId,categoryName,size,quantity,minimumStock,addedDate,billImage,rid],
+          "UPDATE inventory_purchase_receipts SET inventory_id=?,category_id=?,category=?,size=?,quantity=?,minimum_stock=?,added_date=?,bill_image=?,description=? WHERE id=?",
+          [target.id,categoryId,categoryName,size,quantity,minimumStock,addedDate,billImage,description,rid],
         );
         const targetMin=Number(db.getFirstSync<any>(
           "SELECT COALESCE(MAX(minimum_stock),0) AS n FROM inventory_purchase_receipts WHERE inventory_id=?",
