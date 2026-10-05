@@ -212,7 +212,7 @@ function deleteInventoryRows(ids: string[]) {
       cleanIds,
     );
     db.runSync(
-      `DELETE FROM inventory_purchase_receipts WHERE inventory_id IN (${placeholders})`,
+      `DELETE FROM stock_receipts WHERE inventory_id IN (${placeholders})`,
       cleanIds,
     );
     db.runSync(
@@ -578,11 +578,11 @@ export const api = {
     initializeDatabase();
     const normalizedPath = normalizeRoute(path);
 
-    const receiptDelete=normalizedPath.match(/^\/inventory-purchase-receipts\/([^/]+)\/delete$/);
+    const receiptDelete=normalizedPath.match(/^\/stock-receipts\/([^/]+)\/delete$/);
     if(receiptDelete){
       await requireAdmin();
       const rid=decodeURIComponent(receiptDelete[1]);
-      const receipt=db.getFirstSync<any>("SELECT * FROM inventory_purchase_receipts WHERE id=? LIMIT 1",[rid]);
+      const receipt=db.getFirstSync<any>("SELECT * FROM stock_receipts WHERE id=? LIMIT 1",[rid]);
       if(!receipt) throw new Error("Receiving entry not found.");
       const inventory=db.getFirstSync<any>("SELECT * FROM inventory WHERE id=? LIMIT 1",[receipt.inventory_id]);
       if(!inventory) throw new Error("Inventory item for this receipt no longer exists.");
@@ -592,10 +592,10 @@ export const api = {
       const next=current-qty;
       const uid=await currentUser();
       db.withTransactionSync(()=>{
-        db.runSync("DELETE FROM inventory_purchase_receipts WHERE id=?",[rid]);
+        db.runSync("DELETE FROM stock_receipts WHERE id=?",[rid]);
         db.runSync("UPDATE inventory SET quantity=? WHERE id=?",[next,inventory.id]);
         const aggregateMin=Number(db.getFirstSync<any>(
-          "SELECT COALESCE(MAX(minimum_stock),0) AS n FROM inventory_purchase_receipts WHERE inventory_id=?",
+          "SELECT COALESCE(MAX(minimum_stock),0) AS n FROM stock_receipts WHERE inventory_id=?",
           [inventory.id],
         )?.n||0);
         db.runSync("UPDATE inventory SET minimum_stock=? WHERE id=?",[aggregateMin,inventory.id]);
@@ -696,7 +696,7 @@ export const api = {
             db.runSync("INSERT INTO inventory (id,name,quantity,unit,minimum_stock,category_id,category,size,added_date,bill_image) VALUES (?,?,?,?,?,?,?,?,?,?)",[inventoryId,categoryName,quantity,unit,minimumStock,categoryId,categoryName,size,addedDate,billImage]);
             movement(inventoryId,"purchase",quantity,quantity,"Stock received",uid);
           }
-          db.runSync("INSERT INTO inventory_purchase_receipts (id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,description,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+          db.runSync("INSERT INTO stock_receipts (id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,description,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             [id(),inventoryId,batchId,categoryId,categoryName,size,quantity,unit,minimumStock,addedDate,billImage,description,nowIso(),uid]);
           added++;
         }
@@ -709,12 +709,12 @@ export const api = {
       throw new Error("Direct stock entry is disabled. Use Receive Stock.");
     }
 
-    if (normalizedPath === "/inventory-purchase-receipts") {
+    if (normalizedPath === "/stock-receipts") {
       await requireAdmin();
       // Received Stock contains only the new transaction records. Do not
       // synthesize entries from the older aggregate inventory table.
       const receiptRows = db.getAllSync<any>(
-        "SELECT r.*, i.name FROM inventory_purchase_receipts r LEFT JOIN inventory i ON i.id=r.inventory_id ORDER BY r.created_at DESC",
+        "SELECT r.*, i.name FROM stock_receipts r LEFT JOIN inventory i ON i.id=r.inventory_id ORDER BY r.created_at DESC",
       );
       return receiptRows.map((r:any)=>({
         ...r,
@@ -838,11 +838,11 @@ export const api = {
       await assertRecordAccess(existing.created_by);
       return (await savePatient(body, true)) as any;
     }
-    const receiptMatch=normalizedPath.match(/^\/inventory-purchase-receipts\/(.+)$/);
+    const receiptMatch=normalizedPath.match(/^\/stock-receipts\/(.+)$/);
     if(receiptMatch){
       await requireAdmin();
       const rid=decodeURIComponent(receiptMatch[1]);
-      const existing=db.getFirstSync<any>("SELECT * FROM inventory_purchase_receipts WHERE id=? LIMIT 1",[rid]);
+      const existing=db.getFirstSync<any>("SELECT * FROM stock_receipts WHERE id=? LIMIT 1",[rid]);
       if(!existing) throw new Error("Receiving entry not found.");
       const quantity=Math.max(0,Number(body?.quantity)||0);
       if(quantity<=0) throw new Error("Quantity must be above 0.");
@@ -873,11 +873,11 @@ export const api = {
             [nextQty,minimumStock,oldInventory.id],
           );
           db.runSync(
-            "UPDATE inventory_purchase_receipts SET category_id=?,category=?,size=?,quantity=?,minimum_stock=?,added_date=?,bill_image=?,description=? WHERE id=?",
+            "UPDATE stock_receipts SET category_id=?,category=?,size=?,quantity=?,minimum_stock=?,added_date=?,bill_image=?,description=? WHERE id=?",
             [categoryId,categoryName,size,quantity,minimumStock,addedDate,billImage,description,rid],
           );
           const aggregateMin=Number(db.getFirstSync<any>(
-            "SELECT COALESCE(MAX(minimum_stock),0) AS n FROM inventory_purchase_receipts WHERE inventory_id=?",
+            "SELECT COALESCE(MAX(minimum_stock),0) AS n FROM stock_receipts WHERE inventory_id=?",
             [oldInventory.id],
           )?.n||0);
           db.runSync("UPDATE inventory SET minimum_stock=? WHERE id=?",[aggregateMin,oldInventory.id]);
@@ -892,7 +892,7 @@ export const api = {
         if(oldNext<0) throw new Error("This receipt cannot be edited because available stock is already lower than its original quantity.");
         db.runSync("UPDATE inventory SET quantity=? WHERE id=?",[oldNext,oldInventory.id]);
         const oldMin=Number(db.getFirstSync<any>(
-          "SELECT COALESCE(MAX(minimum_stock),0) AS n FROM inventory_purchase_receipts WHERE inventory_id=? AND id<>?",
+          "SELECT COALESCE(MAX(minimum_stock),0) AS n FROM stock_receipts WHERE inventory_id=? AND id<>?",
           [oldInventory.id,rid],
         )?.n||0);
         db.runSync("UPDATE inventory SET minimum_stock=? WHERE id=?",[oldMin,oldInventory.id]);
@@ -919,11 +919,11 @@ export const api = {
         }
 
         db.runSync(
-          "UPDATE inventory_purchase_receipts SET inventory_id=?,category_id=?,category=?,size=?,quantity=?,minimum_stock=?,added_date=?,bill_image=?,description=? WHERE id=?",
+          "UPDATE stock_receipts SET inventory_id=?,category_id=?,category=?,size=?,quantity=?,minimum_stock=?,added_date=?,bill_image=?,description=? WHERE id=?",
           [target.id,categoryId,categoryName,size,quantity,minimumStock,addedDate,billImage,description,rid],
         );
         const targetMin=Number(db.getFirstSync<any>(
-          "SELECT COALESCE(MAX(minimum_stock),0) AS n FROM inventory_purchase_receipts WHERE inventory_id=?",
+          "SELECT COALESCE(MAX(minimum_stock),0) AS n FROM stock_receipts WHERE inventory_id=?",
           [target.id],
         )?.n||0);
         db.runSync("UPDATE inventory SET minimum_stock=? WHERE id=?",[targetMin,target.id]);
