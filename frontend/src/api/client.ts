@@ -753,7 +753,7 @@ export const api = {
         const uid = await currentUser();
         movement(existing.id, "purchase", quantity, next, body?.note || "Stock received", uid);
         db.runSync(
-          "INSERT INTO inventory_purchase_receipts (id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+          "INSERT INTO inventory_purchase_receipts (id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,description,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
           [id(), existing.id, id(), categoryId, categoryName, size, quantity, unit, minimumStock, String(body?.addedDate||new Date().toISOString().slice(0,10)), String(body?.billImage||""), String(body?.description||body?.note||"").trim(), nowIso(), uid],
         );
         return { id: existing.id, name: categoryName, categoryId, category: categoryName, size, quantity: next, unit, minimumStock } as any;
@@ -768,8 +768,8 @@ export const api = {
       const uid = await currentUser();
       movement(inventoryId, "purchase", quantity, quantity, body?.note || "Stock received", uid);
       db.runSync(
-        "INSERT INTO inventory_purchase_receipts (id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        [id(), inventoryId, batchId, categoryId, categoryName, size, quantity, unit, minimumStock, String(body?.addedDate||new Date().toISOString().slice(0,10)), String(body?.billImage||""), nowIso(), uid],
+        "INSERT INTO inventory_purchase_receipts (id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,description,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        [id(), inventoryId, batchId, categoryId, categoryName, size, quantity, unit, minimumStock, String(body?.addedDate||new Date().toISOString().slice(0,10)), String(body?.billImage||""), String(body?.description||body?.note||"").trim(), nowIso(), uid],
       );
       return { id: inventoryId, name: categoryName, categoryId, category: categoryName, size, quantity, unit, minimumStock } as any;
     }
