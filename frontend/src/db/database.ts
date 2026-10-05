@@ -148,6 +148,17 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
   // categories are persistent local data and must never be seeded, cleaned,
   // or deleted during an app update.
   ensureInventoryCategoryLinks();
+  // Definitive one-time cutover: Receive Stock owns receipt history.
+  // Remove every legacy receipt-history row and old Implant Portal detail row.
+  // IMPORTANT: aggregate inventory quantities are preserved.
+  const freshStart=db.getFirstSync<any>("SELECT value FROM app_meta WHERE key=? LIMIT 1",[RECEIVE_STOCK_FRESH_START_MARKER]);
+  if(!freshStart){
+    db.withTransactionSync(()=>{
+      db.runSync("DELETE FROM inventory_purchase_receipts");
+      db.runSync("DELETE FROM implant_records");
+      db.runSync("INSERT OR REPLACE INTO app_meta (key,value) VALUES (?,?)",[RECEIVE_STOCK_FRESH_START_MARKER,"done"]);
+    });
+  }
   // One-time migration for the Receive Stock history UI. Old aggregate/legacy
   // receiving data is removed from the receipt-history table only; inventory
   // quantities themselves are never changed.
@@ -176,6 +187,7 @@ const INVENTORY_RESET_MARKER = "hold-inventory-reset-available-v5";
 const RECEIPT_HISTORY_RESET_MARKER = "received-stock-history-reset-v6";
 const IMPLANT_PORTAL_CLEANUP_MARKER = "implant-portal-cleanup-v4";
 const LEGACY_RECEIPT_CLEANUP_MARKER = "legacy-receipt-cleanup-v2";
+const RECEIVE_STOCK_FRESH_START_MARKER = "receive-stock-fresh-start-v1";
 
 export function markInventoryResetDone() {
   db.runSync("INSERT OR REPLACE INTO app_meta (key,value) VALUES (?,?)", [INVENTORY_RESET_MARKER, "done"]);
