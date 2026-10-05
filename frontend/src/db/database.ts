@@ -90,13 +90,14 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
       note TEXT, created_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS inventory_purchase_receipts (
-      id TEXT PRIMARY KEY NOT NULL, inventory_id TEXT NOT NULL, category_id TEXT,
-      category TEXT, size TEXT, quantity REAL NOT NULL DEFAULT 0, unit TEXT NOT NULL DEFAULT 'pcs',
+      id TEXT PRIMARY KEY NOT NULL, inventory_id TEXT NOT NULL, batch_id TEXT,
+      category_id TEXT, category TEXT, size TEXT, quantity REAL NOT NULL DEFAULT 0, unit TEXT NOT NULL DEFAULT 'pcs',
       minimum_stock REAL NOT NULL DEFAULT 0, added_date TEXT, bill_image TEXT,
       created_at TEXT NOT NULL, created_by TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_inventory_purchase_receipts_item ON inventory_purchase_receipts(inventory_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_inventory_purchase_receipts_date ON inventory_purchase_receipts(added_date);
+    CREATE INDEX IF NOT EXISTS idx_inventory_purchase_receipts_batch ON inventory_purchase_receipts(batch_id, created_at);
     CREATE TABLE IF NOT EXISTS app_meta (
       key TEXT PRIMARY KEY NOT NULL, value TEXT
     );
@@ -134,6 +135,7 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
   addColumn("users", "can_edit_patients", "INTEGER NOT NULL DEFAULT 1");
   addColumn("users", "disabled", "INTEGER NOT NULL DEFAULT 0");
   addColumn("inventory", "category_id", "TEXT");
+  addColumn("inventory_purchase_receipts", "batch_id", "TEXT");
   addColumn("inventory", "category", "TEXT");
   addColumn("inventory", "size", "TEXT");
   migrateInventorySchema();
@@ -151,11 +153,20 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
     db.runSync("DELETE FROM inventory_purchase_receipts");
     db.runSync("INSERT OR REPLACE INTO app_meta (key,value) VALUES (?,?)",[RECEIPT_HISTORY_RESET_MARKER,"done"]);
   }
+  // Receive Stock is now the authoritative stock-entry workflow. Remove old
+  // detailed Implant Portal records once so they cannot remain as duplicate
+  // stock data after upgrading to the transaction-based inventory model.
+  const implantCleanup=db.getFirstSync<any>("SELECT value FROM app_meta WHERE key=? LIMIT 1",[IMPLANT_PORTAL_CLEANUP_MARKER]);
+  if(!implantCleanup){
+    db.runSync("DELETE FROM implant_records");
+    db.runSync("INSERT OR REPLACE INTO app_meta (key,value) VALUES (?,?)",[IMPLANT_PORTAL_CLEANUP_MARKER,"done"]);
+  }
   if (!options?.skipInventoryReset) applyHoldInventoryResetOnce();
 }
 
 const INVENTORY_RESET_MARKER = "hold-inventory-reset-available-v5";
-const RECEIPT_HISTORY_RESET_MARKER = "received-stock-history-reset-v3";
+const RECEIPT_HISTORY_RESET_MARKER = "received-stock-history-reset-v4";
+const IMPLANT_PORTAL_CLEANUP_MARKER = "implant-portal-cleanup-v1";
 
 export function markInventoryResetDone() {
   db.runSync("INSERT OR REPLACE INTO app_meta (key,value) VALUES (?,?)", [INVENTORY_RESET_MARKER, "done"]);
