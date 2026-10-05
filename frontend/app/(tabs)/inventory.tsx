@@ -53,7 +53,6 @@ export default function Inventory() {
   const isAdmin = user?.role === "admin";
   const params = useLocalSearchParams<{ categoryId?: string; categoryName?: string }>();
   const selectedCategoryId = typeof params.categoryId === "string" ? params.categoryId : "";
-  const selectedCategoryName = typeof params.categoryName === "string" ? params.categoryName : "";
 
   const [tab, setTab] = useState("All");
   const [editItem, setEditItem] = useState<InventoryItem | null>(null);
