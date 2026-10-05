@@ -588,8 +588,13 @@ export const api = {
       const next=current-qty;
       const uid=await currentUser();
       db.withTransactionSync(()=>{
-        db.runSync("UPDATE inventory SET quantity=? WHERE id=?",[next,inventory.id]);
         db.runSync("DELETE FROM inventory_purchase_receipts WHERE id=?",[rid]);
+        db.runSync("UPDATE inventory SET quantity=? WHERE id=?",[next,inventory.id]);
+        const aggregateMin=Number(db.getFirstSync<any>(
+          "SELECT COALESCE(MAX(minimum_stock),0) AS n FROM inventory_purchase_receipts WHERE inventory_id=?",
+          [inventory.id],
+        )?.n||0);
+        db.runSync("UPDATE inventory SET minimum_stock=? WHERE id=?",[aggregateMin,inventory.id]);
         movement(inventory.id,"purchase_delete",-qty,next,"Received stock deleted",uid);
       });
       return {success:true} as any;
