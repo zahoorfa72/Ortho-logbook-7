@@ -97,6 +97,15 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
     );
     CREATE INDEX IF NOT EXISTS idx_inventory_purchase_receipts_item ON inventory_purchase_receipts(inventory_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_inventory_purchase_receipts_date ON inventory_purchase_receipts(added_date);
+    CREATE TABLE IF NOT EXISTS stock_receipts (
+      id TEXT PRIMARY KEY NOT NULL, inventory_id TEXT NOT NULL, batch_id TEXT,
+      category_id TEXT, category TEXT, size TEXT, quantity REAL NOT NULL DEFAULT 0, unit TEXT NOT NULL DEFAULT 'pcs',
+      minimum_stock REAL NOT NULL DEFAULT 0, added_date TEXT, bill_image TEXT,
+      description TEXT, created_at TEXT NOT NULL, created_by TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_stock_receipts_item ON stock_receipts(inventory_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_stock_receipts_date ON stock_receipts(added_date);
+    CREATE INDEX IF NOT EXISTS idx_stock_receipts_batch ON stock_receipts(batch_id, created_at);
     CREATE TABLE IF NOT EXISTS app_meta (
       key TEXT PRIMARY KEY NOT NULL, value TEXT
     );
@@ -148,6 +157,17 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
   // categories are persistent local data and must never be seeded, cleaned,
   // or deleted during an app update.
   ensureInventoryCategoryLinks();
+  // Definitive fresh Stock portal cutover. Stock reads only stock_receipts.
+  // Never import, copy, or display records from the old Implant Portal or legacy receipt table.
+  const stockPortalFreshStart=db.getFirstSync<any>("SELECT value FROM app_meta WHERE key=? LIMIT 1",[STOCK_PORTAL_FRESH_START_MARKER]);
+  if(!stockPortalFreshStart){
+    db.withTransactionSync(()=>{
+      db.runSync("DELETE FROM stock_receipts");
+      db.runSync("DELETE FROM inventory_purchase_receipts");
+      db.runSync("DELETE FROM implant_records");
+      db.runSync("INSERT OR REPLACE INTO app_meta (key,value) VALUES (?,?)",[STOCK_PORTAL_FRESH_START_MARKER,"done"]);
+    });
+  }
   // Definitive one-time cutover: Receive Stock owns receipt history.
   // Remove every legacy receipt-history row and old Implant Portal detail row.
   // IMPORTANT: aggregate inventory quantities are preserved.
@@ -188,6 +208,7 @@ const RECEIPT_HISTORY_RESET_MARKER = "received-stock-history-reset-v6";
 const IMPLANT_PORTAL_CLEANUP_MARKER = "implant-portal-cleanup-v4";
 const LEGACY_RECEIPT_CLEANUP_MARKER = "legacy-receipt-cleanup-v2";
 const RECEIVE_STOCK_FRESH_START_MARKER = "receive-stock-fresh-start-v1";
+const STOCK_PORTAL_FRESH_START_MARKER = "stock-portal-fresh-start-v1";
 
 export function markInventoryResetDone() {
   db.runSync("INSERT OR REPLACE INTO app_meta (key,value) VALUES (?,?)", [INVENTORY_RESET_MARKER, "done"]);
