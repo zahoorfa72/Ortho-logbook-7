@@ -160,7 +160,7 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
   const fields = Array.isArray(branding.pdfPatientFields) && branding.pdfPatientFields.length
     ? branding.pdfPatientFields
     : ["date","mrNo","name","gender","age","diagnosis","procedure"];
-  const labels: Record<string,string> = {date:"Date",mrNo:"MR No",name:"Patient",gender:"Gender",age:"Age",address:"Address",diagnosis:"Diagnosis",procedure:"Procedure",implants:"Implants",fileName:"File Name"};
+  const labels: Record<string,string> = {date:"Date",mrNo:"MR No",name:"Patient",gender:"Gender",age:"Age",address:"Address",diagnosis:"Diagnosis",procedure:"Procedure",fileName:"File Name"};
   const legacyHierarchy = [
     { fields: [branding.pdfMainHeadingField || "name"], label: "Main Heading" },
     { fields: [branding.pdfSubHeadingField || "procedure"], label: "Sub-heading 1" },
@@ -184,7 +184,6 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
     if(key === "name") return p.name || "";
     if(key === "diagnosis") return p.diagnosis || "";
     if(key === "procedure") return p.procedure || "";
-    if(key === "implants") return implantText(p);
     return String((p.customData||{})[key] || "");
   };
   const implantText = (p: Patient) => {
@@ -210,9 +209,7 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
         const headingClass=level ? " headingLevel"+level : "";
         const styled=level ? "<span class='headingText"+headingClass+"'>"+raw+"</span>" : raw;
         const sub=styled;
-        const implants=(k==="procedure" && level>=2)?implantText(p):"";
-        const implantHtml=implants?"<span class='implantSubheading'>Implant: "+escapeHtml(implants)+"</span>":"";
-        return "<td>"+sub+implantHtml+(k==="name"?badge:"")+"</td>";
+        return "<td>"+sub+(k==="name"?badge:"")+"</td>";
       }).join("")+"</tr>";
     });
     if(!rows) rows='<tr><td colspan="'+(fields.length+1)+'"><div class="empty">No patients recorded.</div></td></tr>';
@@ -254,13 +251,7 @@ export async function buildPatientDetailHtml(
       else if(f.key==="age") value=p.age;
       else if(f.key==="address") value=p.address||"";
       else if(f.key==="diagnosis") value=p.diagnosis;
-      else if(f.key==="procedure") {
-        const implantText=(p.implants&&p.implants.length
-          ? p.implants.map((x:any)=>formatInventoryLabel(x.category,x.name,x.size)+(Number(x.quantity)>1?" × "+x.quantity:"")).join(" • ")
-          : [p.implant,p.implantII].filter(Boolean).join(" • "));
-        value=p.procedure || "";
-        if(implantText) value += (value ? "\n" : "") + "Implant: " + implantText;
-      }
+      else if(f.key==="procedure") value=p.procedure || "";
       else if(f.key==="fileName") value=p.fileName||"";
       else value=String((p.customData||{})[f.key]||"");
       return "<tr><th>"+escapeHtml(f.label)+"</th><td class='detailValue'>"+escapeHtml(value||"—")+"</td></tr>";
@@ -278,6 +269,33 @@ export async function buildPatientDetailHtml(
       "</section>";
   }));
   return "<html><head><meta charset='utf-8'/>"+styles(branding)+"<style>.patientPage{page-break-after:always;border:1px solid #E2DFD8;border-radius:14px;padding:20px;margin-bottom:18px}.patientPage:last-child{page-break-after:auto}.patientNumber{font-size:10px;color:#7C7872;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px}.patientName{font-size:22px;font-weight:800;color:"+branding.primary+"}.patientMr{font-size:12px;color:#3A3A3C;margin-top:4px;margin-bottom:16px}.detailTable th{width:28%;background:"+branding.tertiary+"}.photoGrid{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}.patientPhoto{width:220px;height:220px;object-fit:cover;border-radius:10px;border:1px solid #E2DFD8}</style></head><body>"+header(branding,"Detailed Patient Report — "+patients.length+" record"+(patients.length===1?"":"s"))+pages.join("")+footer(branding)+"</body></html>";
+}
+
+export function buildPatientImplantHtml(branding: BrandingConfig, patients: Patient[], fromDate?: string, toDate?: string): string {
+  const implantHeading = String(branding.pdfImplantHeading || "Implants").trim() || "Implants";
+  const implantSubheading = String(branding.pdfImplantSubheading || "Used Implants").trim() || "Used Implants";
+  const implantText = (p: Patient) => {
+    const implants = p.implants?.length
+      ? p.implants.map((x:any)=>formatInventoryLabel(x.category,x.name,x.size)+(Number(x.quantity)>1?" × "+x.quantity:"")).join(" • ")
+      : [p.implant,p.implantII].filter(Boolean).join(" • ");
+    return implants;
+  };
+  const rows = patients.map((p, i) => {
+    const implants = implantText(p);
+    return `<tr>
+      <td>${i + 1}</td>
+      <td><strong>${escapeHtml(p.name || "Unnamed patient")}</strong><br/><span class="muted">MR No: ${escapeHtml(p.mrNo || "—")} · Date: ${escapeHtml(p.date || "—")}</span></td>
+      <td><strong class="implantHeading">${escapeHtml(implantHeading)}</strong><div class="implantSubheading">${escapeHtml(implantSubheading)}</div><div>${escapeHtml(implants || "—")}</div></td>
+      <td>${escapeHtml(p.procedure || "—")}</td>
+    </tr>`;
+  }).join("");
+  return `<html><head><meta charset="utf-8"/>${styles(branding)}<style>
+    .muted{color:#7C7872;font-size:10px}.implantHeading{color:${branding.primary}}.implantSubheading{color:${branding.pdfImplantSubheadingColor || "#8A9690"};font-size:10px;font-weight:700;margin:2px 0}
+  </style></head><body>
+    ${header(branding, escapeHtml(implantHeading) + " — " + patients.length + " record" + (patients.length===1?"":"s") + (fromDate||toDate?" — "+escapeHtml(fromDate||"Start")+" to "+escapeHtml(toDate||"End"):""))}
+    <table><thead><tr><th>#</th><th>Patient</th><th>${escapeHtml(implantHeading)}</th><th>Procedure</th></tr></thead><tbody>${rows || "<tr><td colspan='4'><div class='empty'>No patients recorded.</div></td></tr>"}</tbody></table>
+    ${footer(branding)}
+  </body></html>`;
 }
 
 export function buildImplantRecordsHtml(branding: BrandingConfig, records:any[]): string {
