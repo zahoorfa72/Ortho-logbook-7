@@ -379,7 +379,7 @@ export default function BrandingScreen() {
         <Pressable style={[styles.toggleRow,{backgroundColor:draft.pdfShowOccurrenceBadge!==false?colors.brandTertiary:colors.surfaceSecondary}]} onPress={()=>setDraft(d=>({...d,pdfShowOccurrenceBadge:d.pdfShowOccurrenceBadge===false}))}>
           <View style={{flex:1}}><Text style={styles.colorLabel}>Show patient occurrence symbol (1st / 2nd / 3rd time)</Text><Text style={styles.colorDesc}>Admin can enable or disable this symbol in Patient PDF.</Text></View>
           <Ionicons name={draft.pdfShowOccurrenceBadge!==false?"checkmark-circle":"ellipse-outline"} size={24} color={draft.pdfShowOccurrenceBadge!==false?colors.brandPrimary:colors.muted}/>
-        </Pressable>>
+        </Pressable>
         <Text style={[styles.section, { marginTop: spacing.xl }]}>Colour Presets</Text>
         <View style={styles.presets}>
           {BRANDING_PRESETS.map((p) => (
