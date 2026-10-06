@@ -66,6 +66,8 @@ export type BrandingConfig = {
   pdfSubHeadingField?: string;
   pdfHeadingLevels?: { fields: string[]; label?: string }[];
   pdfImplantSubheadingColor?: string;
+  pdfImplantHeading?: string;
+  pdfImplantSubheading?: string;
   pdfPatientsPerPage?: number;
   pdfListTextSize?: "small" | "medium" | "large";
   pdfListTextWeight?: "normal" | "bold";
@@ -107,15 +109,16 @@ export const defaultBranding: BrandingConfig = {
   pdfShowGeneratedAt: true,
   pdfPageSize: "A4",
   pdfOrientation: "portrait",
-  pdfPatientFields: ["date","mrNo","name","gender","age","address","diagnosis","procedure","implants"],
+  pdfPatientFields: ["date","mrNo","name","gender","age","address","diagnosis","procedure"],
   pdfMainHeadingField: "name",
   pdfSubHeadingField: "procedure",
   pdfHeadingLevels: [
     { fields: ["name"], label: "Main Heading" },
     { fields: ["procedure"], label: "Sub-heading 1" },
-    { fields: ["implants"], label: "Sub-heading 2" },
   ],
   pdfImplantSubheadingColor: "#8A9690",
+  pdfImplantHeading: "Implants",
+  pdfImplantSubheading: "Used Implants",
   pdfPatientsPerPage: 20,
   pdfListTextSize: "medium",
   pdfListTextWeight: "normal",
@@ -160,7 +163,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       if (typeof saved === "string" && saved) {
         try {
           const parsed = JSON.parse(saved) as BrandingConfig;
-          if (parsed && typeof parsed === "object") setBrandingState({ ...defaultBranding, ...parsed });
+          if (parsed && typeof parsed === "object") setBrandingState({ ...defaultBranding, ...parsed, pdfPatientFields: (Array.isArray(parsed.pdfPatientFields) ? parsed.pdfPatientFields : defaultBranding.pdfPatientFields).filter((x) => x !== "implants"), pdfHeadingLevels: (Array.isArray(parsed.pdfHeadingLevels) ? parsed.pdfHeadingLevels : defaultBranding.pdfHeadingLevels).map((g:any) => ({ ...g, fields: Array.isArray(g?.fields) ? g.fields.filter((x:string) => x !== "implants") : [] })) });
         } catch {}
       }
     });
