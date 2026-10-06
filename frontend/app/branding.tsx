@@ -260,15 +260,22 @@ export default function BrandingScreen() {
         <Text style={styles.hint}>Every available patient section is listed here. Check marks decide exactly which sections the admin wants in the Patient PDF. Custom fields created in Patient Fields also appear here.</Text>
         {patientPdfOptions.map(([key,label]) => {
           const active=(draft.pdfPatientFields||defaultBranding.pdfPatientFields||[]).includes(key);
-          return <Pressable key={key} onPress={()=>setDraft(d=>({...d,pdfPatientFields:active?(d.pdfPatientFields||[]).filter(x=>x!==key):[...(d.pdfPatientFields||defaultBranding.pdfPatientFields||[]),key]}))} style={styles.fieldToggle}>
+          return <Pressable key={key} onPress={()=>setDraft(d=>{
+  const current=d.pdfPatientFields||defaultBranding.pdfPatientFields||[];
+  const next=active?current.filter(x=>x!==key):[...current,key];
+  const levels=(d.pdfHeadingLevels||defaultBranding.pdfHeadingLevels||[]).map((g:any)=>({...g,fields:(g.fields||[]).filter((x:string)=>next.includes(x))}));
+  return {...d,pdfPatientFields:next,pdfHeadingLevels:levels};
+})} style={styles.fieldToggle}>
             <Ionicons name={active?"checkbox":"square-outline"} size={21} color={active?colors.brandPrimary:colors.muted}/>
             <Text style={styles.fieldToggleText}>{label}</Text>
           </Pressable>;
         })}
         <Text style={[styles.label, { marginTop: spacing.md }]}>PDF field heading setup</Text>
-        <Text style={styles.hint}>For every available section, choose Normal, Main Heading, Sub-heading 1, or Sub-heading 2. These settings control the heading level inside the Patient PDF. Implants is optional and is never added unless checked above.</Text>
+        <Text style={styles.hint}>Only enabled sections appear here. Each enabled entry has its own box: Normal, Main Heading, Sub-heading, or Sub-sub-heading. A Sub-heading belongs under the most recent Main Heading before it; a Sub-sub-heading belongs under that sub-heading. Disabled sections have no heading control and cannot appear in the Patient PDF.</Text>
         {patientPdfOptions.map(([key,label])=>{
           const defaults=defaultBranding.pdfHeadingLevels||[];
+          const enabledFields=draft.pdfPatientFields||defaultBranding.pdfPatientFields||[];
+          if(!enabledFields.includes(key)) return null;
           const groups=Array.isArray(draft.pdfHeadingLevels)&&draft.pdfHeadingLevels.length?draft.pdfHeadingLevels:defaults;
           const current=groups.findIndex((g:any)=>Array.isArray(g?.fields)&&g.fields.includes(key));
           const setLevel=(level:number)=>{
@@ -283,7 +290,7 @@ export default function BrandingScreen() {
           return <View key={key} style={styles.subtitleLineCard}>
             <Text style={styles.subtitleLineLabel}>{label}</Text>
             <View style={styles.styleRow}>
-              {[["Normal",0],["Main Heading",1],["Sub-heading 1",2],["Sub-heading 2",3]].map(([txt,level])=>{
+              {[["Normal",0],["Main Heading",1],["Sub-heading",2],["Sub-sub-heading",3]].map(([txt,level])=>{
                 const active=(current===Number(level)-1) || (Number(level)===0&&current<0);
                 return <Pressable key={String(level)} onPress={()=>setLevel(Number(level))} style={[styles.styleChip,{backgroundColor:active?colors.brandPrimary:colors.surfaceSecondary}]}>
                   <Text style={[styles.styleChipText,{color:active?colors.onBrandPrimary:colors.onSurface}]}>{txt}</Text>
