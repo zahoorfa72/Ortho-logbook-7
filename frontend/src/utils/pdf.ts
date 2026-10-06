@@ -204,7 +204,7 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
     let rows="";
     page.forEach((p,idx)=>{
       const occurrence=counts.get(p.id)||p.operationCount||1;
-      const badge=branding.pdfShowOccurrenceBadge!==false ? '<span class="badge">'+escapeHtml(ordinalSuffix(occurrence))+' time</span>' : "";
+      const badge=branding.pdfShowOccurrenceBadge!==false ? '<span class="occurrence">'+escapeHtml(ordinalSuffix(occurrence))+' time</span>' : "";
       rows += "<tr><td class='indexCell'>"+(start+idx+1)+"</td>"+fields.map(k=>{
         const raw=escapeHtml(value(p,k)||"—");
         const level=levelFor(k);
@@ -223,7 +223,7 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
   const textTone = branding.pdfListTextTone==="light" ? "#7C7872" : branding.pdfListTextTone==="dark" ? "#1C1C1E" : "#3A3A3C";
   const rowPadding = branding.pdfListRowSpacing==="spacious" ? "4.5px 4px" : branding.pdfListRowSpacing==="normal" ? "3.5px 3.5px" : "2.5px 3.5px";
   return '<html><head><meta charset="utf-8"/>'+styles(branding)+'<style>'+
-    'table{font-size:'+textSize+'px;table-layout:auto;width:100%;border-collapse:collapse}.listPage{page-break-after:always}.listPage:last-child{page-break-after:auto}th,td{padding:'+rowPadding+';line-height:1.15;vertical-align:middle}td{color:'+textTone+';font-weight:'+textWeight+'}.indexHead,.indexCell{width:22px;text-align:center}.headingText{display:block}.headingLevel1{font-size:1.08em;font-weight:800;color:'+branding.primary+'}.headingLevel2{font-weight:750;color:'+branding.text+'}.headingLevel3{font-weight:700;color:'+branding.text+'}.headingLevel4{font-weight:650;color:#59625E}.badge{font-size:.78em;color:'+branding.primary+';margin-left:3px;white-space:nowrap}tbody tr{page-break-inside:avoid}'+
+    'table{font-size:'+textSize+'px;table-layout:auto;width:100%;border-collapse:collapse}.listPage{page-break-after:always}.listPage:last-child{page-break-after:auto}th,td{padding:'+rowPadding+';line-height:1.15;vertical-align:middle}td{color:'+textTone+';font-weight:'+textWeight+'}.indexHead,.indexCell{width:22px;text-align:center}.headingText{display:block}.headingLevel1{font-size:1.08em;font-weight:800;color:'+branding.primary+'}.headingLevel2{font-weight:750;color:'+branding.text+'}.headingLevel3{font-weight:700;color:'+branding.text+'}.headingLevel4{font-weight:650;color:#59625E}.occurrence{font-size:.78em;font-weight:700;color:'+branding.text+';margin-left:5px;white-space:nowrap}.badge{font-size:.78em;margin-left:3px;white-space:nowrap}tbody tr{page-break-inside:avoid}'+
     '</style></head><body>'+
     header(branding,'Patient List — '+patients.length+' record'+(patients.length===1?'':'s')+(fromDate||toDate?' — '+(fromDate||'Start')+' to '+(toDate||'End'):''))+
     pageTables.join("")+footer(branding)+'</body></html>';
@@ -240,7 +240,12 @@ export async function buildPatientDetailHtml(
     if(uri.startsWith("data:")) return uri;
     try {
       const base64=await FileSystem.readAsStringAsync(uri,{encoding:FileSystem.EncodingType.Base64});
-      return "data:image/jpeg;base64,"+base64;
+      const lower=uri.toLowerCase().split("?")[0];
+      const mime=lower.endsWith(".png") ? "image/png"
+        : lower.endsWith(".webp") ? "image/webp"
+        : lower.endsWith(".gif") ? "image/gif"
+        : "image/jpeg";
+      return "data:"+mime+";base64,"+base64;
     } catch { return ""; }
   };
   const pages=await Promise.all(patients.map(async (p,idx)=>{
@@ -268,15 +273,19 @@ export async function buildPatientDetailHtml(
     const selectedPhotos=photoMode==="all"?rawPhotos:(photoMode==="first"?rawPhotos.slice(0,1):[]);
     const photos=[];
     for(const uri of selectedPhotos){const src=await photoToData(uri);if(src)photos.push("<img src='"+src+"' class='patientPhoto' />");}
+    const occurrence=Number(p.operationCount||1);
+    const occurrenceTag=branding.pdfShowOccurrenceBadge!==false
+      ? "<span class='occurrenceTag'>"+escapeHtml(ordinalSuffix(occurrence))+" time</span>"
+      : "";
     return "<section class='patientPage'>"+
       "<div class='patientNumber'>Patient "+(idx+1)+" of "+patients.length+"</div>"+
-      "<div class='patientName'>"+escapeHtml(p.name||"Unnamed patient")+"</div>"+
+      "<div class='patientName'>"+escapeHtml(p.name||"Unnamed patient")+occurrenceTag+"</div>"+
       (p.mrNo?"<div class='patientMr'>MR No: "+escapeHtml(p.mrNo)+"</div>":"")+
       "<table class='detailTable'><tbody>"+rows+"</tbody></table>"+
       (photos.length?"<div class='photoGrid'>"+photos.join("")+"</div>":"")+
       "</section>";
   }));
-  return "<html><head><meta charset='utf-8'/>"+styles(branding)+"<style>.patientPage{page-break-after:always;border:1px solid #E2DFD8;border-radius:14px;padding:20px;margin-bottom:18px}.patientPage:last-child{page-break-after:auto}.patientNumber{font-size:10px;color:#7C7872;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px}.patientName{font-size:22px;font-weight:800;color:"+branding.primary+"}.patientMr{font-size:12px;color:#3A3A3C;margin-top:4px;margin-bottom:16px}.detailTable th{width:28%;background:"+branding.tertiary+"}.photoGrid{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}.patientPhoto{width:220px;height:220px;object-fit:cover;border-radius:10px;border:1px solid #E2DFD8}</style></head><body>"+header(branding,"Detailed Patient Report — "+patients.length+" record"+(patients.length===1?"":"s"))+pages.join("")+footer(branding)+"</body></html>";
+  return "<html><head><meta charset='utf-8'/>"+styles(branding)+"<style>.patientPage{page-break-after:always;border:1px solid #E2DFD8;border-radius:14px;padding:20px;margin-bottom:18px}.patientPage:last-child{page-break-after:auto}.patientNumber{font-size:10px;color:#7C7872;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px}.patientName{font-size:22px;font-weight:800;color:"+branding.primary+"}.occurrenceTag{font-size:12px;font-weight:700;color:"+branding.text+";margin-left:8px;white-space:nowrap}.patientMr{font-size:12px;color:#3A3A3C;margin-top:4px;margin-bottom:16px}.detailTable th{width:28%;background:"+branding.tertiary+"}.photoGrid{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}.patientPhoto{width:220px;height:220px;object-fit:cover;border-radius:10px;border:1px solid #E2DFD8}</style></head><body>"+header(branding,"Detailed Patient Report — "+patients.length+" record"+(patients.length===1?"":"s"))+pages.join("")+footer(branding)+"</body></html>";
 }
 
 
