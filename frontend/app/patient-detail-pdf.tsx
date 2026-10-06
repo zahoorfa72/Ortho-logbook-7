@@ -150,7 +150,7 @@ export default function PatientDetailPdfScreen() {
             <View style={{flex:1,marginLeft:spacing.sm}}>
               <View style={styles.patientNameRow}>
                 <Text style={styles.patientName}>{item.name||"Unnamed patient"}</Text>
-                {item.totalOperations && item.totalOperations>1 ? <Text style={styles.occurrenceText}>{occurrenceLabel(item.operationCount||1)}</Text> : null}
+                {branding.pdfShowOccurrenceBadge!==false && item.totalOperations && item.totalOperations>1 ? <Text style={styles.occurrenceText}>{occurrenceLabel(item.operationCount||1)}</Text> : null}
               </View>
               <Text style={styles.patientMeta}>{item.mrNo||"—"} · {item.date||"—"}{item.fileName?" · "+item.fileName:""}</Text>
             </View>
