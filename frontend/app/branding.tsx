@@ -3,10 +3,12 @@ import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system";
 import { Image } from "expo-image";
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { api } from "@/src/api/client";
 import { useAuth } from "@/src/auth/AuthContext";
 import { PrimaryButton } from "@/src/components/PrimaryButton";
 import { useToast } from "@/src/components/toast";
@@ -59,6 +61,8 @@ export default function BrandingScreen() {
   const [subtitleSizeText, setSubtitleSizeText] = useState(String(branding.pdfSubtitleSize));
   const [titleSizeText, setTitleSizeText] = useState(String(branding.pdfTitleSize));
   const [pdfMarginText, setPdfMarginText] = useState(String(branding.pdfMargin));
+  const { data: customFields = [] } = useQuery<any[]>({ queryKey: ["patient-custom-fields"], queryFn: () => api.get("/patient-custom-fields"), enabled: user?.role === "admin" });
+  const patientPdfOptions = [["date","Date"],["mrNo","MR No"],["name","Patient Name"],["gender","Gender"],["age","Age"],["address","Address"],["diagnosis","Diagnosis"],["procedure","Procedure"],["implants","Implants"],["fileName","File Name"], ...customFields.filter((f:any)=>f?.key && f?.label).map((f:any)=>[String(f.key),String(f.label)])] as [string,string][];
 
   const set = (k: keyof BrandingConfig) => (v: string) =>
     setDraft((d) => ({ ...d, [k]: v }));
@@ -253,10 +257,8 @@ export default function BrandingScreen() {
           </View>;
         })}
         <Text style={[styles.label, { marginTop: spacing.md }]}>Patient fields in PDF</Text>
-        <Text style={styles.hint}>Select only the patient fields you want in the original compact PDF. The layout remains the same.</Text>
-        {[
-          ["date","Date"],["mrNo","MR No"],["name","Patient Name"],["gender","Gender"],["age","Age"],["address","Address"],["diagnosis","Diagnosis"],["procedure","Procedure"],["implants","Implants"],["fileName","File Name"]
-        ].map(([key,label]) => {
+        <Text style={styles.hint}>Every available patient section is listed here. Check marks decide exactly which sections the admin wants in the Patient PDF. Custom fields created in Patient Fields also appear here.</Text>
+        {patientPdfOptions.map(([key,label]) => {
           const active=(draft.pdfPatientFields||defaultBranding.pdfPatientFields||[]).includes(key);
           return <Pressable key={key} onPress={()=>setDraft(d=>({...d,pdfPatientFields:active?(d.pdfPatientFields||[]).filter(x=>x!==key):[...(d.pdfPatientFields||defaultBranding.pdfPatientFields||[]),key]}))} style={styles.fieldToggle}>
             <Ionicons name={active?"checkbox":"square-outline"} size={21} color={active?colors.brandPrimary:colors.muted}/>
@@ -264,10 +266,8 @@ export default function BrandingScreen() {
           </Pressable>;
         })}
         <Text style={[styles.label, { marginTop: spacing.md }]}>PDF field heading setup</Text>
-        <Text style={styles.hint}>Every patient field is shown separately. Procedure remains available, and Implants is now an optional selectable field. Implants is not included unless you select it.</Text>
-        {[
-          ["date","Date"],["mrNo","MR No"],["name","Patient Name"],["gender","Gender"],["age","Age"],["address","Address"],["diagnosis","Diagnosis"],["procedure","Procedure"],["implants","Implants"],["fileName","File Name"]
-        ].map(([key,label])=>{
+        <Text style={styles.hint}>For every available section, choose Normal, Main Heading, Sub-heading 1, or Sub-heading 2. These settings control the heading level inside the Patient PDF. Implants is optional and is never added unless checked above.</Text>
+        {patientPdfOptions.map(([key,label])=>{
           const defaults=defaultBranding.pdfHeadingLevels||[];
           const groups=Array.isArray(draft.pdfHeadingLevels)&&draft.pdfHeadingLevels.length?draft.pdfHeadingLevels:defaults;
           const current=groups.findIndex((g:any)=>Array.isArray(g?.fields)&&g.fields.includes(key));
