@@ -270,77 +270,54 @@ export default function BrandingScreen() {
             <Text style={styles.fieldToggleText}>{label}</Text>
           </Pressable>;
         })}
-        <Text style={[styles.label, { marginTop: spacing.md }]}>Patient PDF heading setup</Text>
-        <Text style={styles.hint}>
-          The boxes below are live. They contain every Patient PDF entry that is currently enabled above.
-          Check an entry in Sub-heading to make it a Sub-heading. Check an entry in Sub-sub-heading to make
-          it a Sub-sub-heading. An entry can be selected in only one box. If you disable an entry above,
-          it disappears from both boxes automatically.
-        </Text>
+        <Text style={[styles.label, { marginTop: spacing.md }]}>Patient PDF headings</Text>
+        <Text style={styles.hint}>Every enabled Patient PDF entry has its own Sub-heading and Sub-sub-heading boxes. Choose No need or check the entry. Only enabled entries appear here.</Text>
         {(() => {
           const enabledFields = draft.pdfPatientFields || defaultBranding.pdfPatientFields || [];
-          const groups = Array.isArray(draft.pdfHeadingLevels) && draft.pdfHeadingLevels.length
-            ? draft.pdfHeadingLevels
-            : (defaultBranding.pdfHeadingLevels || []);
-          const selectedSub = new Set<string>(Array.isArray(groups[1]?.fields) ? groups[1].fields : []);
-          const selectedSubSub = new Set<string>(Array.isArray(groups[2]?.fields) ? groups[2].fields : []);
-
-          const updateHeadingSelection = (key: string, level: 0 | 2 | 3) => {
+          const groups = Array.isArray(draft.pdfHeadingLevels) ? draft.pdfHeadingLevels : [];
+          const sub = new Set<string>(Array.isArray(groups.find((g:any)=>g?.label==="Sub-heading")?.fields) ? groups.find((g:any)=>g?.label==="Sub-heading").fields : []);
+          const subSub = new Set<string>(Array.isArray(groups.find((g:any)=>g?.label==="Sub-sub-heading")?.fields) ? groups.find((g:any)=>g?.label==="Sub-sub-heading").fields : []);
+          const setEntryLevel = (key:string, level:0|2|3) => {
             setDraft(d => {
-              const defaults = defaultBranding.pdfHeadingLevels || [];
-              const base = Array.from({ length: 3 }, (_, i) => ({
-                ...(d.pdfHeadingLevels?.[i] || defaults[i] || {}),
-                fields: [...(d.pdfHeadingLevels?.[i]?.fields || defaults[i]?.fields || [])],
-              }));
-              base.forEach((g: any) => {
-                g.fields = (g.fields || []).filter((x: string) => x !== key);
-              });
-              if (level === 2) base[1].fields.push(key);
-              if (level === 3) base[2].fields.push(key);
-              base[0].label = "Main Heading";
-              base[1].label = "Sub-heading";
-              base[2].label = "Sub-sub-heading";
-              return { ...d, pdfHeadingLevels: base };
+              const base = [
+                { label:"Main Heading", fields:[...(d.pdfHeadingLevels?.find((g:any)=>g?.label==="Main Heading")?.fields || [])] },
+                { label:"Sub-heading", fields:[...(d.pdfHeadingLevels?.find((g:any)=>g?.label==="Sub-heading")?.fields || [])] },
+                { label:"Sub-sub-heading", fields:[...(d.pdfHeadingLevels?.find((g:any)=>g?.label==="Sub-sub-heading")?.fields || [])] },
+              ];
+              base.forEach(g=>{g.fields=g.fields.filter((x:string)=>x!==key);});
+              if(level===2) base[1].fields.push(key);
+              if(level===3) base[2].fields.push(key);
+              return {...d,pdfHeadingLevels:base};
             });
           };
-
-          const entryBox = (title: string, level: 2 | 3, selected: Set<string>) => (
-            <View style={styles.headingBox}>
-              <Text style={styles.headingBoxTitle}>{title}</Text>
-              <Text style={styles.headingBoxHint}>
-                Select any enabled Patient PDF entry below.
-              </Text>
-              <View style={styles.headingEntryGrid}>
-                {patientPdfOptions.filter(([key]) => enabledFields.includes(key)).map(([key, label]) => {
-                  const checked = selected.has(key);
-                  return (
-                    <Pressable
-                      key={key}
-                      onPress={() => updateHeadingSelection(key, checked ? 0 : level)}
-                      style={[styles.headingEntry, checked && { borderColor: colors.brandPrimary, backgroundColor: colors.brandTertiary }]}
-                    >
-                      <Ionicons
-                        name={checked ? "checkbox" : "square-outline"}
-                        size={20}
-                        color={checked ? colors.brandPrimary : colors.muted}
-                      />
-                      <Text style={styles.headingEntryText}>{label}</Text>
-                    </Pressable>
-                  );
-                })}
+          return patientPdfOptions.filter(([key])=>enabledFields.includes(key)).map(([key,label])=>{
+            const subChecked=sub.has(key), subSubChecked=subSub.has(key);
+            return <View key={key} style={styles.patientPdfEntryBox}>
+              <Pressable style={styles.fieldToggle} onPress={()=>setDraft(d=>({...d,pdfPatientFields:(d.pdfPatientFields||[]).filter(x=>x!==key)}))}>
+                <Ionicons name="checkbox" size={21} color={colors.brandPrimary}/><Text style={styles.headingEntryText}>{label}</Text>
+              </Pressable>
+              <View style={styles.headingChoiceRow}>
+                <View style={styles.headingChoiceBox}>
+                  <Text style={styles.headingChoiceTitle}>Sub-heading</Text>
+                  <Pressable onPress={()=>setEntryLevel(key,0)} style={[styles.headingChoiceOption,!subChecked&&styles.headingChoiceOptionActive]}>
+                    <Ionicons name={!subChecked?"radio-button-on":"radio-button-off"} size={19} color={!subChecked?colors.brandPrimary:colors.muted}/><Text style={styles.headingChoiceText}>No need</Text>
+                  </Pressable>
+                  <Pressable onPress={()=>setEntryLevel(key,2)} style={[styles.headingChoiceOption,subChecked&&styles.headingChoiceOptionActive]}>
+                    <Ionicons name={subChecked?"checkbox":"square-outline"} size={19} color={subChecked?colors.brandPrimary:colors.muted}/><Text style={styles.headingChoiceText}>{label}</Text>
+                  </Pressable>
+                </View>
+                <View style={styles.headingChoiceBox}>
+                  <Text style={styles.headingChoiceTitle}>Sub-sub-heading</Text>
+                  <Pressable onPress={()=>setEntryLevel(key,0)} style={[styles.headingChoiceOption,!subSubChecked&&styles.headingChoiceOptionActive]}>
+                    <Ionicons name={!subSubChecked?"radio-button-on":"radio-button-off"} size={19} color={!subSubChecked?colors.brandPrimary:colors.muted}/><Text style={styles.headingChoiceText}>No need</Text>
+                  </Pressable>
+                  <Pressable onPress={()=>setEntryLevel(key,3)} style={[styles.headingChoiceOption,subSubChecked&&styles.headingChoiceOptionActive]}>
+                    <Ionicons name={subSubChecked?"checkbox":"square-outline"} size={19} color={subSubChecked?colors.brandPrimary:colors.muted}/><Text style={styles.headingChoiceText}>{label}</Text>
+                  </Pressable>
+                </View>
               </View>
-              {!enabledFields.length ? (
-                <Text style={styles.hint}>Enable Patient PDF entries above first.</Text>
-              ) : null}
-            </View>
-          );
-
-          return (
-            <>
-              {entryBox("Sub-heading", 2, selectedSub)}
-              {entryBox("Sub-sub-heading", 3, selectedSubSub)}
-            </>
-          );
+            </View>;
+          });
         })()}
         <Text style={[styles.label, { marginTop: spacing.md }]}>Patient list layout</Text>
         <Text style={styles.hint}>Control how many patients fit on each PDF list page and how the list text looks. The selected settings apply to the existing PDF design.</Text>
@@ -398,7 +375,11 @@ export default function BrandingScreen() {
         <View style={styles.styleRow}>{(["portrait","landscape"] as const).map(v=><Pressable key={v} onPress={()=>setDraft(d=>({...d,pdfOrientation:v}))} style={[styles.styleChip,{backgroundColor:draft.pdfOrientation===v?colors.brandPrimary:colors.surfaceSecondary}]}><Text style={[styles.styleChipText,{color:draft.pdfOrientation===v?colors.onBrandPrimary:colors.onSurface}]}>{v}</Text></Pressable>)}</View>
         <Text style={styles.label}>Page margin (points)</Text>
         <View style={styles.sizeControls}><Pressable style={styles.sizeButton} onPress={()=>{const n=Math.max(12,Number(draft.pdfMargin||28)-2);setDraft(d=>({...d,pdfMargin:n}));setPdfMarginText(String(n));}}><Ionicons name="remove" size={18} color={colors.onSurface}/></Pressable><TextInput keyboardType="number-pad" value={pdfMarginText} onChangeText={setPdfMarginText} onBlur={()=>{const n=Math.max(12,Math.min(60,Math.round(Number(pdfMarginText)||28)));setPdfMarginText(String(n));setDraft(d=>({...d,pdfMargin:n}));}} style={styles.smallSizeInput}/><Pressable style={styles.sizeButton} onPress={()=>{const n=Math.min(60,Number(draft.pdfMargin||28)+2);setDraft(d=>({...d,pdfMargin:n}));setPdfMarginText(String(n));}}><Ionicons name="add" size={18} color={colors.onSurface}/></Pressable></View>
-        <Pressable style={[styles.toggleRow,{backgroundColor:draft.pdfShowGeneratedAt?colors.brandTertiary:colors.surfaceSecondary}]} onPress={()=>setDraft(d=>({...d,pdfShowGeneratedAt:!d.pdfShowGeneratedAt}))}><View style={{flex:1}}><Text style={styles.colorLabel}>Show generated date/time</Text><Text style={styles.colorDesc}>Display report generation time in the PDF header</Text></View><Ionicons name={draft.pdfShowGeneratedAt?"checkmark-circle":"ellipse-outline"} size={24} color={draft.pdfShowGeneratedAt?colors.brandPrimary:colors.muted}/></Pressable>
+        <Pressable style={[styles.toggleRow,{backgroundColor:draft.pdfShowGeneratedAt?colors.brandTertiary:colors.surfaceSecondary}]} onPress={()=>setDraft(d=>({...d,pdfShowGeneratedAt:!d.pdfShowGeneratedAt}))}><View style={{flex:1}}><Text style={styles.colorLabel}>Show generated date/time</Text><Text style={styles.colorDesc}>Display report generation time in the PDF header</Text></View><Ionicons name={draft.pdfShowGeneratedAt?"checkmark-circle":"ellipse-outline"} size={24} color={draft.pdfShowGeneratedAt?colors.brandPrimary:colors.muted}/></Pressable
+        <Pressable style={[styles.toggleRow,{backgroundColor:draft.pdfShowOccurrenceBadge!==false?colors.brandTertiary:colors.surfaceSecondary}]} onPress={()=>setDraft(d=>({...d,pdfShowOccurrenceBadge:d.pdfShowOccurrenceBadge===false}))}>
+          <View style={{flex:1}}><Text style={styles.colorLabel}>Show patient occurrence symbol (1st / 2nd / 3rd time)</Text><Text style={styles.colorDesc}>Admin can enable or disable this symbol in Patient PDF.</Text></View>
+          <Ionicons name={draft.pdfShowOccurrenceBadge!==false?"checkmark-circle":"ellipse-outline"} size={24} color={draft.pdfShowOccurrenceBadge!==false?colors.brandPrimary:colors.muted}/>
+        </Pressable>>
         <Text style={[styles.section, { marginTop: spacing.xl }]}>Colour Presets</Text>
         <View style={styles.presets}>
           {BRANDING_PRESETS.map((p) => (
@@ -544,7 +525,14 @@ const useStyles = makeStyles((colors) => ({
   fieldToggle:{flexDirection:"row",alignItems:"center",gap:spacing.sm,paddingVertical:spacing.sm},
   fieldToggleText:{fontFamily:fontFamily.medium,fontSize:fontSize.base,color:colors.onSurface},
   subtitleLineCard:{padding:spacing.md,borderWidth:1,borderColor:colors.border,borderRadius:radius.md,backgroundColor:colors.surfaceSecondary,marginTop:spacing.sm},
-  headingBox:{padding:spacing.md,borderWidth:1,borderColor:colors.borderStrong,borderRadius:radius.md,backgroundColor:colors.surfaceSecondary,marginTop:spacing.md},
+  patientPdfEntryBox:{padding:spacing.md,borderWidth:1,borderColor:colors.borderStrong,borderRadius:radius.md,backgroundColor:colors.surfaceSecondary,marginTop:spacing.sm},
+  headingChoiceRow:{flexDirection:"row",gap:spacing.sm},
+  headingChoiceBox:{flex:1,padding:spacing.sm,borderWidth:1,borderColor:colors.border,borderRadius:radius.sm,backgroundColor:colors.surface},
+  headingChoiceTitle:{fontFamily:fontFamily.bold,fontSize:fontSize.xs,color:colors.onSurface,marginBottom:spacing.xs},
+  headingChoiceOption:{flexDirection:"row",alignItems:"center",gap:spacing.xs,paddingVertical:6,paddingHorizontal:4,borderRadius:radius.sm},
+  headingChoiceOptionActive:{backgroundColor:colors.brandTertiary},
+  headingChoiceText:{fontFamily:fontFamily.medium,fontSize:fontSize.sm,color:colors.onSurface},
+  headingEntryText:{fontFamily:fontFamily.medium,fontSize:fontSize.base,color:colors.onSurface},
   headingBoxTitle:{fontFamily:fontFamily.bold,fontSize:fontSize.base,color:colors.onSurface,marginBottom:spacing.xs},
   headingBoxHint:{fontFamily:fontFamily.regular,fontSize:fontSize.xs,color:colors.muted,marginBottom:spacing.sm},
   headingEntryGrid:{flexDirection:"row",flexWrap:"wrap",gap:spacing.sm},
