@@ -1,0 +1,170 @@
+import { useMemo, useState } from "react";
+import { ActivityIndicator, Alert, FlatList, Pressable, ScrollView, Text, View } from "react-native";
+import { router } from "expo-router";
+import { useQuery } from "@tanstack/react-query";
+import Ionicons from "@react-native-vector-icons/ionicons";
+
+import { api } from "@/src/api/client";
+import { PrimaryButton } from "@/src/components/PrimaryButton";
+import { useToast } from "@/src/components/toast";
+import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
+import { buildPatientDetailHtml, generateAndSharePdf } from "@/src/utils/pdf";
+
+type Patient = {
+  id:string; mrNo:string; name:string; gender:string; age:string; diagnosis:string;
+  procedure:string; implant:string; implantII:string; date:string; address:string;
+  fileName:string; photos:string[]; customData?:Record<string,string>; implants?:any[];
+};
+
+type Field = { key:string; label:string };
+
+const baseFields:Field[] = [
+  {key:"date",label:"Date"}, {key:"mrNo",label:"MR No"}, {key:"name",label:"Patient Name"},
+  {key:"gender",label:"Gender"}, {key:"age",label:"Age"}, {key:"address",label:"Address"},
+  {key:"diagnosis",label:"Diagnosis"}, {key:"procedure",label:"Procedure"},
+  {key:"implants",label:"Implants"}, {key:"fileName",label:"File Name"},
+];
+
+export default function PatientDetailPdfScreen() {
+  const styles = useStyles();
+  const { colors, branding } = useTheme();
+  const toast = useToast();
+  const [mode,setMode] = useState<"all"|"selected">("all");
+  const [selectedIds,setSelectedIds] = useState<string[]>([]);
+  const [photoMode,setPhotoMode] = useState<"none"|"first"|"all">("first");
+  const [fields,setFields] = useState<Field[]>(baseFields);
+  const [creating,setCreating] = useState(false);
+
+  const {data:patients=[],isLoading} = useQuery<Patient[]>({queryKey:["patients"],queryFn:()=>api.get("/patients")});
+  const {data:customFields=[]} = useQuery<any[]>({queryKey:["patient-custom-fields"],queryFn:()=>api.get("/patient-custom-fields")});
+
+  const allFields = useMemo<Field[]>(()=>[
+    ...fields,
+    ...customFields.filter((f:any)=>f?.key && f?.label && !fields.some(x=>x.key===String(f.key)))
+      .map((f:any)=>({key:String(f.key),label:String(f.label)}))
+  ],[fields,customFields]);
+
+  const toggleField=(key:string)=>{
+    setFields(prev=>prev.some(x=>x.key===key) ? prev.filter(x=>x.key!==key) : [...prev,{key,label:allFields.find(x=>x.key===key)?.label||key}]);
+  };
+  const togglePatient=(id:string)=>setSelectedIds(prev=>prev.includes(id)?prev.filter(x=>x!==id):[...prev,id]);
+
+  const selectedPatients=useMemo(
+    ()=>mode==="all"?patients:patients.filter(p=>selectedIds.includes(p.id)),
+    [mode,patients,selectedIds]
+  );
+
+  const create=async()=>{
+    if(!fields.length){ toast("Select at least one patient detail field.","error"); return; }
+    if(mode==="selected"&&!selectedIds.length){ toast("Select at least one patient.","error"); return; }
+    if(!selectedPatients.length){ toast("No patients available.","info"); return; }
+    setCreating(true);
+    try {
+      const html=await buildPatientDetailHtml(branding,selectedPatients,fields,photoMode);
+      await generateAndSharePdf(html,"Patient Detail");
+    } catch(e:any) {
+      Alert.alert("PDF failed",e?.message||"Could not create Patient Detail PDF.");
+    } finally { setCreating(false); }
+  };
+
+  if(isLoading) return <View style={styles.center}><ActivityIndicator size="large" color={colors.brandPrimary}/></View>;
+
+  return <View style={styles.container}>
+    <View style={[styles.header,{paddingTop:spacing.lg}]}>
+      <Pressable onPress={()=>router.back()} style={styles.back}><Ionicons name="arrow-back" size={22} color={colors.onSurface}/></Pressable>
+      <View style={{flex:1}}>
+        <Text style={styles.title}>Patient Detail PDF</Text>
+        <Text style={styles.subtitle}>Separate from the main Patient List PDF</Text>
+      </View>
+    </View>
+
+    <ScrollView contentContainerStyle={{padding:spacing.lg,paddingBottom:spacing.xl*2}}>
+      <Text style={styles.section}>Patients</Text>
+      <View style={styles.segment}>
+        {(["all","selected"] as const).map(x=><Pressable key={x} onPress={()=>setMode(x)} style={[styles.segmentBtn,mode===x&&styles.segmentActive]}>
+          <Text style={[styles.segmentText,mode===x&&styles.segmentTextActive]}>{x==="all"?"All Patients":"Selected Patients"}</Text>
+        </Pressable>)}
+      </View>
+
+      {mode==="selected" && <View style={styles.patientBox}>
+        <View style={styles.rowBetween}>
+          <Text style={styles.helper}>{selectedIds.length} selected</Text>
+          <Pressable onPress={()=>setSelectedIds(selectedIds.length===patients.length?[]:patients.map(p=>p.id))}>
+            <Text style={styles.link}>{selectedIds.length===patients.length?"Clear All":"Select All"}</Text>
+          </Pressable>
+        </View>
+        <FlatList
+          data={patients}
+          scrollEnabled={false}
+          keyExtractor={p=>p.id}
+          renderItem={({item})=><Pressable onPress={()=>togglePatient(item.id)} style={styles.patientRow}>
+            <Ionicons name={selectedIds.includes(item.id)?"checkbox":"square-outline"} size={22} color={selectedIds.includes(item.id)?colors.brandPrimary:colors.muted}/>
+            <View style={{flex:1,marginLeft:spacing.sm}}>
+              <Text style={styles.patientName}>{item.name||"Unnamed patient"}</Text>
+              <Text style={styles.patientMeta}>{item.mrNo||"—"} · {item.date||"—"}</Text>
+            </View>
+          </Pressable>}
+          ListEmptyComponent={<Text style={styles.helper}>No patients found.</Text>}
+        />
+      </View>}
+
+      <Text style={styles.section}>Details to include</Text>
+      <Text style={styles.helper}>Only checked details will appear. Each patient always gets one separate page.</Text>
+      <View style={styles.fieldGrid}>
+        {allFields.map(f=><Pressable key={f.key} onPress={()=>toggleField(f.key)} style={styles.fieldRow}>
+          <Ionicons name={fields.some(x=>x.key===f.key)?"checkbox":"square-outline"} size={21} color={fields.some(x=>x.key===f.key)?colors.brandPrimary:colors.muted}/>
+          <Text style={styles.fieldText}>{f.label}</Text>
+        </Pressable>)}
+      </View>
+
+      <Text style={styles.section}>Patient pictures</Text>
+      <View style={styles.photoChoices}>
+        {([
+          ["none","No picture"],["first","First picture only"],["all","All pictures"]
+        ] as const).map(([value,label])=><Pressable key={value} onPress={()=>setPhotoMode(value)} style={[styles.photoBtn,photoMode===value&&styles.photoActive]}>
+          <Text style={[styles.photoText,photoMode===value&&styles.photoTextActive]}>{label}</Text>
+        </Pressable>)}
+      </View>
+
+      <View style={styles.summary}>
+        <Text style={styles.summaryTitle}>PDF summary</Text>
+        <Text style={styles.summaryText}>{selectedPatients.length} patient page{selectedPatients.length===1?"":"s"} · {fields.length} detail field{fields.length===1?"":"s"} · {photoMode==="first"?"First picture":photoMode==="all"?"All pictures":"No pictures"}</Text>
+      </View>
+
+      <PrimaryButton title="Create Patient Detail PDF" onPress={create} loading={creating} testID="create-patient-detail-pdf"/>
+    </ScrollView>
+  </View>;
+}
+
+const useStyles=makeStyles(colors=>({
+  container:{flex:1,backgroundColor:colors.surfaceSecondary},
+  center:{flex:1,alignItems:"center",justifyContent:"center",backgroundColor:colors.surfaceSecondary},
+  header:{backgroundColor:colors.surface,paddingHorizontal:spacing.lg,paddingBottom:spacing.md,borderBottomWidth:1,borderBottomColor:colors.border,flexDirection:"row",alignItems:"center",gap:spacing.sm},
+  back:{width:40,height:40,borderRadius:radius.md,backgroundColor:colors.surfaceSecondary,alignItems:"center",justifyContent:"center"},
+  title:{fontFamily:fontFamily.bold,fontSize:fontSize.xl,color:colors.onSurface},
+  subtitle:{fontFamily:fontFamily.regular,fontSize:fontSize.sm,color:colors.muted,marginTop:2},
+  section:{fontFamily:fontFamily.bold,fontSize:fontSize.base,color:colors.onSurface,marginTop:spacing.lg,marginBottom:spacing.sm},
+  helper:{fontFamily:fontFamily.regular,fontSize:fontSize.sm,color:colors.muted,lineHeight:20},
+  segment:{flexDirection:"row",backgroundColor:colors.surface,borderRadius:radius.md,borderWidth:1,borderColor:colors.border,padding:3},
+  segmentBtn:{flex:1,paddingVertical:spacing.sm,alignItems:"center",borderRadius:radius.sm},
+  segmentActive:{backgroundColor:colors.brandPrimary},
+  segmentText:{fontFamily:fontFamily.semibold,fontSize:fontSize.sm,color:colors.onSurfaceSecondary},
+  segmentTextActive:{color:colors.onBrandPrimary},
+  patientBox:{marginTop:spacing.sm,backgroundColor:colors.surface,borderRadius:radius.md,borderWidth:1,borderColor:colors.border,padding:spacing.sm},
+  rowBetween:{flexDirection:"row",justifyContent:"space-between",alignItems:"center",padding:spacing.xs},
+  link:{fontFamily:fontFamily.semibold,fontSize:fontSize.sm,color:colors.brandPrimary},
+  patientRow:{flexDirection:"row",alignItems:"center;paddingVertical:spacing.sm",borderBottomWidth:1,borderBottomColor:colors.border},
+  patientName:{fontFamily:fontFamily.semibold,fontSize:fontSize.sm,color:colors.onSurface},
+  patientMeta:{fontFamily:fontFamily.regular,fontSize:fontSize.xs,color:colors.muted,marginTop:2},
+  fieldGrid:{backgroundColor:colors.surface,borderRadius:radius.md,borderWidth:1,borderColor:colors.border,overflow:"hidden"},
+  fieldRow:{flexDirection:"row",alignItems:"center",padding:spacing.md,borderBottomWidth:1,borderBottomColor:colors.border,gap:spacing.sm},
+  fieldText:{fontFamily:fontFamily.medium,fontSize:fontSize.sm,color:colors.onSurface},
+  photoChoices:{gap:spacing.sm},
+  photoBtn:{padding:spacing.md,borderRadius:radius.md,borderWidth:1,borderColor:colors.border,backgroundColor:colors.surface},
+  photoActive:{borderColor:colors.brandPrimary,backgroundColor:colors.brandTertiary},
+  photoText:{fontFamily:fontFamily.semibold,fontSize:fontSize.sm,color:colors.onSurface},
+  photoTextActive:{color:colors.brandPrimary},
+  summary:{marginTop:spacing.lg,marginBottom:spacing.md,padding:spacing.md,borderRadius:radius.md,backgroundColor:colors.brandTertiary},
+  summaryTitle:{fontFamily:fontFamily.bold,fontSize:fontSize.sm,color:colors.onSurface},
+  summaryText:{fontFamily:fontFamily.regular,fontSize:fontSize.sm,color:colors.onSurfaceSecondary,marginTop:4,lineHeight:20},
+}));
