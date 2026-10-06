@@ -255,7 +255,7 @@ export default function BrandingScreen() {
         <Text style={[styles.label, { marginTop: spacing.md }]}>Patient fields in PDF</Text>
         <Text style={styles.hint}>Select only the patient fields you want in the original compact PDF. The layout remains the same.</Text>
         {[
-          ["date","Date"],["mrNo","MR No"],["name","Patient Name"],["gender","Gender"],["age","Age"],["address","Address"],["diagnosis","Diagnosis"],["procedure","Procedure"],["fileName","File Name"]
+          ["date","Date"],["mrNo","MR No"],["name","Patient Name"],["gender","Gender"],["age","Age"],["address","Address"],["diagnosis","Diagnosis"],["procedure","Procedure"],["implants","Implants"],["fileName","File Name"]
         ].map(([key,label]) => {
           const active=(draft.pdfPatientFields||defaultBranding.pdfPatientFields||[]).includes(key);
           return <Pressable key={key} onPress={()=>setDraft(d=>({...d,pdfPatientFields:active?(d.pdfPatientFields||[]).filter(x=>x!==key):[...(d.pdfPatientFields||defaultBranding.pdfPatientFields||[]),key]}))} style={styles.fieldToggle}>
@@ -264,9 +264,9 @@ export default function BrandingScreen() {
           </Pressable>;
         })}
         <Text style={[styles.label, { marginTop: spacing.md }]}>PDF field heading setup</Text>
-        <Text style={styles.hint}>Every patient field is shown separately. For each field choose Normal, Main Heading, or Sub-heading 1.</Text>
+        <Text style={styles.hint}>Every patient field is shown separately. Procedure remains available, and Implants is now an optional selectable field. Implants is not included unless you select it.</Text>
         {[
-          ["date","Date"],["mrNo","MR No"],["name","Patient Name"],["gender","Gender"],["age","Age"],["address","Address"],["diagnosis","Diagnosis"],["procedure","Procedure"],["fileName","File Name"]
+          ["date","Date"],["mrNo","MR No"],["name","Patient Name"],["gender","Gender"],["age","Age"],["address","Address"],["diagnosis","Diagnosis"],["procedure","Procedure"],["implants","Implants"],["fileName","File Name"]
         ].map(([key,label])=>{
           const defaults=defaultBranding.pdfHeadingLevels||[];
           const groups=Array.isArray(draft.pdfHeadingLevels)&&draft.pdfHeadingLevels.length?draft.pdfHeadingLevels:defaults;
