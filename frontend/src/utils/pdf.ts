@@ -164,7 +164,6 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
   const legacyHierarchy = [
     { fields: [branding.pdfMainHeadingField || "name"], label: "Main Heading" },
     { fields: [branding.pdfSubHeadingField || "procedure"], label: "Sub-heading 1" },
-    { fields: ["implants"], label: "Sub-heading 2" },
   ];
   const hierarchy = Array.isArray(branding.pdfHeadingLevels) && branding.pdfHeadingLevels.length
     ? branding.pdfHeadingLevels.map((x:any) => ({ fields: Array.isArray(x?.fields) ? x.fields.filter(Boolean).map(String) : [], label: String(x?.label || "") })).filter((x:any) => x.fields.length)
@@ -173,7 +172,6 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
     const index = hierarchy.findIndex((x:any) => x.fields.includes(key));
     return index >= 0 ? index + 1 : 0;
   };
-  const implantSubColor = branding.pdfImplantSubheadingColor || "#8A9690";
   const value = (p: Patient, key: string) => {
     if(key === "gender") return p.gender || "";
     if(key === "age") return p.age || "";
@@ -185,12 +183,6 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
     if(key === "diagnosis") return p.diagnosis || "";
     if(key === "procedure") return p.procedure || "";
     return String((p.customData||{})[key] || "");
-  };
-  const implantText = (p: Patient) => {
-    const implants = p.implants?.length
-      ? p.implants.map((x:any)=>formatInventoryLabel(x.category,x.name,x.size)+(Number(x.quantity)>1?" × "+x.quantity:"")).join(" • ")
-      : [p.implant,p.implantII].filter(Boolean).join(" • ");
-    return implants;
   };
   const groups = new Map<string, Patient[]>();
   const keyOf = (p: Patient) => (p.name||"").trim().toLowerCase()+"|"+(p.mrNo||"").trim().toLowerCase();
