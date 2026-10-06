@@ -371,12 +371,8 @@ export async function buildPatientDetailHtml(
     }
 
     const derived=occurrenceMap.get(p.id);
-    const occurrence=Number(
-      p.operationCount || derived?.occurrence || 1
-    );
-    const total=Number(
-      p.totalOperations || derived?.total || 0
-    );
+    const occurrence=Number(derived?.occurrence || p.operationCount || 1);
+    const total=Number(derived?.total || p.totalOperations || 0);
     const occurrenceTag=branding.pdfShowOccurrenceBadge!==false
       ? "<span class='occurrenceTag'>"+escapeHtml(ordinalSuffix(occurrence))+" time</span>"
       : "";
@@ -394,6 +390,7 @@ export async function buildPatientDetailHtml(
 
   return "<html><head><meta charset='utf-8'/>"+styles(branding)+
     "<style>"+
+    ".detailHeaderPage{page-break-after:always;break-after:page;min-height:250mm}"+
     ".patientPage{page-break-after:always;page-break-inside:avoid;break-inside:avoid;border:1px solid #E2DFD8;border-radius:14px;padding:16px;margin-bottom:8px}"+
     ".patientPage:last-child{page-break-after:auto}"+
     ".patientNumber{font-size:10px;color:#7C7872;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px}"+
@@ -405,7 +402,7 @@ export async function buildPatientDetailHtml(
     ".photoGrid{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;align-items:flex-start;page-break-inside:avoid}"+
     ".patientPhoto{width:110px;height:110px;object-fit:cover;border-radius:8px;border:1px solid #E2DFD8}"+
     "</style></head><body>"+
-    header(branding,"Detailed Patient Report — "+patients.length+" record"+(patients.length===1?"":"s"))+
+    "<section class='detailHeaderPage'>"+header(branding,"Detailed Patient Report — "+patients.length+" record"+(patients.length===1?"":"s"))+"</section>"+
     pages.join("")+
     footer(branding)+
     "</body></html>";
