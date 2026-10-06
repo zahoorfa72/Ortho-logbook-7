@@ -270,35 +270,78 @@ export default function BrandingScreen() {
             <Text style={styles.fieldToggleText}>{label}</Text>
           </Pressable>;
         })}
-        <Text style={[styles.label, { marginTop: spacing.md }]}>PDF field heading setup</Text>
-        <Text style={styles.hint}>Only enabled sections appear here. Each enabled entry has its own box: Normal, Main Heading, Sub-heading, or Sub-sub-heading. A Sub-heading belongs under the most recent Main Heading before it; a Sub-sub-heading belongs under that sub-heading. Disabled sections have no heading control and cannot appear in the Patient PDF.</Text>
-        {patientPdfOptions.map(([key,label])=>{
-          const defaults=defaultBranding.pdfHeadingLevels||[];
-          const enabledFields=draft.pdfPatientFields||defaultBranding.pdfPatientFields||[];
-          if(!enabledFields.includes(key)) return null;
-          const groups=Array.isArray(draft.pdfHeadingLevels)&&draft.pdfHeadingLevels.length?draft.pdfHeadingLevels:defaults;
-          const current=groups.findIndex((g:any)=>Array.isArray(g?.fields)&&g.fields.includes(key));
-          const setLevel=(level:number)=>{
-            setDraft(d=>{
-              const base=Array.from({length:3},(_,i)=>({...(d.pdfHeadingLevels?.[i]||defaults[i]||{}),fields:[...((d.pdfHeadingLevels?.[i]?.fields||defaults[i]?.fields||[]))]}));
-              base.forEach((g:any)=>{g.fields=g.fields.filter((x:string)=>x!==key);});
-              if(level>0) base[level-1].fields.push(key);
-              base[0].label="Main Heading"; base[1].label="Sub-heading 1"; base[2].label="Sub-heading 2";
-              return {...d,pdfHeadingLevels:base};
+        <Text style={[styles.label, { marginTop: spacing.md }]}>Patient PDF heading setup</Text>
+        <Text style={styles.hint}>
+          The boxes below are live. They contain every Patient PDF entry that is currently enabled above.
+          Check an entry in Sub-heading to make it a Sub-heading. Check an entry in Sub-sub-heading to make
+          it a Sub-sub-heading. An entry can be selected in only one box. If you disable an entry above,
+          it disappears from both boxes automatically.
+        </Text>
+        {(() => {
+          const enabledFields = draft.pdfPatientFields || defaultBranding.pdfPatientFields || [];
+          const groups = Array.isArray(draft.pdfHeadingLevels) && draft.pdfHeadingLevels.length
+            ? draft.pdfHeadingLevels
+            : (defaultBranding.pdfHeadingLevels || []);
+          const selectedSub = new Set<string>(Array.isArray(groups[1]?.fields) ? groups[1].fields : []);
+          const selectedSubSub = new Set<string>(Array.isArray(groups[2]?.fields) ? groups[2].fields : []);
+
+          const updateHeadingSelection = (key: string, level: 0 | 2 | 3) => {
+            setDraft(d => {
+              const defaults = defaultBranding.pdfHeadingLevels || [];
+              const base = Array.from({ length: 3 }, (_, i) => ({
+                ...(d.pdfHeadingLevels?.[i] || defaults[i] || {}),
+                fields: [...(d.pdfHeadingLevels?.[i]?.fields || defaults[i]?.fields || [])],
+              }));
+              base.forEach((g: any) => {
+                g.fields = (g.fields || []).filter((x: string) => x !== key);
+              });
+              if (level === 2) base[1].fields.push(key);
+              if (level === 3) base[2].fields.push(key);
+              base[0].label = "Main Heading";
+              base[1].label = "Sub-heading";
+              base[2].label = "Sub-sub-heading";
+              return { ...d, pdfHeadingLevels: base };
             });
           };
-          return <View key={key} style={styles.subtitleLineCard}>
-            <Text style={styles.subtitleLineLabel}>{label}</Text>
-            <View style={styles.styleRow}>
-              {[["Normal",0],["Main Heading",1],["Sub-heading",2],["Sub-sub-heading",3]].map(([txt,level])=>{
-                const active=(current===Number(level)-1) || (Number(level)===0&&current<0);
-                return <Pressable key={String(level)} onPress={()=>setLevel(Number(level))} style={[styles.styleChip,{backgroundColor:active?colors.brandPrimary:colors.surfaceSecondary}]}>
-                  <Text style={[styles.styleChipText,{color:active?colors.onBrandPrimary:colors.onSurface}]}>{txt}</Text>
-                </Pressable>;
-              })}
+
+          const entryBox = (title: string, level: 2 | 3, selected: Set<string>) => (
+            <View style={styles.headingBox}>
+              <Text style={styles.headingBoxTitle}>{title}</Text>
+              <Text style={styles.headingBoxHint}>
+                Select any enabled Patient PDF entry below.
+              </Text>
+              <View style={styles.headingEntryGrid}>
+                {patientPdfOptions.filter(([key]) => enabledFields.includes(key)).map(([key, label]) => {
+                  const checked = selected.has(key);
+                  return (
+                    <Pressable
+                      key={key}
+                      onPress={() => updateHeadingSelection(key, checked ? 0 : level)}
+                      style={[styles.headingEntry, checked && { borderColor: colors.brandPrimary, backgroundColor: colors.brandTertiary }]}
+                    >
+                      <Ionicons
+                        name={checked ? "checkbox" : "square-outline"}
+                        size={20}
+                        color={checked ? colors.brandPrimary : colors.muted}
+                      />
+                      <Text style={styles.headingEntryText}>{label}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+              {!enabledFields.length ? (
+                <Text style={styles.hint}>Enable Patient PDF entries above first.</Text>
+              ) : null}
             </View>
-          </View>;
-        })}
+          );
+
+          return (
+            <>
+              {entryBox("Sub-heading", 2, selectedSub)}
+              {entryBox("Sub-sub-heading", 3, selectedSubSub)}
+            </>
+          );
+        })()}
         <Text style={[styles.label, { marginTop: spacing.md }]}>Patient list layout</Text>
         <Text style={styles.hint}>Control how many patients fit on each PDF list page and how the list text looks. The selected settings apply to the existing PDF design.</Text>
         <Text style={styles.colorLabel}>Patients per page</Text>
@@ -501,6 +544,11 @@ const useStyles = makeStyles((colors) => ({
   fieldToggle:{flexDirection:"row",alignItems:"center",gap:spacing.sm,paddingVertical:spacing.sm},
   fieldToggleText:{fontFamily:fontFamily.medium,fontSize:fontSize.base,color:colors.onSurface},
   subtitleLineCard:{padding:spacing.md,borderWidth:1,borderColor:colors.border,borderRadius:radius.md,backgroundColor:colors.surfaceSecondary,marginTop:spacing.sm},
+  headingBox:{padding:spacing.md,borderWidth:1,borderColor:colors.borderStrong,borderRadius:radius.md,backgroundColor:colors.surfaceSecondary,marginTop:spacing.md},
+  headingBoxTitle:{fontFamily:fontFamily.bold,fontSize:fontSize.base,color:colors.onSurface,marginBottom:spacing.xs},
+  headingBoxHint:{fontFamily:fontFamily.regular,fontSize:fontSize.xs,color:colors.muted,marginBottom:spacing.sm},
+  headingEntryGrid:{flexDirection:"row",flexWrap:"wrap",gap:spacing.sm},
+  headingEntry:{flexDirection:"row",alignItems:"center",gap:spacing.xs,paddingHorizontal:spacing.sm,paddingVertical:spacing.sm,borderWidth:1,borderColor:colors.border,borderRadius:radius.sm,backgroundColor:colors.surface},
   subtitleLineLabel:{fontFamily:fontFamily.semibold,fontSize:fontSize.sm,color:colors.onSurface,marginBottom:spacing.xs},
   sizeControls: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
   sizeButton: { width: 36, height: 36, borderRadius: 18, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surfaceSecondary, alignItems: "center", justifyContent: "center" },
