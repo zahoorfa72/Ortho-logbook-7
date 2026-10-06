@@ -2,6 +2,7 @@ import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
 import { formatInventoryLabel } from "./inventory-label";
 import { Platform } from "react-native";
+import * as ImageManipulator from "expo-image-manipulator";
 import * as FileSystem from "expo-file-system/legacy";
 
 import type { BrandingConfig } from "@/src/theme";
@@ -239,20 +240,63 @@ export async function buildPatientDetailHtml(
   fields: PatientPdfField[],
   photoMode: "none" | "first" | "all" = "first",
 ): Promise<string> {
+  // Keep occurrence numbering identical to the Patient List: same patient means
+  // the same trimmed, case-insensitive Name + MR No identity.
+  const identity = (p: Patient) =>
+    `${(p.name || "").trim().toLowerCase()}|${(p.mrNo || "").trim().toLowerCase()}`;
+  const groups = new Map<string, Patient[]>();
+  for (const p of patients) {
+    if (!(p.name || "").trim() && !(p.mrNo || "").trim()) continue;
+    const key = identity(p);
+    const list = groups.get(key) || [];
+    list.push(p);
+    groups.set(key, list);
+  }
+  const occurrenceMap = new Map<string, { occurrence:number; total:number }>();
+  for (const list of groups.values()) {
+    const sorted = [...list].sort(
+      (a,b) => String(a.date || "").localeCompare(String(b.date || "")) ||
+        String(a.id || "").localeCompare(String(b.id || "")),
+    );
+    sorted.forEach((p,i) => occurrenceMap.set(p.id,{ occurrence:i+1,total:sorted.length }));
+  }
+
+  const photoCache = new Map<string,string>();
   const photoToData = async (uri:string) => {
-    if(!uri) return "";
-    if(uri.startsWith("data:")) return uri;
+    if (!uri) return "";
+    if (uri.startsWith("data:image/")) return uri;
+    const cached = photoCache.get(uri);
+    if (cached !== undefined) return cached;
     try {
-      const base64=await FileSystem.readAsStringAsync(uri,{encoding:FileSystem.EncodingType.Base64});
-      const lower=uri.toLowerCase().split("?")[0];
-      const mime=lower.endsWith(".png") ? "image/png"
-        : lower.endsWith(".webp") ? "image/webp"
-        : lower.endsWith(".gif") ? "image/gif"
-        : "image/jpeg";
-      return "data:"+mime+";base64,"+base64;
-    } catch { return ""; }
+      // Print on Android is much more reliable with small embedded JPEGs than
+      // full-resolution gallery/document images. Resize before embedding so
+      // multiple patient photos cannot make the print renderer fail.
+      const result = await ImageManipulator.manipulateAsync(
+        uri,
+        [{ resize: { width: 900 } }],
+        { compress: 0.62, format: ImageManipulator.SaveFormat.JPEG, base64: true },
+      );
+      const base64 = result.base64 || "";
+      if (!base64) return "";
+      const data = "data:image/jpeg;base64," + base64;
+      photoCache.set(uri,data);
+      return data;
+    } catch {
+      try {
+        const base64=await FileSystem.readAsStringAsync(uri,{encoding:FileSystem.EncodingType.Base64});
+        if (!base64) return "";
+        const data="data:image/jpeg;base64,"+base64;
+        photoCache.set(uri,data);
+        return data;
+      } catch {
+        return "";
+      }
+    }
   };
-  const pages=await Promise.all(patients.map(async (p,idx)=>{
+
+  const pages:string[]=[];
+  for(let idx=0; idx<patients.length; idx++){
+    const p=patients[idx];
     const rows=fields.filter(f=>f.key!=="photos").map(f=>{
       let value="";
       if(f.key==="date") value=p.date;
@@ -273,24 +317,58 @@ export async function buildPatientDetailHtml(
       else value=String((p.customData||{})[f.key]||"");
       return "<tr><th>"+escapeHtml(f.label)+"</th><td class='detailValue'>"+escapeHtml(value||"—")+"</td></tr>";
     }).join("");
-    const rawPhotos=Array.isArray(p.photos)&&p.photos.length ? p.photos.filter(Boolean) : ((p as any).photoUri ? [String((p as any).photoUri)] : []);
-    const selectedPhotos=photoMode==="all"?rawPhotos:(photoMode==="first"?rawPhotos.slice(0,1):[]);
-    const photos=[];
-    for(const uri of selectedPhotos){const src=await photoToData(uri);if(src)photos.push("<img src='"+src+"' class='patientPhoto' />");}
-    const occurrence=Number(p.operationCount||1);
-    const total=Number(p.totalOperations||0);
+
+    const rawPhotos=Array.isArray(p.photos)&&p.photos.length
+      ? p.photos.filter(Boolean)
+      : ((p as any).photoUri ? [String((p as any).photoUri)] : []);
+    const selectedPhotos=photoMode==="all"
+      ? rawPhotos
+      : (photoMode==="first" ? rawPhotos.slice(0,1) : []);
+    const photos:string[]=[];
+    for(const uri of selectedPhotos){
+      const src=await photoToData(uri);
+      if(src) photos.push("<img src=\"" + src + "\" class=\"patientPhoto\" />");
+    }
+
+    const derived=occurrenceMap.get(p.id);
+    const occurrence=Number(
+      p.operationCount || derived?.occurrence || 1
+    );
+    const total=Number(
+      p.totalOperations || derived?.total || 0
+    );
     const occurrenceTag=branding.pdfShowOccurrenceBadge!==false && total>1
       ? "<span class='occurrenceTag'>"+escapeHtml(ordinalSuffix(occurrence))+" time</span>"
       : "";
-    return "<section class='patientPage'>"+
+
+    pages.push(
+      "<section class='patientPage'>"+
       "<div class='patientNumber'>Patient "+(idx+1)+" of "+patients.length+"</div>"+
       "<div class='patientName'>"+escapeHtml(p.name||"Unnamed patient")+occurrenceTag+"</div>"+
       (p.mrNo?"<div class='patientMr'>MR No: "+escapeHtml(p.mrNo)+"</div>":"")+
       "<table class='detailTable'><tbody>"+rows+"</tbody></table>"+
       (photos.length?"<div class='photoGrid'>"+photos.join("")+"</div>":"")+
-      "</section>";
-  }));
-  return "<html><head><meta charset='utf-8'/>"+styles(branding)+"<style>.patientPage{page-break-after:always;page-break-inside:avoid;break-inside:avoid;border:1px solid #E2DFD8;border-radius:14px;padding:16px;margin-bottom:8px}.patientPage:last-child{page-break-after:auto}.patientNumber{font-size:10px;color:#7C7872;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px}.patientName{font-size:22px;font-weight:800;color:"+branding.primary+";display:flex;align-items:baseline;gap:6px;flex-wrap:wrap}.occurrenceTag{display:inline-block;font-size:12px;font-weight:700;color:#555555;margin-left:8px;white-space:nowrap;background:transparent!important;border:0!important;padding:0!important;box-shadow:none!important}.patientMr{font-size:12px;color:#3A3A3C;margin-top:4px;margin-bottom:12px}.detailTable th{width:28%;background:"+branding.tertiary+"}.detailTable td{padding:5px 6px;vertical-align:top;line-height:1.25}.photoGrid{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;align-items:flex-start;page-break-inside:avoid}.patientPhoto{width:110px;height:110px;object-fit:cover;border-radius:8px;border:1px solid #E2DFD8}</style></head><body>"+header(branding,"Detailed Patient Report — "+patients.length+" record"+(patients.length===1?"":"s"))+pages.join("")+footer(branding)+"</body></html>";
+      "</section>"
+    );
+  }
+
+  return "<html><head><meta charset='utf-8'/>"+styles(branding)+
+    "<style>"+
+    ".patientPage{page-break-after:always;page-break-inside:avoid;break-inside:avoid;border:1px solid #E2DFD8;border-radius:14px;padding:16px;margin-bottom:8px}"+
+    ".patientPage:last-child{page-break-after:auto}"+
+    ".patientNumber{font-size:10px;color:#7C7872;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px}"+
+    ".patientName{font-size:22px;font-weight:800;color:"+branding.primary+";display:flex;align-items:baseline;gap:6px;flex-wrap:wrap}"+
+    ".occurrenceTag{display:inline-block;font-size:12px;font-weight:700;color:#555555;margin-left:8px;white-space:nowrap;background:transparent!important;border:0!important;padding:0!important;box-shadow:none!important}"+
+    ".patientMr{font-size:12px;color:#3A3A3C;margin-top:4px;margin-bottom:12px}"+
+    ".detailTable th{width:28%;background:"+branding.tertiary+"}"+
+    ".detailTable td{padding:5px 6px;vertical-align:top;line-height:1.25}"+
+    ".photoGrid{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;align-items:flex-start;page-break-inside:avoid}"+
+    ".patientPhoto{width:110px;height:110px;object-fit:cover;border-radius:8px;border:1px solid #E2DFD8}"+
+    "</style></head><body>"+
+    header(branding,"Detailed Patient Report — "+patients.length+" record"+(patients.length===1?"":"s"))+
+    pages.join("")+
+    footer(branding)+
+    "</body></html>";
 }
 
 
