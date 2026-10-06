@@ -44,7 +44,6 @@ export default function SettingsScreen() {
 
   const rows: Row[] = [
     { icon: "color-palette-outline", label: "Branding", sub: "App title, logo, colours and text styling", to: "/branding", testID: "settings-branding" },
-    { icon: "document-text-outline", label: "PDF Settings", sub: "Patient/procedure PDF and separate implant PDF", to: "/pdf-settings", testID: "settings-pdf" },
     { icon: "list-outline", label: "Procedures", sub: "Add, edit or remove procedure names", to: "/procedures", testID: "settings-procedures" },
     { icon: "options-outline", label: "Patient Fields", sub: "Create extra fields for the patient form", to: "/patient-fields", testID: "settings-patient-fields" },
     { icon: "keypad-outline", label: pinSet ? "Change Admin PIN" : "Set Admin PIN", sub: "Protect exports & settings", to: "/admin-pin", testID: "settings-pin" },
