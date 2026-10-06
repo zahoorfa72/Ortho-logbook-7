@@ -377,7 +377,7 @@ export async function buildPatientDetailHtml(
     const total=Number(
       p.totalOperations || derived?.total || 0
     );
-    const occurrenceTag=branding.pdfShowOccurrenceBadge!==false && total>1
+    const occurrenceTag=branding.pdfShowOccurrenceBadge!==false
       ? "<span class='occurrenceTag'>"+escapeHtml(ordinalSuffix(occurrence))+" time</span>"
       : "";
 
