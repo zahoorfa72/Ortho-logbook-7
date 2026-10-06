@@ -159,18 +159,12 @@ function footer(branding: BrandingConfig) {
 export function buildPatientListHtml(branding: BrandingConfig, patients: Patient[], fromDate?: string, toDate?: string): string {
   const fields = Array.isArray(branding.pdfPatientFields) && branding.pdfPatientFields.length
     ? branding.pdfPatientFields
-    : ["date","mrNo","name","gender","age","diagnosis","procedure"];
+    : ["date","mrNo","name","gender","age","address","diagnosis","procedure"];
   const labels: Record<string,string> = {date:"Date",mrNo:"MR No",name:"Patient",gender:"Gender",age:"Age",address:"Address",diagnosis:"Diagnosis",procedure:"Procedure",implants:"Implants",fileName:"File Name"};
-  const legacyHierarchy = [
-    { fields: [branding.pdfMainHeadingField || "name"], label: "Main Heading" },
-    { fields: [branding.pdfSubHeadingField || "procedure"], label: "Sub-heading 1" },
-  ];
-  const hierarchy = Array.isArray(branding.pdfHeadingLevels) && branding.pdfHeadingLevels.length
-    ? branding.pdfHeadingLevels.map((x:any) => ({ fields: Array.isArray(x?.fields) ? x.fields.filter(Boolean).map(String) : [], label: String(x?.label || "") })).filter((x:any) => x.fields.length)
-    : legacyHierarchy;
+  const hierarchy = Array.isArray(branding.pdfHeadingLevels) ? branding.pdfHeadingLevels : [];
   const levelFor = (key:string) => {
-    const index = hierarchy.findIndex((x:any) => x.fields.includes(key));
-    return index >= 0 ? index + 1 : 0;
+    const i=hierarchy.findIndex((g:any)=>Array.isArray(g?.fields) && g.fields.includes(key));
+    return i>=0 ? i+1 : 0;
   };
   const value = (p: Patient, key: string) => {
     if(key === "gender") return p.gender || "";
@@ -194,24 +188,32 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
   const keyOf = (p: Patient) => (p.name||"").trim().toLowerCase()+"|"+(p.mrNo||"").trim().toLowerCase();
   for(const p of patients){ const key=keyOf(p); const list=groups.get(key)||[]; list.push(p); groups.set(key,list); }
   const counts = new Map<string,number>();
-  for(const list of groups.values()){ const sorted=[...list].sort((a,b)=>String(a.date||"").localeCompare(String(b.date||""))||String(a.id||"").localeCompare(String(b.id||""))); sorted.forEach((p,i)=>counts.set(p.id,i+1)); }
+  for(const list of groups.values()){
+    const sorted=[...list].sort((a,b)=>String(a.date||"").localeCompare(String(b.date||""))||String(a.id||"").localeCompare(String(b.id||"")));
+    sorted.forEach((p,i)=>counts.set(p.id,i+1));
+  }
   const pageTables:string[]=[]; const pageSize=Math.max(1, Math.min(200, Number(branding.pdfPatientsPerPage || 20)));
   for(let start=0; start<patients.length || (patients.length===0&&start===0); start+=pageSize){
     const page=patients.slice(start,start+pageSize);
     let rows="";
     page.forEach((p,idx)=>{
-      const badge=(counts.get(p.id)||p.operationCount||1)>1 ? '<span class="badge">'+escapeHtml(ordinalSuffix(counts.get(p.id)||p.operationCount||1))+' time</span>' : "";
-      rows += "<tr><td class='indexCell'>"+(start+idx+1)+"</td>"+fields.map(k=>{
+      const occurrence=counts.get(p.id)||p.operationCount||1;
+      const badge='<span class="badge">'+escapeHtml(ordinalSuffix(occurrence))+' time</span>';
+      let content="";
+      let lastMain=false;
+      fields.forEach((k)=>{
         const raw=escapeHtml(value(p,k)||"—");
         const level=levelFor(k);
-        const headingClass=level ? " headingLevel"+level : "";
-        const styled=level ? "<span class='headingText"+headingClass+"'>"+raw+"</span>" : raw;
-        const sub=styled;
-        return "<td>"+sub+(k==="name"?badge:"")+"</td>";
-      }).join("")+"</tr>";
+        const label=escapeHtml(labels[k]||k);
+        if(level===1){ lastMain=true; content+="<div class='pdfField mainField'><span class='pdfFieldLabel'>"+label+"</span><span class='pdfFieldValue'>"+raw+"</span></div>"; }
+        else if(level===2){ content+="<div class='pdfField subField'><span class='pdfFieldLabel'>"+label+"</span><span class='pdfFieldValue'>"+raw+"</span></div>"; }
+        else if(level===3){ content+="<div class='pdfField subSubField'><span class='pdfFieldLabel'>"+label+"</span><span class='pdfFieldValue'>"+raw+"</span></div>"; }
+        else { content+="<div class='pdfField normalField'><span class='pdfFieldLabel'>"+label+"</span><span class='pdfFieldValue'>"+raw+"</span></div>"; }
+      });
+      rows += "<tr><td class='indexCell'>"+(start+idx+1)+"</td><td class='patientEntry'>"+content+"<div class='occurrence'>"+badge+"</div></td></tr>";
     });
     if(!rows) rows='<tr><td colspan="'+(fields.length+1)+'"><div class="empty">No patients recorded.</div></td></tr>';
-    const heads=fields.map(k=>"<th>"+escapeHtml(labels[k]||k)+"</th>").join("");
+    const heads="<th>Patient PDF sections</th>";
     pageTables.push('<section class="listPage"><table><thead><tr><th class="indexHead">#</th>'+heads+'</tr></thead><tbody>'+rows+'</tbody></table></section>');
   }
   const textSize = branding.pdfListTextSize==="small" ? 7.2 : branding.pdfListTextSize==="large" ? 9.4 : 8.2;
@@ -219,7 +221,7 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
   const textTone = branding.pdfListTextTone==="light" ? "#7C7872" : branding.pdfListTextTone==="dark" ? "#1C1C1E" : "#3A3A3C";
   const rowPadding = branding.pdfListRowSpacing==="spacious" ? "4.5px 4px" : branding.pdfListRowSpacing==="normal" ? "3.5px 3.5px" : "2.5px 3.5px";
   return '<html><head><meta charset="utf-8"/>'+styles(branding)+'<style>'+
-    'table{font-size:'+textSize+'px;table-layout:auto;width:100%;border-collapse:collapse}.listPage{page-break-after:always}.listPage:last-child{page-break-after:auto}th,td{padding:'+rowPadding+';line-height:1.15;vertical-align:middle}td{color:'+textTone+';font-weight:'+textWeight+'}.indexHead,.indexCell{width:22px;text-align:center}.headingText{display:block}.headingLevel1{font-size:1.08em;font-weight:800;color:'+branding.primary+'}.headingLevel2{font-weight:750;color:'+branding.text+'}.headingLevel3{font-weight:700;color:'+branding.text+'}.headingLevel4{font-weight:650;color:#59625E}.badge{font-size:.78em;color:'+branding.primary+';margin-left:3px;white-space:nowrap}tbody tr{page-break-inside:avoid}'+
+    'table{font-size:'+textSize+'px;table-layout:fixed;width:100%;border-collapse:collapse}.listPage{page-break-after:always}.listPage:last-child{page-break-after:auto}th,td{padding:'+rowPadding+';line-height:1.2;vertical-align:top}td{color:'+textTone+';font-weight:'+textWeight+'}.indexHead,.indexCell{width:28px;text-align:center}.patientEntry{padding:7px 8px!important}.pdfField{display:block;margin:1px 0}.pdfFieldLabel{display:inline-block;min-width:90px;margin-right:6px}.pdfFieldValue{font-weight:inherit}.mainField{font-size:1.08em;font-weight:800;color:'+branding.primary+';padding-top:3px}.subField{font-size:1em;font-weight:650;color:'+branding.text+';padding-left:12px}.subSubField{font-size:.94em;font-weight:500;color:#59625E;padding-left:24px}.normalField{font-size:.94em;color:'+textTone+'}.occurrence{margin-top:5px}.badge{font-size:.78em;color:'+branding.primary+';margin-left:3px;white-space:nowrap}tbody tr{page-break-inside:avoid}'+
     '</style></head><body>'+
     header(branding,'Patient List — '+patients.length+' record'+(patients.length===1?'':'s')+(fromDate||toDate?' — '+(fromDate||'Start')+' to '+(toDate||'End'):''))+
     pageTables.join("")+footer(branding)+'</body></html>';
