@@ -45,7 +45,7 @@ export default function PatientDetailPdfScreen() {
   const [search,setSearch] = useState("");
   const [creating,setCreating] = useState(false);
 
-  const {data:patients=[],isLoading} = useQuery<Patient[]>({queryKey:["patients-detail"],queryFn:()=>api.get("/patients-detail"),enabled:user?.role==="admin"});
+  const {data:patients=[],isLoading,isError} = useQuery<Patient[]>({queryKey:["patients-detail"],queryFn:()=>api.get("/patients-detail"),enabled:user?.role==="admin"});
   const {data:customFields=[]} = useQuery<any[]>({queryKey:["patient-custom-fields"],queryFn:()=>api.get("/patient-custom-fields"),enabled:user?.role==="admin"});
 
   const allFields = useMemo<Field[]>(()=>[
