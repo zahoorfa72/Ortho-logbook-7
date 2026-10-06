@@ -269,32 +269,6 @@ export async function buildPatientDetailHtml(
   return "<html><head><meta charset='utf-8'/>"+styles(branding)+"<style>.patientPage{page-break-after:always;border:1px solid #E2DFD8;border-radius:14px;padding:20px;margin-bottom:18px}.patientPage:last-child{page-break-after:auto}.patientNumber{font-size:10px;color:#7C7872;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px}.patientName{font-size:22px;font-weight:800;color:"+branding.primary+"}.patientMr{font-size:12px;color:#3A3A3C;margin-top:4px;margin-bottom:16px}.detailTable th{width:28%;background:"+branding.tertiary+"}.photoGrid{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}.patientPhoto{width:220px;height:220px;object-fit:cover;border-radius:10px;border:1px solid #E2DFD8}</style></head><body>"+header(branding,"Detailed Patient Report — "+patients.length+" record"+(patients.length===1?"":"s"))+pages.join("")+footer(branding)+"</body></html>";
 }
 
-export function buildPatientImplantHtml(branding: BrandingConfig, patients: Patient[], fromDate?: string, toDate?: string): string {
-  const implantHeading = String(branding.pdfImplantHeading || "Implants").trim() || "Implants";
-  const implantSubheading = String(branding.pdfImplantSubheading || "Used Implants").trim() || "Used Implants";
-  const implantText = (p: Patient) => {
-    const implants = p.implants?.length
-      ? p.implants.map((x:any)=>formatInventoryLabel(x.category,x.name,x.size)+(Number(x.quantity)>1?" × "+x.quantity:"")).join(" • ")
-      : [p.implant,p.implantII].filter(Boolean).join(" • ");
-    return implants;
-  };
-  const rows = patients.map((p, i) => {
-    const implants = implantText(p);
-    return `<tr>
-      <td>${i + 1}</td>
-      <td><strong>${escapeHtml(p.name || "Unnamed patient")}</strong><br/><span class="muted">MR No: ${escapeHtml(p.mrNo || "—")} · Date: ${escapeHtml(p.date || "—")}</span></td>
-      <td><strong class="implantHeading">${escapeHtml(implantHeading)}</strong><div class="implantSubheading">${escapeHtml(implantSubheading)}</div><div>${escapeHtml(implants || "—")}</div></td>
-      <td>${escapeHtml(p.procedure || "—")}</td>
-    </tr>`;
-  }).join("");
-  return `<html><head><meta charset="utf-8"/>${styles(branding)}<style>
-    .muted{color:#7C7872;font-size:10px}.implantHeading{color:${branding.primary}}.implantSubheading{color:${branding.pdfImplantSubheadingColor || "#8A9690"};font-size:10px;font-weight:700;margin:2px 0}
-  </style></head><body>
-    ${header(branding, escapeHtml(implantHeading) + " — " + patients.length + " record" + (patients.length===1?"":"s") + (fromDate||toDate?" — "+escapeHtml(fromDate||"Start")+" to "+escapeHtml(toDate||"End"):""))}
-    <table><thead><tr><th>#</th><th>Patient</th><th>${escapeHtml(implantHeading)}</th><th>Procedure</th></tr></thead><tbody>${rows || "<tr><td colspan='4'><div class='empty'>No patients recorded.</div></td></tr>"}</tbody></table>
-    ${footer(branding)}
-  </body></html>`;
-}
 
 export function buildImplantRecordsHtml(branding: BrandingConfig, records:any[]): string {
   const rows=records.map((r:any,i:number)=>{
