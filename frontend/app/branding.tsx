@@ -255,7 +255,7 @@ export default function BrandingScreen() {
         <Text style={[styles.label, { marginTop: spacing.md }]}>Patient fields in PDF</Text>
         <Text style={styles.hint}>Select only the patient fields you want in the original compact PDF. The layout remains the same.</Text>
         {[
-          ["date","Date"],["mrNo","MR No"],["name","Patient Name"],["gender","Gender"],["age","Age"],["address","Address"],["diagnosis","Diagnosis"],["procedure","Procedure / Implant"],["fileName","File Name"]
+          ["date","Date"],["mrNo","MR No"],["name","Patient Name"],["gender","Gender"],["age","Age"],["address","Address"],["diagnosis","Diagnosis"],["procedure","Procedure"],["fileName","File Name"]
         ].map(([key,label]) => {
           const active=(draft.pdfPatientFields||defaultBranding.pdfPatientFields||[]).includes(key);
           return <Pressable key={key} onPress={()=>setDraft(d=>({...d,pdfPatientFields:active?(d.pdfPatientFields||[]).filter(x=>x!==key):[...(d.pdfPatientFields||defaultBranding.pdfPatientFields||[]),key]}))} style={styles.fieldToggle}>
@@ -266,7 +266,7 @@ export default function BrandingScreen() {
         <Text style={[styles.label, { marginTop: spacing.md }]}>PDF field heading setup</Text>
         <Text style={styles.hint}>Every PDF field is shown separately. For each field choose Normal, Main Heading, Sub-heading 1, or Sub-heading 2. You can put multiple fields in either sub-heading level. Implants is a separate selectable field.</Text>
         {[
-          ["date","Date"],["mrNo","MR No"],["name","Patient Name"],["gender","Gender"],["age","Age"],["address","Address"],["diagnosis","Diagnosis"],["procedure","Procedure"],["implants","Implants"],["fileName","File Name"]
+          ["date","Date"],["mrNo","MR No"],["name","Patient Name"],["gender","Gender"],["age","Age"],["address","Address"],["diagnosis","Diagnosis"],["procedure","Procedure"],["fileName","File Name"]
         ].map(([key,label])=>{
           const defaults=defaultBranding.pdfHeadingLevels||[];
           const groups=Array.isArray(draft.pdfHeadingLevels)&&draft.pdfHeadingLevels.length?draft.pdfHeadingLevels:defaults;
@@ -292,6 +292,12 @@ export default function BrandingScreen() {
             </View>
           </View>;
         })}
+        <Text style={[styles.label, { marginTop: spacing.md }]}>Implant PDF headings</Text>
+        <Text style={styles.hint}>Implants are no longer included inside the patient/procedure PDF. They have their own separate PDF. Edit both headings here.</Text>
+        <Text style={styles.colorLabel}>Implant heading</Text>
+        <TextInput value={String(draft.pdfImplantHeading || "Implants")} onChangeText={v=>setDraft(d=>({...d,pdfImplantHeading:v}))} placeholder="Implants" placeholderTextColor={colors.muted} style={styles.input} />
+        <Text style={styles.colorLabel}>Implant sub-heading</Text>
+        <TextInput value={String(draft.pdfImplantSubheading || "Used Implants")} onChangeText={v=>setDraft(d=>({...d,pdfImplantSubheading:v}))} placeholder="Used Implants" placeholderTextColor={colors.muted} style={styles.input} />
         <Text style={styles.colorLabel}>Implant sub-heading colour</Text>
         <TextInput value={String(draft.pdfImplantSubheadingColor||"#8A9690")} onChangeText={v=>setDraft(d=>({...d,pdfImplantSubheadingColor:v}))} placeholder="#8A9690" placeholderTextColor={colors.muted} style={styles.input} />
         <Text style={[styles.label, { marginTop: spacing.md }]}>Patient list layout</Text>
