@@ -590,7 +590,7 @@ const useStyles = makeStyles((colors) => ({
   headingBoxTitle:{fontFamily:fontFamily.bold,fontSize:fontSize.base,color:colors.onSurface,marginBottom:spacing.xs},
   headingBoxHint:{fontFamily:fontFamily.regular,fontSize:fontSize.xs,color:colors.muted,marginBottom:spacing.sm},
   headingEntryGrid:{flexDirection:"row",flexWrap:"wrap",gap:spacing.sm},
-  headingEntry:{flexDirection:"row",alignItems:"center",gap:spacing.xs,paddingHorizontal:spacing.sm,paddingVertical:spacing.sm,borderWidth:1,borderColor:colors.border,borderRadius:radius.sm,backgroundColor:colors.surface},
+  headingEntry:{flexDirection:"row",alignItems:"center",gap:spacing.xs,paddingHorizontal:spacing.xs,paddingVertical:spacing.xs},
   subtitleLineLabel:{fontFamily:fontFamily.semibold,fontSize:fontSize.sm,color:colors.onSurface,marginBottom:spacing.xs},
   sizeControls: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
   sizeButton: { width: 36, height: 36, borderRadius: 18, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surfaceSecondary, alignItems: "center", justifyContent: "center" },
