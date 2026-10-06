@@ -160,7 +160,7 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
   const fields = Array.isArray(branding.pdfPatientFields) && branding.pdfPatientFields.length
     ? branding.pdfPatientFields
     : ["date","mrNo","name","gender","age","diagnosis","procedure"];
-  const labels: Record<string,string> = {date:"Date",mrNo:"MR No",name:"Patient",gender:"Gender",age:"Age",address:"Address",diagnosis:"Diagnosis",procedure:"Procedure",fileName:"File Name"};
+  const labels: Record<string,string> = {date:"Date",mrNo:"MR No",name:"Patient",gender:"Gender",age:"Age",address:"Address",diagnosis:"Diagnosis",procedure:"Procedure",implants:"Implants",fileName:"File Name"};
   const legacyHierarchy = [
     { fields: [branding.pdfMainHeadingField || "name"], label: "Main Heading" },
     { fields: [branding.pdfSubHeadingField || "procedure"], label: "Sub-heading 1" },
@@ -182,6 +182,12 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
     if(key === "name") return p.name || "";
     if(key === "diagnosis") return p.diagnosis || "";
     if(key === "procedure") return p.procedure || "";
+    if(key === "implants") {
+      const items = Array.isArray(p.implants) && p.implants.length
+        ? p.implants.map((x:any)=>formatInventoryLabel(x.category,x.name,x.size)+(Number(x.quantity)>1?" × "+x.quantity:""))
+        : [p.implant,p.implantII].filter(Boolean);
+      return items.join(" • ");
+    }
     return String((p.customData||{})[key] || "");
   };
   const groups = new Map<string, Patient[]>();
@@ -234,7 +240,7 @@ export async function buildPatientDetailHtml(
     } catch { return ""; }
   };
   const pages=await Promise.all(patients.map(async (p,idx)=>{
-    const rows=fields.filter(f=>f.key!=="photos" && f.key!=="implants").map(f=>{
+    const rows=fields.filter(f=>f.key!=="photos").map(f=>{
       let value="";
       if(f.key==="date") value=p.date;
       else if(f.key==="mrNo") value=p.mrNo;
