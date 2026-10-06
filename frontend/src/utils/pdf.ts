@@ -162,6 +162,25 @@ function footer(branding: BrandingConfig) {
 }
 
 export function buildPatientListHtml(branding: BrandingConfig, patients: Patient[], fromDate?: string, toDate?: string): string {
+  const parseDate = (v:string) => {
+    const raw=String(v||"").trim();
+    if(!raw) return "";
+    const iso=raw.match(/^(\\d{4})[-\\/](\\d{1,2})[-\\/](\\d{1,2})$/);
+    if(iso) return iso[1]+iso[2].padStart(2,"0")+iso[3].padStart(2,"0");
+    const dmy=raw.match(/^(\\d{1,2})[-\\/](\\d{1,2})[-\\/](\\d{4})$/);
+    if(dmy) return dmy[3]+dmy[2].padStart(2,"0")+dmy[1].padStart(2,"0");
+    const parsed=new Date(raw);
+    return Number.isNaN(parsed.getTime()) ? raw : parsed.getFullYear()+String(parsed.getMonth()+1).padStart(2,"0")+String(parsed.getDate()).padStart(2,"0");
+  };
+  const fromKey=parseDate(fromDate||"");
+  const toKey=parseDate(toDate||"");
+  const filteredPatients=patients.filter(p=>{
+    const d=parseDate(String(p.date||""));
+    if(fromKey && (!d || d<fromKey)) return false;
+    if(toKey && (!d || d>toKey)) return false;
+    return true;
+  });
+  patients=filteredPatients;
   const fields = Array.isArray(branding.pdfPatientFields) && branding.pdfPatientFields.length
     ? branding.pdfPatientFields
     : ["date","mrNo","name","gender","age","diagnosis","procedure"];
@@ -173,6 +192,7 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
   const hierarchy = Array.isArray(branding.pdfHeadingLevels) && branding.pdfHeadingLevels.length
     ? branding.pdfHeadingLevels.map((x:any) => ({ fields: Array.isArray(x?.fields) ? x.fields.filter(Boolean).map(String) : [], label: String(x?.label || "") })).filter((x:any) => x.fields.length)
     : legacyHierarchy;
+  const headingMap:any = branding.pdfHeadingMap && typeof branding.pdfHeadingMap==="object" ? branding.pdfHeadingMap : {};
   const levelFor = (key:string) => {
     const index = hierarchy.findIndex((x:any) => x.fields.includes(key));
     return index >= 0 ? index + 1 : 0;
@@ -207,16 +227,20 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
     page.forEach((p,idx)=>{
       const occurrence=Number(p.operationCount||counts.get(p.id)||1);
       const total=Number(p.totalOperations||groups.get(keyOf(p))?.length||0);
-      const badge=branding.pdfShowOccurrenceBadge!==false && total>1
+      const badge=branding.pdfShowOccurrenceBadge!==false
         ? '<span class="occurrence">'+escapeHtml(ordinalSuffix(occurrence))+' time</span>'
         : "";
       rows += "<tr><td class='indexCell'>"+(start+idx+1)+"</td>"+fields.map(k=>{
         const raw=escapeHtml(value(p,k)||"—");
+        const cfg:any=headingMap[String(k)] || {};
+        const headingKeys:string[]=Array.isArray(cfg.heading)?cfg.heading.map(String):[];
+        const subKeys:string[]=Array.isArray(cfg.subHeading)?cfg.subHeading.map(String):[];
+        const headingLines=headingKeys.map(h=>"<div class='pdfHeadingLine'><b>Heading: "+escapeHtml(h)+"</b> — "+escapeHtml(value(p,h)||"—")+"</div>").join("");
+        const subLines=subKeys.map(h=>"<div class='pdfSubHeadingLine'><b>Sub-heading: "+escapeHtml(h)+"</b> — "+escapeHtml(value(p,h)||"—")+"</div>").join("");
         const level=levelFor(k);
         const headingClass=level ? " headingLevel"+level : "";
         const styled=level ? "<span class='headingText"+headingClass+"'>"+raw+"</span>" : raw;
-        const sub=styled;
-        return "<td>"+sub+(k==="name"?badge:"")+"</td>";
+        return "<td>"+styled+headingLines+subLines+(k==="name"?badge:"")+"</td>";
       }).join("")+"</tr>";
     });
     if(!rows) rows='<tr><td colspan="'+(fields.length+1)+'"><div class="empty">No patients recorded.</div></td></tr>';
