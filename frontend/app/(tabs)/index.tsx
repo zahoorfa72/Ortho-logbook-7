@@ -250,7 +250,7 @@ export default function Logbook() {
     }
     catch(e:any) { toast(e?.message || "Could not create PDF.", "error"); }
     finally { setExporting(false); }
-  }, [branding,filteredForPdf,pdfFromDate,pdfToDate,toast]);
+  }, [branding,filteredForPdf,pdfFromDate,pdfToDate,pdfMonth,pdfYear,toast]);
   const doExportImplants = useCallback(async () => {
     if (pdfFromDate && pdfToDate && pdfFromDate > pdfToDate) { toast("From date cannot be after To date.", "error"); return; }
     const list = filteredForPdf();
