@@ -373,7 +373,7 @@ export async function buildPatientDetailHtml(
     const derived=occurrenceMap.get(p.id);
     const occurrence=Number(derived?.occurrence || p.operationCount || 1);
     const total=Number(derived?.total || p.totalOperations || 0);
-    const occurrenceTag=branding.pdfShowOccurrenceBadge!==false
+    const occurrenceTag=branding.pdfShowOccurrenceBadge!==false && occurrence>1
       ? "<span class='occurrenceTag'>"+escapeHtml(ordinalSuffix(occurrence))+" time</span>"
       : "";
 
@@ -394,8 +394,8 @@ export async function buildPatientDetailHtml(
     ".patientPage{page-break-after:always;page-break-inside:avoid;break-inside:avoid;border:1px solid #E2DFD8;border-radius:14px;padding:16px;margin-bottom:8px}"+
     ".patientPage:last-child{page-break-after:auto}"+
     ".patientNumber{font-size:10px;color:#7C7872;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px}"+
-    ".patientName{font-size:22px;font-weight:800;color:"+branding.primary+";display:flex;align-items:baseline;gap:6px;flex-wrap:wrap}"+
-    ".occurrenceTag{display:inline-block;font-size:12px;font-weight:700;color:#555555;margin-left:8px;white-space:nowrap;background:transparent!important;border:0!important;padding:0!important;box-shadow:none!important}"+
+    ".patientName{font-size:22px;font-weight:800;color:"+branding.primary+";display:flex;align-items:center;gap:8px;flex-wrap:wrap}"+
+    ".occurrenceTag{display:inline-block;font-size:12px;font-weight:600;color:#555555;margin-left:0;white-space:nowrap;background:transparent!important;border:0!important;padding:0!important;box-shadow:none!important;line-height:1.2}"+
     ".patientMr{font-size:12px;color:#3A3A3C;margin-top:4px;margin-bottom:12px}"+
     ".detailTable th{width:28%;background:"+branding.tertiary+"}"+
     ".detailTable td{padding:5px 6px;vertical-align:top;line-height:1.25}.mainEntryValue{font-weight:700;margin-bottom:5px}.nestedEntry{display:flex;gap:8px;padding:3px 0 3px 10px;border-left:3px solid #DCE5E1;line-height:1.2}.nestedLabel{font-weight:700;min-width:92px}.nestedValue{font-weight:500}.subHeadingEntry{margin-left:12px;border-left-color:#C7C2B6}"+
