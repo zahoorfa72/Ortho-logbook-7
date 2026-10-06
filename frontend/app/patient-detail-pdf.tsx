@@ -39,8 +39,8 @@ export default function PatientDetailPdfScreen() {
   const {data:customFields=[]} = useQuery<any[]>({queryKey:["patient-custom-fields"],queryFn:()=>api.get("/patient-custom-fields")});
 
   const allFields = useMemo<Field[]>(()=>[
-    ...fields,
-    ...customFields.filter((f:any)=>f?.key && f?.label && !fields.some(x=>x.key===String(f.key)))
+    ...baseFields,
+    ...customFields.filter((f:any)=>f?.key && f?.label && !baseFields.some(x=>x.key===String(f.key)))
       .map((f:any)=>({key:String(f.key),label:String(f.label)}))
   ],[fields,customFields]);
 
@@ -153,7 +153,7 @@ const useStyles=makeStyles(colors=>({
   patientBox:{marginTop:spacing.sm,backgroundColor:colors.surface,borderRadius:radius.md,borderWidth:1,borderColor:colors.border,padding:spacing.sm},
   rowBetween:{flexDirection:"row",justifyContent:"space-between",alignItems:"center",padding:spacing.xs},
   link:{fontFamily:fontFamily.semibold,fontSize:fontSize.sm,color:colors.brandPrimary},
-  patientRow:{flexDirection:"row",alignItems:"center;paddingVertical:spacing.sm",borderBottomWidth:1,borderBottomColor:colors.border},
+  patientRow:{flexDirection:"row",alignItems:"center;paddingVertical:spacing.sm,borderBottomWidth:1,borderBottomColor:colors.border},
   patientName:{fontFamily:fontFamily.semibold,fontSize:fontSize.sm,color:colors.onSurface},
   patientMeta:{fontFamily:fontFamily.regular,fontSize:fontSize.xs,color:colors.muted,marginTop:2},
   fieldGrid:{backgroundColor:colors.surface,borderRadius:radius.md,borderWidth:1,borderColor:colors.border,overflow:"hidden"},
