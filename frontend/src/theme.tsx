@@ -69,6 +69,7 @@ export type BrandingConfig = {
   pdfImplantHeading?: string;
   pdfImplantSubheading?: string;
   pdfPatientsPerPage?: number;
+  pdfShowOccurrenceBadge?: boolean;
   pdfListTextSize?: "small" | "medium" | "large";
   pdfListTextWeight?: "normal" | "bold";
   pdfListTextTone?: "light" | "normal" | "dark";
@@ -120,6 +121,7 @@ export const defaultBranding: BrandingConfig = {
   pdfImplantHeading: "Implants",
   pdfImplantSubheading: "Used Implants",
   pdfPatientsPerPage: 20,
+  pdfShowOccurrenceBadge: true,
   pdfListTextSize: "medium",
   pdfListTextWeight: "normal",
   pdfListTextTone: "normal",
