@@ -270,13 +270,10 @@ export default function BrandingScreen() {
             <Text style={styles.fieldToggleText}>{label}</Text>
           </Pressable>;
         })}
-        <Text style={[styles.label, { marginTop: spacing.md }]}>Patient PDF headings</Text>
-        <Text style={styles.hint}>Every enabled Patient PDF entry has its own Sub-heading and Sub-sub-heading boxes. Choose No need or check the entry. Only enabled entries appear here.</Text>
         {(() => {
-          const enabledFields = draft.pdfPatientFields || defaultBranding.pdfPatientFields || [];
           const groups = Array.isArray(draft.pdfHeadingLevels) ? draft.pdfHeadingLevels : [];
-          const subGroup = groups.find((g:any)=>g?.label==="Sub-heading");
-          const subSubGroup = groups.find((g:any)=>g?.label==="Sub-sub-heading");
+          const subGroup = groups.find((g:any)=>["Sub-heading","Sub-heading 1"].includes(String(g?.label||"")));
+          const subSubGroup = groups.find((g:any)=>["Sub-sub-heading","Sub-sub-heading 1"].includes(String(g?.label||"")));
           const sub = new Set<string>(Array.isArray(subGroup?.fields) ? subGroup.fields.map(String) : []);
           const subSub = new Set<string>(Array.isArray(subSubGroup?.fields) ? subSubGroup.fields.map(String) : []);
 
@@ -311,15 +308,6 @@ export default function BrandingScreen() {
             });
           };
 
-          const removeHeadingField = (key:string) => setDraft(d => ({
-            ...d,
-            pdfHeadingLevels: [
-              { label:"Main Heading", fields:[...(d.pdfHeadingLevels?.find((g:any)=>g?.label==="Main Heading")?.fields || [])] },
-              { label:"Sub-heading", fields:[...(d.pdfHeadingLevels?.find((g:any)=>g?.label==="Sub-heading")?.fields || [])].filter((x:string)=>x!==key) },
-              { label:"Sub-sub-heading", fields:[...(d.pdfHeadingLevels?.find((g:any)=>g?.label==="Sub-sub-heading")?.fields || [])].filter((x:string)=>x!==key) },
-            ],
-          }));
-
           const fieldRow = (key:string,label:string,checked:boolean,onPress:()=>void) => (
             <Pressable key={key} onPress={onPress} style={styles.headingEntry}>
               <Ionicons name={checked?"checkbox":"square-outline"} size={19} color={checked?colors.brandPrimary:colors.muted}/>
@@ -331,7 +319,7 @@ export default function BrandingScreen() {
             <Text style={[styles.label, { marginTop: spacing.md }]}>Patient PDF headings</Text>
             <Text style={styles.hint}>
               Every patient detail field is available in both boxes, including Age, Procedure, Implants and any new custom field created in Patient Fields.
-              A field selected as a heading is also enabled for the Patient PDF. One field can be in only one heading level.
+              Check every field needed at each level. A field selected as a heading is also enabled for the Patient PDF, and one field can be in only one heading level.
             </Text>
             <View style={styles.headingChoiceRow}>
               <View style={styles.headingChoiceBox}>
