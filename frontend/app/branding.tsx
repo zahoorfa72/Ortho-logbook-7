@@ -275,49 +275,94 @@ export default function BrandingScreen() {
         {(() => {
           const enabledFields = draft.pdfPatientFields || defaultBranding.pdfPatientFields || [];
           const groups = Array.isArray(draft.pdfHeadingLevels) ? draft.pdfHeadingLevels : [];
-          const sub = new Set<string>(Array.isArray(groups.find((g:any)=>g?.label==="Sub-heading")?.fields) ? groups.find((g:any)=>g?.label==="Sub-heading").fields : []);
-          const subSub = new Set<string>(Array.isArray(groups.find((g:any)=>g?.label==="Sub-sub-heading")?.fields) ? groups.find((g:any)=>g?.label==="Sub-sub-heading").fields : []);
-          const setEntryLevel = (key:string, level:0|2|3) => {
+          const subGroup = groups.find((g:any)=>g?.label==="Sub-heading");
+          const subSubGroup = groups.find((g:any)=>g?.label==="Sub-sub-heading");
+          const sub = new Set<string>(Array.isArray(subGroup?.fields) ? subGroup.fields.map(String) : []);
+          const subSub = new Set<string>(Array.isArray(subSubGroup?.fields) ? subSubGroup.fields.map(String) : []);
+
+          const toggleHeadingField = (key:string, level:2|3) => {
             setDraft(d => {
+              const currentFields = Array.isArray(d.pdfPatientFields)
+                ? [...d.pdfPatientFields]
+                : [...(defaultBranding.pdfPatientFields || [])];
               const base = [
                 { label:"Main Heading", fields:[...(d.pdfHeadingLevels?.find((g:any)=>g?.label==="Main Heading")?.fields || [])] },
                 { label:"Sub-heading", fields:[...(d.pdfHeadingLevels?.find((g:any)=>g?.label==="Sub-heading")?.fields || [])] },
                 { label:"Sub-sub-heading", fields:[...(d.pdfHeadingLevels?.find((g:any)=>g?.label==="Sub-sub-heading")?.fields || [])] },
               ];
-              base.forEach(g=>{g.fields=g.fields.filter((x:string)=>x!==key);});
-              if(level===2) base[1].fields.push(key);
-              if(level===3) base[2].fields.push(key);
-              return {...d,pdfHeadingLevels:base};
+              const target = level===2 ? base[1].fields : base[2].fields;
+              const other = level===2 ? base[2].fields : base[1].fields;
+              const active = target.includes(key);
+
+              if(active){
+                target.splice(target.indexOf(key),1);
+              } else {
+                target.push(key);
+                if(!currentFields.includes(key)) currentFields.push(key);
+                const otherIndex = other.indexOf(key);
+                if(otherIndex >= 0) other.splice(otherIndex,1);
+              }
+
+              return {
+                ...d,
+                pdfPatientFields: currentFields,
+                pdfHeadingLevels: base,
+              };
             });
           };
-          return patientPdfOptions.filter(([key])=>enabledFields.includes(key)).map(([key,label])=>{
-            const subChecked=sub.has(key), subSubChecked=subSub.has(key);
-            return <View key={key} style={styles.patientPdfEntryBox}>
-              <Pressable style={styles.fieldToggle} onPress={()=>setDraft(d=>{const next=(d.pdfPatientFields||[]).filter(x=>x!==key); const groups=(d.pdfHeadingLevels||[]).map((g:any)=>({...g,fields:(g.fields||[]).filter((x:string)=>x!==key)})); return {...d,pdfPatientFields:next,pdfHeadingLevels:groups};})}>
-                <Ionicons name="checkbox" size={21} color={colors.brandPrimary}/><Text style={styles.headingEntryText}>{label}</Text>
-              </Pressable>
-              <View style={styles.headingChoiceRow}>
-                <View style={styles.headingChoiceBox}>
-                  <Text style={styles.headingChoiceTitle}>Sub-heading</Text>
-                  <Pressable onPress={()=>setEntryLevel(key,0)} style={[styles.headingChoiceOption,!subChecked&&styles.headingChoiceOptionActive]}>
-                    <Ionicons name={!subChecked?"radio-button-on":"radio-button-off"} size={19} color={!subChecked?colors.brandPrimary:colors.muted}/><Text style={styles.headingChoiceText}>No need</Text>
-                  </Pressable>
-                  <Pressable onPress={()=>setEntryLevel(key,2)} style={[styles.headingChoiceOption,subChecked&&styles.headingChoiceOptionActive]}>
-                    <Ionicons name={subChecked?"checkbox":"square-outline"} size={19} color={subChecked?colors.brandPrimary:colors.muted}/><Text style={styles.headingChoiceText}>{label}</Text>
-                  </Pressable>
-                </View>
-                <View style={styles.headingChoiceBox}>
-                  <Text style={styles.headingChoiceTitle}>Sub-sub-heading</Text>
-                  <Pressable onPress={()=>setEntryLevel(key,0)} style={[styles.headingChoiceOption,!subSubChecked&&styles.headingChoiceOptionActive]}>
-                    <Ionicons name={!subSubChecked?"radio-button-on":"radio-button-off"} size={19} color={!subSubChecked?colors.brandPrimary:colors.muted}/><Text style={styles.headingChoiceText}>No need</Text>
-                  </Pressable>
-                  <Pressable onPress={()=>setEntryLevel(key,3)} style={[styles.headingChoiceOption,subSubChecked&&styles.headingChoiceOptionActive]}>
-                    <Ionicons name={subSubChecked?"checkbox":"square-outline"} size={19} color={subSubChecked?colors.brandPrimary:colors.muted}/><Text style={styles.headingChoiceText}>{label}</Text>
-                  </Pressable>
+
+          const removeHeadingField = (key:string) => setDraft(d => ({
+            ...d,
+            pdfHeadingLevels: [
+              { label:"Main Heading", fields:[...(d.pdfHeadingLevels?.find((g:any)=>g?.label==="Main Heading")?.fields || [])] },
+              { label:"Sub-heading", fields:[...(d.pdfHeadingLevels?.find((g:any)=>g?.label==="Sub-heading")?.fields || [])].filter((x:string)=>x!==key) },
+              { label:"Sub-sub-heading", fields:[...(d.pdfHeadingLevels?.find((g:any)=>g?.label==="Sub-sub-heading")?.fields || [])].filter((x:string)=>x!==key) },
+            ],
+          }));
+
+          const fieldRow = (key:string,label:string,checked:boolean,onPress:()=>void) => (
+            <Pressable key={key} onPress={onPress} style={styles.headingEntry}>
+              <Ionicons name={checked?"checkbox":"square-outline"} size={19} color={checked?colors.brandPrimary:colors.muted}/>
+              <Text style={styles.headingEntryText}>{label}</Text>
+            </Pressable>
+          );
+
+          return <View>
+            <Text style={[styles.label, { marginTop: spacing.md }]}>Patient PDF headings</Text>
+            <Text style={styles.hint}>
+              Every patient detail field is available in both boxes, including Age, Procedure, Implants and any new custom field created in Patient Fields.
+              A field selected as a heading is also enabled for the Patient PDF. One field can be in only one heading level.
+            </Text>
+            <View style={styles.headingChoiceRow}>
+              <View style={styles.headingChoiceBox}>
+                <Text style={styles.headingBoxTitle}>Sub-heading</Text>
+                <Text style={styles.headingBoxHint}>Check every field you want as a sub-heading. Unchecked = No need.</Text>
+                <View style={styles.headingEntryGrid}>
+                  {patientPdfOptions.map(([key,label]) =>
+                    fieldRow(String(key),String(label),sub.has(String(key)),()=>toggleHeadingField(String(key),2))
+                  )}
                 </View>
               </View>
-            </View>;
-          });
+
+              <View style={styles.headingChoiceBox}>
+                <Text style={styles.headingBoxTitle}>Sub-sub-heading</Text>
+                <Text style={styles.headingBoxHint}>Check every field you want as a sub-sub-heading. Unchecked = No need.</Text>
+                <View style={styles.headingEntryGrid}>
+                  {patientPdfOptions.map(([key,label]) =>
+                    fieldRow("subsub-"+String(key),String(label),subSub.has(String(key)),()=>toggleHeadingField(String(key),3))
+                  )}
+                </View>
+              </View>
+            </View>
+
+            {(sub.size || subSub.size) ? (
+              <Pressable onPress={()=>setDraft(d=>({...d,pdfHeadingLevels:(d.pdfHeadingLevels||[]).map((g:any)=>(
+                g?.label==="Sub-heading" || g?.label==="Sub-sub-heading" ? {...g,fields:[]} : g
+              ))}))} style={[styles.actionBtnGhost,{marginTop:spacing.sm}]}>
+                <Text style={styles.actionText}>Clear Sub-heading / Sub-sub-heading choices</Text>
+              </Pressable>
+            ) : null}
+          </View>;
         })()}
         <Text style={[styles.label, { marginTop: spacing.md }]}>Patient list layout</Text>
         <Text style={styles.hint}>Control how many patients fit on each PDF list page and how the list text looks. The selected settings apply to the existing PDF design.</Text>
