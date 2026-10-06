@@ -39,7 +39,7 @@ import {
   evaluateReminder,
   type ReminderState,
 } from "@/src/utils/backup-reminder";
-import { buildPatientListHtml, generateAndSharePdf } from "@/src/utils/pdf";
+import { buildPatientListHtml, buildPatientImplantHtml, generateAndSharePdf } from "@/src/utils/pdf";
 
 type Patient = {
   id: string;
@@ -251,6 +251,23 @@ export default function Logbook() {
     catch(e:any) { toast(e?.message || "Could not create PDF.", "error"); }
     finally { setExporting(false); }
   }, [branding,filteredForPdf,pdfFromDate,pdfToDate,toast]);
+  const doExportImplants = useCallback(async () => {
+    if (pdfFromDate && pdfToDate && pdfFromDate > pdfToDate) { toast("From date cannot be after To date.", "error"); return; }
+    const list = filteredForPdf();
+    if (!list.length) { toast("No patients match the selected PDF dates.", "info"); return; }
+    setExporting(true);
+    try {
+      let effectiveFrom = pdfFromDate; let effectiveTo = pdfToDate;
+      const y = Number(pdfYear); const m = Number(pdfMonth);
+      if (y && m >= 1 && m <= 12) { effectiveFrom = effectiveFrom || String(y) + "-" + String(m).padStart(2,"0") + "-01"; effectiveTo = effectiveTo || String(y) + "-" + String(m).padStart(2,"0") + "-" + String(new Date(y,m,0).getDate()).padStart(2,"0"); }
+      else if (y) { effectiveFrom = effectiveFrom || String(y) + "-01-01"; effectiveTo = effectiveTo || String(y) + "-12-31"; }
+      const html = buildPatientImplantHtml(branding, list, effectiveFrom, effectiveTo);
+      setPdfFilterOpen(false);
+      await generateAndSharePdf(html, "Patient Implant List");
+    } catch(e:any) { toast(e?.message || "Could not create implant PDF.", "error"); }
+    finally { setExporting(false); }
+  }, [branding,filteredForPdf,pdfFromDate,pdfToDate,pdfMonth,pdfYear,toast]);
+
   const requestExport = useCallback(async () => { if (await hasAdminPin()) setPinPromptFor("export"); else openPdfFilter(); }, [openPdfFilter]);
   const requestSettings = useCallback(async () => {
     if (await hasAdminPin()) setPinPromptFor("settings");
@@ -541,8 +558,10 @@ export default function Logbook() {
           <Text style={styles.pdfModalLabel}>Month / Year (optional)</Text>
           <View style={styles.pdfFilterRow}><TextInput value={pdfMonth} onChangeText={v=>setPdfMonth(v.replace(/[^0-9]/g,"").slice(0,2))} placeholder="Month 1-12" placeholderTextColor={colors.muted} keyboardType="number-pad" style={[styles.pdfDateInput,{flex:1}]}/><TextInput value={pdfYear} onChangeText={v=>setPdfYear(v.replace(/[^0-9]/g,"").slice(0,4))} placeholder="Year" placeholderTextColor={colors.muted} keyboardType="number-pad" style={[styles.pdfDateInput,{flex:1}]}/></View>
           {availableYears.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pdfDateRow}>{availableYears.map(y=><Pressable key={y} onPress={()=>setPdfYear(y)} style={[styles.pdfDateChip,pdfYear===y&&styles.pdfDateChipActive]}><Text style={[styles.pdfDateText,pdfYear===y&&styles.pdfDateTextActive]}>{y}</Text></Pressable>)}</ScrollView> : null}
-          <Text style={styles.pdfModalHint}>This uses the original patient-list PDF. It is compacted so about 13-15 patients fit on one A4 portrait page, with the selected From/To dates shown in the PDF header.</Text>
-          <PrimaryButton title="Create Patient List PDF" onPress={doExport} loading={exporting} testID="create-patient-list-pdf"/>
+          <Text style={styles.pdfModalHint}>Procedure/Patient PDF and Implant PDF are now separate. The Implant PDF uses the editable Implant Heading and Implant Sub-heading from PDF settings.</Text>
+          <PrimaryButton title="Create Procedure / Patient PDF" onPress={doExport} loading={exporting} testID="create-patient-list-pdf"/>
+          <View style={{ height: spacing.sm }} />
+          <PrimaryButton title="Create Implant PDF" onPress={doExportImplants} loading={exporting} testID="create-implant-pdf"/>
         </View></View>
       </Modal>
 
