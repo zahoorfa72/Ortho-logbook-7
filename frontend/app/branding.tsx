@@ -264,7 +264,7 @@ export default function BrandingScreen() {
           </Pressable>;
         })}
         <Text style={[styles.label, { marginTop: spacing.md }]}>PDF field heading setup</Text>
-        <Text style={styles.hint}>Every PDF field is shown separately. For each field choose Normal, Main Heading, Sub-heading 1, or Sub-heading 2. You can put multiple fields in either sub-heading level. Implants is a separate selectable field.</Text>
+        <Text style={styles.hint}>Every patient field is shown separately. For each field choose Normal, Main Heading, or Sub-heading 1.</Text>
         {[
           ["date","Date"],["mrNo","MR No"],["name","Patient Name"],["gender","Gender"],["age","Age"],["address","Address"],["diagnosis","Diagnosis"],["procedure","Procedure"],["fileName","File Name"]
         ].map(([key,label])=>{
@@ -292,14 +292,6 @@ export default function BrandingScreen() {
             </View>
           </View>;
         })}
-        <Text style={[styles.label, { marginTop: spacing.md }]}>Implant PDF headings</Text>
-        <Text style={styles.hint}>Implants are no longer included inside the patient/procedure PDF. They have their own separate PDF. Edit both headings here.</Text>
-        <Text style={styles.colorLabel}>Implant heading</Text>
-        <TextInput value={String(draft.pdfImplantHeading || "Implants")} onChangeText={v=>setDraft(d=>({...d,pdfImplantHeading:v}))} placeholder="Implants" placeholderTextColor={colors.muted} style={styles.input} />
-        <Text style={styles.colorLabel}>Implant sub-heading</Text>
-        <TextInput value={String(draft.pdfImplantSubheading || "Used Implants")} onChangeText={v=>setDraft(d=>({...d,pdfImplantSubheading:v}))} placeholder="Used Implants" placeholderTextColor={colors.muted} style={styles.input} />
-        <Text style={styles.colorLabel}>Implant sub-heading colour</Text>
-        <TextInput value={String(draft.pdfImplantSubheadingColor||"#8A9690")} onChangeText={v=>setDraft(d=>({...d,pdfImplantSubheadingColor:v}))} placeholder="#8A9690" placeholderTextColor={colors.muted} style={styles.input} />
         <Text style={[styles.label, { marginTop: spacing.md }]}>Patient list layout</Text>
         <Text style={styles.hint}>Control how many patients fit on each PDF list page and how the list text looks. The selected settings apply to the existing PDF design.</Text>
         <Text style={styles.colorLabel}>Patients per page</Text>
