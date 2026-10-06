@@ -293,7 +293,7 @@ export default function BrandingScreen() {
           return patientPdfOptions.filter(([key])=>enabledFields.includes(key)).map(([key,label])=>{
             const subChecked=sub.has(key), subSubChecked=subSub.has(key);
             return <View key={key} style={styles.patientPdfEntryBox}>
-              <Pressable style={styles.fieldToggle} onPress={()=>setDraft(d=>({...d,pdfPatientFields:(d.pdfPatientFields||[]).filter(x=>x!==key)}))}>
+              <Pressable style={styles.fieldToggle} onPress={()=>setDraft(d=>{const next=(d.pdfPatientFields||[]).filter(x=>x!==key); const groups=(d.pdfHeadingLevels||[]).map((g:any)=>({...g,fields:(g.fields||[]).filter((x:string)=>x!==key)})); return {...d,pdfPatientFields:next,pdfHeadingLevels:groups};})}>
                 <Ionicons name="checkbox" size={21} color={colors.brandPrimary}/><Text style={styles.headingEntryText}>{label}</Text>
               </Pressable>
               <View style={styles.headingChoiceRow}>
