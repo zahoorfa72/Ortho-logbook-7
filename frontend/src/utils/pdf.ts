@@ -297,25 +297,41 @@ export async function buildPatientDetailHtml(
   const pages:string[]=[];
   for(let idx=0; idx<patients.length; idx++){
     const p=patients[idx];
-    const rows=fields.filter(f=>f.key!=="photos").map(f=>{
+    const fieldValues = new Map<string,string>();
+    const getValue = (key:string) => {
+      if(fieldValues.has(key)) return fieldValues.get(key) || "";
       let value="";
-      if(f.key==="date") value=p.date;
-      else if(f.key==="mrNo") value=p.mrNo;
-      else if(f.key==="name") value=p.name;
-      else if(f.key==="gender") value=p.gender;
-      else if(f.key==="age") value=p.age;
-      else if(f.key==="address") value=p.address||"";
-      else if(f.key==="diagnosis") value=p.diagnosis;
-      else if(f.key==="procedure") value=p.procedure || "";
-      else if(f.key==="implants") {
+      if(key==="date") value=p.date;
+      else if(key==="mrNo") value=p.mrNo;
+      else if(key==="name") value=p.name;
+      else if(key==="gender") value=p.gender;
+      else if(key==="age") value=p.age;
+      else if(key==="address") value=p.address||"";
+      else if(key==="diagnosis") value=p.diagnosis;
+      else if(key==="procedure") value=p.procedure || "";
+      else if(key==="implants") {
         const items = Array.isArray(p.implants) && p.implants.length
           ? p.implants.map((x:any)=>formatInventoryLabel(x.category,x.name,x.size)+(Number(x.quantity)>1?" × "+x.quantity:""))
           : [p.implant,p.implantII].filter(Boolean);
         value = items.join(" • ");
       }
-      else if(f.key==="fileName") value=p.fileName||"";
-      else value=String((p.customData||{})[f.key]||"");
-      return "<tr><th>"+escapeHtml(f.label)+"</th><td class='detailValue'>"+escapeHtml(value||"—")+"</td></tr>";
+      else if(key==="fileName") value=p.fileName||"";
+      else value=String((p.customData||{})[key]||"");
+      fieldValues.set(key,value);
+      return value;
+    };
+    const availableFields = fields.filter(f=>f.key!=="photos");
+    const labels = new Map(availableFields.map(f=>[String(f.key),String(f.label)]));
+    const map:any = branding.pdfHeadingMap && typeof branding.pdfHeadingMap==="object" ? branding.pdfHeadingMap : {};
+    const legacySub = Array.isArray(branding.pdfHeadingLevels) ? branding.pdfHeadingLevels.filter((g:any)=>["Sub-heading","Sub-heading 1"].includes(String(g?.label||""))).flatMap((g:any)=>Array.isArray(g?.fields)?g.fields.map(String):[]) : [];
+    const legacySubSub = Array.isArray(branding.pdfHeadingLevels) ? branding.pdfHeadingLevels.filter((g:any)=>["Sub-sub-heading","Sub-sub-heading 1"].includes(String(g?.label||""))).flatMap((g:any)=>Array.isArray(g?.fields)?g.fields.map(String):[]) : [];
+    const rows=availableFields.map(f=>{
+      const raw:any=map[String(f.key)];
+      const headingKeys:string[]=raw && Array.isArray(raw.heading) ? raw.heading.map(String) : legacySub;
+      const subHeadingKeys:string[]=raw && Array.isArray(raw.subHeading) ? raw.subHeading.map(String) : legacySubSub;
+      const headingRows=headingKeys.filter(k=>labels.has(k)).map(k=>"<div class=\"nestedEntry headingEntry\"><span class=\"nestedLabel\">Heading: "+escapeHtml(labels.get(k)||k)+"</span><span class=\"nestedValue\">"+escapeHtml(getValue(k)||"—")+"</span></div>").join("");
+      const subRows=subHeadingKeys.filter(k=>labels.has(k)).map(k=>"<div class=\"nestedEntry subHeadingEntry\"><span class=\"nestedLabel\">Sub-heading: "+escapeHtml(labels.get(k)||k)+"</span><span class=\"nestedValue\">"+escapeHtml(getValue(k)||"—")+"</span></div>").join("");
+      return "<tr><th>"+escapeHtml(f.label)+"</th><td class=\"detailValue\"><div class=\"mainEntryValue\">"+escapeHtml(getValue(String(f.key))||"—")+"</div>"+headingRows+subRows+"</td></tr>";
     }).join("");
 
     const rawPhotos=Array.isArray(p.photos)&&p.photos.length
@@ -361,7 +377,7 @@ export async function buildPatientDetailHtml(
     ".occurrenceTag{display:inline-block;font-size:12px;font-weight:700;color:#555555;margin-left:8px;white-space:nowrap;background:transparent!important;border:0!important;padding:0!important;box-shadow:none!important}"+
     ".patientMr{font-size:12px;color:#3A3A3C;margin-top:4px;margin-bottom:12px}"+
     ".detailTable th{width:28%;background:"+branding.tertiary+"}"+
-    ".detailTable td{padding:5px 6px;vertical-align:top;line-height:1.25}"+
+    ".detailTable td{padding:5px 6px;vertical-align:top;line-height:1.25}.mainEntryValue{font-weight:700;margin-bottom:5px}.nestedEntry{display:flex;gap:8px;padding:3px 0 3px 10px;border-left:3px solid #DCE5E1;line-height:1.2}.nestedLabel{font-weight:700;min-width:92px}.nestedValue{font-weight:500}.subHeadingEntry{margin-left:12px;border-left-color:#C7C2B6}"+
     ".photoGrid{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;align-items:flex-start;page-break-inside:avoid}"+
     ".patientPhoto{width:110px;height:110px;object-fit:cover;border-radius:8px;border:1px solid #E2DFD8}"+
     "</style></head><body>"+
