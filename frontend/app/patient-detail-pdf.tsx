@@ -65,6 +65,23 @@ export default function PatientDetailPdfScreen() {
     return patients.filter(p=>[p.name,p.mrNo,p.date,p.fileName,p.gender,p.age,p.address,p.diagnosis,p.procedure,p.implant,p.implantII,...(p.implants||[]).flatMap((x:any)=>[x.category,x.name,x.size]),...Object.values(p.customData||{})].some(v=>String(v||"").toLowerCase().includes(q)));
   },[patients,search]);
 
+  const occurrenceById=useMemo(()=>{
+    const groups=new Map<string,Patient[]>();
+    const identity=(p:Patient)=>(p.name||"").trim().toLowerCase()+"|"+(p.mrNo||"").trim().toLowerCase();
+    for(const p of patients){
+      const key=identity(p);
+      const list=groups.get(key)||[];
+      list.push(p);
+      groups.set(key,list);
+    }
+    const result=new Map<string,number>();
+    for(const list of groups.values()){
+      const sorted=[...list].sort((a,b)=>String(a.date||"").localeCompare(String(b.date||""))||String(a.id||"").localeCompare(String(b.id||"")));
+      sorted.forEach((p,i)=>result.set(p.id,i+1));
+    }
+    return result;
+  },[patients]);
+
   const selectedPatients=useMemo(
     ()=>mode==="all"?patients:patients.filter(p=>selectedIds.includes(p.id)),
     [mode,patients,selectedIds]
@@ -150,7 +167,7 @@ export default function PatientDetailPdfScreen() {
             <View style={{flex:1,marginLeft:spacing.sm}}>
               <View style={styles.patientNameRow}>
                 <Text style={styles.patientName}>{item.name||"Unnamed patient"}</Text>
-                {branding.pdfShowOccurrenceBadge!==false && item.totalOperations && item.totalOperations>1 ? <Text style={styles.occurrenceText}>{occurrenceLabel(item.operationCount||1)}</Text> : null}
+                {branding.pdfShowOccurrenceBadge!==false ? <Text style={styles.occurrenceText}>{occurrenceLabel(occurrenceById.get(item.id)||item.operationCount||1)}</Text> : null}
               </View>
               <Text style={styles.patientMeta}>{item.mrNo||"—"} · {item.date||"—"}{item.fileName?" · "+item.fileName:""}</Text>
             </View>
