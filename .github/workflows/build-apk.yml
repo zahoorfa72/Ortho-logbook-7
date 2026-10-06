@@ -78,12 +78,17 @@ jobs:
           # Accept all licences (ignore SIGPIPE 141 from `yes`).
           yes | "$SDKMAN" --licenses >/dev/null 2>&1 || true
 
-          # Install / verify the NDK version React Native 0.86 requires.
-          "$SDKMAN" "ndk;${NDK_VERSION}"
+          # Install / verify the exact native toolchain required by
+          # React Native 0.86 / Expo SDK 57. react-native-worklets uses
+          # CMake during configureCMakeRelWithDebInfo.
+          "$SDKMAN" "ndk;${NDK_VERSION}" "cmake;3.22.1"
 
           NDK_DIR="$ANDROID_HOME/ndk/${NDK_VERSION}"
+          CMAKE_DIR="$ANDROID_HOME/cmake/3.22.1"
           test -f "$NDK_DIR/source.properties"
+          test -f "$CMAKE_DIR/bin/cmake"
           echo "NDK ready at: $NDK_DIR"
+          echo "CMake ready at: $CMAKE_DIR"
 
           {
             echo "ANDROID_SDK_ROOT=$ANDROID_HOME"
