@@ -146,8 +146,10 @@ function styles(branding: BrandingConfig) {
       .barFill { height: 100%; background: ${branding.primary}; }
       .section { margin-top: 20px; font-size: 14px; font-weight: 800; color: ${branding.primary}; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; }
       .footer { margin-top: 30px; padding-top: 12px; border-top: 1px solid #E2DFD8; font-size: 10px; color: #7C7872; text-align: center; }
-      .listPage { page-break-after: always; break-inside: avoid; }\n      .listPage:last-child { page-break-after: auto; }
-      .listPage table { page-break-inside: avoid; }\n      .empty { padding: 30px; text-align: center; color: #7C7872; font-style: italic; }
+      .listPage { page-break-after: always; break-inside: avoid; }
+      .listPage:last-child { page-break-after: auto; }
+      .listPage table { page-break-inside: avoid; }
+      .empty { padding: 30px; text-align: center; color: #7C7872; font-style: italic; }
     </style>
   `;
 }
