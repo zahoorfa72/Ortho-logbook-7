@@ -227,7 +227,7 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
     page.forEach((p,idx)=>{
       const occurrence=Number(p.operationCount||counts.get(p.id)||1);
       const total=Number(p.totalOperations||groups.get(keyOf(p))?.length||0);
-      const badge=branding.pdfShowOccurrenceBadge!==false
+      const badge=branding.pdfShowOccurrenceBadge!==false && occurrence>1
         ? '<span class="occurrence">'+escapeHtml(ordinalSuffix(occurrence))+' time</span>'
         : "";
       rows += "<tr><td class='indexCell'>"+(start+idx+1)+"</td>"+fields.map(k=>{
@@ -235,8 +235,8 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
         const cfg:any=headingMap[String(k)] || {};
         const headingKeys:string[]=Array.isArray(cfg.heading)?cfg.heading.map(String):[];
         const subKeys:string[]=Array.isArray(cfg.subHeading)?cfg.subHeading.map(String):[];
-        const headingLines=headingKeys.map(h=>"<div class='pdfHeadingLine'><b>Heading: "+escapeHtml(h)+"</b> — "+escapeHtml(value(p,h)||"—")+"</div>").join("");
-        const subLines=subKeys.map(h=>"<div class='pdfSubHeadingLine'><b>Sub-heading: "+escapeHtml(h)+"</b> — "+escapeHtml(value(p,h)||"—")+"</div>").join("");
+        const headingLines=headingKeys.map(h=>"<div class='pdfHeadingLine'><b>"+escapeHtml(labels[h]||h)+"</b> — "+escapeHtml(value(p,h)||"—")+"</div>").join("");
+        const subLines=subKeys.map(h=>"<div class='pdfSubHeadingLine'><b>"+escapeHtml(labels[h]||h)+"</b> — "+escapeHtml(value(p,h)||"—")+"</div>").join("");
         const level=levelFor(k);
         const headingClass=level ? " headingLevel"+level : "";
         const styled=level ? "<span class='headingText"+headingClass+"'>"+raw+"</span>" : raw;
@@ -252,7 +252,7 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
   const textTone = branding.pdfListTextTone==="light" ? "#7C7872" : branding.pdfListTextTone==="dark" ? "#1C1C1E" : "#3A3A3C";
   const rowPadding = branding.pdfListRowSpacing==="spacious" ? "4.5px 4px" : branding.pdfListRowSpacing==="normal" ? "3.5px 3.5px" : "2.5px 3.5px";
   return '<html><head><meta charset="utf-8"/>'+styles(branding)+'<style>'+
-    'table{font-size:'+textSize+'px;table-layout:auto;width:100%;border-collapse:collapse}.listPage{page-break-after:always}.listPage:last-child{page-break-after:auto}th,td{padding:'+rowPadding+';line-height:1.15;vertical-align:middle}td{color:'+textTone+';font-weight:'+textWeight+'}.indexHead,.indexCell{width:22px;text-align:center}.headingText{display:block}.headingLevel1{font-size:1.08em;font-weight:800;color:'+branding.primary+'}.headingLevel2{font-weight:750;color:'+branding.text+'}.headingLevel3{font-weight:700;color:'+branding.text+'}.headingLevel4{font-weight:650;color:#59625E}.occurrence{font-size:.78em;font-weight:700;color:#555555;margin-left:5px;white-space:nowrap}.badge{font-size:.78em;margin-left:3px;white-space:nowrap}tbody tr{page-break-inside:avoid}'+
+    'table{font-size:'+textSize+'px;table-layout:auto;width:100%;border-collapse:collapse}.listPage{page-break-after:always}.listPage:last-child{page-break-after:auto}th,td{padding:'+rowPadding+';line-height:1.15;vertical-align:middle}td{color:'+textTone+';font-weight:'+textWeight+'}.indexHead,.indexCell{width:22px;text-align:center}.headingText{display:block}.headingLevel1{font-size:1.08em;font-weight:800;color:'+branding.primary+'}.headingLevel2{font-weight:750;color:'+branding.text+'}.headingLevel3{font-weight:700;color:'+branding.text+'}.headingLevel4{font-weight:650;color:#59625E}.pdfHeadingLine,.pdfSubHeadingLine{margin-top:3px;padding-left:6px;border-left:3px solid #555555;color:#1C1C1E;font-weight:600;line-height:1.2}.pdfHeadingLine b,.pdfSubHeadingLine b{color:#1C1C1E;font-weight:800}.pdfSubHeadingLine{margin-left:10px;border-left-color:#5B5145}.occurrence{display:inline-block;font-size:.78em;font-weight:600;color:#555555;margin-left:5px;white-space:nowrap;background:transparent!important;border:0!important;padding:0!important;box-shadow:none!important;line-height:1.2}.badge{font-size:.78em;margin-left:3px;white-space:nowrap}tbody tr{page-break-inside:avoid}'+
     '</style></head><body>'+
     header(branding,'Patient List — '+patients.length+' record'+(patients.length===1?'':'s')+(fromDate||toDate?' — '+(fromDate||'Start')+' to '+(toDate||'End'):''))+
     pageTables.join("")+footer(branding)+'</body></html>';
