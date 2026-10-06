@@ -167,7 +167,7 @@ export default function PatientDetailPdfScreen() {
             <View style={{flex:1,marginLeft:spacing.sm}}>
               <View style={styles.patientNameRow}>
                 <Text style={styles.patientName}>{item.name||"Unnamed patient"}</Text>
-                {branding.pdfShowOccurrenceBadge!==false ? <Text style={styles.occurrenceText}>{occurrenceLabel(occurrenceById.get(item.id)||item.operationCount||1)}</Text> : null}
+                {branding.pdfShowOccurrenceBadge!==false && (occurrenceById.get(item.id)||item.operationCount||1)>1 ? <Text style={styles.occurrenceText}>{occurrenceLabel(occurrenceById.get(item.id)||item.operationCount||1)}</Text> : null}
               </View>
               <Text style={styles.patientMeta}>{item.mrNo||"—"} · {item.date||"—"}{item.fileName?" · "+item.fileName:""}</Text>
             </View>
