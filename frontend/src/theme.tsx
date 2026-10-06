@@ -65,6 +65,7 @@ export type BrandingConfig = {
   pdfMainHeadingField?: string;
   pdfSubHeadingField?: string;
   pdfHeadingLevels?: { fields: string[]; label?: string }[];
+  pdfHeadingMap?: Record<string, { heading: string[]; subHeading: string[] }>;
   pdfImplantSubheadingColor?: string;
   pdfImplantHeading?: string;
   pdfImplantSubheading?: string;
