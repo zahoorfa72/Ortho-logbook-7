@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { ActivityIndicator, Alert, FlatList, Pressable, ScrollView, Text, View } from "react-native";
+import { ActivityIndicator, Alert, FlatList, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { router } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import Ionicons from "@react-native-vector-icons/ionicons";
@@ -13,7 +13,8 @@ import { buildPatientDetailHtml, generateAndSharePdf } from "@/src/utils/pdf";
 type Patient = {
   id:string; mrNo:string; name:string; gender:string; age:string; diagnosis:string;
   procedure:string; implant:string; implantII:string; date:string; address:string;
-  fileName:string; photos:string[]; customData?:Record<string,string>; implants?:any[];
+  fileName:string; photos:string[]; operationCount?:number; totalOperations?:number;
+  customData?:Record<string,string>; implants?:any[];
 };
 
 type Field = { key:string; label:string };
@@ -33,9 +34,10 @@ export default function PatientDetailPdfScreen() {
   const [selectedIds,setSelectedIds] = useState<string[]>([]);
   const [photoMode,setPhotoMode] = useState<"none"|"first"|"all">("first");
   const [fields,setFields] = useState<Field[]>(baseFields);
+  const [search,setSearch] = useState("");
   const [creating,setCreating] = useState(false);
 
-  const {data:patients=[],isLoading} = useQuery<Patient[]>({queryKey:["patients"],queryFn:()=>api.get("/patients")});
+  const {data:patients=[],isLoading} = useQuery<Patient[]>({queryKey:["patients-detail"],queryFn:()=>api.get("/patients-detail")});
   const {data:customFields=[]} = useQuery<any[]>({queryKey:["patient-custom-fields"],queryFn:()=>api.get("/patient-custom-fields")});
 
   const allFields = useMemo<Field[]>(()=>[
@@ -49,10 +51,17 @@ export default function PatientDetailPdfScreen() {
   };
   const togglePatient=(id:string)=>setSelectedIds(prev=>prev.includes(id)?prev.filter(x=>x!==id):[...prev,id]);
 
+  const filteredPatients=useMemo(()=>{
+    const q=search.trim().toLowerCase();
+    if(!q) return patients;
+    return patients.filter(p=>[p.name,p.mrNo,p.date,p.fileName].some(v=>String(v||"").toLowerCase().includes(q)));
+  },[patients,search]);
+
   const selectedPatients=useMemo(
     ()=>mode==="all"?patients:patients.filter(p=>selectedIds.includes(p.id)),
     [mode,patients,selectedIds]
   );
+
 
   const create=async()=>{
     if(!fields.length){ toast("Select at least one patient detail field.","error"); return; }
@@ -87,24 +96,41 @@ export default function PatientDetailPdfScreen() {
       </View>
 
       {mode==="selected" && <View style={styles.patientBox}>
+        <TextInput
+          value={search}
+          onChangeText={setSearch}
+          placeholder="Search patient name, MR No, date or file name"
+          placeholderTextColor={colors.muted}
+          style={styles.searchInput}
+          autoCorrect={false}
+        />
         <View style={styles.rowBetween}>
-          <Text style={styles.helper}>{selectedIds.length} selected</Text>
-          <Pressable onPress={()=>setSelectedIds(selectedIds.length===patients.length?[]:patients.map(p=>p.id))}>
-            <Text style={styles.link}>{selectedIds.length===patients.length?"Clear All":"Select All"}</Text>
+          <Text style={styles.helper}>{selectedIds.length} selected · {filteredPatients.length} shown</Text>
+          <Pressable onPress={()=>{
+            const shownIds=filteredPatients.map(p=>p.id);
+            const allShown=shownIds.length>0 && shownIds.every(id=>selectedIds.includes(id));
+            setSelectedIds(prev=>allShown
+              ? prev.filter(id=>!shownIds.includes(id))
+              : [...new Set([...prev,...shownIds])]
+            );
+          }}>
+            <Text style={styles.link}>
+              {filteredPatients.length>0 && filteredPatients.every(p=>selectedIds.includes(p.id)) ? "Clear Shown" : "Select Shown"}
+            </Text>
           </Pressable>
         </View>
         <FlatList
-          data={patients}
+          data={filteredPatients}
           scrollEnabled={false}
           keyExtractor={p=>p.id}
           renderItem={({item})=><Pressable onPress={()=>togglePatient(item.id)} style={styles.patientRow}>
             <Ionicons name={selectedIds.includes(item.id)?"checkbox":"square-outline"} size={22} color={selectedIds.includes(item.id)?colors.brandPrimary:colors.muted}/>
             <View style={{flex:1,marginLeft:spacing.sm}}>
               <Text style={styles.patientName}>{item.name||"Unnamed patient"}</Text>
-              <Text style={styles.patientMeta}>{item.mrNo||"—"} · {item.date||"—"}</Text>
+              <Text style={styles.patientMeta}>{item.mrNo||"—"} · {item.date||"—"}{item.fileName?" · "+item.fileName:""}</Text>
             </View>
           </Pressable>}
-          ListEmptyComponent={<Text style={styles.helper}>No patients found.</Text>}
+          ListEmptyComponent={<Text style={styles.helper}>No matching patients found.</Text>}
         />
       </View>}
 
@@ -145,6 +171,7 @@ const useStyles=makeStyles(colors=>({
   subtitle:{fontFamily:fontFamily.regular,fontSize:fontSize.sm,color:colors.muted,marginTop:2},
   section:{fontFamily:fontFamily.bold,fontSize:fontSize.base,color:colors.onSurface,marginTop:spacing.lg,marginBottom:spacing.sm},
   helper:{fontFamily:fontFamily.regular,fontSize:fontSize.sm,color:colors.muted,lineHeight:20},
+  searchInput:{backgroundColor:colors.surfaceSecondary,borderRadius:radius.md,borderWidth:1,borderColor:colors.border,paddingHorizontal:spacing.md,paddingVertical:spacing.md,fontFamily:fontFamily.regular,fontSize:fontSize.base,color:colors.onSurface,marginBottom:spacing.sm},
   segment:{flexDirection:"row",backgroundColor:colors.surface,borderRadius:radius.md,borderWidth:1,borderColor:colors.border,padding:3},
   segmentBtn:{flex:1,paddingVertical:spacing.sm,alignItems:"center",borderRadius:radius.sm},
   segmentActive:{backgroundColor:colors.brandPrimary},
