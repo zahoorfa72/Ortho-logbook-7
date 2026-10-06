@@ -52,7 +52,7 @@ export default function PatientDetailPdfScreen() {
     ...baseFields,
     ...customFields.filter((f:any)=>f?.key && f?.label && !baseFields.some(x=>x.key===String(f.key)))
       .map((f:any)=>({key:String(f.key),label:String(f.label)}))
-  ],[fields,customFields]);
+  ],[customFields]);
 
   const toggleField=(key:string)=>{
     setFields(prev=>prev.some(x=>x.key===key) ? prev.filter(x=>x.key!==key) : [...prev,{key,label:allFields.find(x=>x.key===key)?.label||key}]);
@@ -208,6 +208,7 @@ const useStyles=makeStyles(colors=>({
   occurrenceText:{fontFamily:fontFamily.semibold,fontSize:fontSize.xs,color:"#555555"},
   rowBetween:{flexDirection:"row",justifyContent:"space-between",alignItems:"center",padding:spacing.xs},
   link:{fontFamily:fontFamily.semibold,fontSize:fontSize.sm,color:colors.brandPrimary},
+  searchInput:{marginBottom:spacing.sm,backgroundColor:colors.surfaceSecondary,borderWidth:1,borderColor:colors.border,borderRadius:radius.md,paddingHorizontal:spacing.md,paddingVertical:spacing.sm,color:colors.onSurface,fontFamily:fontFamily.regular,fontSize:fontSize.sm},
   patientRow:{flexDirection:"row",alignItems:"center",paddingVertical:spacing.sm,borderBottomWidth:1,borderBottomColor:colors.border},
   patientName:{fontFamily:fontFamily.semibold,fontSize:fontSize.sm,color:colors.onSurface},
   patientMeta:{fontFamily:fontFamily.regular,fontSize:fontSize.xs,color:colors.muted,marginTop:2},
