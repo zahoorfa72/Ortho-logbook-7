@@ -227,12 +227,21 @@ export default function Logbook() {
 
   const availableYears = useMemo(() => [...new Set((data || []).map(p => String(p.date || "").slice(0,4)).filter(Boolean))].sort().reverse(), [data]);
   const filteredForPdf = useCallback(() => {
+    const dateKey = (v:string) => {
+      const raw=String(v||"").trim();
+      const iso=raw.match(/^(\\d{4})[-\\/](\\d{1,2})[-\\/](\\d{1,2})$/);
+      if(iso) return iso[1]+iso[2].padStart(2,"0")+iso[3].padStart(2,"0");
+      const dmy=raw.match(/^(\\d{1,2})[-\\/](\\d{1,2})[-\\/](\\d{4})$/);
+      if(dmy) return dmy[3]+dmy[2].padStart(2,"0")+dmy[1].padStart(2,"0");
+      return raw;
+    };
     let list = [...(data || [])];
     const year = Number(pdfYear); const month = Number(pdfMonth);
-    if (year) list = list.filter(p => String(p.date || "").startsWith(String(year) + "-"));
-    if (month >= 1 && month <= 12 && year) list = list.filter(p => String(p.date || "").startsWith(String(year) + "-" + String(month).padStart(2,"0") + "-"));
-    if (pdfFromDate) list = list.filter(p => String(p.date || "") >= pdfFromDate);
-    if (pdfToDate) list = list.filter(p => String(p.date || "") <= pdfToDate);
+    if (year) list = list.filter(p => dateKey(String(p.date||"")).startsWith(String(year)));
+    if (month >= 1 && month <= 12 && year) list = list.filter(p => dateKey(String(p.date||"")).startsWith(String(year)+String(month).padStart(2,"0")));
+    const fromKey=dateKey(pdfFromDate); const toKey=dateKey(pdfToDate);
+    if (fromKey) list = list.filter(p => { const d=dateKey(String(p.date||"")); return d && d>=fromKey; });
+    if (toKey) list = list.filter(p => { const d=dateKey(String(p.date||"")); return d && d<=toKey; });
     return list;
   }, [data,pdfFromDate,pdfToDate,pdfMonth,pdfYear]);
   const openPdfFilter = useCallback(() => { setPdfFromDate(""); setPdfToDate(""); setPdfMonth(""); setPdfYear(""); setPdfFilterOpen(true); }, []);
