@@ -197,7 +197,6 @@ const useStyles=makeStyles(colors=>({
   subtitle:{fontFamily:fontFamily.regular,fontSize:fontSize.sm,color:colors.muted,marginTop:2},
   section:{fontFamily:fontFamily.bold,fontSize:fontSize.base,color:colors.onSurface,marginTop:spacing.lg,marginBottom:spacing.sm},
   helper:{fontFamily:fontFamily.regular,fontSize:fontSize.sm,color:colors.muted,lineHeight:20},
-  searchInput:{backgroundColor:colors.surfaceSecondary,borderRadius:radius.md,borderWidth:1,borderColor:colors.border,paddingHorizontal:spacing.md,paddingVertical:spacing.md,fontFamily:fontFamily.regular,fontSize:fontSize.base,color:colors.onSurface,marginBottom:spacing.sm},
   segment:{flexDirection:"row",backgroundColor:colors.surface,borderRadius:radius.md,borderWidth:1,borderColor:colors.border,padding:3},
   segmentBtn:{flex:1,paddingVertical:spacing.sm,alignItems:"center",borderRadius:radius.sm},
   segmentActive:{backgroundColor:colors.brandPrimary},
