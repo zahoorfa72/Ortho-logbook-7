@@ -18,6 +18,7 @@ type Patient = {
   implantII: string;
   date: string;
   operationCount?: number; // Nth-time operated (1 = first, 2 = 2nd time, ...)
+  totalOperations?: number;
   address?: string; fileName?: string; photos?: string[]; customData?: Record<string,string>;
   implants?: any[];
 };
@@ -203,8 +204,11 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
     const page=patients.slice(start,start+pageSize);
     let rows="";
     page.forEach((p,idx)=>{
-      const occurrence=counts.get(p.id)||p.operationCount||1;
-      const badge=branding.pdfShowOccurrenceBadge!==false ? '<span class="occurrence">'+escapeHtml(ordinalSuffix(occurrence))+' time</span>' : "";
+      const occurrence=Number(p.operationCount||counts.get(p.id)||1);
+      const total=Number(p.totalOperations||groups.get(keyOf(p))?.length||0);
+      const badge=branding.pdfShowOccurrenceBadge!==false && total>1
+        ? '<span class="occurrence">'+escapeHtml(ordinalSuffix(occurrence))+' time</span>'
+        : "";
       rows += "<tr><td class='indexCell'>"+(start+idx+1)+"</td>"+fields.map(k=>{
         const raw=escapeHtml(value(p,k)||"—");
         const level=levelFor(k);
@@ -269,12 +273,13 @@ export async function buildPatientDetailHtml(
       else value=String((p.customData||{})[f.key]||"");
       return "<tr><th>"+escapeHtml(f.label)+"</th><td class='detailValue'>"+escapeHtml(value||"—")+"</td></tr>";
     }).join("");
-    const rawPhotos=Array.isArray(p.photos)?p.photos.filter(Boolean):[];
+    const rawPhotos=Array.isArray(p.photos)&&p.photos.length ? p.photos.filter(Boolean) : ((p as any).photoUri ? [String((p as any).photoUri)] : []);
     const selectedPhotos=photoMode==="all"?rawPhotos:(photoMode==="first"?rawPhotos.slice(0,1):[]);
     const photos=[];
     for(const uri of selectedPhotos){const src=await photoToData(uri);if(src)photos.push("<img src='"+src+"' class='patientPhoto' />");}
     const occurrence=Number(p.operationCount||1);
-    const occurrenceTag=branding.pdfShowOccurrenceBadge!==false
+    const total=Number(p.totalOperations||0);
+    const occurrenceTag=branding.pdfShowOccurrenceBadge!==false && total>1
       ? "<span class='occurrenceTag'>"+escapeHtml(ordinalSuffix(occurrence))+" time</span>"
       : "";
     return "<section class='patientPage'>"+
@@ -285,7 +290,7 @@ export async function buildPatientDetailHtml(
       (photos.length?"<div class='photoGrid'>"+photos.join("")+"</div>":"")+
       "</section>";
   }));
-  return "<html><head><meta charset='utf-8'/>"+styles(branding)+"<style>.patientPage{page-break-after:always;border:1px solid #E2DFD8;border-radius:14px;padding:20px;margin-bottom:18px}.patientPage:last-child{page-break-after:auto}.patientNumber{font-size:10px;color:#7C7872;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px}.patientName{font-size:22px;font-weight:800;color:"+branding.primary+"}.occurrenceTag{font-size:12px;font-weight:700;color:"+branding.text+";margin-left:8px;white-space:nowrap}.patientMr{font-size:12px;color:#3A3A3C;margin-top:4px;margin-bottom:16px}.detailTable th{width:28%;background:"+branding.tertiary+"}.photoGrid{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}.patientPhoto{width:220px;height:220px;object-fit:cover;border-radius:10px;border:1px solid #E2DFD8}</style></head><body>"+header(branding,"Detailed Patient Report — "+patients.length+" record"+(patients.length===1?"":"s"))+pages.join("")+footer(branding)+"</body></html>";
+  return "<html><head><meta charset='utf-8'/>"+styles(branding)+"<style>.patientPage{page-break-after:always;page-break-inside:avoid;break-inside:avoid;border:1px solid #E2DFD8;border-radius:14px;padding:16px;margin-bottom:8px}.patientPage:last-child{page-break-after:auto}.patientNumber{font-size:10px;color:#7C7872;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px}.patientName{font-size:22px;font-weight:800;color:"+branding.primary+";display:flex;align-items:baseline;gap:6px;flex-wrap:wrap}.occurrenceTag{font-size:12px;font-weight:700;color:#555555;margin-left:6px;white-space:nowrap}.patientMr{font-size:12px;color:#3A3A3C;margin-top:4px;margin-bottom:12px}.detailTable th{width:28%;background:"+branding.tertiary+"}.detailTable td{padding:5px 6px;vertical-align:top;line-height:1.25}.photoGrid{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;align-items:flex-start;page-break-inside:avoid}.patientPhoto{width:110px;height:110px;object-fit:cover;border-radius:8px;border:1px solid #E2DFD8}</style></head><body>"+header(branding,"Detailed Patient Report — "+patients.length+" record"+(patients.length===1?"":"s"))+pages.join("")+footer(branding)+"</body></html>";
 }
 
 
