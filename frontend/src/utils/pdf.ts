@@ -254,6 +254,12 @@ export async function buildPatientDetailHtml(
       else if(f.key==="address") value=p.address||"";
       else if(f.key==="diagnosis") value=p.diagnosis;
       else if(f.key==="procedure") value=p.procedure || "";
+      else if(f.key==="implants") {
+        const items = Array.isArray(p.implants) && p.implants.length
+          ? p.implants.map((x:any)=>formatInventoryLabel(x.category,x.name,x.size)+(Number(x.quantity)>1?" × "+x.quantity:""))
+          : [p.implant,p.implantII].filter(Boolean);
+        value = items.join(" • ");
+      }
       else if(f.key==="fileName") value=p.fileName||"";
       else value=String((p.customData||{})[f.key]||"");
       return "<tr><th>"+escapeHtml(f.label)+"</th><td class='detailValue'>"+escapeHtml(value||"—")+"</td></tr>";
