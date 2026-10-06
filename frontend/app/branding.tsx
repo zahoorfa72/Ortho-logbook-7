@@ -282,10 +282,17 @@ export default function BrandingScreen() {
               const currentFields = Array.isArray(d.pdfPatientFields)
                 ? [...d.pdfPatientFields]
                 : [...(defaultBranding.pdfPatientFields || [])];
+              const groupsNow = Array.isArray(d.pdfHeadingLevels) ? d.pdfHeadingLevels : [];
+              const readGroup = (labels:string[]) => {
+                const values = groupsNow
+                  .filter((g:any) => labels.includes(String(g?.label || "").trim()))
+                  .flatMap((g:any) => Array.isArray(g?.fields) ? g.fields.map(String) : []);
+                return [...new Set(values)];
+              };
               const base = [
-                { label:"Main Heading", fields:[...(d.pdfHeadingLevels?.find((g:any)=>g?.label==="Main Heading")?.fields || [])] },
-                { label:"Sub-heading", fields:[...(d.pdfHeadingLevels?.find((g:any)=>g?.label==="Sub-heading")?.fields || [])] },
-                { label:"Sub-sub-heading", fields:[...(d.pdfHeadingLevels?.find((g:any)=>g?.label==="Sub-sub-heading")?.fields || [])] },
+                { label:"Main Heading", fields:readGroup(["Main Heading"]) },
+                { label:"Sub-heading", fields:readGroup(["Sub-heading","Sub-heading 1"]) },
+                { label:"Sub-sub-heading", fields:readGroup(["Sub-sub-heading","Sub-sub-heading 1"]) },
               ];
               const target = level===2 ? base[1].fields : base[2].fields;
               const other = level===2 ? base[2].fields : base[1].fields;
@@ -410,7 +417,7 @@ export default function BrandingScreen() {
         <View style={styles.sizeControls}><Pressable style={styles.sizeButton} onPress={()=>{const n=Math.max(12,Number(draft.pdfMargin||28)-2);setDraft(d=>({...d,pdfMargin:n}));setPdfMarginText(String(n));}}><Ionicons name="remove" size={18} color={colors.onSurface}/></Pressable><TextInput keyboardType="number-pad" value={pdfMarginText} onChangeText={setPdfMarginText} onBlur={()=>{const n=Math.max(12,Math.min(60,Math.round(Number(pdfMarginText)||28)));setPdfMarginText(String(n));setDraft(d=>({...d,pdfMargin:n}));}} style={styles.smallSizeInput}/><Pressable style={styles.sizeButton} onPress={()=>{const n=Math.min(60,Number(draft.pdfMargin||28)+2);setDraft(d=>({...d,pdfMargin:n}));setPdfMarginText(String(n));}}><Ionicons name="add" size={18} color={colors.onSurface}/></Pressable></View>
         <Pressable style={[styles.toggleRow,{backgroundColor:draft.pdfShowGeneratedAt?colors.brandTertiary:colors.surfaceSecondary}]} onPress={()=>setDraft(d=>({...d,pdfShowGeneratedAt:!d.pdfShowGeneratedAt}))}><View style={{flex:1}}><Text style={styles.colorLabel}>Show generated date/time</Text><Text style={styles.colorDesc}>Display report generation time in the PDF header</Text></View><Ionicons name={draft.pdfShowGeneratedAt?"checkmark-circle":"ellipse-outline"} size={24} color={draft.pdfShowGeneratedAt?colors.brandPrimary:colors.muted}/></Pressable>
         <Pressable style={[styles.toggleRow,{backgroundColor:draft.pdfShowOccurrenceBadge!==false?colors.brandTertiary:colors.surfaceSecondary}]} onPress={()=>setDraft(d=>({...d,pdfShowOccurrenceBadge:d.pdfShowOccurrenceBadge===false}))}>
-          <View style={{flex:1}}><Text style={styles.colorLabel}>Show patient occurrence symbol (1st / 2nd / 3rd time)</Text><Text style={styles.colorDesc}>Admin can enable or disable this symbol in Patient PDF.</Text></View>
+          <View style={{flex:1}}><Text style={styles.colorLabel}>Show patient occurrence tag (1st / 2nd / 3rd time)</Text><Text style={styles.colorDesc}>Administrator approval controls whether the 1st / 2nd / 3rd time text appears in Patient PDF.</Text></View>
           <Ionicons name={draft.pdfShowOccurrenceBadge!==false?"checkmark-circle":"ellipse-outline"} size={24} color={draft.pdfShowOccurrenceBadge!==false?colors.brandPrimary:colors.muted}/>
         </Pressable>
         <Text style={[styles.section, { marginTop: spacing.xl }]}>Colour Presets</Text>
