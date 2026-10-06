@@ -353,8 +353,8 @@ export async function buildPatientDetailHtml(
       const raw:any=map[String(f.key)];
       const headingKeys:string[]=raw && Array.isArray(raw.heading) ? raw.heading.map(String) : legacySub;
       const subHeadingKeys:string[]=raw && Array.isArray(raw.subHeading) ? raw.subHeading.map(String) : legacySubSub;
-      const headingRows=headingKeys.filter(k=>labels.has(k)).map(k=>"<div class=\"nestedEntry headingEntry\"><span class=\"nestedLabel\">Heading: "+escapeHtml(labels.get(k)||k)+"</span><span class=\"nestedValue\">"+escapeHtml(getValue(k)||"—")+"</span></div>").join("");
-      const subRows=subHeadingKeys.filter(k=>labels.has(k)).map(k=>"<div class=\"nestedEntry subHeadingEntry\"><span class=\"nestedLabel\">Sub-heading: "+escapeHtml(labels.get(k)||k)+"</span><span class=\"nestedValue\">"+escapeHtml(getValue(k)||"—")+"</span></div>").join("");
+      const headingRows=headingKeys.filter(k=>labels.has(k)).map(k=>"<div class=\"nestedEntry headingEntry\"><span class=\"nestedLabel\">"+escapeHtml(labels.get(k)||k)+"</span><span class=\"nestedValue\">"+escapeHtml(getValue(k)||"—")+"</span></div>").join("");
+      const subRows=subHeadingKeys.filter(k=>labels.has(k)).map(k=>"<div class=\"nestedEntry subHeadingEntry\"><span class=\"nestedLabel\">"+escapeHtml(labels.get(k)||k)+"</span><span class=\"nestedValue\">"+escapeHtml(getValue(k)||"—")+"</span></div>").join("");
       return "<tr><th>"+escapeHtml(f.label)+"</th><td class=\"detailValue\"><div class=\"mainEntryValue\">"+escapeHtml(getValue(String(f.key))||"—")+"</div>"+headingRows+subRows+"</td></tr>";
     }).join("");
 
@@ -398,7 +398,7 @@ export async function buildPatientDetailHtml(
     ".occurrenceTag{display:inline-block;font-size:12px;font-weight:600;color:#555555;margin-left:0;white-space:nowrap;background:transparent!important;border:0!important;padding:0!important;box-shadow:none!important;line-height:1.2}"+
     ".patientMr{font-size:12px;color:#3A3A3C;margin-top:4px;margin-bottom:12px}"+
     ".detailTable th{width:28%;background:"+branding.tertiary+"}"+
-    ".detailTable td{padding:5px 6px;vertical-align:top;line-height:1.25}.mainEntryValue{font-weight:700;margin-bottom:5px}.nestedEntry{display:flex;gap:8px;padding:3px 0 3px 10px;border-left:3px solid #DCE5E1;line-height:1.2}.nestedLabel{font-weight:700;min-width:92px}.nestedValue{font-weight:500}.subHeadingEntry{margin-left:12px;border-left-color:#C7C2B6}"+
+    ".detailTable td{padding:5px 6px;vertical-align:top;line-height:1.25}.mainEntryValue{font-weight:700;margin-bottom:5px}.nestedEntry{display:flex;gap:8px;padding:3px 0 3px 10px;border-left:3px solid #555555;line-height:1.2;color:#1C1C1E}.nestedLabel{font-weight:800;min-width:92px;color:#1C1C1E}.nestedValue{font-weight:600;color:#1C1C1E}.subHeadingEntry{margin-left:12px;border-left-color:#5B5145}"+
     ".photoGrid{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;align-items:flex-start;page-break-inside:avoid}"+
     ".patientPhoto{width:110px;height:110px;object-fit:cover;border-radius:8px;border:1px solid #E2DFD8}"+
     "</style></head><body>"+
