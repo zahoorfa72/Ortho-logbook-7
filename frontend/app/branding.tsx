@@ -285,92 +285,60 @@ export default function BrandingScreen() {
           </Pressable>;
         })}
         {(() => {
-          const groups = Array.isArray(draft.pdfHeadingLevels) ? draft.pdfHeadingLevels : [];
-          const subGroup = groups.find((g:any)=>["Sub-heading","Sub-heading 1"].includes(String(g?.label||"")));
-          const subSubGroup = groups.find((g:any)=>["Sub-sub-heading","Sub-sub-heading 1"].includes(String(g?.label||"")));
-          const sub = new Set<string>(Array.isArray(subGroup?.fields) ? subGroup.fields.map(String) : []);
-          const subSub = new Set<string>(Array.isArray(subSubGroup?.fields) ? subSubGroup.fields.map(String) : []);
-
-          const toggleHeadingField = (key:string, level:2|3) => {
+          type HeadingMap = { heading:string[]; subHeading:string[] };
+          const savedMap = (draft.pdfHeadingMap && typeof draft.pdfHeadingMap === "object") ? draft.pdfHeadingMap : {};
+          const legacyGroups = Array.isArray(draft.pdfHeadingLevels) ? draft.pdfHeadingLevels : [];
+          const legacySub = legacyGroups.filter((g:any)=>["Sub-heading","Sub-heading 1"].includes(String(g?.label||""))).flatMap((g:any)=>Array.isArray(g?.fields)?g.fields.map(String):[]);
+          const legacySubSub = legacyGroups.filter((g:any)=>["Sub-sub-heading","Sub-sub-heading 1"].includes(String(g?.label||""))).flatMap((g:any)=>Array.isArray(g?.fields)?g.fields.map(String):[]);
+          const getMap = (mainKey:string):HeadingMap => {
+            const raw:any = (savedMap as any)[mainKey];
+            if(raw && typeof raw === "object") return { heading:Array.isArray(raw.heading)?raw.heading.map(String):[], subHeading:Array.isArray(raw.subHeading)?raw.subHeading.map(String):[] };
+            return { heading:[...legacySub], subHeading:[...legacySubSub] };
+          };
+          const toggle = (mainKey:string, level:"heading"|"subHeading", fieldKey:string) => {
             setDraft(d => {
-              const currentFields = Array.isArray(d.pdfPatientFields)
-                ? [...d.pdfPatientFields]
-                : [...(defaultBranding.pdfPatientFields || [])];
-              const groupsNow = Array.isArray(d.pdfHeadingLevels) ? d.pdfHeadingLevels : [];
-              const readGroup = (labels:string[]) => {
-                const values = groupsNow
-                  .filter((g:any) => labels.includes(String(g?.label || "").trim()))
-                  .flatMap((g:any) => Array.isArray(g?.fields) ? g.fields.map(String) : []);
-                return [...new Set(values)];
-              };
-              const base = [
-                { label:"Main Heading", fields:readGroup(["Main Heading"]) },
-                { label:"Sub-heading", fields:readGroup(["Sub-heading","Sub-heading 1"]) },
-                { label:"Sub-sub-heading", fields:readGroup(["Sub-sub-heading","Sub-sub-heading 1"]) },
-              ];
-              const target = level===2 ? base[1].fields : base[2].fields;
-              const other = level===2 ? base[2].fields : base[1].fields;
-              const active = target.includes(key);
-
-              if(active){
-                target.splice(target.indexOf(key),1);
-              } else {
-                target.push(key);
-                if(!currentFields.includes(key)) currentFields.push(key);
-                const otherIndex = other.indexOf(key);
-                if(otherIndex >= 0) other.splice(otherIndex,1);
-              }
-
-              return {
-                ...d,
-                pdfPatientFields: currentFields,
-                pdfHeadingLevels: base,
-              };
+              const current:any = (d.pdfHeadingMap && typeof d.pdfHeadingMap === "object") ? d.pdfHeadingMap : {};
+              const raw:any = current[mainKey] || { heading:[], subHeading:[] };
+              const next:HeadingMap = { heading:Array.isArray(raw.heading)?[...raw.heading.map(String)]:[], subHeading:Array.isArray(raw.subHeading)?[...raw.subHeading.map(String)]:[] };
+              const target = next[level];
+              const i=target.indexOf(fieldKey);
+              if(i>=0) target.splice(i,1); else target.push(fieldKey);
+              const enabled=Array.isArray(d.pdfPatientFields)?[...d.pdfPatientFields]:[...(defaultBranding.pdfPatientFields||[])];
+              if(!enabled.includes(fieldKey)) enabled.push(fieldKey);
+              return {...d,pdfPatientFields:enabled,pdfHeadingMap:{...current,[mainKey]:next}};
             });
           };
-
-          const fieldRow = (key:string,label:string,checked:boolean,onPress:()=>void) => (
-            <Pressable key={key} onPress={onPress} style={styles.headingEntry}>
+          const fieldRow = (id:string,label:string,checked:boolean,onPress:()=>void) => (
+            <Pressable key={id} onPress={onPress} style={styles.headingEntry}>
               <Ionicons name={checked?"checkbox":"square-outline"} size={19} color={checked?colors.brandPrimary:colors.muted}/>
               <Text style={styles.headingEntryText}>{label}</Text>
             </Pressable>
           );
-
           return <View>
-            <Text style={[styles.label, { marginTop: spacing.md }]}>Patient PDF headings</Text>
-            <Text style={styles.hint}>
-              Every patient detail field is available in both boxes, including Age, Procedure, Implants and any new custom field created in Patient Fields.
-              Check every field needed at each level. A field selected as a heading is also enabled for the Patient PDF, and one field can be in only one heading level.
-            </Text>
-            <View style={styles.headingChoiceRow}>
-              <View style={styles.headingChoiceBox}>
-                <Text style={styles.headingBoxTitle}>Sub-heading</Text>
-                <Text style={styles.headingBoxHint}>Check every field you want as a sub-heading. Unchecked = No need.</Text>
-                <View style={styles.headingEntryGrid}>
-                  {patientPdfOptions.map(([key,label]) =>
-                    fieldRow(String(key),String(label),sub.has(String(key)),()=>toggleHeadingField(String(key),2))
-                  )}
+            <Text style={[styles.label,{marginTop:spacing.md}]}>Patient PDF heading structure — per main entry</Text>
+            <Text style={styles.hint}>Every main entry has its own Heading and Sub-heading boxes. Each box contains the complete list of all patient fields and custom fields. These choices are independent for every main entry.</Text>
+            {patientPdfOptions.map(([mainKey,mainLabel]) => {
+              const cfg=getMap(String(mainKey));
+              return <View key={"main-"+String(mainKey)} style={styles.patientPdfEntryBox}>
+                <Text style={styles.mainEntryTitle}>Main entry: {String(mainLabel)}</Text>
+                <View style={styles.headingChoiceRow}>
+                  <View style={styles.headingChoiceBox}>
+                    <Text style={styles.headingBoxTitle}>Heading</Text>
+                    <Text style={styles.headingBoxHint}>Choose any fields to appear under this main entry.</Text>
+                    <View style={styles.headingEntryGrid}>
+                      {patientPdfOptions.map(([key,label])=>fieldRow("h-"+mainKey+"-"+key,String(label),cfg.heading.includes(String(key)),()=>toggle(String(mainKey),"heading",String(key))))}
+                    </View>
+                  </View>
+                  <View style={styles.headingChoiceBox}>
+                    <Text style={styles.headingBoxTitle}>Sub-heading</Text>
+                    <Text style={styles.headingBoxHint}>Choose any fields to appear under this main entry’s heading.</Text>
+                    <View style={styles.headingEntryGrid}>
+                      {patientPdfOptions.map(([key,label])=>fieldRow("s-"+mainKey+"-"+key,String(label),cfg.subHeading.includes(String(key)),()=>toggle(String(mainKey),"subHeading",String(key))))}
+                    </View>
+                  </View>
                 </View>
-              </View>
-
-              <View style={styles.headingChoiceBox}>
-                <Text style={styles.headingBoxTitle}>Sub-sub-heading</Text>
-                <Text style={styles.headingBoxHint}>Check every field you want as a sub-sub-heading. Unchecked = No need.</Text>
-                <View style={styles.headingEntryGrid}>
-                  {patientPdfOptions.map(([key,label]) =>
-                    fieldRow("subsub-"+String(key),String(label),subSub.has(String(key)),()=>toggleHeadingField(String(key),3))
-                  )}
-                </View>
-              </View>
-            </View>
-
-            {(sub.size || subSub.size) ? (
-              <Pressable onPress={()=>setDraft(d=>({...d,pdfHeadingLevels:(d.pdfHeadingLevels||[]).map((g:any)=>(
-                g?.label==="Sub-heading" || g?.label==="Sub-sub-heading" ? {...g,fields:[]} : g
-              ))}))} style={[styles.actionBtnGhost,{marginTop:spacing.sm}]}>
-                <Text style={styles.actionText}>Clear Sub-heading / Sub-sub-heading choices</Text>
-              </Pressable>
-            ) : null}
+              </View>;
+            })}
           </View>;
         })()}
         <Text style={[styles.label, { marginTop: spacing.md }]}>Patient list layout</Text>
@@ -587,6 +555,7 @@ const useStyles = makeStyles((colors) => ({
   headingChoiceOptionActive:{backgroundColor:colors.brandTertiary},
   headingChoiceText:{fontFamily:fontFamily.medium,fontSize:fontSize.sm,color:colors.onSurface},
   headingEntryText:{fontFamily:fontFamily.medium,fontSize:fontSize.base,color:colors.onSurface},
+  mainEntryTitle:{fontFamily:fontFamily.bold,fontSize:fontSize.lg,color:colors.brandPrimary,marginBottom:spacing.sm},
   headingBoxTitle:{fontFamily:fontFamily.bold,fontSize:fontSize.base,color:colors.onSurface,marginBottom:spacing.xs},
   headingBoxHint:{fontFamily:fontFamily.regular,fontSize:fontSize.xs,color:colors.muted,marginBottom:spacing.sm},
   headingEntryGrid:{flexDirection:"row",flexWrap:"wrap",gap:spacing.sm},
