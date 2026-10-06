@@ -146,7 +146,8 @@ function styles(branding: BrandingConfig) {
       .barFill { height: 100%; background: ${branding.primary}; }
       .section { margin-top: 20px; font-size: 14px; font-weight: 800; color: ${branding.primary}; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; }
       .footer { margin-top: 30px; padding-top: 12px; border-top: 1px solid #E2DFD8; font-size: 10px; color: #7C7872; text-align: center; }
-      .listPage { page-break-after: always; break-inside: avoid; }\n      .listPage:last-child { page-break-after: auto; }\n      .listPage table { page-break-inside: avoid; }\n      .empty { padding: 30px; text-align: center; color: #7C7872; font-style: italic; }
+      .listPage { page-break-after: always; break-inside: avoid; }\n      .listPage:last-child { page-break-after: auto; }
+      .listPage table { page-break-inside: avoid; }\n      .empty { padding: 30px; text-align: center; color: #7C7872; font-style: italic; }
     </style>
   `;
 }
@@ -200,7 +201,8 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
     const page=patients.slice(start,start+pageSize);
     let rows="";
     page.forEach((p,idx)=>{
-      const occurrence=counts.get(p.id)||p.operationCount||1;\n      const badge=branding.pdfShowOccurrenceBadge!==false ? '<span class="badge">'+escapeHtml(ordinalSuffix(occurrence))+' time</span>' : "";
+      const occurrence=counts.get(p.id)||p.operationCount||1;
+      const badge=branding.pdfShowOccurrenceBadge!==false ? '<span class="badge">'+escapeHtml(ordinalSuffix(occurrence))+' time</span>' : "";
       rows += "<tr><td class='indexCell'>"+(start+idx+1)+"</td>"+fields.map(k=>{
         const raw=escapeHtml(value(p,k)||"—");
         const level=levelFor(k);
