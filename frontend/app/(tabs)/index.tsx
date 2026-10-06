@@ -544,7 +544,7 @@ export default function Logbook() {
           <View style={styles.pdfFilterRow}><TextInput value={pdfMonth} onChangeText={v=>setPdfMonth(v.replace(/[^0-9]/g,"").slice(0,2))} placeholder="Month 1-12" placeholderTextColor={colors.muted} keyboardType="number-pad" style={[styles.pdfDateInput,{flex:1}]}/><TextInput value={pdfYear} onChangeText={v=>setPdfYear(v.replace(/[^0-9]/g,"").slice(0,4))} placeholder="Year" placeholderTextColor={colors.muted} keyboardType="number-pad" style={[styles.pdfDateInput,{flex:1}]}/></View>
           {availableYears.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pdfDateRow}>{availableYears.map(y=><Pressable key={y} onPress={()=>setPdfYear(y)} style={[styles.pdfDateChip,pdfYear===y&&styles.pdfDateChipActive]}><Text style={[styles.pdfDateText,pdfYear===y&&styles.pdfDateTextActive]}>{y}</Text></Pressable>)}</ScrollView> : null}
           <Text style={styles.pdfModalHint}>Patient PDF sections are controlled by the check marks and heading settings in Branding.</Text>
-          <PrimaryButton title="Create Procedure / Patient PDF" onPress={doExport} loading={exporting} testID="create-patient-list-pdf"/>
+          <PrimaryButton title="Create Patient PDF" onPress={doExport} loading={exporting} testID="create-patient-list-pdf"/>
         </View></View>
       </Modal>
 
