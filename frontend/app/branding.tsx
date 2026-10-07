@@ -341,68 +341,33 @@ export default function BrandingScreen() {
             })}
           </View>;
         })()}
-        <Text style={[styles.label, { marginTop: spacing.md }]}>Patient list layout</Text>
-        <Text style={styles.hint}>Control how many patients fit on each PDF list page and how the list text looks. The selected settings apply to the existing PDF design.</Text>
+        <Text style={[styles.label, { marginTop: spacing.md }]}>Patient List PDF settings</Text>
+        <Text style={styles.hint}>Patients per page applies only to the Patient List PDF. It does not affect the separate Patient PDF.</Text>
         <Text style={styles.colorLabel}>Patients per page</Text>
         <View style={styles.sizeControls}>
-          <Pressable style={styles.sizeButton} onPress={()=>{const n=Math.max(1,Number(draft.pdfPatientsPerPage||20)-1);setDraft(d=>({...d,pdfPatientsPerPage:n}));}}><Ionicons name="remove" size={18} color={colors.onSurface}/></Pressable>
+          <Pressable style={styles.sizeButton} onPress={()=>setDraft(d=>({...d,pdfPatientsPerPage:Math.max(1,Number(d.pdfPatientsPerPage||20)-1)}))}><Ionicons name="remove" size={18} color={colors.onSurface}/></Pressable>
           <TextInput keyboardType="number-pad" value={String(draft.pdfPatientsPerPage||20)} onChangeText={v=>setDraft(d=>({...d,pdfPatientsPerPage:Math.max(1,Math.min(200,Number(v.replace(/[^0-9]/g,""))||1))}))} style={styles.smallSizeInput}/>
-          <Pressable style={styles.sizeButton} onPress={()=>{const n=Math.min(200,Number(draft.pdfPatientsPerPage||20)+1);setDraft(d=>({...d,pdfPatientsPerPage:n}));}}><Ionicons name="add" size={18} color={colors.onSurface}/></Pressable>
+          <Pressable style={styles.sizeButton} onPress={()=>setDraft(d=>({...d,pdfPatientsPerPage:Math.min(200,Number(d.pdfPatientsPerPage||20)+1)}))}><Ionicons name="add" size={18} color={colors.onSurface}/></Pressable>
         </View>
-        <Text style={styles.hint}>Example: 20 or 25 patients per page.</Text>
-        <Text style={styles.colorLabel}>List text size</Text>
-        <View style={styles.styleRow}>{(["small","medium","large"] as const).map(v=><Pressable key={v} onPress={()=>setDraft(d=>({...d,pdfListTextSize:v}))} style={[styles.styleChip,{backgroundColor:draft.pdfListTextSize===v?colors.brandPrimary:colors.surfaceSecondary}]}><Text style={[styles.styleChipText,{color:draft.pdfListTextSize===v?colors.onBrandPrimary:colors.onSurface}]}>{v}</Text></Pressable>)}</View>
-        <Text style={styles.colorLabel}>Main Entry text weight</Text>
-        <View style={styles.styleRow}>{(["normal","bold"] as const).map(v=><Pressable key={v} onPress={()=>setDraft(d=>({...d,pdfListTextWeight:v}))} style={[styles.styleChip,{backgroundColor:draft.pdfListTextWeight===v?colors.brandPrimary:colors.surfaceSecondary}]}><Text style={[styles.styleChipText,{color:draft.pdfListTextWeight===v?colors.onBrandPrimary:colors.onSurface}]}>{v}</Text></Pressable>)}</View>
-        <Text style={styles.colorLabel}>Main Entry text darkness</Text>
-        <View style={styles.styleRow}>{(["light","normal","dark"] as const).map(v=><Pressable key={v} onPress={()=>setDraft(d=>({...d,pdfListTextTone:v}))} style={[styles.styleChip,{backgroundColor:draft.pdfListTextTone===v?colors.brandPrimary:colors.surfaceSecondary}]}><Text style={[styles.styleChipText,{color:activeToneColor(v)}]}>{v}</Text></Pressable>)}</View>
-        <Text style={styles.colorLabel}>Main Entry row spacing</Text>
-        <View style={styles.styleRow}>{(["compact","normal","spacious"] as const).map(v=><Pressable key={v} onPress={()=>setDraft(d=>({...d,pdfListRowSpacing:v}))} style={[styles.styleChip,{backgroundColor:draft.pdfListRowSpacing===v?colors.brandPrimary:colors.surfaceSecondary}]}><Text style={[styles.styleChipText,{color:draft.pdfListRowSpacing===v?colors.onBrandPrimary:colors.onSurface}]}>{v}</Text></Pressable>)}</View>
-        <Text style={[styles.label, { marginTop: spacing.md }]}>PDF design</Text>
-        <Text style={styles.hint}>These settings change the existing PDF design; they do not create a second PDF setup.</Text>
-        <View style={styles.styleRow}>
-          {(["portrait","landscape"] as const).map(v=><Pressable key={v} onPress={()=>setDraft(d=>({...d,pdfOrientation:v}))} style={[styles.styleChip,{backgroundColor:draft.pdfOrientation===v?colors.brandPrimary:colors.surfaceSecondary}]}><Text style={[styles.styleChipText,{color:draft.pdfOrientation===v?colors.onBrandPrimary:colors.onSurface}]}>{v}</Text></Pressable>)}
-        </View>
-<Text style={[styles.label, { marginTop: spacing.md }]}>PDF heading style</Text>
-        <View style={styles.styleRow}>
-          {(["regular","medium","semibold","bold"] as const).map(v => (
-            <Pressable key={v} onPress={() => setDraft(d => ({...d, pdfTitleFont:v}))} style={[styles.styleChip,{backgroundColor:draft.pdfTitleFont===v?colors.brandPrimary:colors.surfaceSecondary}]}>
-              <Text style={[styles.styleChipText,{color:draft.pdfTitleFont===v?colors.onBrandPrimary:colors.onSurface}]}>{v}</Text>
-            </Pressable>
-          ))}
-        </View>
-        <View style={styles.sizeRow}>
-          <Text style={styles.colorLabel}>Heading size</Text>
-          <View style={styles.sizeControls}>
-            <Pressable style={styles.sizeButton} onPress={() => { const n=Math.max(8, Number(draft.pdfTitleSize||24)-1); setDraft(d=>({...d,pdfTitleSize:n})); setTitleSizeText(String(n)); }}>
-              <Ionicons name="remove" size={18} color={colors.onSurface} />
-            </Pressable>
-            <TextInput keyboardType="number-pad" value={titleSizeText} onChangeText={setTitleSizeText} onBlur={commitTitleSize} onSubmitEditing={commitTitleSize} returnKeyType="done" style={styles.smallSizeInput}/>
-            <Pressable style={styles.sizeButton} onPress={() => { const n=Math.min(72, Number(draft.pdfTitleSize||24)+1); setDraft(d=>({...d,pdfTitleSize:n})); setTitleSizeText(String(n)); }}>
-              <Ionicons name="add" size={18} color={colors.onSurface} />
-            </Pressable>
-          </View>
-        </View>
-        <Text style={styles.hint}>Heading and sub-heading styles affect the hierarchy only. Main Entry has separate controls above.</Text>
-        <Text style={[styles.section, { marginTop: spacing.xl }]}>PDF Layout & Design</Text>
-        <Text style={styles.label}>Table header colour</Text>
-        <TextInput value={String(draft.pdfTableHeaderColor)} onChangeText={v=>setDraft(d=>({...d,pdfTableHeaderColor:v}))} placeholder="#DCE5E1" placeholderTextColor={colors.muted} style={styles.input} />
-        <Text style={styles.label}>Alternating row colour</Text>
-        <TextInput value={String(draft.pdfTableStripeColor)} onChangeText={v=>setDraft(d=>({...d,pdfTableStripeColor:v}))} placeholder="#FAFAF7" placeholderTextColor={colors.muted} style={styles.input} />
-        <Text style={styles.label}>PDF footer text</Text>
-        <TextInput value={draft.pdfFooterText} onChangeText={v=>setDraft(d=>({...d,pdfFooterText:v}))} placeholder="Offline Report" placeholderTextColor={colors.muted} style={styles.input} />
-        <Text style={styles.label}>Page size</Text>
-        <View style={styles.styleRow}>{(["A4","Letter"] as const).map(v=><Pressable key={v} onPress={()=>setDraft(d=>({...d,pdfPageSize:v}))} style={[styles.styleChip,{backgroundColor:draft.pdfPageSize===v?colors.brandPrimary:colors.surfaceSecondary}]}><Text style={[styles.styleChipText,{color:draft.pdfPageSize===v?colors.onBrandPrimary:colors.onSurface}]}>{v}</Text></Pressable>)}</View>
-        <Text style={styles.label}>Orientation</Text>
-        <View style={styles.styleRow}>{(["portrait","landscape"] as const).map(v=><Pressable key={v} onPress={()=>setDraft(d=>({...d,pdfOrientation:v}))} style={[styles.styleChip,{backgroundColor:draft.pdfOrientation===v?colors.brandPrimary:colors.surfaceSecondary}]}><Text style={[styles.styleChipText,{color:draft.pdfOrientation===v?colors.onBrandPrimary:colors.onSurface}]}>{v}</Text></Pressable>)}</View>
-        <Text style={styles.label}>Page margin (points)</Text>
-        <View style={styles.sizeControls}><Pressable style={styles.sizeButton} onPress={()=>{const n=Math.max(12,Number(draft.pdfMargin||28)-2);setDraft(d=>({...d,pdfMargin:n}));setPdfMarginText(String(n));}}><Ionicons name="remove" size={18} color={colors.onSurface}/></Pressable><TextInput keyboardType="number-pad" value={pdfMarginText} onChangeText={setPdfMarginText} onBlur={()=>{const n=Math.max(12,Math.min(60,Math.round(Number(pdfMarginText)||28)));setPdfMarginText(String(n));setDraft(d=>({...d,pdfMargin:n}));}} style={styles.smallSizeInput}/><Pressable style={styles.sizeButton} onPress={()=>{const n=Math.min(60,Number(draft.pdfMargin||28)+2);setDraft(d=>({...d,pdfMargin:n}));setPdfMarginText(String(n));}}><Ionicons name="add" size={18} color={colors.onSurface}/></Pressable></View>
-        <Pressable style={[styles.toggleRow,{backgroundColor:draft.pdfShowGeneratedAt?colors.brandTertiary:colors.surfaceSecondary}]} onPress={()=>setDraft(d=>({...d,pdfShowGeneratedAt:!d.pdfShowGeneratedAt}))}><View style={{flex:1}}><Text style={styles.colorLabel}>Show generated date/time</Text><Text style={styles.colorDesc}>Display report generation time in the PDF header</Text></View><Ionicons name={draft.pdfShowGeneratedAt?"checkmark-circle":"ellipse-outline"} size={24} color={draft.pdfShowGeneratedAt?colors.brandPrimary:colors.muted}/></Pressable>
-        <Pressable style={[styles.toggleRow,{backgroundColor:draft.pdfShowOccurrenceBadge!==false?colors.brandTertiary:colors.surfaceSecondary}]} onPress={()=>setDraft(d=>({...d,pdfShowOccurrenceBadge:d.pdfShowOccurrenceBadge===false}))}>
-          <View style={{flex:1}}><Text style={styles.colorLabel}>Show patient occurrence tag (1st / 2nd / 3rd time)</Text><Text style={styles.colorDesc}>Administrator approval controls whether the 1st / 2nd / 3rd time text appears in Patient PDF.</Text></View>
-          <Ionicons name={draft.pdfShowOccurrenceBadge!==false?"checkmark-circle":"ellipse-outline"} size={24} color={draft.pdfShowOccurrenceBadge!==false?colors.brandPrimary:colors.muted}/>
-        </Pressable>
-        <Text style={styles.hint}>Main Entry, Heading and Sub-heading each have completely separate size, weight and darkness controls above. The Patients per page setting applies only to this Patient List PDF and never changes the separate Patient PDF.</Text>
+        <Text style={styles.hint}>The selected number is kept as a complete page chunk in the Patient List PDF.</Text>
+        <Text style={styles.colorLabel}>Main Entry — text size</Text>
+        <View style={styles.styleRow}>{(["small","medium","large"] as const).map(v=><Pressable key={v} onPress={()=>setDraft(d=>({...d,pdfMainEntryTextSize:v}))} style={[styles.styleChip,{backgroundColor:draft.pdfMainEntryTextSize===v?colors.brandPrimary:colors.surfaceSecondary}]}><Text style={[styles.styleChipText,{color:draft.pdfMainEntryTextSize===v?colors.onBrandPrimary:colors.onSurface}]}>{v}</Text></Pressable>)}</View>
+        <Text style={styles.colorLabel}>Main Entry — font weight</Text>
+        <View style={styles.styleRow}>{(["normal","medium","semibold","bold"] as const).map(v=><Pressable key={v} onPress={()=>setDraft(d=>({...d,pdfMainEntryTextWeight:v}))} style={[styles.styleChip,{backgroundColor:draft.pdfMainEntryTextWeight===v?colors.brandPrimary:colors.surfaceSecondary}]}><Text style={[styles.styleChipText,{color:draft.pdfMainEntryTextWeight===v?colors.onBrandPrimary:colors.onSurface}]}>{v}</Text></Pressable>)}</View>
+        <Text style={styles.colorLabel}>Main Entry — darkness</Text>
+        <View style={styles.styleRow}>{(["light","normal","dark"] as const).map(v=><Pressable key={v} onPress={()=>setDraft(d=>({...d,pdfMainEntryTextTone:v}))} style={[styles.styleChip,{backgroundColor:draft.pdfMainEntryTextTone===v?colors.brandPrimary:colors.surfaceSecondary}]}><Text style={[styles.styleChipText,{color:activeToneColor(v)}]}>{v}</Text></Pressable>)}</View>
+        <Text style={styles.colorLabel}>Heading — text size</Text>
+        <View style={styles.styleRow}>{(["small","medium","large"] as const).map(v=><Pressable key={v} onPress={()=>setDraft(d=>({...d,pdfHeadingTextSize:v}))} style={[styles.styleChip,{backgroundColor:draft.pdfHeadingTextSize===v?colors.brandPrimary:colors.surfaceSecondary}]}><Text style={[styles.styleChipText,{color:draft.pdfHeadingTextSize===v?colors.onBrandPrimary:colors.onSurface}]}>{v}</Text></Pressable>)}</View>
+        <Text style={styles.colorLabel}>Heading — font weight</Text>
+        <View style={styles.styleRow}>{(["normal","medium","semibold","bold"] as const).map(v=><Pressable key={v} onPress={()=>setDraft(d=>({...d,pdfHeadingTextWeight:v}))} style={[styles.styleChip,{backgroundColor:draft.pdfHeadingTextWeight===v?colors.brandPrimary:colors.surfaceSecondary}]}><Text style={[styles.styleChipText,{color:draft.pdfHeadingTextWeight===v?colors.onBrandPrimary:colors.onSurface}]}>{v}</Text></Pressable>)}</View>
+        <Text style={styles.colorLabel}>Heading — darkness</Text>
+        <View style={styles.styleRow}>{(["light","normal","dark"] as const).map(v=><Pressable key={v} onPress={()=>setDraft(d=>({...d,pdfHeadingTextTone:v}))} style={[styles.styleChip,{backgroundColor:draft.pdfHeadingTextTone===v?colors.brandPrimary:colors.surfaceSecondary}]}><Text style={[styles.styleChipText,{color:activeToneColor(v)}]}>{v}</Text></Pressable>)}</View>
+        <Text style={styles.colorLabel}>Sub-heading — text size</Text>
+        <View style={styles.styleRow}>{(["small","medium","large"] as const).map(v=><Pressable key={v} onPress={()=>setDraft(d=>({...d,pdfSubHeadingTextSize:v}))} style={[styles.styleChip,{backgroundColor:draft.pdfSubHeadingTextSize===v?colors.brandPrimary:colors.surfaceSecondary}]}><Text style={[styles.styleChipText,{color:draft.pdfSubHeadingTextSize===v?colors.onBrandPrimary:colors.onSurface}]}>{v}</Text></Pressable>)}</View>
+        <Text style={styles.colorLabel}>Sub-heading — font weight</Text>
+        <View style={styles.styleRow}>{(["normal","medium","semibold","bold"] as const).map(v=><Pressable key={v} onPress={()=>setDraft(d=>({...d,pdfSubHeadingTextWeight:v}))} style={[styles.styleChip,{backgroundColor:draft.pdfSubHeadingTextWeight===v?colors.brandPrimary:colors.surfaceSecondary}]}><Text style={[styles.styleChipText,{color:draft.pdfSubHeadingTextWeight===v?colors.onBrandPrimary:colors.onSurface}]}>{v}</Text></Pressable>)}</View>
+        <Text style={styles.colorLabel}>Sub-heading — darkness</Text>
+        <View style={styles.styleRow}>{(["light","normal","dark"] as const).map(v=><Pressable key={v} onPress={()=>setDraft(d=>({...d,pdfSubHeadingTextTone:v}))} style={[styles.styleChip,{backgroundColor:draft.pdfSubHeadingTextTone===v?colors.brandPrimary:colors.surfaceSecondary}]}><Text style={[styles.styleChipText,{color:activeToneColor(v)}]}>{v}</Text></Pressable>)}</View>
         <Text style={[styles.section, { marginTop: spacing.xl }]}>Colour Presets</Text>
         <View style={styles.presets}>
           {BRANDING_PRESETS.map((p) => (
