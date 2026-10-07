@@ -243,8 +243,8 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
         const cfg:any=headingMap[String(k)] || {};
         const headingKeys:string[]=Array.isArray(cfg.heading)?cfg.heading.map(String):[];
         const subKeys:string[]=Array.isArray(cfg.subHeading)?cfg.subHeading.map(String):[];
-        const headingLines=headingKeys.map(h=>"<div class='pdfHeadingLine'><b>"+escapeHtml(labels[h]||h)+"</b> — "+escapeHtml(value(p,h)||"—")+"</div>").join("");
-        const subLines=subKeys.map(h=>"<div class='pdfSubHeadingLine'><b>"+escapeHtml(labels[h]||h)+"</b> — "+escapeHtml(value(p,h)||"—")+"</div>").join("");
+        const headingLines=headingKeys.map(h=>"<div class='pdfHeadingLine pdfHierarchyText'><b>"+escapeHtml(labels[h]||h)+"</b> — "+escapeHtml(value(p,h)||"—")+"</div>").join("");
+        const subLines=subKeys.map(h=>"<div class='pdfSubHeadingLine pdfHierarchyText'><b>"+escapeHtml(labels[h]||h)+"</b> — "+escapeHtml(value(p,h)||"—")+"</div>").join("");
         const level=levelFor(k);
         const headingClass=level ? " headingLevel"+level : "";
         const styled=level ? "<span class='headingText"+headingClass+"'>"+raw+"</span>" : raw;
