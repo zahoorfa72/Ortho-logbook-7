@@ -51,6 +51,7 @@ export type BrandingConfig = {
   pdfLogoLayout: "center" | "left"; // Header layout: centered title with side logos, or left-aligned
   pdfTitleFont: "regular" | "medium" | "semibold" | "bold";
   pdfTitleSize: number;
+  pdfTitleColor?: string;
   pdfSubtitleFont: "regular" | "medium" | "semibold" | "bold";
   pdfSubtitleSize: number;
   pdfSubtitleLines?: { text: string; size: number; font: "regular" | "medium" | "semibold" | "bold"; bold: boolean }[];
@@ -109,6 +110,7 @@ export const defaultBranding: BrandingConfig = {
   pdfLogoLayout: "center",
   pdfTitleFont: "bold",
   pdfTitleSize: 24,
+  pdfTitleColor: "#1C1C1E",
   pdfSubtitleFont: "regular",
   pdfSubtitleSize: 12,
   pdfSubtitleLines: [
