@@ -352,7 +352,7 @@ export async function buildPatientDetailHtml(
       fieldValues.set(key,value);
       return value;
     };
-    const availableFields = fields.filter(f=>f.key!=="photos");
+    const availableFields = fields.filter(f=>f.key!=="photos" && f.key!=="name" && f.key!=="mrNo");
     const labels = new Map(availableFields.map(f=>[String(f.key),String(f.label)]));
     const map:any = branding.pdfHeadingMap && typeof branding.pdfHeadingMap==="object" ? branding.pdfHeadingMap : {};
     const legacySub = Array.isArray(branding.pdfHeadingLevels) ? branding.pdfHeadingLevels.filter((g:any)=>["Sub-heading","Sub-heading 1"].includes(String(g?.label||""))).flatMap((g:any)=>Array.isArray(g?.fields)?g.fields.map(String):[]) : [];
