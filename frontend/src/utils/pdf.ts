@@ -87,6 +87,7 @@ function header(branding: BrandingConfig, subtitle: string) {
   const titleWeight = branding.pdfTitleFont === "regular" ? "400" : branding.pdfTitleFont === "medium" ? "500" : branding.pdfTitleFont === "semibold" ? "600" : "800";
   const subtitleWeight = branding.pdfSubtitleFont === "regular" ? "400" : branding.pdfSubtitleFont === "medium" ? "500" : branding.pdfSubtitleFont === "semibold" ? "600" : "800";
   const titleSize = Number(branding.pdfTitleSize || 24);
+  const titleColor = /^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$/.test(String(branding.pdfTitleColor || "")) ? String(branding.pdfTitleColor) : "#1C1C1E";
   const subtitleSize = Number(branding.pdfSubtitleSize || 12);
   const customBlock = subtitleLinesHtml(branding);
   const layout = branding.pdfLogoLayout || "center";
@@ -95,7 +96,7 @@ function header(branding: BrandingConfig, subtitle: string) {
       <div class="header headerLeft">
         <div class="logoSide">${leftLogo}</div>
         <div class="titleBlock titleBlockLeft">
-          <div class="title" style="font-size:${titleSize}px;font-weight:${titleWeight}">${escapeHtml(branding.title)}</div>
+          <div class="title" style="font-size:${titleSize}px;font-weight:${titleWeight};color:${titleColor}">${escapeHtml(branding.title)}</div>
           ${customBlock}
           <div class="subtitle" style="font-size:${subtitleSize}px;font-weight:${subtitleWeight}">${escapeHtml(subtitle)}</div>
           ${branding.pdfShowGeneratedAt === false ? "" : `<div class="printed">Generated on ${escapeHtml(new Date().toLocaleString())}</div>`}
@@ -107,7 +108,7 @@ function header(branding: BrandingConfig, subtitle: string) {
     <div class="header">
       <div class="logoSide">${leftLogo}</div>
       <div class="titleBlock">
-        <div class="title" style="font-size:${titleSize}px;font-weight:${titleWeight}">${escapeHtml(branding.title)}</div>
+        <div class="title" style="font-size:${titleSize}px;font-weight:${titleWeight};color:${titleColor}">${escapeHtml(branding.title)}</div>
         ${customBlock}
         <div class="subtitle" style="font-size:${subtitleSize}px;font-weight:${subtitleWeight}">${escapeHtml(subtitle)}</div>
         ${branding.pdfShowGeneratedAt === false ? "" : `<div class="printed">Generated on ${escapeHtml(new Date().toLocaleString())}</div>`}
