@@ -231,6 +231,16 @@ export default function BrandingScreen() {
           style={styles.input}
         />
 
+        <View style={styles.patientPdfEntryBox}>
+          <Text style={styles.mainEntryTitle}>PDF Title — Professional Editing</Text>
+          <Text style={styles.headingBoxHint}>Controls for the main title at the top of the Patient List and Patient Detail PDFs.</Text>
+          <Text style={styles.colorLabel}>Font weight</Text>
+          <View style={styles.styleRow}>{(["regular","medium","semibold","bold"] as const).map(v=><Pressable key={v} onPress={()=>setDraft(d=>({...d,pdfTitleFont:v}))} style={[styles.styleChip,{backgroundColor:draft.pdfTitleFont===v?colors.brandPrimary:colors.surfaceSecondary}]}><Text style={[styles.styleChipText,{color:draft.pdfTitleFont===v?colors.onBrandPrimary:colors.onSurface}]}>{v}</Text></Pressable>)}</View>
+          <Text style={styles.colorLabel}>Text size (pt)</Text>
+          <View style={styles.sizeControls}><Pressable style={styles.sizeButton} onPress={()=>{const n=Math.max(8,Math.round(Number(draft.pdfTitleSize||24)-1));setDraft(d=>({...d,pdfTitleSize:n}));setTitleSizeText(String(n));}}><Ionicons name="remove" size={18} color={colors.onSurface}/></Pressable><TextInput keyboardType="number-pad" value={titleSizeText} onChangeText={setTitleSizeText} onBlur={commitTitleSize} style={styles.smallSizeInput}/><Pressable style={styles.sizeButton} onPress={()=>{const n=Math.min(72,Math.round(Number(draft.pdfTitleSize||24)+1));setDraft(d=>({...d,pdfTitleSize:n}));setTitleSizeText(String(n));}}><Ionicons name="add" size={18} color={colors.onSurface}/></Pressable></View>
+          <Text style={styles.colorLabel}>Text color</Text>
+          <View style={{flexDirection:"row",alignItems:"center",gap:spacing.sm}}><View style={{width:30,height:30,borderRadius:15,backgroundColor:String(draft.pdfTitleColor||"#1C1C1E"),borderWidth:1,borderColor:colors.border}}/><TextInput value={String(draft.pdfTitleColor||"#1C1C1E")} onChangeText={v=>setDraft(d=>({...d,pdfTitleColor:v}))} placeholder="#1C1C1E" placeholderTextColor={colors.muted} autoCapitalize="none" style={[styles.input,{flex:1,marginBottom:0}]}/></View>
+        </View>
         <Text style={styles.label}>Logos (both sides of PDF title)</Text>
         <View style={styles.twinLogos}>
           <LogoSlot
