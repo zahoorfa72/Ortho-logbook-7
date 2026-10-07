@@ -352,11 +352,11 @@ export default function BrandingScreen() {
         <Text style={styles.hint}>Example: 20 or 25 patients per page.</Text>
         <Text style={styles.colorLabel}>List text size</Text>
         <View style={styles.styleRow}>{(["small","medium","large"] as const).map(v=><Pressable key={v} onPress={()=>setDraft(d=>({...d,pdfListTextSize:v}))} style={[styles.styleChip,{backgroundColor:draft.pdfListTextSize===v?colors.brandPrimary:colors.surfaceSecondary}]}><Text style={[styles.styleChipText,{color:draft.pdfListTextSize===v?colors.onBrandPrimary:colors.onSurface}]}>{v}</Text></Pressable>)}</View>
-        <Text style={styles.colorLabel}>List text weight</Text>
+        <Text style={styles.colorLabel}>Main Entry text weight</Text>
         <View style={styles.styleRow}>{(["normal","bold"] as const).map(v=><Pressable key={v} onPress={()=>setDraft(d=>({...d,pdfListTextWeight:v}))} style={[styles.styleChip,{backgroundColor:draft.pdfListTextWeight===v?colors.brandPrimary:colors.surfaceSecondary}]}><Text style={[styles.styleChipText,{color:draft.pdfListTextWeight===v?colors.onBrandPrimary:colors.onSurface}]}>{v}</Text></Pressable>)}</View>
-        <Text style={styles.colorLabel}>List text darkness</Text>
+        <Text style={styles.colorLabel}>Main Entry text darkness</Text>
         <View style={styles.styleRow}>{(["light","normal","dark"] as const).map(v=><Pressable key={v} onPress={()=>setDraft(d=>({...d,pdfListTextTone:v}))} style={[styles.styleChip,{backgroundColor:draft.pdfListTextTone===v?colors.brandPrimary:colors.surfaceSecondary}]}><Text style={[styles.styleChipText,{color:activeToneColor(v)}]}>{v}</Text></Pressable>)}</View>
-        <Text style={styles.colorLabel}>Row spacing</Text>
+        <Text style={styles.colorLabel}>Main Entry row spacing</Text>
         <View style={styles.styleRow}>{(["compact","normal","spacious"] as const).map(v=><Pressable key={v} onPress={()=>setDraft(d=>({...d,pdfListRowSpacing:v}))} style={[styles.styleChip,{backgroundColor:draft.pdfListRowSpacing===v?colors.brandPrimary:colors.surfaceSecondary}]}><Text style={[styles.styleChipText,{color:draft.pdfListRowSpacing===v?colors.onBrandPrimary:colors.onSurface}]}>{v}</Text></Pressable>)}</View>
         <Text style={[styles.label, { marginTop: spacing.md }]}>PDF design</Text>
         <Text style={styles.hint}>These settings change the existing PDF design; they do not create a second PDF setup.</Text>
@@ -383,7 +383,7 @@ export default function BrandingScreen() {
             </Pressable>
           </View>
         </View>
-        <Text style={styles.hint}>Heading and sub-heading styles affect the PDF header only.</Text>
+        <Text style={styles.hint}>Heading and sub-heading styles affect the hierarchy only. Main Entry has separate controls above.</Text>
         <Text style={[styles.section, { marginTop: spacing.xl }]}>PDF Layout & Design</Text>
         <Text style={styles.label}>Table header colour</Text>
         <TextInput value={String(draft.pdfTableHeaderColor)} onChangeText={v=>setDraft(d=>({...d,pdfTableHeaderColor:v}))} placeholder="#DCE5E1" placeholderTextColor={colors.muted} style={styles.input} />
