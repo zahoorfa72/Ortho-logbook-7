@@ -71,6 +71,17 @@ export type BrandingConfig = {
   pdfImplantSubheading?: string;
   pdfPatientsPerPage?: number;
   pdfShowOccurrenceBadge?: boolean;
+  // Independent Patient List PDF styles: Main Entry, Heading and Sub-heading.
+  pdfMainEntryTextSize?: "small" | "medium" | "large";
+  pdfMainEntryTextWeight?: "normal" | "medium" | "semibold" | "bold";
+  pdfMainEntryTextTone?: "light" | "normal" | "dark";
+  pdfHeadingTextSize?: "small" | "medium" | "large";
+  pdfHeadingTextWeight?: "normal" | "medium" | "semibold" | "bold";
+  pdfHeadingTextTone?: "light" | "normal" | "dark";
+  pdfSubHeadingTextSize?: "small" | "medium" | "large";
+  pdfSubHeadingTextWeight?: "normal" | "medium" | "semibold" | "bold";
+  pdfSubHeadingTextTone?: "light" | "normal" | "dark";
+  // Legacy fields are kept only for backward-compatible stored settings; the UI no longer exposes them.
   pdfHierarchyFontWeight?: "regular" | "medium" | "semibold";
   pdfHierarchySize?: "small" | "normal" | "large";
   pdfListTextSize?: "small" | "medium" | "large";
@@ -125,6 +136,16 @@ export const defaultBranding: BrandingConfig = {
   pdfImplantSubheading: "Used Implants",
   pdfPatientsPerPage: 20,
   pdfShowOccurrenceBadge: true,
+  pdfMainEntryTextSize: "medium",
+  pdfMainEntryTextWeight: "bold",
+  pdfMainEntryTextTone: "dark",
+  pdfHeadingTextSize: "small",
+  pdfHeadingTextWeight: "normal",
+  pdfHeadingTextTone: "normal",
+  pdfSubHeadingTextSize: "small",
+  pdfSubHeadingTextWeight: "normal",
+  pdfSubHeadingTextTone: "light",
+  // Legacy defaults retained for migration only.
   pdfHierarchyFontWeight: "regular",
   pdfHierarchySize: "normal",
   pdfListTextSize: "medium",
