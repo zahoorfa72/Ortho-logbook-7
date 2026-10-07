@@ -236,7 +236,7 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
       const occurrence=Number(counts.get(p.id) || p.operationCount || 1);
       const total=Number(groups.get(keyOf(p))?.length || p.totalOperations || 0);
       const badge=branding.pdfShowOccurrenceBadge!==false && occurrence>1
-        ? '<span class="occurrence">'+escapeHtml(ordinalSuffix(occurrence))+' time</span>'
+        ? '<span class="occurrence occurrence-'+occurrence+'">'+escapeHtml(ordinalSuffix(occurrence))+' time</span>'
         : "";
       rows += "<tr><td class='indexCell'>"+(start+idx+1)+"</td>"+mainFields.map(k=>{
         const raw=escapeHtml(value(p,k)||"—");
@@ -260,7 +260,7 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
   const textTone = branding.pdfListTextTone==="light" ? "#7C7872" : branding.pdfListTextTone==="dark" ? "#1C1C1E" : "#3A3A3C";
   const rowPadding = branding.pdfListRowSpacing==="spacious" ? "4.5px 4px" : branding.pdfListRowSpacing==="normal" ? "3.5px 3.5px" : "2.5px 3.5px";
   return '<html><head><meta charset="utf-8"/>'+styles(branding)+'<style>'+
-    '.header{page-break-inside:avoid;break-inside:avoid;page-break-after:avoid;break-after:avoid}.titleBlock,.logoSide{page-break-inside:avoid;break-inside:avoid}table{page-break-inside:auto;break-inside:auto;font-size:'+textSize+'px;table-layout:auto;width:100%;border-collapse:collapse}.listPage{page-break-after:always;page-break-inside:auto;break-inside:auto}.listPage:last-child{page-break-after:auto}th,td{padding:'+rowPadding+';line-height:1.15;vertical-align:middle}td{color:'+textTone+';font-weight:'+textWeight+'}.indexHead,.indexCell{width:22px;text-align:center}.headingText{display:block}.headingLevel1{font-size:1.08em;font-weight:800;color:'+branding.primary+'}.headingLevel2{font-weight:750;color:'+branding.text+'}.headingLevel3{font-weight:700;color:'+branding.text+'}.headingLevel4{font-weight:650;color:#59625E}.pdfHeadingLine,.pdfSubHeadingLine{margin-top:3px;padding:0;color:#1C1C1E;font-weight:600;line-height:1.2}.pdfHeadingLine b,.pdfSubHeadingLine b{color:#1C1C1E;font-weight:800}.pdfSubHeadingLine{margin-left:0}.occurrence{display:inline-block;font-size:.78em;font-weight:600;color:#555555;margin-left:5px;white-space:nowrap;background:transparent!important;border:0!important;padding:0!important;box-shadow:none!important;line-height:1.2}.badge{font-size:.78em;margin-left:3px;white-space:nowrap}tbody tr{page-break-inside:avoid}'+
+    '.header{page-break-inside:avoid;break-inside:avoid;page-break-after:avoid;break-after:avoid}.titleBlock,.logoSide{page-break-inside:avoid;break-inside:avoid}table{page-break-inside:auto;break-inside:auto;font-size:'+textSize+'px;table-layout:auto;width:100%;border-collapse:collapse}.listPage{page-break-after:always;page-break-inside:auto;break-inside:auto}.listPage:last-child{page-break-after:auto}th,td{padding:'+rowPadding+';line-height:1.15;vertical-align:middle}td{color:'+textTone+';font-weight:'+textWeight+'}.indexHead,.indexCell{width:22px;text-align:center}.headingText{display:block}.headingLevel1{font-size:1.08em;font-weight:800;color:'+branding.primary+'}.headingLevel2{font-weight:750;color:'+branding.text+'}.headingLevel3{font-weight:700;color:'+branding.text+'}.headingLevel4{font-weight:650;color:#59625E}.pdfHeadingLine,.pdfSubHeadingLine{margin-top:3px;padding:0;color:#1C1C1E;font-weight:600;line-height:1.2}.pdfHeadingLine b,.pdfSubHeadingLine b{color:#1C1C1E;font-weight:800}.pdfSubHeadingLine{margin-left:0}.occurrence{display:inline-block;font-size:.76em;font-weight:700;margin-left:5px;white-space:nowrap;padding:2px 7px;border-radius:999px;line-height:1.2}.occurrence-2{background:#B8860B;color:#fff}.occurrence-3{background:#3F6B8A;color:#fff}.occurrence-4{background:#6B4C8A;color:#fff}.occurrence-5{background:#2F7D5B;color:#fff}.occurrence-6{background:#A64B2A;color:#fff}.occurrence-7{background:#8A5A2B;color:#fff}.occurrence-8{background:#4C566A;color:#fff}.occurrence-9{background:#9A3E5E;color:#fff}.occurrence-10{background:#356B73;color:#fff}.badge{font-size:.78em;margin-left:3px;white-space:nowrap}tbody tr{page-break-inside:avoid}'+
     '</style></head><body>'+
     header(branding,'Patient List — '+patients.length+' record'+(patients.length===1?'':'s')+(fromDate||toDate?' — '+(fromDate||'Start')+' to '+(toDate||'End'):''))+
     pageTables.join("")+footer(branding)+'</body></html>';
@@ -382,7 +382,7 @@ export async function buildPatientDetailHtml(
     const occurrence=Number(derived?.occurrence || p.operationCount || 1);
     const total=Number(derived?.total || p.totalOperations || 0);
     const occurrenceTag=branding.pdfShowOccurrenceBadge!==false && occurrence>1
-      ? "<span class='occurrenceTag'>"+escapeHtml(ordinalSuffix(occurrence))+" time</span>"
+      ? "<span class='occurrenceTag occurrence-"+occurrence+"'>"+escapeHtml(ordinalSuffix(occurrence))+" time</span>"
       : "";
 
     pages.push(
@@ -403,7 +403,7 @@ export async function buildPatientDetailHtml(
     ".patientPage:last-child{page-break-after:auto}"+
     ".patientNumber{font-size:10px;color:#7C7872;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px}"+
     ".patientName{font-size:22px;font-weight:800;color:"+branding.primary+";display:flex;align-items:center;gap:8px;flex-wrap:wrap}"+
-    ".occurrenceTag{display:inline-block;font-size:12px;font-weight:600;color:#555555;margin-left:0;white-space:nowrap;background:transparent!important;border:0!important;padding:0!important;box-shadow:none!important;line-height:1.2}"+
+    ".occurrenceTag{display:inline-block;font-size:12px;font-weight:700;margin-left:6px;white-space:nowrap;padding:3px 9px;border-radius:999px;line-height:1.2}.occurrenceTag.occurrence-2{background:#B8860B;color:#fff}.occurrenceTag.occurrence-3{background:#3F6B8A;color:#fff}.occurrenceTag.occurrence-4{background:#6B4C8A;color:#fff}.occurrenceTag.occurrence-5{background:#2F7D5B;color:#fff}.occurrenceTag.occurrence-6{background:#A64B2A;color:#fff}.occurrenceTag.occurrence-7{background:#8A5A2B;color:#fff}.occurrenceTag.occurrence-8{background:#4C566A;color:#fff}.occurrenceTag.occurrence-9{background:#9A3E5E;color:#fff}.occurrenceTag.occurrence-10{background:#356B73;color:#fff}"+
     ".patientMr{font-size:12px;color:#3A3A3C;margin-top:4px;margin-bottom:12px}"+
     ".detailTable th{width:28%;background:"+branding.tertiary+"}"+
     ".detailTable td{padding:5px 6px;vertical-align:top;line-height:1.25}.mainEntryValue{font-weight:700;margin-bottom:5px}.nestedEntry{display:flex;gap:8px;padding:3px 0 3px 10px;border-left:3px solid #555555;line-height:1.2;color:#1C1C1E}.nestedLabel{font-weight:800;min-width:92px;color:#1C1C1E}.nestedValue{font-weight:600;color:#1C1C1E}.subHeadingEntry{margin-left:12px;border-left-color:#5B5145}"+
