@@ -402,11 +402,7 @@ export default function BrandingScreen() {
           <View style={{flex:1}}><Text style={styles.colorLabel}>Show patient occurrence tag (1st / 2nd / 3rd time)</Text><Text style={styles.colorDesc}>Administrator approval controls whether the 1st / 2nd / 3rd time text appears in Patient PDF.</Text></View>
           <Ionicons name={draft.pdfShowOccurrenceBadge!==false?"checkmark-circle":"ellipse-outline"} size={24} color={draft.pdfShowOccurrenceBadge!==false?colors.brandPrimary:colors.muted}/>
         </Pressable>
-        <Text style={[styles.label,{marginTop:spacing.md}]}>Main Entry child style</Text>
-        <Text style={styles.hint}>Heading and Sub-heading can be lighter than the Main Entry. This applies to both Patient PDFs.</Text>
-        <View style={styles.styleRow}>{(["regular","medium","semibold"] as const).map(v=><Pressable key={v} onPress={()=>setDraft(d=>({...d,pdfHierarchyFontWeight:v}))} style={[styles.styleChip,{backgroundColor:draft.pdfHierarchyFontWeight===v?colors.brandPrimary:colors.surfaceSecondary}]}><Text style={[styles.styleChipText,{color:draft.pdfHierarchyFontWeight===v?colors.onBrandPrimary:colors.onSurface}]}>{v}</Text></Pressable>)}</View>
-        <Text style={styles.colorLabel}>Heading / Sub-heading size</Text>
-        <View style={styles.styleRow}>{(["small","normal","large"] as const).map(v=><Pressable key={v} onPress={()=>setDraft(d=>({...d,pdfHierarchySize:v}))} style={[styles.styleChip,{backgroundColor:draft.pdfHierarchySize===v?colors.brandPrimary:colors.surfaceSecondary}]}><Text style={[styles.styleChipText,{color:draft.pdfHierarchySize===v?colors.onBrandPrimary:colors.onSurface}]}>{v}</Text></Pressable>)}</View>
+        <Text style={styles.hint}>Main Entry, Heading and Sub-heading each have completely separate size, weight and darkness controls above. The Patients per page setting applies only to this Patient List PDF and never changes the separate Patient PDF.</Text>
         <Text style={[styles.section, { marginTop: spacing.xl }]}>Colour Presets</Text>
         <View style={styles.presets}>
           {BRANDING_PRESETS.map((p) => (
