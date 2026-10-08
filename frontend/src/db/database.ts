@@ -144,6 +144,7 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
   addColumn("users", "can_edit_patients", "INTEGER NOT NULL DEFAULT 1");
   addColumn("users", "disabled", "INTEGER NOT NULL DEFAULT 0");
   addColumn("inventory", "category_id", "TEXT");
+  addColumn("inventory", "low_stock_triggered_at", "TEXT");
   addColumn("inventory_purchase_receipts", "batch_id", "TEXT");
   addColumn("inventory_purchase_receipts", "description", "TEXT");
   // IMPORTANT: older local databases do not have batch_id. Add the column
