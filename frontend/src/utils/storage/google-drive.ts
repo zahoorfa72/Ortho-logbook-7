@@ -1,15 +1,13 @@
 import { GoogleSignin, statusCodes } from "@react-native-google-signin/google-signin";
 import { File, Paths } from "expo-file-system";
 import { fetch as expoFetch } from "expo/fetch";
-import { exportBackup, type BackupFilter } from "@/src/utils/storage/backup";
+import { exportUnencryptedBackup, type BackupFilter } from "@/src/utils/storage/backup";
 import { markBackupTaken } from "@/src/utils/backup-reminder";
-import { storage } from "@/src/utils/storage";
 
 export const GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
 const BACKUP_NAME = "Ortho Logbook Backup.orbackup";
 const DRIVE_API = "https://www.googleapis.com/drive/v3/files";
 const DRIVE_UPLOAD = "https://www.googleapis.com/upload/drive/v3/files";
-const AUTO_BACKUP_PASSWORD_KEY = "ortho_drive_auto_backup_password";
 
 let configured = false;
 
@@ -163,14 +161,12 @@ async function uploadContent(encryptedBackup: string, existingId?: string) {
   return uploadResponse.json();
 }
 
-export async function backupToGoogleDrive(password: string, filter: BackupFilter = { type: "all" }) {
-  if (!password || password.length < 8) throw new Error("Backup password must contain at least 8 characters.");
-  // Keep the password only in encrypted device storage so automatic Drive backup
-  // can continue after the user leaves the Backup screen. It is never uploaded.
-  await storage.secureSet(AUTO_BACKUP_PASSWORD_KEY, password);
-  const encryptedBackup = await exportBackup(password, filter);
+export async function backupToGoogleDrive(_password?: string, filter: BackupFilter = { type: "all" }) {
+  // Google Drive backup is intentionally plain JSON at the user's request.
+  // Local phone/file backups remain encrypted by exportBackup().
+  const backupText = await exportUnencryptedBackup(filter);
   const existing = await findLatestBackup();
-  const result = await uploadContent(encryptedBackup, existing?.id);
+  const result = await uploadContent(backupText, existing?.id);
   await markBackupTaken();
   return { ...result, accountEmail: getConnectedGoogleAccount() };
 }
@@ -183,11 +179,3 @@ export async function restoreLatestFromGoogleDrive() {
   return { backupText, name: file.name, modifiedTime: file.modifiedTime };
 }
 
-export async function getStoredAutoBackupPassword(): Promise<string | null> {
-  const value = await storage.secureGet(AUTO_BACKUP_PASSWORD_KEY, "");
-  return value || null;
-}
-
-export async function clearStoredAutoBackupPassword() {
-  await storage.secureRemove(AUTO_BACKUP_PASSWORD_KEY);
-}
