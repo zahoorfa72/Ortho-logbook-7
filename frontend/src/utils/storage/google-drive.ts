@@ -7,6 +7,8 @@ import { storage } from "@/src/utils/storage";
 
 const LAST_DRIVE_BACKUP_KEY = "ortho_drive_last_successful_backup";
 const LAST_DRIVE_CONTENT_HASH_KEY = "ortho_drive_last_uploaded_content_hash";
+const DRIVE_SCOPE_VERSION_KEY = "ortho_drive_scope_version";
+const DRIVE_SCOPE_VERSION = "full-drive-v1";
 export async function getLastDriveBackupStatus(): Promise<string | null> {
   return (await storage.secureGet(LAST_DRIVE_BACKUP_KEY, "")) || null;
 }
@@ -36,6 +38,7 @@ export async function connectGoogleAccount() {
     if (!result || result.type === "cancelled") throw new Error("Google account selection was cancelled.");
     const current = GoogleSignin.getCurrentUser();
     if (!current?.user?.email) throw new Error("Google account was not returned.");
+    await storage.secureSet(DRIVE_SCOPE_VERSION_KEY, DRIVE_SCOPE_VERSION);
     return current.user.email;
   } catch (error: any) {
     if (error?.code === statusCodes.PLAY_SERVICES_NOT_AVAILABLE) {
@@ -61,7 +64,10 @@ export function getConnectedGoogleAccount(): string | null {
 async function accessToken() {
   configure();
   const current = GoogleSignin.getCurrentUser();
-  if (!current) {
+  const scopeVersion = await storage.secureGet(DRIVE_SCOPE_VERSION_KEY, "");
+  // Re-authorize once after upgrading from the old drive.file scope. This avoids
+  // repeated addScopes failures and ensures older Drive backups can be listed.
+  if (!current || scopeVersion !== DRIVE_SCOPE_VERSION) {
     await connectGoogleAccount();
   }
   try {
