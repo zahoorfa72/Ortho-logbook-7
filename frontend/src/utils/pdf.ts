@@ -201,7 +201,8 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
   });
   // A field used as a Heading/Sub-heading belongs under its parent Main Entry,
   // so it must not also appear as a separate Main Entry column.
-  const mainFields = fields.filter((k:string) => !hierarchyChildFields.has(String(k)));
+  const infectionKeys = new Set(["hcvPlus","hbaSg","hiv"]);
+  const mainFields = fields.filter((k:string) => !hierarchyChildFields.has(String(k)) && !infectionKeys.has(String(k)));
   const levelFor = (key:string) => {
     const index = hierarchy.findIndex((x:any) => x.fields.includes(key));
     return index >= 0 ? index + 1 : 0;
@@ -242,6 +243,11 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
       const badge=branding.pdfShowOccurrenceBadge!==false && occurrence>1
         ? '<span class="occurrence occurrence-'+occurrence+'">'+escapeHtml(ordinalSuffix(occurrence))+' time</span>'
         : "";
+      const infectionLines = [
+        ["hcvPlus","HCV+"], ["hbaSg","HbAsg"], ["hiv","HIV"]
+      ].filter(([key]) => value(p,key) === "Yes").map(([key,label]) =>
+        "<div class='infectionLine'><b>"+escapeHtml(label)+"</b></div>"
+      ).join("");
       rows += "<tr><td class='indexCell'>"+(start+idx+1)+"</td>"+mainFields.map(k=>{
         const raw=escapeHtml(value(p,k)||"—");
         const cfg:any=headingMap[String(k)] || {};
@@ -252,14 +258,16 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
         const level=levelFor(k);
         const headingClass=level ? " headingLevel"+level : "";
         const styled=level ? "<span class='headingText"+headingClass+"'>"+raw+"</span>" : raw;
-        return "<td>"+styled+headingLines+subLines+(k===mainFields[0]?badge:"")+"</td>";
+        const infectionAfterDiagnosis = k === "diagnosis" ? infectionLines : "";
+        return "<td>"+styled+headingLines+subLines+infectionAfterDiagnosis+(k===mainFields[0]?badge:"")+"</td>";
       }).join("")+"</tr>";
     });
     if(!rows) rows='<tr><td colspan="'+(mainFields.length+1)+'"><div class="empty">No patients recorded.</div></td></tr>';
     const heads=mainFields.map(k=>"<th>"+escapeHtml(labels[k]||k)+"</th>").join("");
     pageTables.push('<section class="listPage"><table><thead><tr><th class="indexHead">#</th>'+heads+'</tr></thead><tbody>'+rows+'</tbody></table></section>');
   }
-  const mainSize = branding.pdfMainEntryTextSize==="small" ? 7.2 : branding.pdfMainEntryTextSize==="large" ? 9.4 : 8.2;
+  const pageScale = pageSize >= 30 ? 0.70 : pageSize >= 25 ? 0.78 : pageSize >= 20 ? 0.86 : pageSize >= 15 ? 0.94 : 1;
+  const mainSize = (branding.pdfMainEntryTextSize==="small" ? 7.2 : branding.pdfMainEntryTextSize==="large" ? 9.4 : 8.2) * pageScale;
   const mainWeight = ({normal:400,medium:500,semibold:600,bold:700} as any)[branding.pdfMainEntryTextWeight || "bold"] || 700;
   const mainTone = branding.pdfMainEntryTextTone==="light" ? "#7C7872" : branding.pdfMainEntryTextTone==="dark" ? "#1C1C1E" : "#3A3A3C";
   const headingSize = branding.pdfHeadingTextSize==="small" ? 0.92 : branding.pdfHeadingTextSize==="large" ? 1.12 : 1;
@@ -270,7 +278,7 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
   const headingTone = tone(branding.pdfHeadingTextTone);
   const subHeadingTone = tone(branding.pdfSubHeadingTextTone);
   return '<html><head><meta charset="utf-8"/>'+styles(branding)+'<style>'+
-    '.header{page-break-inside:avoid;break-inside:avoid;page-break-after:avoid;break-after:avoid}.titleBlock,.logoSide{page-break-inside:avoid;break-inside:avoid}table{page-break-inside:auto;break-inside:auto;font-size:'+mainSize+'px;table-layout:fixed;width:100%;border-collapse:collapse}.listPage{display:block;page-break-before:always;break-before:page;page-break-after:always;break-after:page;page-break-inside:avoid;break-inside:avoid}.listPage:first-of-type{page-break-before:auto;break-before:auto}.listPage:last-child{page-break-after:auto;break-after:auto}th,td{padding:2.5px 3.5px;line-height:1.08;vertical-align:middle}td{color:'+mainTone+';font-weight:'+mainWeight+'}.indexHead,.indexCell{width:22px;text-align:center}.headingText{display:block}.headingLevel1,.headingLevel2,.headingLevel3,.headingLevel4{font-size:'+headingSize+'em;font-weight:'+headingWeight+';color:'+headingTone+'}.pdfHeadingLine{margin-top:3px;padding:0;color:'+headingTone+';font-weight:'+headingWeight+';font-size:'+headingSize+'em;line-height:1.15}.pdfSubHeadingLine{margin-top:2px;padding:0;color:'+subHeadingTone+';font-weight:'+subHeadingWeight+';font-size:'+subHeadingSize+'em;line-height:1.12}.pdfHeadingLine b,.pdfSubHeadingLine b{color:inherit;font-weight:inherit}.pdfSubHeadingLine{margin-left:0}.occurrence{display:inline-block;font-size:.76em;font-weight:700;margin-left:5px;white-space:nowrap;padding:2px 7px;border-radius:999px;line-height:1.2}.occurrence-2{background:#B8860B;color:#fff}.occurrence-3{background:#3F6B8A;color:#fff}.occurrence-4{background:#6B4C8A;color:#fff}.occurrence-5{background:#2F7D5B;color:#fff}.occurrence-6{background:#A64B2A;color:#fff}.occurrence-7{background:#8A5A2B;color:#fff}.occurrence-8{background:#4C566A;color:#fff}.occurrence-9{background:#9A3E5E;color:#fff}.occurrence-10{background:#356B73;color:#fff}.badge{font-size:.78em;margin-left:3px;white-space:nowrap}tbody tr{page-break-inside:avoid}'+
+    '.header{page-break-inside:avoid;break-inside:avoid;page-break-after:avoid;break-after:avoid}.titleBlock,.logoSide{page-break-inside:avoid;break-inside:avoid}table{page-break-inside:auto;break-inside:auto;font-size:'+mainSize+'px;table-layout:fixed;width:100%;border-collapse:collapse}.listPage{display:block;min-height:257mm;height:257mm;overflow:hidden;page-break-before:always;break-before:page;page-break-after:always;break-after:page;page-break-inside:avoid;break-inside:avoid}.listPage:first-of-type{page-break-before:auto;break-before:auto}.listPage:last-child{page-break-after:auto;break-after:auto}th,td{padding:1.8px 3px;line-height:1.02;vertical-align:middle}td{color:'+mainTone+';font-weight:'+mainWeight+'}.indexHead,.indexCell{width:22px;text-align:center}.headingText{display:block}.headingLevel1,.headingLevel2,.headingLevel3,.headingLevel4{font-size:'+headingSize+'em;font-weight:'+headingWeight+';color:'+headingTone+'}.pdfHeadingLine{margin-top:2px;padding:0;color:'+headingTone+';font-weight:'+headingWeight+';font-size:'+headingSize+'em;line-height:1.05}.pdfSubHeadingLine{margin-top:1px;padding:0;color:'+subHeadingTone+';font-weight:'+subHeadingWeight+';font-size:'+subHeadingSize+'em;line-height:1.02}.pdfHeadingLine b,.pdfSubHeadingLine b{color:inherit;font-weight:inherit}.pdfSubHeadingLine{margin-left:0}.infectionLine{color:#7C7872;font-size:.82em;line-height:1.02;margin-top:1px;font-weight:400}.occurrence{display:inline-block;font-size:.76em;font-weight:700;margin-left:5px;white-space:nowrap;padding:2px 7px;border-radius:999px;line-height:1.2}.occurrence-2{background:#B8860B;color:#fff}.occurrence-3{background:#3F6B8A;color:#fff}.occurrence-4{background:#6B4C8A;color:#fff}.occurrence-5{background:#2F7D5B;color:#fff}.occurrence-6{background:#A64B2A;color:#fff}.occurrence-7{background:#8A5A2B;color:#fff}.occurrence-8{background:#4C566A;color:#fff}.occurrence-9{background:#9A3E5E;color:#fff}.occurrence-10{background:#356B73;color:#fff}.badge{font-size:.78em;margin-left:3px;white-space:nowrap}tbody tr{page-break-inside:avoid}'+
     '</style></head><body>'+
     header(branding,'Patient List — '+patients.length+' record'+(patients.length===1?'':'s')+(fromDate||toDate?' — '+(fromDate||'Start')+' to '+(toDate||'End'):''))+
     pageTables.join("")+footer(branding)+'</body></html>';
@@ -375,7 +383,8 @@ export async function buildPatientDetailHtml(
       fieldValues.set(key,value);
       return value;
     };
-    const availableFields = fields.filter(f=>f.key!=="photos" && f.key!=="name" && f.key!=="mrNo");
+    const infectionKeys = new Set(["hcvPlus","hbaSg","hiv"]);
+    const availableFields = fields.filter(f=>f.key!=="photos" && f.key!=="name" && f.key!=="mrNo" && !infectionKeys.has(String(f.key)));
     const labels = new Map(availableFields.map(f=>[String(f.key),String(f.label)]));
     const map:any = branding.pdfHeadingMap && typeof branding.pdfHeadingMap==="object" ? branding.pdfHeadingMap : {};
     const legacySub = Array.isArray(branding.pdfHeadingLevels) ? branding.pdfHeadingLevels.filter((g:any)=>["Sub-heading","Sub-heading 1"].includes(String(g?.label||""))).flatMap((g:any)=>Array.isArray(g?.fields)?g.fields.map(String):[]) : [];
@@ -421,7 +430,7 @@ export async function buildPatientDetailHtml(
 
   return "<html><head><meta charset='utf-8'/>"+styles(branding)+
     "<style>"+
-    ".detailHeaderPage{page-break-after:always;break-after:page;min-height:250mm}"+
+    ".infectionLine{color:#7C7872;font-size:.88em;line-height:1.15;font-weight:400;margin-top:2px}"+
     ".patientPage{page-break-after:always;page-break-inside:avoid;break-inside:avoid;border:1px solid #E2DFD8;border-radius:14px;padding:16px;margin-bottom:8px}"+
     ".patientPage:last-child{page-break-after:auto}"+
     ".patientNumber{font-size:10px;color:#7C7872;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px}"+
@@ -433,7 +442,7 @@ export async function buildPatientDetailHtml(
     ".photoGrid{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;align-items:flex-start;page-break-inside:avoid}"+
     ".patientPhoto{width:110px;height:110px;object-fit:cover;border-radius:8px;border:1px solid #E2DFD8}"+
     "</style></head><body>"+
-    "<section class='detailHeaderPage'>"+header(branding,"Detailed Patient Report — "+patients.length+" record"+(patients.length===1?"":"s"))+"</section>"+
+    header(branding,"Detailed Patient Report — "+patients.length+" record"+(patients.length===1?"":"s"))+
     pages.join("")+
     footer(branding)+
     "</body></html>";
