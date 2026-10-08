@@ -24,7 +24,7 @@ function migrateInventorySchema() {
       CREATE TABLE inventory_v2 (
         id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, quantity REAL NOT NULL DEFAULT 0,
         unit TEXT NOT NULL DEFAULT 'pcs', minimum_stock REAL NOT NULL DEFAULT 0,
-        category_id TEXT, category TEXT, size TEXT
+        category_id TEXT, category TEXT, size TEXT, low_stock_since TEXT
       );
       INSERT INTO inventory_v2 (id,name,quantity,unit,minimum_stock,category_id,category,size)
         SELECT id,name,quantity,unit,minimum_stock,category_id,category,size FROM inventory;
@@ -133,6 +133,7 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
   addColumn("inventory", "size", "TEXT");
   addColumn("inventory", "added_date", "TEXT");
   addColumn("inventory", "bill_image", "TEXT");
+  addColumn("inventory", "low_stock_since", "TEXT");
   addColumn("patients", "photos_json", "TEXT");
   addColumn("patients", "custom_data_json", "TEXT");
   addColumn("patients", "created_by", "TEXT");
