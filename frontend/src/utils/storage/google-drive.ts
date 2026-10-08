@@ -1,6 +1,5 @@
 import { GoogleSignin, statusCodes } from "@react-native-google-signin/google-signin";
 import { File, Paths } from "expo-file-system";
-import { fetch as expoFetch } from "expo/fetch";
 import { exportUnencryptedBackup, type BackupFilter } from "@/src/utils/storage/backup";
 import { markBackupTaken } from "@/src/utils/backup-reminder";
 import { storage } from "@/src/utils/storage";
@@ -86,10 +85,10 @@ async function driveRequest(url: string, init: RequestInit = {}) {
     ? Object.entries(init.headers as Record<string, unknown>)
         .filter((entry): entry is [string, string] => typeof entry[1] === "string")
     : [];
-  const response = await expoFetch(url, {
+  const response = await fetch(url, {
     ...init,
-    headers: [["Authorization", `Bearer ${token}`], ...extraHeaders],
-  } as any);
+    headers: { Authorization: `Bearer ${token}`, ...Object.fromEntries(extraHeaders) },
+  });
   if (!response.ok) {
     let message = `Google Drive request failed (HTTP ${response.status}).`;
     try {
@@ -119,14 +118,14 @@ async function uploadContent(backupText: string, existingId?: string) {
     ? `${DRIVE_UPLOAD}/${encodeURIComponent(existingId)}?uploadType=resumable&fields=id,name,modifiedTime,size`
     : `${DRIVE_UPLOAD}?uploadType=resumable&fields=id,name,modifiedTime,size`;
 
-  const initResponse = await expoFetch(target, {
+  const initResponse = await fetch(target, {
     method: existingId ? "PATCH" : "POST",
-    headers: [
-      ["Authorization", `Bearer ${token}`],
-      ["Content-Type", "application/json; charset=UTF-8"],
-      ["X-Upload-Content-Type", "application/octet-stream"],
-      ["X-Upload-Content-Length", String(temp.size)],
-    ],
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json; charset=UTF-8",
+      "X-Upload-Content-Type": "application/octet-stream",
+      "X-Upload-Content-Length": String(temp.size),
+    },
     body: JSON.stringify({
       name: BACKUP_NAME,
       mimeType: "application/octet-stream",
@@ -149,13 +148,13 @@ async function uploadContent(backupText: string, existingId?: string) {
     throw new Error("Google Drive did not return an upload session.");
   }
 
-  const uploadResponse = await expoFetch(sessionUrl, {
+  const uploadResponse = await fetch(sessionUrl, {
     method: "PUT",
-    headers: [
-      ["Authorization", `Bearer ${token}`],
-      ["Content-Type", "application/octet-stream"],
-      ["Content-Length", String(temp.size)],
-    ],
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/octet-stream",
+      "Content-Length": String(temp.size),
+    },
     body: temp as any,
   });
 
