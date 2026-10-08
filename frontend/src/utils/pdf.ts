@@ -34,6 +34,7 @@ type InventoryItem = {
   minimumStock: number;
   category?: string;
   size?: string;
+  lowStockTriggeredAt?: string;
 };
 
 type StatsData = {
@@ -524,6 +525,7 @@ export function buildInventoryHtml(
   branding: BrandingConfig,
   items: InventoryItem[],
   lowOnly: boolean,
+  reportTitle?: string,
 ): string {
   const list = lowOnly ? items.filter((i) => i.quantity <= i.minimumStock) : items;
   const rows = list.length
@@ -549,7 +551,7 @@ export function buildInventoryHtml(
     <html>
       <head><meta charset="utf-8"/>${styles(branding)}</head>
       <body>
-        ${header(branding, lowOnly ? `Low Stock Report — ${list.length} item${list.length === 1 ? "" : "s"}` : `Inventory — ${list.length} items`)}
+        ${header(branding, reportTitle || (lowOnly ? `Low Stock Report — ${list.length} item${list.length === 1 ? "" : "s"}` : `Inventory — ${list.length} items`))}
         <table>
           <thead>
             <tr>
