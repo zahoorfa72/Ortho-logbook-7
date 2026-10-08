@@ -110,7 +110,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }):Promise<
   patients:embeddedPatients,
   procedures:db.getAllSync<any>("SELECT * FROM procedures ORDER BY name COLLATE NOCASE"),
   inventoryCategories:db.getAllSync<any>("SELECT * FROM inventory_categories ORDER BY name COLLATE NOCASE"),
-  inventory:db.getAllSync<any>("SELECT id,name,category_id,category,size,quantity,unit,minimum_stock FROM inventory ORDER BY COALESCE(category,''),name COLLATE NOCASE,COALESCE(size,'')"),
+  inventory:db.getAllSync<any>("SELECT id,name,category_id,category,size,quantity,unit,minimum_stock,low_stock_triggered_at,low_stock_since FROM inventory ORDER BY COALESCE(category,''),name COLLATE NOCASE,COALESCE(size,'')"),
   patientImplants:db.getAllSync<any>("SELECT * FROM patient_implants ORDER BY created_at ASC"),
   patientCustomFields:db.getAllSync<any>("SELECT * FROM patient_custom_fields ORDER BY sort_order ASC,label COLLATE NOCASE"),
   implantRecords:db.getAllSync<any>("SELECT * FROM implant_records ORDER BY created_at ASC"),
@@ -264,7 +264,7 @@ export function restoreBackup(backup:BackupData){
     const itemName=restoreText(i.name,"Unnamed item");
     const itemCategory=restoreText(i.category);
     const itemSize=restoreText(i.size);
-    db.runSync("INSERT INTO inventory (id,name,category_id,category,size,quantity,unit,minimum_stock) VALUES (?,?,?,?,?,?,?,?)",[restoredInventoryId,itemName,cid,itemCategory,itemSize,restoreReal(i.quantity,0,0),restoreText(i.unit,"pcs"),restoreReal(i.minimum_stock,0,0)]);
+    db.runSync("INSERT INTO inventory (id,name,category_id,category,size,quantity,unit,minimum_stock,low_stock_triggered_at,low_stock_since) VALUES (?,?,?,?,?,?,?,?,?,?)",[restoredInventoryId,itemName,cid,itemCategory,itemSize,restoreReal(i.quantity,0,0),restoreText(i.unit,"pcs"),restoreReal(i.minimum_stock,0,0),restoreText(i.low_stock_triggered_at)||null,restoreText(i.low_stock_since)||null]);
   }
   // Restore patient inventory selections without creating duplicate rows.
   // Older backups/restore versions could contain the same patient + implant more
@@ -344,7 +344,7 @@ export function restoreBackup(backup:BackupData){
 //   matching name + category + size and summing quantities.
 export function mergeBackup(backup: BackupData) {
  initializeDatabase({ skipInventoryReset: true });
- if(!backup||![2,3,4,5].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
+ if(!backup||![2,3,4,5,6].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
  const stats = { patients: 0, procedures: 0, inventory: 0, expenses: 0, users: 0, patientHistory: 0, inventoryMovements: 0 };
  db.withTransactionSync(() => {
   const has = (table: string, id: string) => !!db.getFirstSync<any>(`SELECT id FROM ${table} WHERE id=?`, [id]);
@@ -391,7 +391,7 @@ export function mergeBackup(backup: BackupData) {
     const q = Number(existing.quantity || 0) + Number(i.quantity || 0);
     db.runSync("UPDATE inventory SET quantity=?,minimum_stock=?,category_id=?,category=?,size=? WHERE id=?", [q, Math.max(Number(existing.minimum_stock||0), Number(i.minimum_stock||0)), categoryId || existing.category_id || null, categoryName||existing.category||"", i.size||existing.size||"", existing.id]);
    } else {
-    db.runSync("INSERT INTO inventory (id,name,category_id,category,size,quantity,unit,minimum_stock) VALUES (?,?,?,?,?,?,?,?)", [i.id, i.name, categoryId, categoryName, i.size||"", Number(i.quantity||0), i.unit||"pcs", Number(i.minimum_stock||0)]);
+    db.runSync("INSERT INTO inventory (id,name,category_id,category,size,quantity,unit,minimum_stock,low_stock_triggered_at,low_stock_since) VALUES (?,?,?,?,?,?,?,?,?,?)", [i.id, i.name, categoryId, categoryName, i.size||"", Number(i.quantity||0), i.unit||"pcs", Number(i.minimum_stock||0), restoreText(i.low_stock_triggered_at)||null, restoreText(i.low_stock_since)||null]);
    }
    stats.inventory++;
   }
