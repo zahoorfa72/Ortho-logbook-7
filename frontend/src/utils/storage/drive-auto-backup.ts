@@ -4,29 +4,23 @@ import {
   getConnectedGoogleAccount,
 } from "@/src/utils/storage/google-drive";
 
-const DEBOUNCE_MS = 3000;
+const DEBOUNCE_MS = 5000;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let uploading = false;
-let pending = false;
 
 async function runBackup() {
-  if (uploading) {
-    pending = true;
-    return;
-  }
+  if (uploading) return;
   // Drive is optional. If no account is connected or the phone is offline,
   // leave all local data untouched and try again after the next change/startup.
   if (!getConnectedGoogleAccount()) return;
 
   uploading = true;
-  pending = false;
   try {
     await backupToGoogleDrive(undefined, { type: "all" });
   } catch (error) {
     console.warn("[drive-auto-backup] sync failed:", error);
   } finally {
     uploading = false;
-    if (pending) scheduleBackup();
   }
 }
 
