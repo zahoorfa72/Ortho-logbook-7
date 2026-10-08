@@ -395,13 +395,13 @@ export async function buildPatientDetailHtml(
       const headingKeys:string[]=raw && Array.isArray(raw.heading) ? raw.heading.map(String) : legacySub;
       const subHeadingKeys:string[]=raw && Array.isArray(raw.subHeading) ? raw.subHeading.map(String) : legacySubSub;
       const headingRows=headingKeys.filter(k=>labels.has(k)).map(k=>"<div class=\"nestedEntry headingEntry\"><span class=\"nestedLabel\">"+escapeHtml(labels.get(k)||k)+"</span><span class=\"nestedValue\">"+escapeHtml(getValue(k)||"—")+"</span></div>").join("");
-      const subRows=subHeadingKeys.filter(k=>labels.has(k)).map(k=>"<div class="nestedEntry subHeadingEntry"><span class="nestedLabel">"+escapeHtml(labels.get(k)||k)+"</span><span class="nestedValue">"+escapeHtml(getValue(k)||"—")+"</span></div>").join("");
+      const subRows=subHeadingKeys.filter(k=>labels.has(k)).map(k=>"<div class=\"nestedEntry subHeadingEntry\"><span class=\"nestedLabel\">"+escapeHtml(labels.get(k)||k)+"</span><span class=\"nestedValue\">"+escapeHtml(getValue(k)||"—")+"</span></div>").join("");
       const infectionRows = String(f.key) === "diagnosis" ? [
         ["hcvPlus","HCV+"], ["hbaSg","HbAsg"], ["hiv","HIV"]
       ].filter(([key]) => getValue(key) === "Yes").map(([key,label]) =>
         "<div class=\"infectionLine\"><span class=\"infectionLabel\">"+escapeHtml(label)+"</span><span class=\"infectionValue\">Positive</span></div>"
       ).join("") : "";
-      return "<tr><th>"+escapeHtml(f.label)+"</th><td class="detailValue"><div class="mainEntryValue">"+escapeHtml(getValue(String(f.key))||"—")+"</div>"+headingRows+subRows+infectionRows+"</td></tr>";
+      return "<tr><th>"+escapeHtml(f.label)+"</th><td class=\"detailValue\"><div class=\"mainEntryValue\">"+escapeHtml(getValue(String(f.key))||"—")+"</div>"+headingRows+subRows+infectionRows+"</td></tr>";
     }).join("");
 
     const rawPhotos=Array.isArray(p.photos)&&p.photos.length
