@@ -196,15 +196,15 @@ jobs:
           echo "----- release signing -----"
           awk '/buildTypes\s*{/,/^}/' "$GRADLE_FILE" | sed -n '1,40p'
 
-      - name: Remove signing material after Gradle build inputs are prepared
-        if: always()
-        run: rm -f frontend/android/ortho-logbook-release.jks
-
       - name: Build release APK (JS bundle embedded, standalone offline)
         working-directory: frontend/android
         env:
           NDK_CCACHE: /usr/bin/ccache
         run: ./gradlew assembleRelease --stacktrace --no-daemon
+
+      - name: Remove signing material after Gradle build inputs are prepared
+        if: always()
+        run: rm -f frontend/android/ortho-logbook-release.jks
 
       - name: Collect APK
         run: |
