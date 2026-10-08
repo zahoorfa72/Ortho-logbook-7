@@ -3,6 +3,12 @@ import { File, Paths } from "expo-file-system";
 import { fetch as expoFetch } from "expo/fetch";
 import { exportUnencryptedBackup, type BackupFilter } from "@/src/utils/storage/backup";
 import { markBackupTaken } from "@/src/utils/backup-reminder";
+import { storage } from "@/src/utils/storage";
+
+const LAST_DRIVE_BACKUP_KEY = "ortho_drive_last_successful_backup";
+export async function getLastDriveBackupStatus(): Promise<string | null> {
+  return (await storage.secureGet(LAST_DRIVE_BACKUP_KEY, "")) || null;
+}
 
 export const GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
 const BACKUP_NAME = "Ortho Logbook Backup.orbackup";
@@ -172,7 +178,9 @@ export async function backupToGoogleDrive(_password?: string, filter: BackupFilt
   const existing = await findLatestBackup();
   const result = await uploadContent(backupText, existing?.id);
   await markBackupTaken();
-  return { ...result, accountEmail: getConnectedGoogleAccount() };
+  const completedAt = new Date().toISOString();
+  await storage.secureSet(LAST_DRIVE_BACKUP_KEY, completedAt);
+  return { ...result, completedAt, accountEmail: getConnectedGoogleAccount() };
 }
 
 export async function restoreLatestFromGoogleDrive() {
