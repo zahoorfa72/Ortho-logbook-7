@@ -40,6 +40,7 @@ type InventoryItem = {
   categoryId: string;
   category: string;
   size: string;
+  lowStockTriggeredAt?: string;
 };
 
 export default function Inventory() {
@@ -61,6 +62,7 @@ export default function Inventory() {
   const [historyItem, setHistoryItem] = useState<InventoryItem | null>(null);
   const [pinPromptOpen, setPinPromptOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [exportingNewLow, setExportingNewLow] = useState(false);
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
@@ -115,6 +117,13 @@ export default function Inventory() {
     onSuccess: invalidate,
     onError: (e: any) => toast(e?.message || "Update failed.", "error"),
   });
+
+  const isNewLowStock = useCallback((item: InventoryItem) => {
+    if (item.quantity > item.minimumStock || !item.lowStockTriggeredAt) return false;
+    const t = new Date(item.lowStockTriggeredAt).getTime();
+    if (!Number.isFinite(t)) return false;
+    return Date.now() - t < 15 * 24 * 60 * 60 * 1000;
+  }, []);
 
   const list = useMemo(() => {
     let items = (data || []).filter((i) => {
@@ -203,6 +212,28 @@ export default function Inventory() {
     ]);
   };
 
+  const doNewLowExport = useCallback(async () => {
+    const items = (data || []).filter(isNewLowStock);
+    if (!items.length) {
+      toast("No new low-stock items in the last 15 days.", "info");
+      return;
+    }
+    setExportingNewLow(true);
+    try {
+      const html = buildInventoryHtml(branding, items, true, "New Low Stock — Last 15 Days");
+      await generateAndSharePdf(html, "New Low Stock — Last 15 Days");
+    } catch (e: any) {
+      toast(e?.message || "Could not create new low stock PDF.", "error");
+    } finally {
+      setExportingNewLow(false);
+    }
+  }, [branding, data, isNewLowStock, toast]);
+
+  const requestNewLowExport = useCallback(async () => {
+    if (await hasAdminPin()) setPinPromptOpen(true);
+    else doNewLowExport();
+  }, [doNewLowExport]);
+
   const doExport = useCallback(async () => {
     const items = data || [];
     if (!items.length) {
@@ -243,6 +274,20 @@ export default function Inventory() {
                   <ActivityIndicator size="small" color={colors.brandPrimary} />
                 ) : (
                   <Ionicons name="document-text-outline" size={20} color={colors.brandPrimary} />
+                )}
+              </Pressable>
+            ) : null}
+            {isAdmin ? (
+              <Pressable
+                testID="inventory-new-low-export-pdf"
+                onPress={requestNewLowExport}
+                style={styles.iconBtn}
+                disabled={exportingNewLow}
+              >
+                {exportingNewLow ? (
+                  <ActivityIndicator size="small" color={colors.brandPrimary} />
+                ) : (
+                  <Ionicons name="alert-circle-outline" size={20} color={colors.brandPrimary} />
                 )}
               </Pressable>
             ) : null}
@@ -443,9 +488,7 @@ export default function Inventory() {
         visible={pinPromptOpen}
         title="Admin PIN required"
         description={
-          tab === "Low Stock"
-            ? "Enter admin PIN to export the low stock report."
-            : "Enter admin PIN to export inventory."
+          "Enter admin PIN to export the selected inventory PDF."
         }
         onSuccess={() => {
           setPinPromptOpen(false);
