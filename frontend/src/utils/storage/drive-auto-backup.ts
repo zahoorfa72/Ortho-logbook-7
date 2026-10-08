@@ -2,7 +2,6 @@ import * as SQLite from "expo-sqlite";
 import {
   backupToGoogleDrive,
   getConnectedGoogleAccount,
-  getStoredAutoBackupPassword,
 } from "@/src/utils/storage/google-drive";
 
 const DEBOUNCE_MS = 3000;
@@ -15,18 +14,15 @@ async function runBackup() {
     pending = true;
     return;
   }
-
-  const password = await getStoredAutoBackupPassword();
-  // Automatic backup is opt-in: the user must have connected Drive and
-  // completed at least one manual backup so the encryption password exists.
-  if (!password || !getConnectedGoogleAccount()) return;
+  // Drive is optional. If no account is connected or the phone is offline,
+  // leave all local data untouched and try again after the next change/startup.
+  if (!getConnectedGoogleAccount()) return;
 
   uploading = true;
   pending = false;
   try {
-    await backupToGoogleDrive(password, { type: "all" });
+    await backupToGoogleDrive(undefined, { type: "all" });
   } catch (error) {
-    // Never block or crash the app because Drive is offline/unavailable.
     console.warn("[drive-auto-backup] sync failed:", error);
   } finally {
     uploading = false;
@@ -42,10 +38,17 @@ function scheduleBackup() {
   }, DEBOUNCE_MS);
 }
 
+export function triggerAutomaticDriveBackup() {
+  scheduleBackup();
+}
+
 export function startAutomaticDriveBackup() {
   const subscription = SQLite.addDatabaseChangeListener(() => {
     scheduleBackup();
   });
+  // Also sync on app startup, so edits made while offline are not stranded
+  // waiting for another database change once Drive is available.
+  scheduleBackup();
 
   return () => {
     subscription.remove();
