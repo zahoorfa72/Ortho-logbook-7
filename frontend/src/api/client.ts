@@ -82,12 +82,24 @@ function movement(inventoryId: string, type: string, amount: number, quantityAft
   );
 }
 
+
+function syncLowStockState(inventoryId: string, quantity: number, minimumStock: number, at = nowIso()) {
+  const low = Number(quantity) <= Number(minimumStock);
+  const row = db.getFirstSync<any>("SELECT low_stock_triggered_at FROM inventory WHERE id=? LIMIT 1", [inventoryId]);
+  if (low) {
+    if (!row?.low_stock_triggered_at) {
+      db.runSync("UPDATE inventory SET low_stock_triggered_at=? WHERE id=?", [at, inventoryId]);
+    }
+  } else if (row?.low_stock_triggered_at) {
+    db.runSync("UPDATE inventory SET low_stock_triggered_at=NULL WHERE id=?", [inventoryId]);
+  }
+}
 function changeInventory(name: string, amount: number, type: string, note: string, userId: string | null, inventoryId?: string) {
   const clean = String(name || "").trim();
   if (!clean || !amount) return;
   const item = inventoryId
-    ? db.getFirstSync<any>("SELECT id,name,quantity FROM inventory WHERE id=? LIMIT 1",[inventoryId])
-    : db.getFirstSync<any>("SELECT id,quantity FROM inventory WHERE LOWER(name)=LOWER(?) LIMIT 1",[clean]);
+    ? db.getFirstSync<any>("SELECT id,name,quantity,minimum_stock FROM inventory WHERE id=? LIMIT 1",[inventoryId])
+    : db.getFirstSync<any>("SELECT id,quantity,minimum_stock FROM inventory WHERE LOWER(name)=LOWER(?) LIMIT 1",[clean]);
   if (!item) {
     if (amount < 0) throw new Error(`Implant "${clean}" is not available in inventory.`);
     return;
@@ -96,6 +108,7 @@ function changeInventory(name: string, amount: number, type: string, note: strin
   const q = current + amount;
   if (q < 0) throw new Error(`Insufficient stock for "${clean}". Available: ${current}.`);
   db.runSync("UPDATE inventory SET quantity=? WHERE id=?", [q, item.id]);
+  syncLowStockState(item.id, q, Number(item.minimum_stock) || 0);
   movement(item.id, type, amount, q, note, userId);
 }
 
@@ -402,13 +415,13 @@ const inventory = (categoryId?: string, term?: string) => {
     const q = "%" + term.trim().toLowerCase() + "%"; args.push(q,q,q);
   }
   const sql = `SELECT i.id,i.name,i.category_id,i.category,i.size,i.quantity,i.unit,i.minimum_stock,
-      c.name AS category_name,i.added_date,i.bill_image
+      c.name AS category_name,i.added_date,i.bill_image,i.low_stock_triggered_at
       FROM inventory i LEFT JOIN inventory_categories c ON c.id=i.category_id
       ${where.length ? "WHERE " + where.join(" AND ") : ""}
       ORDER BY COALESCE(c.name,i.category,''), i.name COLLATE NOCASE, COALESCE(i.size,'')`;
   return db.getAllSync<any>(sql,args).map((r) => ({
     id:r.id,name:r.name,categoryId:r.category_id||"",category:r.category_name||r.category||"",size:r.size||"",
-    quantity:Number(r.quantity),unit:r.unit||"pcs",minimumStock:Number(r.minimum_stock),addedDate:r.added_date||"",billImage:r.bill_image||"",
+    quantity:Number(r.quantity),unit:r.unit||"pcs",minimumStock:Number(r.minimum_stock),addedDate:r.added_date||"",billImage:r.bill_image||"",lowStockTriggeredAt:r.low_stock_triggered_at||"",
   }));
 };
 
@@ -625,6 +638,7 @@ export const api = {
           [inventory.id],
         )?.n||0);
         db.runSync("UPDATE inventory SET minimum_stock=? WHERE id=?",[aggregateMin,inventory.id]);
+        syncLowStockState(inventory.id, next, aggregateMin);
         movement(inventory.id,"purchase_delete",-qty,next,"Received stock deleted",uid);
       });
       return {success:true} as any;
@@ -716,6 +730,7 @@ export const api = {
             const next=Number(existing.quantity||0)+quantity;
             inventoryId=existing.id;
             db.runSync("UPDATE inventory SET name=?,category_id=?,category=?,size=?,quantity=?,unit=?,minimum_stock=? WHERE id=?",[categoryName,categoryId,categoryName,size,next,unit,minimumStock,existing.id]);
+            syncLowStockState(existing.id, next, minimumStock);
             movement(existing.id,"purchase",quantity,next,"Stock received",uid);
           } else {
             inventoryId=id();
@@ -887,6 +902,7 @@ export const api = {
             [oldInventory.id],
           )?.n||0);
           db.runSync("UPDATE inventory SET minimum_stock=? WHERE id=?",[aggregateMin,oldInventory.id]);
+          syncLowStockState(oldInventory.id, nextQty, aggregateMin);
           movement(oldInventory.id,"purchase_adjustment",quantity-oldQty,nextQty,"Received stock edited",uid);
           return;
         }
@@ -1011,6 +1027,7 @@ export const api = {
         "UPDATE inventory SET name=?,category_id=?,category=?,size=?,quantity=?,unit=?,minimum_stock=?,added_date=?,bill_image=? WHERE id=?",
         [String(body?.name || item.name || categoryName).trim(), categoryId || null, categoryName, String(body?.size ?? item.size ?? "").trim(), next, String(body?.unit || item.unit || "pcs"), Math.max(0, Number(body?.minimumStock ?? item.minimum_stock) || 0), String(body?.addedDate ?? item.added_date ?? "").trim(), String(body?.billImage ?? item.bill_image ?? ""), im[1]],
       );
+      syncLowStockState(im[1], next, Math.max(0, Number(body?.minimumStock ?? item.minimum_stock) || 0));
       if (delta) movement(im[1], "adjust", delta, next, body?.note || "Manual adjustment", uid);
       return { ...body, id: im[1], quantity: next } as any;
     }
