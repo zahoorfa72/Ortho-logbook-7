@@ -109,10 +109,10 @@ jobs:
           : "${ANDROID_KEY_ALIAS:?Missing GitHub secret ANDROID_KEY_ALIAS}"
           : "${ANDROID_KEY_PASSWORD:?Missing GitHub secret ANDROID_KEY_PASSWORD}"
 
-          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > frontend/android/ortho-logbook-release.jks
-          test -s frontend/android/ortho-logbook-release.jks
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > frontend/android/app/ortho-logbook-release.jks
+          test -s frontend/android/app/ortho-logbook-release.jks
 
-          KEYSTORE="$GITHUB_WORKSPACE/frontend/android/ortho-logbook-release.jks"
+          KEYSTORE="$GITHUB_WORKSPACE/frontend/android/app/ortho-logbook-release.jks"
           keytool -list -v -keystore "$KEYSTORE" -storepass "$ANDROID_KEYSTORE_PASSWORD" | grep -E 'Alias name:|SHA1:|SHA256:'
 
           GRADLE_FILE=frontend/android/app/build.gradle
@@ -126,7 +126,7 @@ jobs:
                   marker,
                   """signingConfigs {
                   orthoLogbookRelease {
-                      storeFile file("../ortho-logbook-release.jks")
+                      storeFile file("ortho-logbook-release.jks")
                       storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
                       keyAlias System.getenv("ANDROID_KEY_ALIAS")
                       keyPassword System.getenv("ANDROID_KEY_PASSWORD")
@@ -147,7 +147,7 @@ jobs:
 
       - name: Remove signing material
         if: always()
-        run: rm -f frontend/android/ortho-logbook-release.jks
+        run: rm -f frontend/android/app/ortho-logbook-release.jks
 
       - name: Collect APK
         run: |
