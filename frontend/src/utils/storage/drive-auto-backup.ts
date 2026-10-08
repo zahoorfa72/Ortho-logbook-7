@@ -6,7 +6,6 @@ import {
 import { setDriveSyncState } from "@/src/utils/storage/drive-sync-status";
 
 const DEBOUNCE_MS = 5000;
-const RETRY_AFTER_UPLOAD_MS = 1500;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let uploading = false;
 let pendingUpdates = 0;
@@ -17,16 +16,9 @@ function scheduleBackup(updateCount = 1) {
   pendingUpdates += updateCount;
   if (!getConnectedGoogleAccount()) return;
 
-  if (uploading) {
-    setDriveSyncState({
-      phase: "uploading",
-      updates: pendingUpdates,
-      message: pendingUpdates > 0
-        ? `Uploading backup · ${pendingUpdates} change(s) queued`
-        : "Uploading backup…",
-    });
-    return;
-  }
+  // Do not emit a new UI state for every SQLite write while uploading.
+  // Just count changes; a single follow-up backup will run after the debounce.
+  if (uploading) return;
 
   if (timer) clearTimeout(timer);
   setDriveSyncState({
@@ -86,7 +78,7 @@ async function runBackup() {
       timer = setTimeout(() => {
         timer = null;
         void runBackup();
-      }, RETRY_AFTER_UPLOAD_MS);
+      }, DEBOUNCE_MS);
     }
   }
 }
