@@ -185,7 +185,7 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
   const fields = Array.isArray(branding.pdfPatientFields) && branding.pdfPatientFields.length
     ? branding.pdfPatientFields
     : ["date","mrNo","name","gender","age","diagnosis","procedure"];
-  const labels: Record<string,string> = {date:"Date",mrNo:"MR No",name:"Patient",gender:"Gender",age:"Age",address:"Address",diagnosis:"Diagnosis",procedure:"Procedure",implants:"Implants",fileName:"File Name"};
+  const labels: Record<string,string> = {date:"Date",mrNo:"MR No",name:"Patient",gender:"Gender",age:"Age",address:"Address",diagnosis:"Diagnosis",procedure:"Procedure",implants:"Implants",fileName:"File Name",hcvPlus:"HCV+",hbaSg:"HbAsg",hiv:"HIV"};
   const legacyHierarchy = [
     { fields: [branding.pdfMainHeadingField || "name"], label: "Main Heading" },
     { fields: [branding.pdfSubHeadingField || "procedure"], label: "Sub-heading 1" },
@@ -216,6 +216,9 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
     if(key === "name") return p.name || "";
     if(key === "diagnosis") return p.diagnosis || "";
     if(key === "procedure") return p.procedure || "";
+    if(key === "hcvPlus") return (p as any).hcvPlus || String((p.customData||{}).hcvPlus||"").toLowerCase()==="true" ? "Yes" : "No";
+    if(key === "hbaSg") return (p as any).hbaSg || String((p.customData||{}).hbaSg||"").toLowerCase()==="true" ? "Yes" : "No";
+    if(key === "hiv") return (p as any).hiv || String((p.customData||{}).hiv||"").toLowerCase()==="true" ? "Yes" : "No";
     if(key === "implants") {
       const items = Array.isArray(p.implants) && p.implants.length
         ? p.implants.map((x:any)=>formatInventoryLabel(x.category,x.name,x.size)+(Number(x.quantity)>1?" × "+x.quantity:""))
@@ -358,6 +361,9 @@ export async function buildPatientDetailHtml(
       else if(key==="address") value=p.address||"";
       else if(key==="diagnosis") value=p.diagnosis;
       else if(key==="procedure") value=p.procedure || "";
+      else if(key==="hcvPlus") value=(p as any).hcvPlus || String((p.customData||{}).hcvPlus||"").toLowerCase()==="true" ? "Yes" : "No";
+      else if(key==="hbaSg") value=(p as any).hbaSg || String((p.customData||{}).hbaSg||"").toLowerCase()==="true" ? "Yes" : "No";
+      else if(key==="hiv") value=(p as any).hiv || String((p.customData||{}).hiv||"").toLowerCase()==="true" ? "Yes" : "No";
       else if(key==="implants") {
         const items = Array.isArray(p.implants) && p.implants.length
           ? p.implants.map((x:any)=>formatInventoryLabel(x.category,x.name,x.size)+(Number(x.quantity)>1?" × "+x.quantity:""))
