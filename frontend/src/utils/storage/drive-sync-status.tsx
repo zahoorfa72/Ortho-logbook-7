@@ -20,7 +20,7 @@ export function setDriveSyncState(next: DriveSyncState) {
 export function subscribeDriveSync(listener: (state: DriveSyncState) => void) {
   listeners.add(listener);
   listener(current);
-  return () => listeners.delete(listener);
+  return () => { listeners.delete(listener); };
 }
 
 export function DriveSyncIndicator() {
