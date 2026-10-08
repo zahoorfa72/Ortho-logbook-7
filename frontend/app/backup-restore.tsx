@@ -353,7 +353,7 @@ export default function BackupRestoreScreen() {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Google Drive Backup</Text>
           <Text style={styles.cardSub}>
-            Connect a Google account on this phone. Each phone can use a different Google account. The backup is encrypted before it is uploaded.
+            Connect a Google account on this phone. Each phone can use a different Google account. Google Drive backup is unencrypted; phone/file backups remain encrypted.
           </Text>
           {googleAccount ? (
             <>
