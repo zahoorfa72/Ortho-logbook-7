@@ -1,5 +1,6 @@
 import { GoogleSignin, statusCodes } from "@react-native-google-signin/google-signin";
 import { File, Paths } from "expo-file-system";
+import { fetch as expoFetch } from "expo/fetch";
 import { exportBackup, type BackupFilter } from "@/src/utils/storage/backup";
 import { markBackupTaken } from "@/src/utils/backup-reminder";
 
@@ -75,7 +76,7 @@ async function accessToken() {
 
 async function driveRequest(url: string, init: RequestInit = {}) {
   const token = await accessToken();
-  const response = await fetch(url, {
+  const response = await expoFetch(url, {
     ...init,
     headers: { Authorization: `Bearer ${token}`, ...(init.headers || {}) },
   });
@@ -108,7 +109,7 @@ async function uploadContent(encryptedBackup: string, existingId?: string) {
     ? `${DRIVE_UPLOAD}/${encodeURIComponent(existingId)}?uploadType=resumable&fields=id,name,modifiedTime,size`
     : `${DRIVE_UPLOAD}?uploadType=resumable&fields=id,name,modifiedTime,size`;
 
-  const initResponse = await fetch(target, {
+  const initResponse = await expoFetch(target, {
     method: existingId ? "PATCH" : "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -138,7 +139,7 @@ async function uploadContent(encryptedBackup: string, existingId?: string) {
     throw new Error("Google Drive did not return an upload session.");
   }
 
-  const uploadResponse = await fetch(sessionUrl, {
+  const uploadResponse = await expoFetch(sessionUrl, {
     method: "PUT",
     headers: {
       Authorization: `Bearer ${token}`,
