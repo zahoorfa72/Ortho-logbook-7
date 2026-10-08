@@ -131,7 +131,8 @@ export default function Inventory() {
       const s = search.trim().toLowerCase();
       return !s || i.name.toLowerCase().includes(s) || i.size.toLowerCase().includes(s) || i.category.toLowerCase().includes(s);
     });
-    if (tab === "Low Stock") items = items.filter((i) => i.quantity <= i.minimumStock);
+    if (tab === "New Low Stock") items = items.filter(isNewLowStock);
+    else if (tab === "Low Stock") items = items.filter((i) => i.quantity <= i.minimumStock);
     items = [...items].sort((a, b) => {
       if (tab === "Low Stock") {
         const an = isNewLowStock(a);
@@ -274,11 +275,11 @@ export default function Inventory() {
             {isAdmin ? (
               <Pressable
                 testID="inventory-export-pdf"
-                onPress={requestExport}
+                onPress={tab === "New Low Stock" ? requestNewLowExport : requestExport}
                 style={styles.iconBtn}
-                disabled={exporting}
+                disabled={tab === "New Low Stock" ? exportingNewLow : exporting}
               >
-                {exporting ? (
+                {(tab === "New Low Stock" ? exportingNewLow : exporting) ? (
                   <ActivityIndicator size="small" color={colors.brandPrimary} />
                 ) : (
                   <Ionicons name="document-text-outline" size={20} color={colors.brandPrimary} />
@@ -311,7 +312,7 @@ export default function Inventory() {
             ) : null}
           </View>
         </View>
-        <Segmented options={["All", "Low Stock"]} value={tab} onChange={setTab} testIDPrefix="inv-tab" />
+        <Segmented options={["All", "New Low Stock", "Low Stock"]} value={tab} onChange={setTab} testIDPrefix="inv-tab" />
         <View style={styles.searchWrap}>
           <Ionicons name="search" size={18} color={colors.muted} />
           <TextInput
@@ -360,8 +361,8 @@ export default function Inventory() {
           ListEmptyComponent={
             <EmptyState
               icon="cube-outline"
-              title={tab === "Low Stock" ? "No low-stock items" : "Inventory is empty"}
-              subtitle={tab === "Low Stock" ? "All implants are well stocked." : "Use Receive Stock on the Implant Inventory screen to add stock."}
+              title={tab === "New Low Stock" ? "No new low-stock items" : tab === "Low Stock" ? "No low-stock items" : "Inventory is empty"}
+              subtitle={tab === "New Low Stock" ? "No item has newly reached minimum stock in the last 15 days." : tab === "Low Stock" ? "Items that remain at or below minimum stock are shown here after the 15-day new period." : "Use Receive Stock to add stock."}
             />
           }
           renderItem={({ item, index }) => {
