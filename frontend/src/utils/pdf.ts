@@ -418,6 +418,7 @@ export async function buildPatientDetailHtml(
       : "";
 
     pages.push(
+      (idx===0 ? header(branding,"Detailed Patient Report — "+patients.length+" record"+(patients.length===1?"":"s")) : "")+
       "<section class='patientPage'>"+
       "<div class='patientNumber'>Patient "+(idx+1)+" of "+patients.length+"</div>"+
       "<div class='patientName'>"+escapeHtml(p.name||"Unnamed patient")+occurrenceTag+"</div>"+
@@ -430,7 +431,7 @@ export async function buildPatientDetailHtml(
 
   return "<html><head><meta charset='utf-8'/>"+styles(branding)+
     "<style>"+
-    ".infectionLine{color:#7C7872;font-size:.88em;line-height:1.15;font-weight:400;margin-top:2px}"+
+    ".infectionLine{color:#7C7872;font-size:.88em;line-height:1.15;font-weight:400;margin-top:2px;display:flex;gap:8px}.infectionLabel{font-weight:400}.infectionValue{font-weight:400}"+
     ".patientPage{page-break-after:always;page-break-inside:avoid;break-inside:avoid;border:1px solid #E2DFD8;border-radius:14px;padding:16px;margin-bottom:8px}"+
     ".patientPage:last-child{page-break-after:auto}"+
     ".patientNumber{font-size:10px;color:#7C7872;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px}"+
@@ -442,7 +443,7 @@ export async function buildPatientDetailHtml(
     ".photoGrid{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;align-items:flex-start;page-break-inside:avoid}"+
     ".patientPhoto{width:110px;height:110px;object-fit:cover;border-radius:8px;border:1px solid #E2DFD8}"+
     "</style></head><body>"+
-    header(branding,"Detailed Patient Report — "+patients.length+" record"+(patients.length===1?"":"s"))+
+    
     pages.join("")+
     footer(branding)+
     "</body></html>";
