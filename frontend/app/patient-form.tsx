@@ -25,6 +25,7 @@ type Patient = {
   diagnosis: string; procedure: string; implant: string; implantII: string; implants?: SelectedImplant[];
   address: string; fileName: string; photoUri: string; photos: string[]; date: string;
   operationCount?: number; totalOperations?: number; customData?: Record<string,string>;
+  hcvPlus?: boolean; hbaSg?: boolean; hiv?: boolean;
 };
 type Procedure = { id: string; name: string };
 type InventoryItem = { id: string; name: string; category: string; categoryId?: string; size: string; quantity: number };
@@ -35,6 +36,7 @@ const empty = (): Patient => ({
   id: "", mrNo: "", name: "", gender: "", age: "", diagnosis: "",
   procedure: "", implant: "", implantII: "", address: "", fileName: "",
   photoUri: "", photos: [], date: today(), implants: [], customData: {},
+  hcvPlus: false, hbaSg: false, hiv: false,
 });
 
 export default function PatientForm() {
@@ -438,7 +440,16 @@ export default function PatientForm() {
   };
 
   const save = useMutation({
-    mutationFn: () => (isEdit ? api.put("/patients/" + id, p) : api.post("/patients", p)),
+    mutationFn: () => {
+      const customData = {
+        ...(p.customData || {}),
+        hcvPlus: p.hcvPlus ? "true" : "false",
+        hbaSg: p.hbaSg ? "true" : "false",
+        hiv: p.hiv ? "true" : "false",
+      };
+      const payload = { ...p, customData };
+      return isEdit ? api.put("/patients/" + id, payload) : api.post("/patients", payload);
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["patients"] });
       qc.invalidateQueries({ queryKey: ["inventory"] });
@@ -614,6 +625,27 @@ export default function PatientForm() {
         <Field label="Age" testID="patient-age-input" value={p.age} onChangeText={set("age")} keyboardType="number-pad" placeholder="e.g. 45" />
         <Field label="Address" testID="patient-address-input" value={p.address} onChangeText={set("address")} placeholder="Patient address" />
 
+        <Text style={styles.section}>Infection Screening</Text>
+        {([
+          ["hcvPlus", "HCV+"],
+          ["hbaSg", "HbAsg"],
+          ["hiv", "HIV"],
+        ] as const).map(([key, label]) => (
+          <Pressable
+            key={key}
+            onPress={() => setP(prev => ({ ...prev, [key]: !prev[key] }))}
+            style={styles.screeningRow}
+            testID={"patient-screening-" + key}
+          >
+            <Ionicons
+              name={p[key] ? "checkbox" : "square-outline"}
+              size={22}
+              color={p[key] ? colors.brandPrimary : colors.muted}
+            />
+            <Text style={styles.screeningText}>{label}</Text>
+          </Pressable>
+        ))}
+
         <Text style={styles.section}>Clinical Details</Text>
         <Field label="Diagnosis" testID="patient-diagnosis-input" value={p.diagnosis} onChangeText={set("diagnosis")} placeholder="Diagnosis" />
         <AutocompleteField label="Procedure" testID="patient-procedure-input" value={p.procedure} onChangeText={set("procedure")} placeholder="Type to search procedures" suggestions={procedureSuggestions} />
@@ -759,6 +791,8 @@ const useStyles = makeStyles((colors) => ({
   headerTitle: { fontFamily: fontFamily.bold, fontSize: fontSize.lg, color: colors.onSurface },
   section: { fontFamily: fontFamily.bold, fontSize: fontSize.sm, color: colors.brandPrimary, textTransform: "uppercase", letterSpacing: 0.6, marginTop: spacing.md, marginBottom: spacing.md },
   label: { fontFamily: fontFamily.semibold, fontSize: fontSize.sm, color: colors.onSurfaceSecondary, marginBottom: spacing.xs },
+  screeningRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingVertical: spacing.sm, marginBottom: spacing.xs },
+  screeningText: { fontFamily: fontFamily.medium, fontSize: fontSize.base, color: colors.onSurface },
   photoActions: { flexDirection: "row", gap: spacing.md, marginBottom: spacing.md, alignItems: "center", flexWrap: "wrap" },
   secondary: { flexDirection: "row", alignItems: "center", height: 48, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, paddingHorizontal: spacing.md, justifyContent: "center" },
   secondaryText: { fontFamily: fontFamily.semibold, color: colors.onSurface },
