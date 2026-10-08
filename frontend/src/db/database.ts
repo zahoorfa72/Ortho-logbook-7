@@ -1,7 +1,7 @@
 import * as SQLite from "expo-sqlite";
 import { HOLD_INVENTORY_RESET } from "@/src/data/hold-inventory-reset";
 
-export const db = SQLite.openDatabaseSync("ortho-logbook.db");
+export const db = SQLite.openDatabaseSync("ortho-logbook.db", { enableChangeListener: true });
 
 function addColumn(table: string, column: string, definition: string) {
   try { db.execSync(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`); } catch {}
