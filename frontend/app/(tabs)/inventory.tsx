@@ -435,7 +435,6 @@ export default function Inventory() {
                   </Pressable>
                 </View>
               </Pressable>
-              </Pressable>
               </>
             );
           }}
