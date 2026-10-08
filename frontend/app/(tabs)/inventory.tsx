@@ -61,6 +61,7 @@ export default function Inventory() {
   const [inventorySort, setInventorySort] = useState<"name-asc" | "name-desc" | "size-asc" | "size-desc" | "qty-desc" | "qty-asc" | "low-first">("name-asc");
   const [historyItem, setHistoryItem] = useState<InventoryItem | null>(null);
   const [pinPromptOpen, setPinPromptOpen] = useState(false);
+  const [pinExportMode, setPinExportMode] = useState<"inventory" | "new-low">("inventory");
   const [exporting, setExporting] = useState(false);
   const [exportingNewLow, setExportingNewLow] = useState(false);
   const [selectMode, setSelectMode] = useState(false);
@@ -132,6 +133,11 @@ export default function Inventory() {
     });
     if (tab === "Low Stock") items = items.filter((i) => i.quantity <= i.minimumStock);
     items = [...items].sort((a, b) => {
+      if (tab === "Low Stock") {
+        const an = isNewLowStock(a);
+        const bn = isNewLowStock(b);
+        if (an !== bn) return an ? -1 : 1;
+      }
       if (inventorySort === "name-desc") return formatInventoryLabel(b.category, b.name, b.size).localeCompare(formatInventoryLabel(a.category, a.name, a.size), undefined, { numeric: true, sensitivity: "base" });
       if (inventorySort === "size-asc" || inventorySort === "size-desc") {
         const sizeNumber = (value: string) => {
@@ -155,7 +161,7 @@ export default function Inventory() {
       return formatInventoryLabel(a.category, a.name, a.size).localeCompare(formatInventoryLabel(b.category, b.name, b.size), undefined, { numeric: true, sensitivity: "base" });
     });
     return items;
-  }, [data, tab, search, inventorySort]);
+  }, [data, tab, search, inventorySort, isNewLowStock]);
 
   const changeQty = (item: InventoryItem, delta: number) => {
     const next = Math.max(0, item.quantity + delta);
@@ -230,6 +236,7 @@ export default function Inventory() {
   }, [branding, data, isNewLowStock, toast]);
 
   const requestNewLowExport = useCallback(async () => {
+    setPinExportMode("new-low");
     if (await hasAdminPin()) setPinPromptOpen(true);
     else doNewLowExport();
   }, [doNewLowExport]);
@@ -252,6 +259,7 @@ export default function Inventory() {
   }, [branding, data, tab, toast]);
 
   const requestExport = useCallback(async () => {
+    setPinExportMode("inventory");
     if (await hasAdminPin()) setPinPromptOpen(true);
     else doExport();
   }, [doExport]);
@@ -356,9 +364,26 @@ export default function Inventory() {
               subtitle={tab === "Low Stock" ? "All implants are well stocked." : "Use Receive Stock on the Implant Inventory screen to add stock."}
             />
           }
-          renderItem={({ item }) => {
+          renderItem={({ item, index }) => {
             const low = item.quantity <= item.minimumStock;
+            const newLow = isNewLowStock(item);
+            const newLowCount = list.filter(isNewLowStock).length;
+            const showSectionHeader = tab === "Low Stock" && (
+              (index === 0) ||
+              (index === newLowCount && newLowCount > 0)
+            );
             return (
+              <>
+                {showSectionHeader ? (
+                  <View style={{ marginBottom: spacing.sm, marginTop: index === 0 ? 0 : spacing.md }}>
+                    <Text style={{ fontFamily: fontFamily.bold, fontSize: fontSize.lg, color: colors.onSurface }}>
+                      {index === 0 && newLow ? "New Low Stock — First 15 Days" : "Other Low Stock"}
+                    </Text>
+                    <Text style={{ fontFamily: fontFamily.regular, fontSize: fontSize.sm, color: colors.muted }}>
+                      {index === 0 && newLow ? "Items that reached minimum stock within the last 15 days." : "Items that have been low stock for 15 days or longer."}
+                    </Text>
+                  </View>
+                ) : null}
               <Pressable style={[styles.row, selectedIds.includes(item.id) && styles.selectedRow]} testID={`inventory-row-${item.id}`} onPress={() => selectMode ? toggleInventory(item.id) : openEdit(item)} onLongPress={() => { if(isAdmin){setSelectMode(true);toggleInventory(item.id);}}}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.itemName} numberOfLines={2}>
@@ -372,7 +397,7 @@ export default function Inventory() {
                     {low && (
                       <View style={styles.lowBadge}>
                         <Ionicons name="alert-circle" size={12} color={colors.onWarning} />
-                        <Text style={styles.lowText}>LOW</Text>
+                        <Text style={styles.lowText}>{newLow ? "NEW • 15 DAYS" : "LOW"}</Text>
                       </View>
                     )}
                   </View>
@@ -410,6 +435,8 @@ export default function Inventory() {
                   </Pressable>
                 </View>
               </Pressable>
+              </Pressable>
+              </>
             );
           }}
         />
@@ -492,7 +519,8 @@ export default function Inventory() {
         }
         onSuccess={() => {
           setPinPromptOpen(false);
-          doExport();
+          if (pinExportMode === "new-low") doNewLowExport();
+          else doExport();
         }}
         onCancel={() => setPinPromptOpen(false)}
       />
