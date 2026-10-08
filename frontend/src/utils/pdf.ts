@@ -425,7 +425,7 @@ export async function buildPatientDetailHtml(
 
     pages.push(
       (idx===0 ? header(branding,"Detailed Patient Report — "+patients.length+" record"+(patients.length===1?"":"s")) : "")+
-      (idx===0 ? header(branding,"Detailed Patient Report — "+patients.length+" record"+(patients.length===1?"":"s")) : "")+
+
       "<section class='patientPage'>"+
       "<div class='patientNumber'>Patient "+(idx+1)+" of "+patients.length+"</div>"+
       "<div class='patientName'>"+escapeHtml(p.name||"Unnamed patient")+occurrenceTag+"</div>"+
