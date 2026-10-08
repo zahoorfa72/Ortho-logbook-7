@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { router } from "expo-router";
 import Ionicons from "@react-native-vector-icons/ionicons";
@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { decryptBackup, mergeBackup, restoreBackup, type BackupFilter } from "../src/utils/storage/backup";
 import { pickBackupFile, saveBackupToPhone, shareBackupFile } from "../src/utils/storage/backup-file";
 import { storage } from "@/src/utils/storage";
+import * as SecureStore from "expo-secure-store";
 import { queryClient } from "@/src/query-client";
 import { useAuth } from "@/src/auth/AuthContext";
 import { Segmented } from "@/src/components/Segmented";
@@ -23,11 +24,76 @@ export default function BackupRestoreScreen() {
   const [backupFilter, setBackupFilter] = useState<BackupFilter>({ type: "all" });
   const [filterValue, setFilterValue] = useState("");
   const [mode, setMode] = useState<"Merge (safe)" | "Replace">("Merge (safe)");
+  const [googleClientId, setGoogleClientId] = useState("");
+  const [googleCloudProjectId, setGoogleCloudProjectId] = useState("");
+  const [googleConfigSaved, setGoogleConfigSaved] = useState(false);
   const [selectedBackup, setSelectedBackup] = useState<{
     name: string;
     backupText: string;
     info: { createdAt: string; encrypted: boolean };
   } | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const [clientId, projectId] = await Promise.all([
+          SecureStore.getItemAsync("ortho_google_drive_client_id"),
+          SecureStore.getItemAsync("ortho_google_drive_cloud_project_id"),
+        ]);
+        if (clientId) setGoogleClientId(clientId);
+        if (projectId) setGoogleCloudProjectId(projectId);
+        setGoogleConfigSaved(Boolean(clientId));
+      } catch {
+        // Configuration is optional and should never block local backup/restore.
+      }
+    })();
+  }, []);
+
+  const saveGoogleConfiguration = async () => {
+    const clientId = googleClientId.trim();
+    const projectId = googleCloudProjectId.trim();
+    if (!clientId) {
+      Alert.alert("Client ID required", "Enter the Google OAuth Client ID before saving.");
+      return;
+    }
+    if (!clientId.endsWith(".apps.googleusercontent.com")) {
+      Alert.alert("Invalid Client ID", "Enter a valid Google OAuth Client ID ending with .apps.googleusercontent.com.");
+      return;
+    }
+    try {
+      await SecureStore.setItemAsync("ortho_google_drive_client_id", clientId);
+      if (projectId) {
+        await SecureStore.setItemAsync("ortho_google_drive_cloud_project_id", projectId);
+      } else {
+        await SecureStore.deleteItemAsync("ortho_google_drive_cloud_project_id");
+      }
+      setGoogleConfigSaved(true);
+      Alert.alert("Google configuration saved", "This configuration is stored on this phone and can be changed without rebuilding the APK.");
+    } catch (error) {
+      Alert.alert("Save failed", error instanceof Error ? error.message : "Unable to save Google configuration.");
+    }
+  };
+
+  const resetGoogleConfiguration = async () => {
+    Alert.alert(
+      "Reset Google configuration?",
+      "This only removes the Google Drive configuration from this phone. Your patients, inventory, photos and existing phone backups are not deleted.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Reset",
+          style: "destructive",
+          onPress: async () => {
+            await SecureStore.deleteItemAsync("ortho_google_drive_client_id");
+            await SecureStore.deleteItemAsync("ortho_google_drive_cloud_project_id");
+            setGoogleClientId("");
+            setGoogleCloudProjectId("");
+            setGoogleConfigSaved(false);
+          },
+        },
+      ],
+    );
+  };
 
   const handleSaveToPhone = async () => {
     if (backupPassword.length < 8) {
@@ -171,6 +237,54 @@ export default function BackupRestoreScreen() {
               Data from all phones combines in the admin account.
             </Text>
           </View>
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Google Drive Configuration</Text>
+          <Text style={styles.cardSub}>
+            Enter the Google OAuth Client ID for this phone at runtime. Changing this value does not require a new APK build and does not affect your local Ortho Logbook data.
+          </Text>
+          <TextInput
+            value={googleClientId}
+            onChangeText={(v) => {
+              setGoogleClientId(v);
+              setGoogleConfigSaved(false);
+            }}
+            placeholder="Google OAuth Client ID"
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="email-address"
+            placeholderTextColor={colors.muted}
+            style={styles.input}
+          />
+          <TextInput
+            value={googleCloudProjectId}
+            onChangeText={(v) => {
+              setGoogleCloudProjectId(v);
+              setGoogleConfigSaved(false);
+            }}
+            placeholder="Google Cloud Project ID (optional)"
+            autoCapitalize="none"
+            autoCorrect={false}
+            placeholderTextColor={colors.muted}
+            style={styles.input}
+          />
+          <Text style={styles.hint}>
+            Each phone can store a different configuration. The APK package name and permanent signing certificate remain unchanged.
+          </Text>
+          {googleConfigSaved && (
+            <Text style={styles.savedText}>✓ Google configuration saved on this phone</Text>
+          )}
+          <Pressable style={styles.primaryButton} onPress={saveGoogleConfiguration}>
+            <Ionicons name="save-outline" size={18} color={colors.onBrandPrimary} />
+            <Text style={styles.primaryText}>Save Google Configuration</Text>
+          </Pressable>
+          {googleConfigSaved && (
+            <Pressable style={[styles.secondaryButton, { marginTop: spacing.sm }]} onPress={resetGoogleConfiguration}>
+              <Ionicons name="refresh-outline" size={18} color={colors.onSurface} />
+              <Text style={styles.secondaryText}>Reset Google Configuration</Text>
+            </Pressable>
+          )}
         </View>
 
         <View style={styles.card}>
@@ -454,6 +568,7 @@ const useStyles = makeStyles((colors) => ({
     marginTop: spacing.md,
     marginBottom: spacing.md,
   },
+  savedText: { fontFamily: fontFamily.semibold, fontSize: fontSize.sm, color: colors.success, marginBottom: spacing.md },
   footerHint: { fontFamily: fontFamily.regular, fontSize: fontSize.xs, color: colors.muted, textAlign: "center", marginTop: spacing.md },
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: spacing.sm, padding: spacing.xl },
   blockedTitle: { fontFamily: fontFamily.bold, fontSize: fontSize.lg, color: colors.onSurface, marginTop: spacing.sm },
