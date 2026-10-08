@@ -103,35 +103,61 @@ async function uploadContent(encryptedBackup: string, existingId?: string) {
   temp.create();
   temp.write(encryptedBackup);
 
-  const metadata = JSON.stringify({
-    name: BACKUP_NAME,
-    mimeType: "application/octet-stream",
+  const token = await accessToken();
+  const target = existingId
+    ? `${DRIVE_UPLOAD}/${encodeURIComponent(existingId)}?uploadType=resumable&fields=id,name,modifiedTime,size`
+    : `${DRIVE_UPLOAD}?uploadType=resumable&fields=id,name,modifiedTime,size`;
+
+  const initResponse = await fetch(target, {
+    method: existingId ? "PATCH" : "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json; charset=UTF-8",
+      "X-Upload-Content-Type": "application/octet-stream",
+      "X-Upload-Content-Length": String(temp.size),
+    },
+    body: JSON.stringify({
+      name: BACKUP_NAME,
+      mimeType: "application/octet-stream",
+    }),
   });
 
-  const form = new FormData();
-  form.append("metadata", new Blob([metadata], { type: "application/json" }) as any);
-  form.append("file", { uri: temp.uri, name: BACKUP_NAME, type: "application/octet-stream" } as any);
+  if (!initResponse.ok) {
+    let message = `Google Drive upload could not be started (HTTP ${initResponse.status}).`;
+    try {
+      const body = await initResponse.json();
+      message = body?.error?.message || message;
+    } catch {}
+    try { temp.delete(); } catch {}
+    throw new Error(message);
+  }
 
-  const token = await accessToken();
-  const url = existingId
-    ? `${DRIVE_UPLOAD}/${encodeURIComponent(existingId)}?uploadType=multipart&fields=id,name,modifiedTime,size`
-    : `${DRIVE_UPLOAD}?uploadType=multipart&fields=id,name,modifiedTime,size`;
-  const response = await fetch(url, {
-    method: existingId ? "PATCH" : "POST",
-    headers: { Authorization: `Bearer ${token}` },
-    body: form,
+  const sessionUrl = initResponse.headers.get("Location");
+  if (!sessionUrl) {
+    try { temp.delete(); } catch {}
+    throw new Error("Google Drive did not return an upload session.");
+  }
+
+  const uploadResponse = await fetch(sessionUrl, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/octet-stream",
+      "Content-Length": String(temp.size),
+    },
+    body: temp as any,
   });
 
   try { temp.delete(); } catch {}
-  if (!response.ok) {
-    let message = `Google Drive upload failed (HTTP ${response.status}).`;
+  if (!uploadResponse.ok) {
+    let message = `Google Drive upload failed (HTTP ${uploadResponse.status}).`;
     try {
-      const body = await response.json();
+      const body = await uploadResponse.json();
       message = body?.error?.message || message;
     } catch {}
     throw new Error(message);
   }
-  return response.json();
+  return uploadResponse.json();
 }
 
 export async function backupToGoogleDrive(password: string, filter: BackupFilter = { type: "all" }) {
