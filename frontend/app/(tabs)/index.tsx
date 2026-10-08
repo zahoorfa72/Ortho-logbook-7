@@ -56,6 +56,9 @@ type Patient = {
   fileName: string;
   photos: string[];
   customData?: Record<string,string>;
+  hcvPlus?: boolean;
+  hbaSg?: boolean;
+  hiv?: boolean;
   operationCount?: number;
   totalOperations?: number;
   implants?: { id:string; inventoryId:string; name:string; category:string; size:string; quantity:number }[];
@@ -267,6 +270,12 @@ export default function Logbook() {
     if (await hasAdminPin()) setPinPromptFor("settings");
     else router.push("/settings");
   }, []);
+
+  const infectionResults = (item: Patient) => [
+    ["HCV+", Boolean(item.hcvPlus) || String(item.customData?.hcvPlus || "").toLowerCase() === "true"],
+    ["HbAsg", Boolean(item.hbaSg) || String(item.customData?.hbaSg || "").toLowerCase() === "true"],
+    ["HIV", Boolean(item.hiv) || String(item.customData?.hiv || "").toLowerCase() === "true"],
+  ].filter(([,positive]) => positive).map(([label]) => String(label));
 
   const chip = (label: string, key: string) =>
     label ? (
@@ -512,6 +521,11 @@ export default function Logbook() {
                 {chip(item.diagnosis, "dx")}
                 {chip(item.procedure, "px")}
               </View>
+              {infectionResults(item).length ? (
+                <View style={styles.infectionRow}>
+                  {infectionResults(item).map(label => <Text key={label} style={styles.infectionText}>{label}</Text>)}
+                </View>
+              ) : null}
 
               {((item.implants && item.implants.length) || item.implant || item.implantII) ? (
                 <View style={styles.implantRow}>
@@ -669,6 +683,8 @@ const useStyles = makeStyles((colors) => ({
   chipText: { fontFamily: fontFamily.semibold, fontSize: fontSize.sm, color: colors.onBrandTertiary },
   implantRow: { flexDirection: "row", alignItems: "center", gap: spacing.xs, marginTop: spacing.sm },
   implant: { fontFamily: fontFamily.regular, fontSize: fontSize.sm, color: colors.muted, flex: 1 },
+  infectionRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.md, marginTop: spacing.xs },
+  infectionText: { fontFamily: fontFamily.regular, fontSize: fontSize.xs, color: colors.muted },
   fab: {
     position: "absolute",
     right: spacing.lg,
