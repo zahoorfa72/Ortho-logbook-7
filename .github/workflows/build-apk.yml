@@ -143,24 +143,62 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x frontend/android/gradlew
 
-      # Ensure the release build type in the generated app/build.gradle is
-      # signed with the debug keystore so the APK is installable without
-      # any user-provided secrets. Expo prebuild already sets
-      # `signingConfig signingConfigs.debug` in the release block, but we
-      # verify + patch defensively in case a future template changes.
-      - name: Ensure release build is signed with debug keystore
+      # Use the permanent release keystore when the four GitHub secrets are
+      # configured. Until then, fail clearly instead of silently changing the
+      # signing certificate between builds.
+      - name: Configure permanent release signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
+          : "${ANDROID_KEYSTORE_BASE64:?Missing GitHub secret ANDROID_KEYSTORE_BASE64}"
+          : "${ANDROID_KEYSTORE_PASSWORD:?Missing GitHub secret ANDROID_KEYSTORE_PASSWORD}"
+          : "${ANDROID_KEY_ALIAS:?Missing GitHub secret ANDROID_KEY_ALIAS}"
+          : "${ANDROID_KEY_PASSWORD:?Missing GitHub secret ANDROID_KEY_PASSWORD}"
+
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > frontend/android/ortho-logbook-release.jks
+          test -s frontend/android/ortho-logbook-release.jks
+
+          KEYSTORE="$GITHUB_WORKSPACE/frontend/android/ortho-logbook-release.jks"
+          echo "----- Permanent signing certificate -----"
+          keytool -list -v -keystore "$KEYSTORE" -storepass "$ANDROID_KEYSTORE_PASSWORD"             | grep -E 'Alias name:|SHA1:|SHA256:'
+
           GRADLE_FILE=frontend/android/app/build.gradle
-          if ! grep -qE 'release\s*\{[^}]*signingConfig[^}]*signingConfigs\.debug' "$GRADLE_FILE"; then
-            echo "Patching release signingConfig -> signingConfigs.debug"
-            # Insert `signingConfig signingConfigs.debug` right after `release {`
-            sed -i '/buildTypes\s*{/,/^\s*}/ {
-              /release\s*{/a\        signingConfig signingConfigs.debug
-            }' "$GRADLE_FILE"
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("frontend/android/app/build.gradle")
+          s = p.read_text()
+          marker = "signingConfigs {"
+          if marker in s and "orthoLogbookRelease" not in s:
+              s = s.replace(
+                  marker,
+                  """signingConfigs {
+                  orthoLogbookRelease {
+                      storeFile file("ortho-logbook-release.jks")
+                      storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                      keyAlias System.getenv("ANDROID_KEY_ALIAS")
+                      keyPassword System.getenv("ANDROID_KEY_PASSWORD")
+                  }""",
+                  1
+              )
+          s = s.replace("signingConfig signingConfigs.debug", "signingConfig signingConfigs.orthoLogbookRelease")
+          p.write_text(s)
+          PY
+
+          if ! grep -q "signingConfig signingConfigs.orthoLogbookRelease" "$GRADLE_FILE"; then
+            echo "::error::Permanent release signing was not configured."
+            exit 1
           fi
-          echo "----- release block -----"
+
+          echo "----- release signing -----"
           awk '/buildTypes\s*{/,/^}/' "$GRADLE_FILE" | sed -n '1,40p'
+
+      - name: Remove signing material after Gradle build inputs are prepared
+        if: always()
+        run: rm -f frontend/android/ortho-logbook-release.jks
 
       - name: Build release APK (JS bundle embedded, standalone offline)
         working-directory: frontend/android
