@@ -1,5 +1,4 @@
 import { GoogleSignin, statusCodes } from "@react-native-google-signin/google-signin";
-import { File, Paths } from "expo-file-system";
 import * as Crypto from "expo-crypto";
 import { exportUnencryptedBackup, type BackupFilter } from "@/src/utils/storage/backup";
 import { markBackupTaken } from "@/src/utils/backup-reminder";
@@ -118,11 +117,6 @@ async function findLatestBackup() {
 }
 
 async function uploadContent(backupText: string, existingId?: string) {
-  const temp = new File(Paths.cache, "ortho-logbook-drive-upload.orbackup");
-  if (temp.exists) temp.delete();
-  temp.create();
-  temp.write(backupText);
-
   const token = await accessToken();
   const target = existingId
     ? `${DRIVE_UPLOAD}/${encodeURIComponent(existingId)}?uploadType=resumable&fields=id,name,modifiedTime,size`
@@ -134,7 +128,6 @@ async function uploadContent(backupText: string, existingId?: string) {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json; charset=UTF-8",
       "X-Upload-Content-Type": "application/octet-stream",
-      "X-Upload-Content-Length": String(temp.size),
     },
     body: JSON.stringify({
       name: BACKUP_NAME,
@@ -148,7 +141,6 @@ async function uploadContent(backupText: string, existingId?: string) {
       const body = await initResponse.json();
       message = body?.error?.message || message;
     } catch {}
-    try { temp.delete(); } catch {}
     throw new Error(message);
   }
 
@@ -163,9 +155,8 @@ async function uploadContent(backupText: string, existingId?: string) {
     headers: {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/octet-stream",
-      "Content-Length": String(temp.size),
     },
-    body: temp as any,
+    body: backupText,
   });
 
   try { temp.delete(); } catch {}
