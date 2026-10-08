@@ -58,7 +58,8 @@
           "photosPermission": "Allow Ortho Logbook to access patient photos.",
           "savePhotosPermission": "Allow Ortho Logbook to save patient photos to this device."
         }
-      ]
+      ],
+      "@react-native-google-signin/google-signin"
     ],
     "experiments": {
       "typedRoutes": true
