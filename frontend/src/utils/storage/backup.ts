@@ -142,16 +142,41 @@ export async function exportBackup(password:string, filter: BackupFilter = { typ
  return JSON.stringify({version:BACKUP_VERSION,app:BACKUP_APP,encrypted:true,algorithm:"XSalsa20-Poly1305",kdf:"SHA-256",createdAt:backup.createdAt,salt:bytesToHex(salt),nonce:bytesToHex(nonce),ciphertext:bytesToHex(ciphertext)} satisfies EncryptedBackup);
 }
 
-function parseHeader(text:string):EncryptedBackup{
+// Google Drive uses a plain JSON snapshot so automatic backup does not depend on a password.
+// Phone/file backups continue using exportBackup() and remain encrypted.
+export async function exportUnencryptedBackup(filter: BackupFilter = { type: "all" }): Promise<string> {
+ const backup = await createBackupData(filter);
+ backup.filter = filter;
+ return JSON.stringify(backup);
+}
+
+function parseHeader(text:string):any{
  let b:any;try{b=JSON.parse(text);}catch{throw new Error("The selected backup file is not valid.");}
- if(!b||![2,3,4,5,6,7].includes(b.version)||b.app!==BACKUP_APP||b.encrypted!==true||b.algorithm!=="XSalsa20-Poly1305"||b.kdf!=="SHA-256")throw new Error("Invalid or unsupported Ortho Logbook backup.");
- if(!b.createdAt||!b.salt||!b.nonce||!b.ciphertext)throw new Error("The backup file is incomplete or damaged.");
+ if(!b||![2,3,4,5,6,7].includes(b.version)||b.app!==BACKUP_APP)throw new Error("Invalid or unsupported Ortho Logbook backup.");
+ if(b.encrypted===true){
+  if(b.algorithm!=="XSalsa20-Poly1305"||b.kdf!=="SHA-256"||!b.createdAt||!b.salt||!b.nonce||!b.ciphertext)throw new Error("The backup file is incomplete or damaged.");
+ } else if(!Array.isArray(b.patients)||!Array.isArray(b.inventory)||!Array.isArray(b.users)){
+  throw new Error("The unencrypted backup is incomplete or damaged.");
+ }
  return b;
 }
-export function getBackupInfo(text:string){const b=parseHeader(text);return {createdAt:b.createdAt,encrypted:true,version:b.version,includesPhotos:b.version>=3};}
+export function getBackupInfo(text:string){const b=parseHeader(text);return {createdAt:b.createdAt||new Date().toISOString(),encrypted:b.encrypted===true,version:b.version,includesPhotos:b.version>=3};}
 
 export async function decryptBackup(text:string,password:string):Promise<BackupData>{
  const b=parseHeader(text);
+ if(b.encrypted!==true){
+  const data=b as BackupData;
+  for(const keyName of ["patients","procedures","inventory","expenses","users","patientHistory","inventoryMovements"]){
+   if(!Array.isArray((data as any)[keyName]))throw new Error("The backup is incomplete or damaged.");
+  }
+  data.inventoryCategories=Array.isArray((data as any).inventoryCategories)?data.inventoryCategories:[];
+  data.patientImplants=Array.isArray((data as any).patientImplants)?data.patientImplants:[];
+  data.stockReceipts=Array.isArray((data as any).stockReceipts)?data.stockReceipts:[];
+  data.inventoryPurchaseReceipts=Array.isArray((data as any).inventoryPurchaseReceipts)?data.inventoryPurchaseReceipts:[];
+  data.patientCustomFields=Array.isArray((data as any).patientCustomFields)?data.patientCustomFields:[];
+  data.implantRecords=Array.isArray((data as any).implantRecords)?data.implantRecords:[];
+  return data;
+ }
  try{
   const key=await deriveKey(password,hexToBytes(b.salt));
   const plain=nacl.secretbox.open(hexToBytes(b.ciphertext),hexToBytes(b.nonce),key);
