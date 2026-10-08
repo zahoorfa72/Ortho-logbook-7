@@ -209,8 +209,8 @@ export default function BackupRestoreScreen() {
 
   const runRestore = async () => {
     if (!selectedBackup) return;
-    if (restorePassword.length < 8) {
-      Alert.alert("Password required", "Enter the password used when this backup was created.");
+    if (selectedBackup.info.encrypted && restorePassword.length < 8) {
+      Alert.alert("Password required", "Enter the password used when this encrypted backup was created.");
       return;
     }
 
