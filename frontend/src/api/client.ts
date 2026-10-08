@@ -31,6 +31,9 @@ export type Patient = {
   operationCount?: number; // Nth-time operated (1 = first, 2 = 2nd time, ...)
   totalOperations?: number; // total ops on this same identity
   customData?: Record<string, string>;
+  hcvPlus?: boolean;
+  hbaSg?: boolean;
+  hiv?: boolean;
 };
 
 function parsePhotos(raw: any, legacyUri: string | null | undefined): string[] {
@@ -64,6 +67,9 @@ const fromPatient = (r: any): Patient => {
     date: safeText(r.date), createdAt: safeText(r.created_at), createdBy: safeText(r.created_by),
     updatedAt: safeText(r.updated_at), updatedBy: safeText(r.updated_by),
     customData,
+    hcvPlus: String(customData.hcvPlus || "").toLowerCase() === "true",
+    hbaSg: String(customData.hbaSg || "").toLowerCase() === "true",
+    hiv: String(customData.hiv || "").toLowerCase() === "true",
   };
 };
 
