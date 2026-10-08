@@ -353,7 +353,7 @@ export default function BackupRestoreScreen() {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Google Drive Backup</Text>
           <Text style={styles.cardSub}>
-            Connect a Google account on this phone. Each phone can use a different Google account. Google Drive backup is unencrypted; phone/file backups remain encrypted.
+            Connect a Google account on this phone. Backup and restore run directly through Google Drive. Drive backups are unencrypted; phone/file backups remain encrypted.
           </Text>
           {googleAccount ? (
             <>
@@ -379,7 +379,7 @@ export default function BackupRestoreScreen() {
                 disabled={driveLoading}
               >
                 <Ionicons name="cloud-download-outline" size={18} color={colors.onSurface} />
-                <Text style={styles.secondaryText}>Download Latest Backup</Text>
+                <Text style={styles.secondaryText}>Restore Latest from Google Drive</Text>
               </Pressable>
               <Pressable
                 style={[styles.secondaryButton, driveLoading && styles.disabledButton, { marginTop: spacing.sm }]}
