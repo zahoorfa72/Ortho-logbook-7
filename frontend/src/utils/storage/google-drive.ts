@@ -1,10 +1,12 @@
 import { GoogleSignin, statusCodes } from "@react-native-google-signin/google-signin";
 import { File, Paths } from "expo-file-system";
+import * as Crypto from "expo-crypto";
 import { exportUnencryptedBackup, type BackupFilter } from "@/src/utils/storage/backup";
 import { markBackupTaken } from "@/src/utils/backup-reminder";
 import { storage } from "@/src/utils/storage";
 
 const LAST_DRIVE_BACKUP_KEY = "ortho_drive_last_successful_backup";
+const LAST_DRIVE_CONTENT_HASH_KEY = "ortho_drive_last_uploaded_content_hash";
 export async function getLastDriveBackupStatus(): Promise<string | null> {
   return (await storage.secureGet(LAST_DRIVE_BACKUP_KEY, "")) || null;
 }
@@ -170,16 +172,35 @@ async function uploadContent(backupText: string, existingId?: string) {
   return uploadResponse.json();
 }
 
-export async function backupToGoogleDrive(_password?: string, filter: BackupFilter = { type: "all" }) {
+async function backupContentHash(backupText: string) {
+  const parsed = JSON.parse(backupText);
+  // Ignore the generated timestamp so unchanged records do not upload again.
+  delete parsed.createdAt;
+  return Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, JSON.stringify(parsed));
+}
+
+export async function backupToGoogleDrive(
+  _password?: string,
+  filter: BackupFilter = { type: "all" },
+  options: { skipIfUnchanged?: boolean } = {},
+) {
   // Google Drive backup is intentionally plain JSON at the user's request.
   // Local phone/file backups remain encrypted by exportBackup().
   const backupText = await exportUnencryptedBackup(filter);
+  const contentHash = await backupContentHash(backupText);
+  const previousHash = await storage.secureGet(LAST_DRIVE_CONTENT_HASH_KEY, "");
+  if (options.skipIfUnchanged && previousHash === contentHash) {
+    const completedAt = await getLastDriveBackupStatus();
+    return { skipped: true, completedAt, accountEmail: getConnectedGoogleAccount(), name: BACKUP_NAME };
+  }
+
   const existing = await findLatestBackup();
   const result = await uploadContent(backupText, existing?.id);
   await markBackupTaken();
   const completedAt = new Date().toISOString();
   await storage.secureSet(LAST_DRIVE_BACKUP_KEY, completedAt);
-  return { ...result, completedAt, accountEmail: getConnectedGoogleAccount() };
+  await storage.secureSet(LAST_DRIVE_CONTENT_HASH_KEY, contentHash);
+  return { ...result, skipped: false, completedAt, accountEmail: getConnectedGoogleAccount() };
 }
 
 export async function restoreLatestFromGoogleDrive() {
