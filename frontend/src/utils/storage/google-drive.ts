@@ -11,7 +11,8 @@ export async function getLastDriveBackupStatus(): Promise<string | null> {
   return (await storage.secureGet(LAST_DRIVE_BACKUP_KEY, "")) || null;
 }
 
-export const GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
+// Full Drive access is needed to discover backups created by earlier app builds or under a different file authorization.
+export const GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive";
 const BACKUP_NAME = "Ortho Logbook Backup.orbackup";
 const DRIVE_API = "https://www.googleapis.com/drive/v3/files";
 const DRIVE_UPLOAD = "https://www.googleapis.com/upload/drive/v3/files";
@@ -33,7 +34,6 @@ export async function connectGoogleAccount() {
     try { await GoogleSignin.signOut(); } catch {}
     const result = await GoogleSignin.signIn();
     if (!result || result.type === "cancelled") throw new Error("Google account selection was cancelled.");
-    await GoogleSignin.addScopes({ scopes: [GOOGLE_DRIVE_SCOPE] });
     const current = GoogleSignin.getCurrentUser();
     if (!current?.user?.email) throw new Error("Google account was not returned.");
     return current.user.email;
@@ -65,8 +65,6 @@ async function accessToken() {
     await connectGoogleAccount();
   }
   try {
-    const granted = await GoogleSignin.addScopes({ scopes: [GOOGLE_DRIVE_SCOPE] });
-    if (!granted) throw new Error("Google Drive permission was not granted.");
     const tokens = await GoogleSignin.getTokens();
     if (!tokens.accessToken) throw new Error("Google did not return a Drive access token.");
     return tokens.accessToken;
@@ -103,10 +101,14 @@ async function driveRequest(url: string, init: RequestInit = {}) {
 }
 
 async function findLatestBackup() {
-  const q = encodeURIComponent(`name = '${BACKUP_NAME.replace(/'/g, "\\'")}' and trashed = false`);
-  const response = await driveRequest(`${DRIVE_API}?q=${q}&pageSize=10&orderBy=modifiedTime%20desc&fields=files(id,name,modifiedTime,size)`);
+  // Search Drive itself, including backups created by older app authorizations.
+  const q = encodeURIComponent("name contains 'Ortho Logbook Backup' and trashed = false");
+  const response = await driveRequest(
+    `${DRIVE_API}?q=${q}&spaces=drive&pageSize=100&orderBy=modifiedTime%20desc&includeItemsFromAllDrives=true&supportsAllDrives=true&fields=files(id,name,modifiedTime,size,mimeType)`,
+  );
   const data = await response.json();
-  return data.files?.[0] || null;
+  const files = Array.isArray(data.files) ? data.files : [];
+  return files.find((file: any) => String(file.name || "").toLowerCase().includes("ortho logbook backup")) || null;
 }
 
 async function uploadContent(backupText: string, existingId?: string) {
