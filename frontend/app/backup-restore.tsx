@@ -4,7 +4,7 @@ import { router } from "expo-router";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { decryptBackup, mergeBackup, restoreBackup, type BackupFilter } from "../src/utils/storage/backup";
+import { decryptBackup, getBackupInfo, mergeBackup, restoreBackup, type BackupFilter } from "../src/utils/storage/backup";
 import { pickBackupFile, saveBackupToPhone, shareBackupFile } from "../src/utils/storage/backup-file";
 import { storage } from "@/src/utils/storage";
 import * as SecureStore from "expo-secure-store";
@@ -12,6 +12,7 @@ import { queryClient } from "@/src/query-client";
 import { useAuth } from "@/src/auth/AuthContext";
 import { Segmented } from "@/src/components/Segmented";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
+import { backupToGoogleDrive, connectGoogleAccount, disconnectGoogleAccount, getConnectedGoogleAccount, restoreLatestFromGoogleDrive } from "@/src/utils/storage/google-drive";
 
 export default function BackupRestoreScreen() {
   const { user } = useAuth();
@@ -27,6 +28,8 @@ export default function BackupRestoreScreen() {
   const [googleClientId, setGoogleClientId] = useState("");
   const [googleCloudProjectId, setGoogleCloudProjectId] = useState("");
   const [googleConfigSaved, setGoogleConfigSaved] = useState(false);
+  const [googleAccount, setGoogleAccount] = useState<string | null>(null);
+  const [driveLoading, setDriveLoading] = useState(false);
   const [selectedBackup, setSelectedBackup] = useState<{
     name: string;
     backupText: string;
@@ -43,6 +46,7 @@ export default function BackupRestoreScreen() {
         if (clientId) setGoogleClientId(clientId);
         if (projectId) setGoogleCloudProjectId(projectId);
         setGoogleConfigSaved(Boolean(clientId));
+        setGoogleAccount(getConnectedGoogleAccount());
       } catch {
         // Configuration is optional and should never block local backup/restore.
       }
@@ -93,6 +97,67 @@ export default function BackupRestoreScreen() {
         },
       ],
     );
+  };
+
+  const handleConnectGoogle = async () => {
+    try {
+      setDriveLoading(true);
+      const email = await connectGoogleAccount();
+      setGoogleAccount(email);
+      Alert.alert("Google account connected", `${email} can now be used for Ortho Logbook Drive backup on this phone.`);
+    } catch (error) {
+      Alert.alert("Google connection failed", error instanceof Error ? error.message : "Unable to connect Google.");
+    } finally {
+      setDriveLoading(false);
+    }
+  };
+
+  const handleDisconnectGoogle = async () => {
+    try {
+      setDriveLoading(true);
+      await disconnectGoogleAccount();
+      setGoogleAccount(null);
+      Alert.alert("Google account disconnected", "This only signs Ortho Logbook out of Google on this phone. Your Drive backup and local app data are not deleted.");
+    } catch (error) {
+      Alert.alert("Disconnect failed", error instanceof Error ? error.message : "Unable to disconnect Google.");
+    } finally {
+      setDriveLoading(false);
+    }
+  };
+
+  const handleDriveBackup = async () => {
+    if (!googleAccount) {
+      await handleConnectGoogle();
+      return;
+    }
+    if (backupPassword.length < 8) {
+      Alert.alert("Password required", "Enter the backup password first. The same password is required to restore on another phone.");
+      return;
+    }
+    try {
+      setDriveLoading(true);
+      await backupToGoogleDrive(backupPassword, backupFilter);
+      Alert.alert("Google Drive backup complete", `Latest encrypted backup was saved to ${googleAccount}'s Google Drive.`);
+    } catch (error) {
+      Alert.alert("Drive backup failed", error instanceof Error ? error.message : "Unable to back up to Google Drive.");
+    } finally {
+      setDriveLoading(false);
+    }
+  };
+
+  const handleDriveRestore = async () => {
+    try {
+      setDriveLoading(true);
+      const result = await restoreLatestFromGoogleDrive();
+      const info = getBackupInfo(result.backupText);
+      setSelectedBackup({ name: result.name, backupText: result.backupText, info });
+      setRestorePassword("");
+      Alert.alert("Backup found", `Latest backup from ${new Date(result.modifiedTime).toLocaleString()} is ready. Choose Merge or Replace below.`);
+    } catch (error) {
+      Alert.alert("Drive restore failed", error instanceof Error ? error.message : "Unable to download the latest Google Drive backup.");
+    } finally {
+      setDriveLoading(false);
+    }
   };
 
   const handleSaveToPhone = async () => {
@@ -285,6 +350,65 @@ export default function BackupRestoreScreen() {
               <Text style={styles.secondaryText}>Reset Google Configuration</Text>
             </Pressable>
           )}
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Google Drive Backup</Text>
+          <Text style={styles.cardSub}>
+            Connect a Google account on this phone. Each phone can use a different Google account. The backup is encrypted before it is uploaded.
+          </Text>
+          {googleAccount ? (
+            <>
+              <View style={styles.selectedBox}>
+                <Text style={styles.selectedTitle}>Connected Google account</Text>
+                <Text style={styles.fileName}>{googleAccount}</Text>
+              </View>
+              <Pressable
+                style={[styles.primaryButton, driveLoading && styles.disabledButton, { marginTop: spacing.sm }]}
+                onPress={handleDriveBackup}
+                disabled={driveLoading}
+              >
+                {driveLoading ? <ActivityIndicator color={colors.onBrandPrimary} /> : (
+                  <>
+                    <Ionicons name="cloud-upload-outline" size={18} color={colors.onBrandPrimary} />
+                    <Text style={styles.primaryText}>Backup to Google Drive</Text>
+                  </>
+                )}
+              </Pressable>
+              <Pressable
+                style={[styles.secondaryButton, driveLoading && styles.disabledButton, { marginTop: spacing.sm }]}
+                onPress={handleDriveRestore}
+                disabled={driveLoading}
+              >
+                <Ionicons name="cloud-download-outline" size={18} color={colors.onSurface} />
+                <Text style={styles.secondaryText}>Download Latest Backup</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.secondaryButton, driveLoading && styles.disabledButton, { marginTop: spacing.sm }]}
+                onPress={handleDisconnectGoogle}
+                disabled={driveLoading}
+              >
+                <Ionicons name="log-out-outline" size={18} color={colors.onSurface} />
+                <Text style={styles.secondaryText}>Change Google Account</Text>
+              </Pressable>
+            </>
+          ) : (
+            <Pressable
+              style={[styles.primaryButton, driveLoading && styles.disabledButton]}
+              onPress={handleConnectGoogle}
+              disabled={driveLoading}
+            >
+              {driveLoading ? <ActivityIndicator color={colors.onBrandPrimary} /> : (
+                <>
+                  <Ionicons name="logo-google" size={18} color={colors.onBrandPrimary} />
+                  <Text style={styles.primaryText}>Choose Google Account</Text>
+                </>
+              )}
+            </Pressable>
+          )}
+          <Text style={[styles.hint, { marginTop: spacing.md, marginBottom: 0 }]}>
+            The Android OAuth client is tied to this app's package/signing certificate; the Google account selected here determines whose Drive is used.
+          </Text>
         </View>
 
         <View style={styles.card}>
