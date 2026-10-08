@@ -76,10 +76,14 @@ async function accessToken() {
 
 async function driveRequest(url: string, init: RequestInit = {}) {
   const token = await accessToken();
+  const extraHeaders = init.headers && typeof init.headers === "object" && !Array.isArray(init.headers)
+    ? Object.entries(init.headers as Record<string, unknown>)
+        .filter((entry): entry is [string, string] => typeof entry[1] === "string")
+    : [];
   const response = await expoFetch(url, {
     ...init,
-    headers: { Authorization: `Bearer ${token}`, ...(init.headers || {}) },
-  });
+    headers: [["Authorization", `Bearer ${token}`], ...extraHeaders],
+  } as any);
   if (!response.ok) {
     let message = `Google Drive request failed (HTTP ${response.status}).`;
     try {
@@ -98,11 +102,11 @@ async function findLatestBackup() {
   return data.files?.[0] || null;
 }
 
-async function uploadContent(encryptedBackup: string, existingId?: string) {
+async function uploadContent(backupText: string, existingId?: string) {
   const temp = new File(Paths.cache, "ortho-logbook-drive-upload.orbackup");
   if (temp.exists) temp.delete();
   temp.create();
-  temp.write(encryptedBackup);
+  temp.write(backupText);
 
   const token = await accessToken();
   const target = existingId
@@ -111,12 +115,12 @@ async function uploadContent(encryptedBackup: string, existingId?: string) {
 
   const initResponse = await expoFetch(target, {
     method: existingId ? "PATCH" : "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json; charset=UTF-8",
-      "X-Upload-Content-Type": "application/octet-stream",
-      "X-Upload-Content-Length": String(temp.size),
-    },
+    headers: [
+      ["Authorization", `Bearer ${token}`],
+      ["Content-Type", "application/json; charset=UTF-8"],
+      ["X-Upload-Content-Type", "application/octet-stream"],
+      ["X-Upload-Content-Length", String(temp.size)],
+    ],
     body: JSON.stringify({
       name: BACKUP_NAME,
       mimeType: "application/octet-stream",
@@ -141,11 +145,11 @@ async function uploadContent(encryptedBackup: string, existingId?: string) {
 
   const uploadResponse = await expoFetch(sessionUrl, {
     method: "PUT",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/octet-stream",
-      "Content-Length": String(temp.size),
-    },
+    headers: [
+      ["Authorization", `Bearer ${token}`],
+      ["Content-Type", "application/octet-stream"],
+      ["Content-Length", String(temp.size)],
+    ],
     body: temp as any,
   });
 
