@@ -13,6 +13,7 @@ import { useAuth } from "@/src/auth/AuthContext";
 import { Segmented } from "@/src/components/Segmented";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 import { backupToGoogleDrive, connectGoogleAccount, disconnectGoogleAccount, getConnectedGoogleAccount, restoreLatestFromGoogleDrive } from "@/src/utils/storage/google-drive";
+import { triggerAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-backup";
 
 export default function BackupRestoreScreen() {
   const { user } = useAuth();
@@ -104,7 +105,8 @@ export default function BackupRestoreScreen() {
       setDriveLoading(true);
       const email = await connectGoogleAccount();
       setGoogleAccount(email);
-      Alert.alert("Google account connected", `${email} can now be used for Ortho Logbook Drive backup on this phone.`);
+      triggerAutomaticDriveBackup();
+      Alert.alert("Google account connected", "Google account connected. Automatic backup will start shortly.");
     } catch (error) {
       Alert.alert("Google connection failed", error instanceof Error ? error.message : "Unable to connect Google.");
     } finally {
@@ -130,14 +132,10 @@ export default function BackupRestoreScreen() {
       await handleConnectGoogle();
       return;
     }
-    if (backupPassword.length < 8) {
-      Alert.alert("Password required", "Enter the backup password first. The same password is required to restore on another phone.");
-      return;
-    }
     try {
       setDriveLoading(true);
-      await backupToGoogleDrive(backupPassword, backupFilter);
-      Alert.alert("Google Drive backup complete", `Latest encrypted backup was saved to ${googleAccount}'s Google Drive.`);
+      await backupToGoogleDrive(undefined, backupFilter);
+      Alert.alert("Google Drive backup complete", `Latest unencrypted backup was saved to ${googleAccount}'s Google Drive.`);
     } catch (error) {
       Alert.alert("Drive backup failed", error instanceof Error ? error.message : "Unable to back up to Google Drive.");
     } finally {
