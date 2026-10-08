@@ -929,6 +929,7 @@ export const api = {
           [oldInventory.id,rid],
         )?.n||0);
         db.runSync("UPDATE inventory SET minimum_stock=? WHERE id=?",[oldMin,oldInventory.id]);
+        syncLowStockState(oldInventory.id, oldNext, oldMin);
 
         let target=db.getFirstSync<any>(
           "SELECT * FROM inventory WHERE category_id=? AND LOWER(COALESCE(size,''))=LOWER(?) LIMIT 1",
@@ -942,12 +943,14 @@ export const api = {
             "UPDATE inventory SET name=?,category=?,quantity=?,unit=?,minimum_stock=? WHERE id=?",
             [categoryName,categoryName,targetNext,String(existing.unit||target.unit||"pcs"),minimumStock,target.id],
           );
+          syncLowStockState(target.id, targetNext, minimumStock);
         }else{
           const targetId=id();
           db.runSync(
-            "INSERT INTO inventory (id,name,quantity,unit,minimum_stock,category_id,category,size,added_date,bill_image) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            [targetId,categoryName,quantity,String(existing.unit||"pcs"),minimumStock,categoryId||null,categoryName,size,addedDate,billImage],
+            "INSERT INTO inventory (id,name,quantity,unit,minimum_stock,category_id,category,size,added_date,bill_image,low_stock_triggered_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            [targetId,categoryName,quantity,String(existing.unit||"pcs"),minimumStock,categoryId||null,categoryName,size,addedDate,billImage,null],
           );
+syncLowStockState(targetId, quantity, minimumStock);
           target=db.getFirstSync<any>("SELECT * FROM inventory WHERE id=? LIMIT 1",[targetId]);
         }
 
