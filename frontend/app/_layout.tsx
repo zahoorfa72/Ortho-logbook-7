@@ -15,6 +15,7 @@ import { queryClient } from "@/src/query-client";
 import { initializeDatabase, repairDatabaseData } from "@/src/db/database";
 import { ThemeProvider } from "@/src/theme";
 import { startAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-backup";
+import { DriveSyncIndicator } from "@/src/utils/storage/drive-sync-status";
 
 LogBox.ignoreAllLogs(true);
 
@@ -81,6 +82,7 @@ export default function RootLayout() {
                 <AuthProvider>
                   <ToastProvider>
                     <StatusBar style="dark" />
+                    <DriveSyncIndicator />
 
                   <Stack screenOptions={{ headerShown: false }}>
                     <Stack.Screen name="index" />
