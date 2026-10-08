@@ -264,7 +264,8 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
     });
     if(!rows) rows='<tr><td colspan="'+(mainFields.length+1)+'"><div class="empty">No patients recorded.</div></td></tr>';
     const heads=mainFields.map(k=>"<th>"+escapeHtml(labels[k]||k)+"</th>").join("");
-    pageTables.push('<section class="listPage"><table><thead><tr><th class="indexHead">#</th>'+heads+'</tr></thead><tbody>'+rows+'</tbody></table></section>');
+    const pageHeader = start === 0 ? header(branding,'Patient List — '+patients.length+' record'+(patients.length===1?'':'s')+(fromDate||toDate?' — '+(fromDate||'Start')+' to '+(toDate||'End'):'')) : "";
+    pageTables.push('<section class="listPage">'+pageHeader+'<table><thead><tr><th class="indexHead">#</th>'+heads+'</tr></thead><tbody>'+rows+'</tbody></table></section>');
   }
   const pageScale = pageSize >= 30 ? 0.70 : pageSize >= 25 ? 0.78 : pageSize >= 20 ? 0.86 : pageSize >= 15 ? 0.94 : 1;
   const mainSize = (branding.pdfMainEntryTextSize==="small" ? 7.2 : branding.pdfMainEntryTextSize==="large" ? 9.4 : 8.2) * pageScale;
@@ -280,7 +281,7 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
   return '<html><head><meta charset="utf-8"/>'+styles(branding)+'<style>'+
     '.header{page-break-inside:avoid;break-inside:avoid;page-break-after:avoid;break-after:avoid}.titleBlock,.logoSide{page-break-inside:avoid;break-inside:avoid}table{page-break-inside:auto;break-inside:auto;font-size:'+mainSize+'px;table-layout:fixed;width:100%;border-collapse:collapse}.listPage{display:block;min-height:257mm;height:257mm;overflow:hidden;page-break-before:always;break-before:page;page-break-after:always;break-after:page;page-break-inside:avoid;break-inside:avoid}.listPage:first-of-type{page-break-before:auto;break-before:auto}.listPage:last-child{page-break-after:auto;break-after:auto}th,td{padding:1.8px 3px;line-height:1.02;vertical-align:middle}td{color:'+mainTone+';font-weight:'+mainWeight+'}.indexHead,.indexCell{width:22px;text-align:center}.headingText{display:block}.headingLevel1,.headingLevel2,.headingLevel3,.headingLevel4{font-size:'+headingSize+'em;font-weight:'+headingWeight+';color:'+headingTone+'}.pdfHeadingLine{margin-top:2px;padding:0;color:'+headingTone+';font-weight:'+headingWeight+';font-size:'+headingSize+'em;line-height:1.05}.pdfSubHeadingLine{margin-top:1px;padding:0;color:'+subHeadingTone+';font-weight:'+subHeadingWeight+';font-size:'+subHeadingSize+'em;line-height:1.02}.pdfHeadingLine b,.pdfSubHeadingLine b{color:inherit;font-weight:inherit}.pdfSubHeadingLine{margin-left:0}.infectionLine{color:#7C7872;font-size:.82em;line-height:1.02;margin-top:1px;font-weight:400}.occurrence{display:inline-block;font-size:.76em;font-weight:700;margin-left:5px;white-space:nowrap;padding:2px 7px;border-radius:999px;line-height:1.2}.occurrence-2{background:#B8860B;color:#fff}.occurrence-3{background:#3F6B8A;color:#fff}.occurrence-4{background:#6B4C8A;color:#fff}.occurrence-5{background:#2F7D5B;color:#fff}.occurrence-6{background:#A64B2A;color:#fff}.occurrence-7{background:#8A5A2B;color:#fff}.occurrence-8{background:#4C566A;color:#fff}.occurrence-9{background:#9A3E5E;color:#fff}.occurrence-10{background:#356B73;color:#fff}.badge{font-size:.78em;margin-left:3px;white-space:nowrap}tbody tr{page-break-inside:avoid}'+
     '</style></head><body>'+
-    header(branding,'Patient List — '+patients.length+' record'+(patients.length===1?'':'s')+(fromDate||toDate?' — '+(fromDate||'Start')+' to '+(toDate||'End'):''))+
+    
     pageTables.join("")+footer(branding)+'</body></html>';
 }
 
