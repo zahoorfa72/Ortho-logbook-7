@@ -745,7 +745,8 @@ export const api = {
             movement(existing.id,"purchase",quantity,next,"Stock received",uid);
           } else {
             inventoryId=id();
-            db.runSync("INSERT INTO inventory (id,name,quantity,unit,minimum_stock,category_id,category,size,added_date,bill_image) VALUES (?,?,?,?,?,?,?,?,?,?)",[inventoryId,categoryName,quantity,unit,minimumStock,categoryId,categoryName,size,addedDate,billImage]);
+            db.runSync("INSERT INTO inventory (id,name,quantity,unit,minimum_stock,category_id,category,size,added_date,bill_image,low_stock_triggered_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",[inventoryId,categoryName,quantity,unit,minimumStock,categoryId,categoryName,size,addedDate,billImage,null]);
+            syncLowStockState(inventoryId, quantity, minimumStock);
             movement(inventoryId,"purchase",quantity,quantity,"Stock received",uid);
           }
           db.runSync("INSERT INTO stock_receipts (id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,description,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
