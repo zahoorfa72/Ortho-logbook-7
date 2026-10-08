@@ -63,7 +63,7 @@ export default function BrandingScreen() {
   const [pdfMarginText, setPdfMarginText] = useState(String(branding.pdfMargin));
   const { data: customFields = [] } = useQuery<any[]>({ queryKey: ["patient-custom-fields"], queryFn: () => api.get("/patient-custom-fields"), enabled: user?.role === "admin" });
   const patientPdfOptions = (() => {
-    const base: [string,string][] = [["date","Date"],["mrNo","MR No"],["name","Patient Name"],["gender","Gender"],["age","Age"],["address","Address"],["diagnosis","Diagnosis"],["procedure","Procedure"],["implants","Implants"],["fileName","File Name"]];
+    const base: [string,string][] = [["date","Date"],["mrNo","MR No"],["name","Patient Name"],["gender","Gender"],["age","Age"],["address","Address"],["diagnosis","Diagnosis"],["procedure","Procedure"],["implants","Implants"],["fileName","File Name"],["hcvPlus","HCV+"],["hbaSg","HbAsg"],["hiv","HIV"]];
     const custom: [string,string][] = customFields.filter((f:any)=>f?.key && f?.label).map((f:any)=>[String(f.key),String(f.label)]);
     const savedKeys = [
       ...(Array.isArray(draft.pdfPatientFields) ? draft.pdfPatientFields : []),
