@@ -87,6 +87,14 @@ function whereForFilter(filter: BackupFilter, column: string) {
 
 async function createBackupData(filter: BackupFilter = { type: "all" }):Promise<BackupData>{
  initializeDatabase();
+ const brandingRaw=await storage.getItem<string>("ortho_branding","");
+ let branding: BrandingConfig | undefined;
+ if(typeof brandingRaw==="string" && brandingRaw.trim()){
+   try{
+     const parsed=JSON.parse(brandingRaw);
+     if(parsed && typeof parsed==="object" && !Array.isArray(parsed)) branding=parsed as BrandingConfig;
+   }catch{}
+ }
  const pf=whereForFilter(filter, "date");
  const patients=db.getAllSync<any>(`SELECT * FROM patients${pf.sql} ORDER BY date DESC, created_at DESC`, pf.args);
  const selectedPatientIds = new Set(patients.map((p:any)=>p.id));
@@ -120,7 +128,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }):Promise<
   inventoryMovements:(()=>{if(filter.type==="all") return db.getAllSync<any>("SELECT * FROM inventory_movements ORDER BY created_at ASC"); const f=filter.type==="date" ? {sql:" WHERE date(created_at)=?",args:[filter.value||""]} : filter.type==="month" ? {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]} : {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]}; return db.getAllSync<any>(`SELECT * FROM inventory_movements${f.sql} ORDER BY created_at ASC`,f.args);})(),
   inventoryPurchaseReceipts:(()=>{const f=whereForFilter(filter,"created_at");return db.getAllSync<any>(`SELECT * FROM inventory_purchase_receipts${f.sql} ORDER BY created_at ASC`,f.args);})(),
   stockReceipts:(()=>{const f=whereForFilter(filter,"created_at");return db.getAllSync<any>(`SELECT * FROM stock_receipts${f.sql} ORDER BY created_at ASC`,f.args);})(),
-  branding:(()=>{const raw=storage.getItem<string>("ortho_branding",""); return raw.then((value)=>{ if(typeof value!=="string"||!value.trim()) return undefined; try{const parsed=JSON.parse(value); return parsed&&typeof parsed==="object"&&!Array.isArray(parsed)?parsed as BrandingConfig:undefined;}catch{return undefined;} });})(),
+  branding,
  };
 }
 
