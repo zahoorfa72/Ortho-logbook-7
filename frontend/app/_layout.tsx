@@ -14,6 +14,7 @@ import { ToastProvider } from "@/src/components/toast";
 import { queryClient } from "@/src/query-client";
 import { initializeDatabase, repairDatabaseData } from "@/src/db/database";
 import { ThemeProvider } from "@/src/theme";
+import { startAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-backup";
 
 LogBox.ignoreAllLogs(true);
 
@@ -33,6 +34,11 @@ function DatabaseBootstrap({ children }: { children: React.ReactNode }) {
   };
 
   useEffect(() => { repair(); }, []);
+
+  useEffect(() => {
+    if (!ready) return;
+    return startAutomaticDriveBackup();
+  }, [ready]);
 
   if (error) {
     return (
