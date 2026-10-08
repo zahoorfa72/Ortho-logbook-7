@@ -300,6 +300,16 @@ export async function buildPatientDetailHtml(
     sorted.forEach((p,i) => occurrenceMap.set(p.id,{ occurrence:i+1,total:sorted.length }));
   }
 
+  const mainWeight = ({normal:400,medium:500,semibold:600,bold:700} as any)[branding.pdfMainEntryTextWeight || "bold"] || 700;
+  const mainTone = branding.pdfMainEntryTextTone==="light" ? "#7C7872" : branding.pdfMainEntryTextTone==="dark" ? "#1C1C1E" : "#3A3A3C";
+  const headingSize = branding.pdfHeadingTextSize==="small" ? 0.92 : branding.pdfHeadingTextSize==="large" ? 1.12 : 1;
+  const subHeadingSize = branding.pdfSubHeadingTextSize==="small" ? 0.88 : branding.pdfSubHeadingTextSize==="large" ? 1.08 : 0.96;
+  const headingWeight = ({normal:400,medium:500,semibold:600,bold:700} as any)[branding.pdfHeadingTextWeight || "normal"] || 400;
+  const subHeadingWeight = ({normal:400,medium:500,semibold:600,bold:700} as any)[branding.pdfSubHeadingTextWeight || "normal"] || 400;
+  const tone = (v:any) => v==="light" ? "#7C7872" : v==="dark" ? "#1C1C1E" : "#3A3A3C";
+  const headingTone = tone(branding.pdfHeadingTextTone);
+  const subHeadingTone = tone(branding.pdfSubHeadingTextTone);
+
   const photoCache = new Map<string,string>();
   const photoToData = async (uri:string) => {
     if (!uri) return "";
