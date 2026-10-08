@@ -94,6 +94,17 @@ function syncLowStockState(inventoryId: string, quantity: number, minimumStock: 
     db.runSync("UPDATE inventory SET low_stock_triggered_at=NULL WHERE id=?", [inventoryId]);
   }
 }
+function updateLowStockSince(inventoryId: string, oldQty: number, newQty: number, oldMin: number, newMin: number) {
+  const oldLow = oldQty <= oldMin;
+  const newLow = newQty <= newMin;
+  if (!newLow) {
+    db.runSync("UPDATE inventory SET low_stock_since=NULL WHERE id=?", [inventoryId]);
+    return;
+  }
+  const existing = String(db.getFirstSync<any>("SELECT low_stock_since FROM inventory WHERE id=?", [inventoryId])?.low_stock_since || "").trim();
+  if (!oldLow || !existing) db.runSync("UPDATE inventory SET low_stock_since=? WHERE id=?", [nowIso(), inventoryId]);
+}
+
 function changeInventory(name: string, amount: number, type: string, note: string, userId: string | null, inventoryId?: string) {
   const clean = String(name || "").trim();
   if (!clean || !amount) return;
@@ -414,14 +425,14 @@ const inventory = (categoryId?: string, term?: string) => {
     where.push("(LOWER(i.name) LIKE ? OR LOWER(COALESCE(i.size,'')) LIKE ? OR LOWER(COALESCE(i.category,'')) LIKE ?)");
     const q = "%" + term.trim().toLowerCase() + "%"; args.push(q,q,q);
   }
-  const sql = `SELECT i.id,i.name,i.category_id,i.category,i.size,i.quantity,i.unit,i.minimum_stock,
+  const sql = `SELECT i.id,i.name,i.category_id,i.category,i.size,i.quantity,i.unit,i.minimum_stock,i.low_stock_since,
       c.name AS category_name,i.added_date,i.bill_image,i.low_stock_triggered_at
       FROM inventory i LEFT JOIN inventory_categories c ON c.id=i.category_id
       ${where.length ? "WHERE " + where.join(" AND ") : ""}
       ORDER BY COALESCE(c.name,i.category,''), i.name COLLATE NOCASE, COALESCE(i.size,'')`;
   return db.getAllSync<any>(sql,args).map((r) => ({
     id:r.id,name:r.name,categoryId:r.category_id||"",category:r.category_name||r.category||"",size:r.size||"",
-    quantity:Number(r.quantity),unit:r.unit||"pcs",minimumStock:Number(r.minimum_stock),addedDate:r.added_date||"",billImage:r.bill_image||"",lowStockTriggeredAt:r.low_stock_triggered_at||"",
+    quantity:Number(r.quantity),unit:r.unit||"pcs",minimumStock:Number(r.minimum_stock),lowStockSince:r.low_stock_since||"",addedDate:r.added_date||"",billImage:r.bill_image||"",lowStockTriggeredAt:r.low_stock_triggered_at||"",
   }));
 };
 
