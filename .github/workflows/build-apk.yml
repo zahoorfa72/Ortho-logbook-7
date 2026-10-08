@@ -12,6 +12,7 @@ concurrency:
 env:
   NDK_VERSION: "27.1.12297006"
   ORG_GRADLE_PROJECT_reactNativeArchitectures: "arm64-v8a"
+  EXPO_PUBLIC_USE_RN_FETCH: "1"
 
 jobs:
   build:
