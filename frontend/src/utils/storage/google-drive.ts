@@ -184,7 +184,10 @@ async function backupContentHash(backupText: string) {
   const parsed = JSON.parse(backupText);
   // Ignore the generated timestamp so unchanged records do not upload again.
   delete parsed.createdAt;
-  return Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, JSON.stringify(parsed));
+  const value = JSON.stringify(parsed);
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i++) { hash ^= value.charCodeAt(i); hash = Math.imul(hash, 16777619); }
+  return `fnv1a-${(hash >>> 0).toString(16)}-${value.length}`;
 }
 
 export async function backupToGoogleDrive(
