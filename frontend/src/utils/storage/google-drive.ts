@@ -180,7 +180,7 @@ async function uploadContent(backupText: string, existingId?: string) {
     // Retry once using the documented multipart endpoint; keep the same backup ID.
     if (String(error?.message || "").includes("upload connection failed")) {
       const boundary = "ortho_logbook_drive_retry_boundary";
-      const body = `--${boundary}\\r\\nContent-Type: application/json; charset=UTF-8\\r\\n\\r\\n${JSON.stringify({ name: BACKUP_NAME, mimeType: "application/json" })}\\r\\n--${boundary}\\r\\nContent-Type: application/json; charset=UTF-8\\r\\n\\r\\n${backupText}\\r\\n--${boundary}--`;
+      const body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify({ name: BACKUP_NAME, mimeType: "application/json" })}\r\n--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${backupText}\r\n--${boundary}--`;
       const retryTarget = existingId
         ? `${DRIVE_UPLOAD}/${encodeURIComponent(existingId)}?uploadType=multipart&fields=id,name,modifiedTime,size`
         : `${DRIVE_UPLOAD}?uploadType=multipart&fields=id,name,modifiedTime,size`;
