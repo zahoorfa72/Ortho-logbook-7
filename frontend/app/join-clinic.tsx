@@ -44,7 +44,7 @@ export default function JoinClinic() {
 
   const runRestore = async () => {
     if (!selected) return;
-    if (password.length < 8) {
+    if (selected.info.encrypted && password.length < 8) {
       Alert.alert("Password required", "Enter the password shared by your administrator.");
       return;
     }
@@ -58,7 +58,7 @@ export default function JoinClinic() {
           onPress: async () => {
             try {
               setLoading(true);
-              const backup = await decryptBackup(selected.backupText, password);
+              const backup = await decryptBackup(selected.backupText, selected.info.encrypted ? password : "");
               const result = restoreBackup(backup);
               await storage.secureRemove("ortho_current_user");
               queryClient.clear();
@@ -116,7 +116,7 @@ export default function JoinClinic() {
         <View style={styles.stepCard}>
           <View style={styles.stepDot}><Text style={styles.stepDotText}>2</Text></View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.stepTitle}>Pick the file</Text>
+            <Text style={styles.stepTitle}>Pick JSON or app backup file</Text>
             <Pressable
               style={styles.pickBtn}
               onPress={pick}
@@ -143,19 +143,28 @@ export default function JoinClinic() {
           <View style={styles.stepCard}>
             <View style={styles.stepDot}><Text style={styles.stepDotText}>3</Text></View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.stepTitle}>Enter the backup password</Text>
-              <Text style={styles.stepSub}>Same password the admin used when creating the backup.</Text>
-              <TextInput
-                testID="join-password-input"
-                value={password}
-                onChangeText={setPassword}
-                placeholder="Backup password"
-                secureTextEntry
-                autoCapitalize="none"
-                autoCorrect={false}
-                placeholderTextColor={colors.muted}
-                style={styles.input}
-              />
+              {selected.info.encrypted ? (
+                <>
+                  <Text style={styles.stepTitle}>Enter the backup password</Text>
+                  <Text style={styles.stepSub}>Same password the admin used when creating the backup.</Text>
+                  <TextInput
+                    testID="join-password-input"
+                    value={password}
+                    onChangeText={setPassword}
+                    placeholder="Backup password"
+                    secureTextEntry
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    placeholderTextColor={colors.muted}
+                    style={styles.input}
+                  />
+                </>
+              ) : (
+                <>
+                  <Text style={styles.stepTitle}>JSON backup ready</Text>
+                  <Text style={styles.stepSub}>This JSON backup is not encrypted, so no password is needed.</Text>
+                </>
+              )}
               <Pressable
                 style={[styles.primaryBtn, loading && { opacity: 0.6 }]}
                 onPress={runRestore}
