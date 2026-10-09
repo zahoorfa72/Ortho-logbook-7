@@ -306,14 +306,20 @@ export async function backupToGoogleDrive(
   const backupText = await exportUnencryptedBackup(filter, options.onProgress);
   options.onProgress?.("Checking whether backup changed…");
   const contentHash = await backupContentHash(backupText, options.onProgress);
-  const previousHash = await storage.secureGet(LAST_DRIVE_CONTENT_HASH_KEY, "");
-  if (options.skipIfUnchanged && previousHash === contentHash) {
-    const completedAt = await getLastDriveBackupStatus();
-    return { skipped: true, completedAt, accountEmail: getConnectedGoogleAccount(), name: BACKUP_NAME };
-  }
-
+  // Always verify that a backup file actually exists in Drive before skipping.
+  // A hash may remain on this phone after a file was deleted in Drive, or may
+  // have been saved by an older build before its first upload completed.
+  // In that situation the first automatic backup must CREATE a new Drive file.
   options.onProgress?.("Finding previous Drive backup…");
   const existing = await findLatestBackup();
+  const previousHash = await storage.secureGet(LAST_DRIVE_CONTENT_HASH_KEY, "");
+  const previousSuccess = await getLastDriveBackupStatus();
+  if (existing?.id && previousSuccess && options.skipIfUnchanged && previousHash === contentHash) {
+    return { skipped: true, completedAt: previousSuccess, accountEmail: getConnectedGoogleAccount(), name: BACKUP_NAME };
+  }
+
+  // No matching file means first-time upload: uploadContent uses POST to create
+  // a new Drive file; PATCH is only used when an existing Drive file was found.
   options.onProgress?.("Uploading backup to Google Drive…");
   const result = await uploadContent(backupText, existing?.id, options.onProgress);
   await markBackupTaken();
