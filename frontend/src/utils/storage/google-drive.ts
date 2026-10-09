@@ -1,5 +1,4 @@
 import { GoogleSignin, statusCodes } from "@react-native-google-signin/google-signin";
-import * as Crypto from "expo-crypto";
 import { exportUnencryptedBackup, type BackupFilter } from "@/src/utils/storage/backup";
 import { markBackupTaken } from "@/src/utils/backup-reminder";
 import { storage } from "@/src/utils/storage";
@@ -19,6 +18,7 @@ const DRIVE_API = "https://www.googleapis.com/drive/v3/files";
 const DRIVE_UPLOAD = "https://www.googleapis.com/upload/drive/v3/files";
 
 let configured = false;
+let accessTokenInFlight: Promise<string> | null = null;
 
 function configure() {
   if (configured) return;
@@ -60,12 +60,10 @@ export function getConnectedGoogleAccount(): string | null {
   return GoogleSignin.getCurrentUser()?.user?.email || null;
 }
 
-async function accessToken() {
+async function resolveAccessToken(): Promise<string> {
   configure();
   const current = GoogleSignin.getCurrentUser();
   const scopeVersion = await storage.secureGet(DRIVE_SCOPE_VERSION_KEY, "");
-  // Re-authorize once after upgrading from the old drive.file scope. This avoids
-  // repeated addScopes failures and ensures older Drive backups can be listed.
   if (!current || scopeVersion !== DRIVE_SCOPE_VERSION) {
     await connectGoogleAccount();
   }
@@ -82,6 +80,17 @@ async function accessToken() {
     }
     throw error;
   }
+}
+
+// react-native-google-signin cannot safely run concurrent getTokens calls.
+// All Drive operations share the same in-flight token request.
+async function accessToken(): Promise<string> {
+  if (!accessTokenInFlight) {
+    accessTokenInFlight = resolveAccessToken().finally(() => {
+      accessTokenInFlight = null;
+    });
+  }
+  return accessTokenInFlight;
 }
 
 async function driveRequest(url: string, init: RequestInit = {}) {
@@ -118,57 +127,50 @@ async function findLatestBackup() {
 
 async function uploadContent(backupText: string, existingId?: string) {
   const token = await accessToken();
+  // Use a single multipart request instead of a resumable session. React Native's
+  // fetch can fail to expose Google's resumable-session Location header reliably.
+  // A single request also avoids a second unauthenticated-looking session URL hop.
+  const boundary = "ortho_logbook_drive_boundary_7ma2";
+  const metadata = JSON.stringify({
+    name: BACKUP_NAME,
+    mimeType: "application/json",
+  });
+  const body =
+    `--${boundary}\\r\\n` +
+    "Content-Type: application/json; charset=UTF-8\\r\\n\\r\\n" +
+    metadata + "\\r\\n" +
+    `--${boundary}\\r\\n` +
+    "Content-Type: application/json; charset=UTF-8\\r\\n\\r\\n" +
+    backupText + "\\r\\n" +
+    `--${boundary}--`;
+
   const target = existingId
-    ? `${DRIVE_UPLOAD}/${encodeURIComponent(existingId)}?uploadType=resumable&fields=id,name,modifiedTime,size`
-    : `${DRIVE_UPLOAD}?uploadType=resumable&fields=id,name,modifiedTime,size`;
+    ? `${DRIVE_UPLOAD}/${encodeURIComponent(existingId)}?uploadType=multipart&fields=id,name,modifiedTime,size`
+    : `${DRIVE_UPLOAD}?uploadType=multipart&fields=id,name,modifiedTime,size`;
 
-  const initResponse = await fetch(target, {
-    method: existingId ? "PATCH" : "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json; charset=UTF-8",
-      "X-Upload-Content-Type": "application/octet-stream",
-    },
-    body: JSON.stringify({
-      name: BACKUP_NAME,
-      mimeType: "application/octet-stream",
-    }),
-  });
+  let response: Response;
+  try {
+    response = await fetch(target, {
+      method: existingId ? "PATCH" : "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": `multipart/related; boundary=${boundary}`,
+      },
+      body,
+    });
+  } catch (error: any) {
+    throw new Error(`Google Drive network request failed during upload. Check internet access, VPN/firewall, and Google Play Services, then retry. ${error?.message || ""}`.trim());
+  }
 
-  if (!initResponse.ok) {
-    let message = `Google Drive upload could not be started (HTTP ${initResponse.status}).`;
+  if (!response.ok) {
+    let message = `Google Drive upload failed (HTTP ${response.status}).`;
     try {
-      const body = await initResponse.json();
-      message = body?.error?.message || message;
+      const result = await response.json();
+      message = result?.error?.message || message;
     } catch {}
     throw new Error(message);
   }
-
-  const sessionUrl = initResponse.headers.get("Location");
-  if (!sessionUrl) {
-    try { temp.delete(); } catch {}
-    throw new Error("Google Drive did not return an upload session.");
-  }
-
-  const uploadResponse = await fetch(sessionUrl, {
-    method: "PUT",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/octet-stream",
-    },
-    body: backupText,
-  });
-
-  try { temp.delete(); } catch {}
-  if (!uploadResponse.ok) {
-    let message = `Google Drive upload failed (HTTP ${uploadResponse.status}).`;
-    try {
-      const body = await uploadResponse.json();
-      message = body?.error?.message || message;
-    } catch {}
-    throw new Error(message);
-  }
-  return uploadResponse.json();
+  return response.json();
 }
 
 async function backupContentHash(backupText: string) {
