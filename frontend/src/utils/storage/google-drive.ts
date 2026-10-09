@@ -765,7 +765,14 @@ export async function restoreLatestFromGoogleDrive() {
             for (const id of deleted) merged.delete("id:" + String(id));
             for (const row of delta[table]) {
               const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
-              merged.set(key, row);
+              const existing = merged.get(key);
+              if (table === "patients" && existing &&
+                  !Object.prototype.hasOwnProperty.call(row, "photo_uri") &&
+                  !Object.prototype.hasOwnProperty.call(row, "photos_json")) {
+                merged.set(key, { ...existing, ...row });
+              } else {
+                merged.set(key, row);
+              }
             }
             composed[table] = Array.from(merged.values());
           } else if (delta._recoveredFromDamage === true && Array.isArray(composed[table])) {
@@ -778,7 +785,14 @@ export async function restoreLatestFromGoogleDrive() {
             }
             for (const row of delta[table]) {
               const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
-              merged.set(key, row);
+              const existing = merged.get(key);
+              if (table === "patients" && existing &&
+                  !Object.prototype.hasOwnProperty.call(row, "photo_uri") &&
+                  !Object.prototype.hasOwnProperty.call(row, "photos_json")) {
+                merged.set(key, { ...existing, ...row });
+              } else {
+                merged.set(key, row);
+              }
             }
             composed[table] = Array.from(merged.values());
           } else {
