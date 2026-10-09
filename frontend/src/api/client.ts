@@ -780,7 +780,7 @@ export const api = {
     // must not depend on stock being zero.
     if (normalizedPath === "/implant-records-bulk-delete") {
       await requireAdmin();
-      const ids=Array.isArray(body?.ids)?[...new Set(body.ids.map((value: unknown) => String(value)).filter((value: string) => Boolean(value)))]:[];
+      const ids: string[] = Array.isArray(body?.ids) ? Array.from(new Set<string>((body.ids as unknown[]).map((value) => String(value)).filter((value) => value.length > 0))) : [];
       if(!ids.length) return {success:true,deleted:0} as any;
       const placeholders=ids.map(()=>"?").join(",");
       const rows=db.getAllSync<any>(`SELECT id FROM implant_records WHERE id IN (${placeholders})`,ids);
