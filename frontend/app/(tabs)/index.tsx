@@ -385,8 +385,8 @@ export default function Logbook() {
             disabled={selectedIds.length === 0}
             style={[styles.deleteSelectionAction, selectedIds.length === 0 && { opacity: 0.45 }]}
           >
-            <Ionicons name="trash-outline" size={19} color={colors.danger || colors.onSurfaceSecondary} />
-            <Text style={[styles.deleteSelectionText, { color: colors.danger || colors.onSurfaceSecondary }]}>Delete</Text>
+            <Ionicons name="trash-outline" size={19} color={colors.error || colors.onSurfaceSecondary} />
+            <Text style={[styles.deleteSelectionText, { color: colors.error || colors.onSurfaceSecondary }]}>Delete</Text>
           </Pressable>
         </View>
       ) : null}
