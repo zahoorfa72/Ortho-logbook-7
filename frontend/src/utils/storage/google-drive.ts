@@ -93,16 +93,29 @@ async function accessToken(): Promise<string> {
   return accessTokenInFlight;
 }
 
+async function fetchWithTimeout(url: string, init: RequestInit = {}, timeoutMs = 30000): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (error: any) {
+    if (controller.signal.aborted) throw new Error("Google Drive request timed out after " + Math.round(timeoutMs / 1000) + " seconds. Check your connection and retry.");
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function driveRequest(url: string, init: RequestInit = {}) {
   const token = await accessToken();
   const extraHeaders = init.headers && typeof init.headers === "object" && !Array.isArray(init.headers)
     ? Object.entries(init.headers as Record<string, unknown>)
         .filter((entry): entry is [string, string] => typeof entry[1] === "string")
     : [];
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     ...init,
     headers: { Authorization: `Bearer ${token}`, ...Object.fromEntries(extraHeaders) },
-  });
+  }, 30000);
   if (!response.ok) {
     let message = `Google Drive request failed (HTTP ${response.status}).`;
     try {
@@ -152,7 +165,7 @@ function uploadChunk(sessionUrl: string, token: string, bytes: Uint8Array, start
     };
     xhr.onerror = () => reject(new Error("No HTTP response while sending a Google Drive upload chunk (readyState " + xhr.readyState + ", status " + (xhr.status || "none") + ")."));
     xhr.ontimeout = () => reject(new Error("Google Drive upload chunk timed out."));
-    xhr.timeout = 180000;
+    xhr.timeout = 45000;
     const chunk = bytes.slice(start, end);
     xhr.send(chunk.buffer as ArrayBuffer);
   });
@@ -204,7 +217,7 @@ async function uploadContent(backupText: string, existingId?: string) {
     : DRIVE_UPLOAD + "?uploadType=resumable&fields=id,name,modifiedTime,size";
   let initResponse: Response;
   try {
-    initResponse = await fetch(target, {
+    initResponse = await fetchWithTimeout(target, {
       method: existingId ? "PATCH" : "POST",
       headers: {
         Authorization: "Bearer " + token,
@@ -213,7 +226,7 @@ async function uploadContent(backupText: string, existingId?: string) {
         "X-Upload-Content-Length": String(bytes.length),
       },
       body: JSON.stringify({ name: BACKUP_NAME, mimeType: "application/json" }),
-    });
+    }, 30000);
   } catch (error: any) {
     throw new Error("Could not start Google Drive upload session. " + (error?.message || "Check network access and retry."));
   }
@@ -243,11 +256,11 @@ async function uploadContent(backupText: string, existingId?: string) {
       ? DRIVE_UPLOAD + "/" + encodeURIComponent(existingId) + "?uploadType=multipart&fields=id,name,modifiedTime,size"
       : DRIVE_UPLOAD + "?uploadType=multipart&fields=id,name,modifiedTime,size";
     try {
-      const retry = await fetch(retryTarget, {
+      const retry = await fetchWithTimeout(retryTarget, {
         method: existingId ? "PATCH" : "POST",
         headers: { Authorization: "Bearer " + token, "Content-Type": "multipart/related; boundary=" + boundary },
         body,
-      });
+      }, 45000);
       if (retry.ok) return await retry.json();
       let message = "Google Drive multipart fallback failed (HTTP " + retry.status + ").";
       try { const data = await retry.json(); message = data?.error?.message || message; } catch {}
@@ -271,11 +284,13 @@ async function backupContentHash(backupText: string) {
 export async function backupToGoogleDrive(
   _password?: string,
   filter: BackupFilter = { type: "all" },
-  options: { skipIfUnchanged?: boolean } = {},
+  options: { skipIfUnchanged?: boolean; onProgress?: (stage: string) => void } = {},
 ) {
   // Google Drive backup is intentionally plain JSON at the user's request.
   // Local phone/file backups remain encrypted by exportBackup().
+  options.onProgress?.("Preparing backup data…");
   const backupText = await exportUnencryptedBackup(filter);
+  options.onProgress?.("Checking whether backup changed…");
   const contentHash = await backupContentHash(backupText);
   const previousHash = await storage.secureGet(LAST_DRIVE_CONTENT_HASH_KEY, "");
   if (options.skipIfUnchanged && previousHash === contentHash) {
@@ -283,7 +298,9 @@ export async function backupToGoogleDrive(
     return { skipped: true, completedAt, accountEmail: getConnectedGoogleAccount(), name: BACKUP_NAME };
   }
 
+  options.onProgress?.("Finding previous Drive backup…");
   const existing = await findLatestBackup();
+  options.onProgress?.("Uploading backup to Google Drive…");
   const result = await uploadContent(backupText, existing?.id);
   await markBackupTaken();
   const completedAt = new Date().toISOString();
