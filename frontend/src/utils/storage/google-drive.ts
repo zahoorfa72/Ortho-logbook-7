@@ -576,7 +576,7 @@ function parseDownloadedBackup(raw: string): any {
 }
 function decodeBackupBase64(value: string): string {
   try {
-    const decoded = globalThis.atob(value.replace(/\\s/g, ""));
+    const decoded = globalThis.atob(value.replace(/\s/g, ""));
     return decodeURIComponent(Array.from(decoded, ch => "%" + ch.charCodeAt(0).toString(16).padStart(2, "0")).join(""));
   } catch { throw new Error("Google Drive backup base64 content could not be decoded."); }
 }
