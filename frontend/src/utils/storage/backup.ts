@@ -13,8 +13,10 @@ type BackupData = {
   version:number; app:string; createdAt:string;
   patients:any[]; procedures:any[]; inventoryCategories:any[]; inventory:any[]; patientImplants:any[]; patientCustomFields:any[]; implantRecords:any[]; expenses:any[]; users:any[];
   patientHistory:any[]; inventoryMovements:any[]; inventoryPurchaseReceipts:any[]; stockReceipts:any[];
-  branding?: BrandingConfig;
+  branding?: BrandingConfig | null;
   filter?: BackupFilter;
+  incremental?: boolean;
+  changedTables?: string[];
 };
 type EncryptedBackup = {
   version:number; app:string; encrypted:true; algorithm:"XSalsa20-Poly1305"; kdf:"SHA-256";
@@ -85,28 +87,32 @@ function whereForFilter(filter: BackupFilter, column: string) {
   return { sql: "", args: [] };
 }
 
-async function createBackupData(filter: BackupFilter = { type: "all" }, onProgress?: (stage: string) => void):Promise<BackupData>{
+async function createBackupData(filter: BackupFilter = { type: "all" }, onProgress?: (stage: string) => void, changedTables?: string[]):Promise<BackupData>{
  initializeDatabase();
- const brandingRaw=await storage.getItem<string>("ortho_branding","");
- let branding: BrandingConfig | undefined;
- if(typeof brandingRaw==="string" && brandingRaw.trim()){
-   try{
-     const parsed=JSON.parse(brandingRaw);
-     if(parsed && typeof parsed==="object" && !Array.isArray(parsed)) branding=parsed as BrandingConfig;
-   }catch{}
+ const include = (name: string) => !changedTables || changedTables.includes(name);
+ let branding: BrandingConfig | null | undefined;
+ if (include("branding")) {
+   const brandingRaw=await storage.getItem<string>("ortho_branding","");
+   if(typeof brandingRaw==="string" && brandingRaw.trim()){
+     try{
+       const parsed=JSON.parse(brandingRaw);
+       if(parsed && typeof parsed==="object" && !Array.isArray(parsed)) branding=parsed as BrandingConfig;
+     }catch{}
+   } else {
+     branding = null;
+   }
  }
  const pf=whereForFilter(filter, "date");
- const patients=db.getAllSync<any>(`SELECT * FROM patients${pf.sql} ORDER BY date DESC, created_at DESC`, pf.args);
+ const patients=include("patients") ? db.getAllSync<any>(`SELECT * FROM patients${pf.sql} ORDER BY date DESC, created_at DESC`, pf.args) : [];
  const selectedPatientIds = new Set(patients.map((p:any)=>p.id));
  const embeddedPatients:any[]=[];
  for(let i=0;i<patients.length;i++){
-   onProgress?.(`Preparing patient photos for backup… ${i+1}/${patients.length}`);
+   onProgress?.(`Compressing changed patient photos… ${i+1}/${patients.length}`);
    embeddedPatients.push(await embedPatientPhotos(patients[i]));
  }
 
- const historyAll=db.getAllSync<any>("SELECT * FROM patient_history ORDER BY created_at ASC");
+ const historyAll=include("patientHistory") ? db.getAllSync<any>("SELECT * FROM patient_history ORDER BY created_at ASC") : [];
  const history=filter.type==="all" ? historyAll : historyAll.filter((h:any)=>selectedPatientIds.has(h.patient_id));
- // Keep history portable too when an old snapshot contains patient photos.
  const embeddedHistory=history.map((h:any)=>{
    try{
      const snap=JSON.parse(String(h.snapshot_json||""));
@@ -119,18 +125,18 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
  return {
   version:BACKUP_VERSION,app:BACKUP_APP,createdAt:new Date().toISOString(),
   patients:embeddedPatients,
-  procedures:db.getAllSync<any>("SELECT * FROM procedures ORDER BY name COLLATE NOCASE"),
-  inventoryCategories:db.getAllSync<any>("SELECT * FROM inventory_categories ORDER BY name COLLATE NOCASE"),
-  inventory:db.getAllSync<any>("SELECT id,name,category_id,category,size,quantity,unit,minimum_stock,low_stock_triggered_at,low_stock_since FROM inventory ORDER BY COALESCE(category,''),name COLLATE NOCASE,COALESCE(size,'')"),
-  patientImplants:db.getAllSync<any>("SELECT * FROM patient_implants ORDER BY created_at ASC"),
-  patientCustomFields:db.getAllSync<any>("SELECT * FROM patient_custom_fields ORDER BY sort_order ASC,label COLLATE NOCASE"),
-  implantRecords:db.getAllSync<any>("SELECT * FROM implant_records ORDER BY created_at ASC"),
-  expenses:(()=>{const f=whereForFilter(filter,"date");return db.getAllSync<any>(`SELECT * FROM expenses${f.sql} ORDER BY date DESC, created_at DESC`,f.args);})(),
-  users:db.getAllSync<any>("SELECT * FROM users ORDER BY created_at ASC"),
+  procedures:include("procedures") ? db.getAllSync<any>("SELECT * FROM procedures ORDER BY name COLLATE NOCASE") : [],
+  inventoryCategories:include("inventoryCategories") ? db.getAllSync<any>("SELECT * FROM inventory_categories ORDER BY name COLLATE NOCASE") : [],
+  inventory:include("inventory") ? db.getAllSync<any>("SELECT id,name,category_id,category,size,quantity,unit,minimum_stock,low_stock_triggered_at,low_stock_since FROM inventory ORDER BY COALESCE(category,''),name COLLATE NOCASE,COALESCE(size,'')") : [],
+  patientImplants:include("patientImplants") ? db.getAllSync<any>("SELECT * FROM patient_implants ORDER BY created_at ASC") : [],
+  patientCustomFields:include("patientCustomFields") ? db.getAllSync<any>("SELECT * FROM patient_custom_fields ORDER BY sort_order ASC,label COLLATE NOCASE") : [],
+  implantRecords:include("implantRecords") ? db.getAllSync<any>("SELECT * FROM implant_records ORDER BY created_at ASC") : [],
+  expenses:include("expenses") ? (()=>{const f=whereForFilter(filter,"date");return db.getAllSync<any>(`SELECT * FROM expenses${f.sql} ORDER BY date DESC, created_at DESC`,f.args);})() : [],
+  users:include("users") ? db.getAllSync<any>("SELECT * FROM users ORDER BY created_at ASC") : [],
   patientHistory:embeddedHistory,
-  inventoryMovements:(()=>{if(filter.type==="all") return db.getAllSync<any>("SELECT * FROM inventory_movements ORDER BY created_at ASC"); const f=filter.type==="date" ? {sql:" WHERE date(created_at)=?",args:[filter.value||""]} : filter.type==="month" ? {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]} : {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]}; return db.getAllSync<any>(`SELECT * FROM inventory_movements${f.sql} ORDER BY created_at ASC`,f.args);})(),
-  inventoryPurchaseReceipts:(()=>{const f=whereForFilter(filter,"created_at");return db.getAllSync<any>(`SELECT * FROM inventory_purchase_receipts${f.sql} ORDER BY created_at ASC`,f.args);})(),
-  stockReceipts:(()=>{const f=whereForFilter(filter,"created_at");return db.getAllSync<any>(`SELECT * FROM stock_receipts${f.sql} ORDER BY created_at ASC`,f.args);})(),
+  inventoryMovements:include("inventoryMovements") ? (()=>{if(filter.type==="all") return db.getAllSync<any>("SELECT * FROM inventory_movements ORDER BY created_at ASC"); const f=filter.type==="date" ? {sql:" WHERE date(created_at)=?",args:[filter.value||""]} : filter.type==="month" ? {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]} : {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]}; return db.getAllSync<any>(`SELECT * FROM inventory_movements${f.sql} ORDER BY created_at ASC`,f.args);})() : [],
+  inventoryPurchaseReceipts:include("inventoryPurchaseReceipts") ? (()=>{const f=whereForFilter(filter,"created_at");return db.getAllSync<any>(`SELECT * FROM inventory_purchase_receipts${f.sql} ORDER BY created_at ASC`,f.args);})() : [],
+  stockReceipts:include("stockReceipts") ? (()=>{const f=whereForFilter(filter,"created_at");return db.getAllSync<any>(`SELECT * FROM stock_receipts${f.sql} ORDER BY created_at ASC`,f.args);})() : [],
   branding,
  };
 }
