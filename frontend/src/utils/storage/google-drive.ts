@@ -138,7 +138,9 @@ async function findLatestBackup() {
   return files.find((file: any) => String(file.name || "").toLowerCase().includes("ortho logbook backup")) || null;
 }
 
-const DRIVE_CHUNK_SIZE = 256 * 1024;
+// Google Drive resumable chunks must be multiples of 256 KiB. 4 MiB chunks
+// reduce a 50 MiB backup from about 200 sequential requests to about 13.
+const DRIVE_CHUNK_SIZE = 4 * 1024 * 1024;
 
 function parseDriveResponse(text: string): any {
   try { return text ? JSON.parse(text) : {}; } catch { return {}; }
@@ -244,6 +246,8 @@ async function uploadContent(backupText: string, existingId?: string, onProgress
     return await uploadResumable(sessionUrl, token, backupText, onProgress);
   } catch (error: any) {
     const originalMessage = String(error?.message || "Google Drive resumable upload failed.");
+    // Do not start a second full-file transfer after the explicit overall deadline.
+    if (originalMessage.includes("stopped after 5 minutes")) throw error;
     // Correct multipart/related structure is retained as a fallback for devices
     // whose native XHR cannot transfer a resumable session body.
     const boundary = "ortho_logbook_drive_" + Date.now().toString(36);
@@ -274,13 +278,21 @@ async function uploadContent(backupText: string, existingId?: string, onProgress
     }
   }
 }
-async function backupContentHash(backupText: string) {
-  const parsed = JSON.parse(backupText);
-  // Ignore the generated timestamp so unchanged records do not upload again.
-  delete parsed.createdAt;
-  const value = JSON.stringify(parsed);
+async function backupContentHash(backupText: string, onProgress?: (stage: string) => void) {
+  // Avoid JSON.parse + JSON.stringify on a potentially 50+ MiB backup. That
+  // duplicated the payload in memory and could freeze the UI for a long time.
+  // Only the top-level generated timestamp changes when records are unchanged.
+  const value = backupText.replace(/("createdAt"\\s*:\\s*")[^"]*(")/, '$1IGNORED_TIMESTAMP$2');
   let hash = 2166136261;
-  for (let i = 0; i < value.length; i++) { hash ^= value.charCodeAt(i); hash = Math.imul(hash, 16777619); }
+  const yieldEvery = 256 * 1024;
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+    if (i > 0 && i % yieldEvery === 0) {
+      onProgress?.("Checking backup contents… " + Math.min(99, Math.round((i / value.length) * 100)) + "%");
+      await new Promise<void>(resolve => setTimeout(resolve, 0));
+    }
+  }
   return `fnv1a-${(hash >>> 0).toString(16)}-${value.length}`;
 }
 
@@ -292,9 +304,9 @@ export async function backupToGoogleDrive(
   // Google Drive backup is intentionally plain JSON at the user's request.
   // Local phone/file backups remain encrypted by exportBackup().
   options.onProgress?.("Preparing backup data…");
-  const backupText = await exportUnencryptedBackup(filter);
+  const backupText = await exportUnencryptedBackup(filter, options.onProgress);
   options.onProgress?.("Checking whether backup changed…");
-  const contentHash = await backupContentHash(backupText);
+  const contentHash = await backupContentHash(backupText, options.onProgress);
   const previousHash = await storage.secureGet(LAST_DRIVE_CONTENT_HASH_KEY, "");
   if (options.skipIfUnchanged && previousHash === contentHash) {
     const completedAt = await getLastDriveBackupStatus();
