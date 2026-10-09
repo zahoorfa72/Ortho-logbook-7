@@ -757,8 +757,11 @@ export async function restoreLatestFromGoogleDrive() {
     let parsed: any;
     try {
       parsed = await downloadDriveJsonValidated(candidate.id);
-    } catch {
-      rejectedFiles.push(String(candidate.name || "Unnamed backup") + " (unreadable)");
+    } catch (error: any) {
+      // Keep the real reason visible so a malformed legacy file can be
+      // diagnosed instead of every failure being reported as "not readable".
+      const reason = String(error?.message || "unknown download/JSON error").slice(0, 180);
+      rejectedFiles.push(String(candidate.name || "Unnamed backup") + " (unreadable: " + reason + ")");
       continue;
     }
     if (!parsed || parsed.app !== "Ortho Logbook" || !Array.isArray(parsed.patients) || !Array.isArray(parsed.inventory)) {
