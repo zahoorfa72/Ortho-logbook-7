@@ -165,8 +165,18 @@ async function findLatestBackupCandidates() {
 }
 
 async function findLatestBackup() {
-  const files = await findLatestBackupCandidates();
-  return files[0] || null;
+  // Auto-sync only needs the newest full baseline. Do not page through the entire
+  // Drive history on every tiny edit; restore still uses the exhaustive search.
+  const q = encodeURIComponent("name contains 'Ortho Logbook Backup' and mimeType != 'application/vnd.google-apps.folder' and trashed = false");
+  const response = await driveRequest(
+    `${DRIVE_API}?q=${q}&spaces=drive&pageSize=1&orderBy=modifiedTime%20desc&includeItemsFromAllDrives=true&supportsAllDrives=true&fields=files(id,name,modifiedTime,size,mimeType)`,
+  );
+  const data = await response.json();
+  const file = Array.isArray(data.files) ? data.files.find((item: any) =>
+    item?.id && item.mimeType !== "application/vnd.google-apps.folder" &&
+    String(item.name || "").toLowerCase().includes("ortho logbook backup")
+  ) : null;
+  return file || null;
 }
 
 // Use 512 KiB chunks (a multiple of Drive's 256 KiB requirement). Smaller
@@ -674,6 +684,20 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
   }
   const baselineKey = String(base.id) + ":" + String(base.modifiedTime || "");
   const backupText = await exportIncrementalBackup(changedTables, onProgress, baselineKey);
+  const delta = JSON.parse(backupText);
+  const hasActualChanges = (Array.isArray(delta.changedTables) ? delta.changedTables : []).some((table: string) => {
+    if (table === "branding") return Object.prototype.hasOwnProperty.call(delta, "branding");
+    if (Array.isArray(delta.fullTables) && delta.fullTables.includes(table)) return true;
+    const rows = Array.isArray(delta[table]) ? delta[table].length : 0;
+    const deleted = Array.isArray(delta.deletedIds?.[table]) ? delta.deletedIds[table].length : 0;
+    return rows > 0 || deleted > 0;
+  });
+  if (!hasActualChanges) {
+    // SQLite can emit duplicate/no-op change events. Avoid a Drive upload when
+    // the table diff proves that no stored record actually changed.
+    await commitIncrementalSnapshotCache();
+    return { skipped: true, completedAt: new Date().toISOString(), name: "No changes", accountEmail: getConnectedGoogleAccount() };
+  }
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const fileName = `Ortho Logbook Incremental ${stamp}.orbackup`;
   onProgress?.("Uploading changed data to Google Drive…");
