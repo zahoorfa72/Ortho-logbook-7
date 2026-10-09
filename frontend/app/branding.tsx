@@ -252,6 +252,51 @@ export default function BrandingScreen() {
           <Text style={styles.colorLabel}>Text color</Text>
           <View style={{flexDirection:"row",alignItems:"center",gap:spacing.sm}}><View style={{width:30,height:30,borderRadius:15,backgroundColor:String(draft.pdfTitleColor||"#1C1C1E"),borderWidth:1,borderColor:colors.border}}/><TextInput value={String(draft.pdfTitleColor||"#1C1C1E")} onChangeText={v=>setDraft(d=>({...d,pdfTitleColor:v}))} placeholder="#1C1C1E" placeholderTextColor={colors.muted} autoCapitalize="none" style={[styles.input,{flex:1,marginBottom:0}]}/></View>
         </View>
+        <Text style={[styles.label, { marginTop: spacing.md }]}>Individual PDF titles and subtitles</Text>
+        <Text style={styles.hint}>Set a separate title and subtitle for each report. Leave a title blank to use the main app title. These settings are saved with Branding and included in backups.</Text>
+        {([
+          ["patientList", "Patient PDF"],
+          ["patientDetail", "Individual Patient PDF"],
+          ["implantRecords", "Implant Records PDF"],
+          ["statistics", "Statistics PDF"],
+          ["stock", "Stock / Inventory PDF"],
+          ["lowStock", "Low Stock PDF"],
+        ] as const).map(([key, label]) => {
+          const config = draft.pdfReportHeaders?.[key] || {};
+          const updateReportHeader = (field: "title" | "subtitle", value: string) =>
+            setDraft(d => ({
+              ...d,
+              pdfReportHeaders: {
+                ...(d.pdfReportHeaders || {}),
+                [key]: {
+                  ...(d.pdfReportHeaders?.[key] || {}),
+                  [field]: value,
+                },
+              },
+            }));
+          return <View key={key} style={styles.subtitleLineCard}>
+            <Text style={styles.subtitleLineLabel}>{label}</Text>
+            <Text style={styles.label}>PDF title (optional)</Text>
+            <TextInput
+              value={config.title || ""}
+              onChangeText={value => updateReportHeader("title", value)}
+              placeholder={draft.title || "Ortho Logbook"}
+              placeholderTextColor={colors.muted}
+              style={styles.input}
+              accessibilityLabel={label + " title"}
+            />
+            <Text style={styles.label}>PDF subtitle</Text>
+            <TextInput
+              value={config.subtitle || ""}
+              onChangeText={value => updateReportHeader("subtitle", value)}
+              placeholder="Enter report-specific subtitle"
+              placeholderTextColor={colors.muted}
+              style={styles.input}
+              accessibilityLabel={label + " subtitle"}
+            />
+          </View>;
+        })}
+
         <Text style={styles.label}>Logos (both sides of PDF title)</Text>
         <View style={styles.twinLogos}>
           <LogoSlot
