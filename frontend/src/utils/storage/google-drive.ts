@@ -282,7 +282,7 @@ async function backupContentHash(backupText: string, onProgress?: (stage: string
   // Avoid JSON.parse + JSON.stringify on a potentially 50+ MiB backup. That
   // duplicated the payload in memory and could freeze the UI for a long time.
   // Only the top-level generated timestamp changes when records are unchanged.
-  const value = backupText.replace(/("createdAt"\\s*:\\s*")[^"]*(")/, '$1IGNORED_TIMESTAMP$2');
+  const value = backupText.replace(/("createdAt"\s*:\s*")[^"]*(")/, '$1IGNORED_TIMESTAMP$2');
   let hash = 2166136261;
   const yieldEvery = 256 * 1024;
   for (let i = 0; i < value.length; i++) {
