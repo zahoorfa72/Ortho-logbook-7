@@ -153,6 +153,24 @@ export async function exportUnencryptedBackup(filter: BackupFilter = { type: "al
  return JSON.stringify(backup);
 }
 
+// Drive auto-sync uses table snapshots rather than re-uploading the full app.
+// A changed table is replaced as a whole during restore, so deletions are
+// represented safely as well as inserts and edits.
+export async function exportIncrementalBackup(changedTables: string[], onProgress?: (stage: string) => void): Promise<string> {
+ const allowed = new Set([
+  "patients","procedures","inventoryCategories","inventory","patientImplants",
+  "patientCustomFields","implantRecords","expenses","users","patientHistory",
+  "inventoryMovements","inventoryPurchaseReceipts","stockReceipts","branding"
+ ]);
+ const tables = Array.from(new Set(changedTables)).filter((name) => allowed.has(name));
+ if (!tables.length) throw new Error("There are no changed data tables to sync.");
+ const backup = await createBackupData({ type: "all" }, onProgress, tables);
+ backup.filter = { type: "all" };
+ backup.incremental = true;
+ backup.changedTables = tables;
+ return JSON.stringify(backup);
+}
+
 function parseHeader(text:string):any{
  let b:any;try{b=JSON.parse(text);}catch{throw new Error("The selected backup file is not valid.");}
  if(!b||![2,3,4,5,6,7].includes(b.version)||b.app!==BACKUP_APP)throw new Error("Invalid or unsupported Ortho Logbook backup.");
