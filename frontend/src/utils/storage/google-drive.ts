@@ -131,7 +131,7 @@ function parseDriveResponse(text: string): any {
   try { return text ? JSON.parse(text) : {}; } catch { return {}; }
 }
 
-function uploadChunk(sessionUrl: string, token: string, bytes: Uint8Array, start: number, end: number, total: number): Promise<{ done: boolean; result?: any }> {
+function uploadChunk(sessionUrl: string, token: string, bytes: Uint8Array, start: number, end: number, total: number): Promise<{ done: boolean; result?: any; nextOffset?: number }> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("PUT", sessionUrl);
@@ -141,7 +141,12 @@ function uploadChunk(sessionUrl: string, token: string, bytes: Uint8Array, start
     xhr.onload = () => {
       const body = xhr.responseText || "";
       const parsed = parseDriveResponse(body);
-      if (xhr.status === 308) { resolve({ done: false }); return; }
+      if (xhr.status === 308) {
+        const range = xhr.getResponseHeader("Range") || "";
+        const match = /bytes=0-(\d+)/i.exec(range);
+        resolve({ done: false, nextOffset: match ? Number(match[1]) + 1 : 0 });
+        return;
+      }
       if (xhr.status >= 200 && xhr.status < 300) { resolve({ done: true, result: parsed }); return; }
       reject(new Error(parsed?.error?.message || ("Google Drive rejected an upload chunk (HTTP " + xhr.status + ").")));
     };
@@ -160,10 +165,17 @@ async function uploadResumable(sessionUrl: string, token: string, backupText: st
   while (offset < bytes.length) {
     const end = Math.min(offset + DRIVE_CHUNK_SIZE, bytes.length);
     let lastError: any = null;
-    let chunkResult: { done: boolean; result?: any } | null = null;
+    let chunkResult: { done: boolean; result?: any; nextOffset?: number } | null = null;
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        chunkResult = await uploadChunk(sessionUrl, token, bytes, offset, end, bytes.length);
+        const response = await uploadChunk(sessionUrl, token, bytes, offset, end, bytes.length);
+        if (!response.done && (response.nextOffset ?? 0) <= offset) {
+          throw new Error("Google Drive did not acknowledge progress for this upload chunk.");
+        }
+        if (!response.done && (response.nextOffset ?? 0) > end) {
+          throw new Error("Google Drive returned an invalid upload offset.");
+        }
+        chunkResult = response;
         lastError = null;
         break;
       } catch (error: any) {
@@ -172,12 +184,13 @@ async function uploadResumable(sessionUrl: string, token: string, backupText: st
       }
     }
     if (lastError || !chunkResult) throw lastError || new Error("Google Drive upload chunk failed.");
-    offset = end;
     if (chunkResult.done) {
+      offset = end;
       result = chunkResult.result;
       if (offset < bytes.length) throw new Error("Google Drive completed the upload earlier than expected; please retry.");
-    } else if (offset >= bytes.length) {
-      throw new Error("Google Drive did not confirm the final upload chunk. Please retry.");
+    } else {
+      offset = chunkResult.nextOffset as number;
+      if (offset >= bytes.length) throw new Error("Google Drive did not confirm the final upload chunk. Please retry.");
     }
   }
   return result || {};
