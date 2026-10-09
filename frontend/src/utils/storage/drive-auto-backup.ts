@@ -45,7 +45,7 @@ async function loadPendingTables() {
     const raw = await storage.getItem<string>(DIRTY_TABLES_KEY, "");
     const parsed = typeof raw === "string" ? JSON.parse(raw) : [];
     if (Array.isArray(parsed)) parsed.forEach((name) => {
-      if (typeof name === "string" && (Object.values(tableMap).includes(name) || name === "branding")) {
+      if (typeof name === "string" && (Object.values(tableMap).includes(name) || name === "branding" || name === "appSettings")) {
         pendingTables.add(name);
       }
     });
