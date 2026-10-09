@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Animated, PanResponder, Text, View, useWindowDimensions } from "react-native";
 
 export type DriveSyncState =
-  | { phase: "idle"; updates: 0; message: "" }
+  | { phase: "idle"; updates: number; message: string }
   | { phase: "waiting"; updates: number; message: string }
   | { phase: "uploading"; updates: number; message: string }
   | { phase: "success"; updates: 0; message: string }
@@ -31,8 +31,10 @@ export function DriveSyncIndicator() {
     onStartShouldSetPanResponder: () => true,
     onMoveShouldSetPanResponder: (_, gesture) => Math.abs(gesture.dx) > 3 || Math.abs(gesture.dy) > 3,
     onPanResponderGrant: () => {
-      position.setOffset({ x: position.x.__getValue(), y: position.y.__getValue() });
-      position.setValue({ x: 0, y: 0 });
+      position.stopAnimation((value) => {
+        position.setOffset(value);
+        position.setValue({ x: 0, y: 0 });
+      });
     },
     onPanResponderMove: Animated.event([null, { dx: position.x, dy: position.y }], { useNativeDriver: false }),
     onPanResponderRelease: () => position.flattenOffset(),
