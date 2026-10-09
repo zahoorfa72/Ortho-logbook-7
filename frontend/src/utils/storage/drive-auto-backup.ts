@@ -101,15 +101,14 @@ async function runBackup() {
     const completedAt = result.completedAt
       ? new Date(result.completedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
       : "";
-    setDriveSyncState({
-      phase: pendingTables.size ? "waiting" : "success",
-      updates: pendingTables.size,
-      message: pendingTables.size
-        ? "New changes detected · syncing again…"
-        : result.baselineCreated
-          ? "Full backup baseline created" + (completedAt ? " · " + completedAt : "")
-          : "Changed data synced to Google Drive" + (completedAt ? " · " + completedAt : ""),
-    });
+    const successMessage = result.baselineCreated
+      ? "Full backup baseline created" + (completedAt ? " · " + completedAt : "")
+      : "Changed data synced to Google Drive" + (completedAt ? " · " + completedAt : "");
+    if (pendingTables.size) {
+      setDriveSyncState({ phase: "waiting", updates: pendingTables.size, message: "New changes detected · syncing again…" });
+    } else {
+      setDriveSyncState({ phase: "success", updates: 0, message: successMessage });
+    }
   } catch (error) {
     // Retain failed table names so the next connection/foreground retry does
     // not lose edits. All actual records remain in local SQLite.
