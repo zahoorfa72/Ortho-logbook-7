@@ -1,4 +1,6 @@
 import { GoogleSignin, statusCodes } from "@react-native-google-signin/google-signin";
+import { NativeModules, Platform } from "react-native";
+import * as FileSystem from "expo-file-system/legacy";
 import { exportUnencryptedBackup, type BackupFilter } from "@/src/utils/storage/backup";
 import { markBackupTaken } from "@/src/utils/backup-reminder";
 import { storage } from "@/src/utils/storage";
@@ -281,78 +283,143 @@ async function uploadResumable(sessionUrl: string, token: string, bytes: Uint8Ar
   }
   return result || {};
 }
+async function uploadNativeBackground(
+  sessionUrl: string,
+  token: string,
+  fileUri: string,
+  totalBytes: number,
+  onProgress?: (stage: string) => void,
+): Promise<any> {
+  const nativeUploader = NativeModules.DriveBackgroundUpload;
+  if (!nativeUploader?.startUpload || !nativeUploader?.getStatus) {
+    throw new Error("This Android build does not include the background upload service. Install the latest Ortho Logbook APK.");
+  }
+  const taskId: string = await nativeUploader.startUpload(sessionUrl, token, fileUri, totalBytes);
+  let lastProgress = -1;
+  while (true) {
+    const status = await nativeUploader.getStatus(taskId);
+    if (status?.status === "completed") {
+      try { return status.result ? JSON.parse(status.result) : {}; } catch { return {}; }
+    }
+    if (status?.status === "error") {
+      throw new Error(status.error || "Google Drive background upload failed. Your local data is unchanged; retry when connected.");
+    }
+    const progress = Number(status?.progress ?? 0);
+    if (progress !== lastProgress) {
+      lastProgress = progress;
+      onProgress?.("Uploading backup to Google Drive in background… " + progress + "%");
+    }
+    await new Promise<void>(resolve => setTimeout(resolve, 1000));
+  }
+}
+
 async function uploadContent(backupText: string, existingId?: string, onProgress?: (stage: string) => void) {
   const token = await accessToken();
-  const bytes = new TextEncoder().encode(backupText);
+  const useNativeBackground = Platform.OS === "android" && !!NativeModules.DriveBackgroundUpload?.startUpload;
+  let stagedFileUri: string | null = null;
+  let totalBytes = 0;
+  let bytes: Uint8Array | null = null;
+
+  if (useNativeBackground) {
+    if (!FileSystem.cacheDirectory) throw new Error("Device cache storage is unavailable for the Drive backup.");
+    stagedFileUri = FileSystem.cacheDirectory + "ortho-drive-backup-" + Date.now() + ".json";
+    try {
+      await FileSystem.writeAsStringAsync(stagedFileUri, backupText, { encoding: FileSystem.EncodingType.UTF8 });
+      const info = await FileSystem.getInfoAsync(stagedFileUri);
+      if (!info.exists || typeof info.size !== "number" || info.size <= 0) {
+        throw new Error("Could not prepare the backup file for background upload.");
+      }
+      totalBytes = info.size;
+    } catch (error: any) {
+      try { await FileSystem.deleteAsync(stagedFileUri, { idempotent: true }); } catch {}
+      throw new Error("Could not prepare the backup for background upload: " + String(error?.message || error));
+    }
+  } else {
+    bytes = new TextEncoder().encode(backupText);
+    totalBytes = bytes.length;
+  }
+
   const target = existingId
     ? DRIVE_UPLOAD + "/" + encodeURIComponent(existingId) + "?uploadType=resumable&fields=id,name,modifiedTime,size"
     : DRIVE_UPLOAD + "?uploadType=resumable&fields=id,name,modifiedTime,size";
-  let initResponse: Response;
   try {
-    initResponse = await fetchWithTimeout(target, {
-      method: existingId ? "PATCH" : "POST",
-      headers: {
-        Authorization: "Bearer " + token,
-        "Content-Type": "application/json; charset=UTF-8",
-        "X-Upload-Content-Type": "application/json",
-        "X-Upload-Content-Length": String(bytes.length),
-      },
-      body: JSON.stringify({ name: BACKUP_NAME, mimeType: "application/json" }),
-    }, 30000);
-  } catch (error: any) {
-    throw new Error("Could not start Google Drive upload session. " + (error?.message || "Check network access and retry."));
-  }
-  if (!initResponse.ok) {
-    let message = "Google Drive could not start upload (HTTP " + initResponse.status + ").";
-    try { const result = await initResponse.json(); message = result?.error?.message || message; } catch {}
-    throw new Error(message);
-  }
-  const sessionUrl = initResponse.headers.get("Location");
-  if (!sessionUrl) throw new Error("Google Drive did not provide an upload session. Reconnect your Google account and retry.");
-  try {
-    return await uploadResumable(sessionUrl, token, bytes, onProgress);
-  } catch (error: any) {
-    const originalMessage = String(error?.message || "Google Drive resumable upload failed.");
-    // Do not start a second full-file transfer after the explicit overall deadline.
-    if (originalMessage.includes("stopped after 5 minutes")) throw error;
-    // Multipart fallback builds a second full-size copy of the JSON in memory.
-    // On Android this can terminate the app for large photo-heavy backups. Only
-    // use it for small files; large uploads fail visibly and keep local data safe.
-    if (bytes.length > 8 * 1024 * 1024) {
-      throw new Error(
-        "Google Drive resumable upload failed: " + originalMessage +
-        " The backup is too large for the safe fallback, so no second full-file copy was attempted. Your data is still on this phone. Check Drive permission/network and retry."
-      );
-    }
-    // Small-file fallback for devices whose native XHR cannot transfer a session body.
-    const boundary = "ortho_logbook_drive_" + Date.now().toString(36);
-    const metadata = JSON.stringify({ name: BACKUP_NAME, mimeType: "application/json" });
-    const body = "--" + boundary + "\r\n" +
-      "Content-Type: application/json; charset=UTF-8\r\n" +
-      "\r\n" + metadata + "\r\n" +
-      "--" + boundary + "\r\n" +
-      "Content-Type: application/json; charset=UTF-8\r\n" +
-      "\r\n" + backupText + "\r\n" +
-      "--" + boundary + "--\r\n";
-    const retryTarget = existingId
-      ? DRIVE_UPLOAD + "/" + encodeURIComponent(existingId) + "?uploadType=multipart&fields=id,name,modifiedTime,size"
-      : DRIVE_UPLOAD + "?uploadType=multipart&fields=id,name,modifiedTime,size";
+    let initResponse: Response;
     try {
-      const retry = await fetchWithTimeout(retryTarget, {
+      initResponse = await fetchWithTimeout(target, {
         method: existingId ? "PATCH" : "POST",
-        headers: { Authorization: "Bearer " + token, "Content-Type": "multipart/related; boundary=" + boundary },
-        body,
-      }, 45000);
-      if (retry.ok) return await retry.json();
-      let message = "Google Drive multipart fallback failed (HTTP " + retry.status + ").";
-      try { const data = await retry.json(); message = data?.error?.message || message; } catch {}
+        headers: {
+          Authorization: "Bearer " + token,
+          "Content-Type": "application/json; charset=UTF-8",
+          "X-Upload-Content-Type": "application/json",
+          "X-Upload-Content-Length": String(totalBytes),
+        },
+        body: JSON.stringify({ name: BACKUP_NAME, mimeType: "application/json" }),
+      }, 30000);
+    } catch (error: any) {
+      throw new Error("Could not start Google Drive upload session. " + (error?.message || "Check network access and retry."));
+    }
+    if (!initResponse.ok) {
+      let message = "Google Drive could not start upload (HTTP " + initResponse.status + ").";
+      try { const result = await initResponse.json(); message = result?.error?.message || message; } catch {}
       throw new Error(message);
-    } catch (retryError: any) {
-      const retryMessage = String(retryError?.message || "Network request failed");
-      throw new Error("Resumable upload failed: " + originalMessage + " Alternate multipart upload failed: " + retryMessage + ". Local records are unchanged; retry when Google Drive connectivity is available.");
+    }
+    const sessionUrl = initResponse.headers.get("Location");
+    if (!sessionUrl) throw new Error("Google Drive did not provide an upload session. Reconnect your Google account and retry.");
+
+    if (useNativeBackground && stagedFileUri) {
+      // The Android foreground service owns the file transfer. It continues
+      // sending 512 KiB Drive chunks while the app is backgrounded or the
+      // screen is locked, and reconciles progress with Drive after interruptions.
+      return await uploadNativeBackground(sessionUrl, token, stagedFileUri, totalBytes, onProgress);
+    }
+
+    try {
+      return await uploadResumable(sessionUrl, token, bytes as Uint8Array, onProgress);
+    } catch (error: any) {
+      const originalMessage = String(error?.message || "Google Drive resumable upload failed.");
+      if (originalMessage.includes("stopped after 5 minutes")) throw error;
+      if ((bytes as Uint8Array).length > 8 * 1024 * 1024) {
+        throw new Error(
+          "Google Drive resumable upload failed: " + originalMessage +
+          " The backup is too large for the safe fallback, so no second full-file copy was attempted. Your data is still on this phone. Check Drive permission/network and retry."
+        );
+      }
+      const boundary = "ortho_logbook_drive_" + Date.now().toString(36);
+      const metadata = JSON.stringify({ name: BACKUP_NAME, mimeType: "application/json" });
+      const body = "--" + boundary + "\\r\\n" +
+        "Content-Type: application/json; charset=UTF-8\\r\\n" +
+        "\\r\\n" + metadata + "\\r\\n" +
+        "--" + boundary + "\\r\\n" +
+        "Content-Type: application/json; charset=UTF-8\\r\\n" +
+        "\\r\\n" + backupText + "\\r\\n" +
+        "--" + boundary + "--\\r\\n";
+      const retryTarget = existingId
+        ? DRIVE_UPLOAD + "/" + encodeURIComponent(existingId) + "?uploadType=multipart&fields=id,name,modifiedTime,size"
+        : DRIVE_UPLOAD + "?uploadType=multipart&fields=id,name,modifiedTime,size";
+      try {
+        const retry = await fetchWithTimeout(retryTarget, {
+          method: existingId ? "PATCH" : "POST",
+          headers: { Authorization: "Bearer " + token, "Content-Type": "multipart/related; boundary=" + boundary },
+          body,
+        }, 45000);
+        if (retry.ok) return await retry.json();
+        let message = "Google Drive multipart fallback failed (HTTP " + retry.status + ").";
+        try { const data = await retry.json(); message = data?.error?.message || message; } catch {}
+        throw new Error(message);
+      } catch (retryError: any) {
+        const retryMessage = String(retryError?.message || "Network request failed");
+        throw new Error("Resumable upload failed: " + originalMessage + " Alternate multipart upload failed: " + retryMessage + ". Local records are unchanged; retry when Google Drive connectivity is available.");
+      }
+    }
+  } finally {
+    if (stagedFileUri) {
+      // The service has finished (successfully or with an error) before this
+      // promise settles; remove only its temporary export, never the database.
+      try { await FileSystem.deleteAsync(stagedFileUri, { idempotent: true }); } catch {}
     }
   }
 }
+
 async function backupContentHash(backupText: string, onProgress?: (stage: string) => void) {
   // Hash the existing string in place rather than creating a second 50+ MiB
   // string with replace(). Ignore only the generated createdAt value so a
