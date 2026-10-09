@@ -7,7 +7,7 @@ import {
 import { setDriveSyncState } from "@/src/utils/storage/drive-sync-status";
 import { storage } from "@/src/utils/storage";
 
-const DEBOUNCE_MS = 5000;
+const DEBOUNCE_MS = 1000;
 const DIRTY_TABLES_KEY = "ortho_drive_pending_tables_v1";
 let timer: ReturnType<typeof setTimeout> | null = null;
 let uploading = false;
@@ -133,9 +133,9 @@ async function runBackup() {
   }
 }
 
-export function triggerAutomaticDriveBackup() {
-  // Explicit callers use this for non-SQLite metadata such as branding.
-  scheduleBackup("branding");
+export function triggerAutomaticDriveBackup(tableName: "branding" | "appSettings" = "branding") {
+  // Explicit callers use this for non-SQLite metadata such as branding and OAuth client configuration.
+  scheduleBackup(tableName);
 }
 
 export function startAutomaticDriveBackup() {
