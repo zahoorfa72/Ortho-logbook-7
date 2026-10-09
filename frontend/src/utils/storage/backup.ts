@@ -178,7 +178,9 @@ export async function exportUnencryptedBackup(filter: BackupFilter = { type: "al
 const DELTA_CACHE_PATH = (LegacyFileSystem.documentDirectory || LegacyFileSystem.cacheDirectory || "") + "ortho-drive-delta-cache-v1.json";
 let pendingDeltaCacheText: string | null = null;
 
-async function readDeltaCache(): Promise<{ baselineKey: string; tables: Record<string, any[]> } | null> {
+type DriveDeltaCache = { baselineKey: string; tables: Record<string, any[]>; photoSources?: Record<string, string> };
+
+async function readDeltaCache(): Promise<DriveDeltaCache | null> {
  try {
   if (!DELTA_CACHE_PATH) return null;
   const info = await LegacyFileSystem.getInfoAsync(DELTA_CACHE_PATH);
