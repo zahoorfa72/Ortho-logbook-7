@@ -173,8 +173,7 @@ function uploadChunk(sessionUrl: string, token: string, bytes: Uint8Array, start
   });
 }
 
-async function uploadResumable(sessionUrl: string, token: string, backupText: string, onProgress?: (stage: string) => void) {
-  const bytes = new TextEncoder().encode(backupText);
+async function uploadResumable(sessionUrl: string, token: string, bytes: Uint8Array, onProgress?: (stage: string) => void) {
   const startedAt = Date.now();
   let offset = 0;
   let result: any = null;
@@ -243,7 +242,7 @@ async function uploadContent(backupText: string, existingId?: string, onProgress
   const sessionUrl = initResponse.headers.get("Location");
   if (!sessionUrl) throw new Error("Google Drive did not provide an upload session. Reconnect your Google account and retry.");
   try {
-    return await uploadResumable(sessionUrl, token, backupText, onProgress);
+    return await uploadResumable(sessionUrl, token, bytes, onProgress);
   } catch (error: any) {
     const originalMessage = String(error?.message || "Google Drive resumable upload failed.");
     // Do not start a second full-file transfer after the explicit overall deadline.
