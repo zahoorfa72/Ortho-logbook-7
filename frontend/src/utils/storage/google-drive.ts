@@ -686,7 +686,7 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
   const backupText = await exportIncrementalBackup(changedTables, onProgress, baselineKey);
   const delta = JSON.parse(backupText);
   const hasActualChanges = (Array.isArray(delta.changedTables) ? delta.changedTables : []).some((table: string) => {
-    if (table === "branding") return Object.prototype.hasOwnProperty.call(delta, "branding");
+    if (table === "branding" || table === "appSettings") return Object.prototype.hasOwnProperty.call(delta, table);
     if (Array.isArray(delta.fullTables) && delta.fullTables.includes(table)) return true;
     const rows = Array.isArray(delta[table]) ? delta[table].length : 0;
     const deleted = Array.isArray(delta.deletedIds?.[table]) ? delta.deletedIds[table].length : 0;
@@ -768,12 +768,12 @@ export async function restoreLatestFromGoogleDrive() {
     }
     let appliedAnyTable = false;
     for (const table of delta.changedTables) {
-      if (table === "branding") {
-        if (Object.prototype.hasOwnProperty.call(delta, "branding")) {
-          composed.branding = delta.branding;
+      if (table === "branding" || table === "appSettings") {
+        if (Object.prototype.hasOwnProperty.call(delta, table)) {
+          (composed as any)[table] = (delta as any)[table];
           appliedAnyTable = true;
         } else {
-          recoveryWarnings.push(String(deltaFile.name || "An incremental backup") + " is missing its branding data.");
+          recoveryWarnings.push(String(deltaFile.name || "An incremental backup") + " is missing its " + table + " data.");
         }
       } else if (["patients","procedures","inventoryCategories","inventory","patientImplants","patientCustomFields","implantRecords","expenses","users","patientHistory","inventoryMovements","inventoryPurchaseReceipts","stockReceipts"].includes(table)) {
         if (Array.isArray(delta[table])) {
