@@ -522,7 +522,7 @@ async function downloadDriveJsonValidated(fileId: string): Promise<any> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      const text = (await downloadDriveJson(fileId)).replace(/^\\uFEFF/, "").trim();
+      const text = (await downloadDriveJson(fileId)).replace(/^\uFEFF/, "").trim();
       if (!text) throw new Error("Google Drive returned an empty backup file.");
       return JSON.parse(text);
     } catch (error) {
