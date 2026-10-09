@@ -569,28 +569,48 @@ export async function restoreLatestFromGoogleDrive() {
     .filter((item: any) => item?.id && Number.isFinite(Date.parse(String(item.modifiedTime || ""))) &&
       (!Number.isFinite(baseTime) || Date.parse(String(item.modifiedTime)) > baseTime))
     .sort((a: any, b: any) => Date.parse(String(a.modifiedTime)) - Date.parse(String(b.modifiedTime)));
+  const recoveryWarnings: string[] = [];
+  let appliedIncrementals = 0;
   for (const deltaFile of deltas) {
     let delta: any;
     try {
       delta = await downloadDriveJsonValidated(deltaFile.id);
     } catch {
-      throw new Error("An incremental Google Drive backup (" + String(deltaFile.name || "unknown file") + ") is unreadable after three download attempts. Restore stopped to prevent silently missing newer data. Keep this file in Drive; reconnect Google Drive and retry after a stable connection.");
+      // Recover the baseline and every readable table snapshot instead of
+      // blocking all old data because one delta file is damaged.
+      recoveryWarnings.push(String(deltaFile.name || "An incremental backup") + " could not be read and was skipped.");
+      continue;
     }
     if (!delta || delta.app !== "Ortho Logbook" || delta.incremental !== true || !Array.isArray(delta.changedTables)) {
-      throw new Error("An incremental Google Drive backup (" + String(deltaFile.name || "unknown file") + ") is incomplete. Restore stopped to protect your data.");
+      recoveryWarnings.push(String(deltaFile.name || "An incremental backup") + " has an invalid format and was skipped.");
+      continue;
     }
+    let appliedAnyTable = false;
     for (const table of delta.changedTables) {
       if (table === "branding") {
-        if (Object.prototype.hasOwnProperty.call(delta, "branding")) composed.branding = delta.branding;
-      } else if (["patients","procedures","inventoryCategories","inventory","patientImplants","patientCustomFields","implantRecords","expenses","users","patientHistory","inventoryMovements","inventoryPurchaseReceipts","stockReceipts"].includes(table) && Array.isArray(delta[table])) {
-        composed[table] = delta[table];
+        if (Object.prototype.hasOwnProperty.call(delta, "branding")) {
+          composed.branding = delta.branding;
+          appliedAnyTable = true;
+        } else {
+          recoveryWarnings.push(String(deltaFile.name || "An incremental backup") + " is missing its branding data.");
+        }
+      } else if (["patients","procedures","inventoryCategories","inventory","patientImplants","patientCustomFields","implantRecords","expenses","users","patientHistory","inventoryMovements","inventoryPurchaseReceipts","stockReceipts"].includes(table)) {
+        if (Array.isArray(delta[table])) {
+          composed[table] = delta[table];
+          appliedAnyTable = true;
+        } else {
+          recoveryWarnings.push(String(deltaFile.name || "An incremental backup") + " is missing table data for " + table + ".");
+        }
       }
     }
-    composed.createdAt = delta.createdAt || composed.createdAt;
+    if (appliedAnyTable) {
+      appliedIncrementals += 1;
+      composed.createdAt = delta.createdAt || composed.createdAt;
+    }
   }
   composed.incremental = false;
   delete composed.changedTables;
   composed.filter = { type: "all" };
-  return { backupText: JSON.stringify(composed), name: file.name, modifiedTime: file.modifiedTime, appliedIncrementals: deltas.length };
+  return { backupText: JSON.stringify(composed), name: file.name, modifiedTime: file.modifiedTime, appliedIncrementals, recoveryWarnings };
 }
 
