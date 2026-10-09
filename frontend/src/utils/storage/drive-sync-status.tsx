@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from "react";
-import { ActivityIndicator, Text, View } from "react-native";
+import React, { useEffect, useRef, useState } from "react";
+import { ActivityIndicator, Animated, PanResponder, Text, View, useWindowDimensions } from "react-native";
 
 export type DriveSyncState =
   | { phase: "idle"; updates: 0; message: "" }
@@ -25,6 +25,19 @@ export function subscribeDriveSync(listener: (state: DriveSyncState) => void) {
 
 export function DriveSyncIndicator() {
   const [state, setState] = useState<DriveSyncState>(current);
+  const { width, height } = useWindowDimensions();
+  const position = useRef(new Animated.ValueXY({ x: Math.max(8, width - 128), y: 48 })).current;
+  const panResponder = useRef(PanResponder.create({
+    onStartShouldSetPanResponder: () => true,
+    onMoveShouldSetPanResponder: (_, gesture) => Math.abs(gesture.dx) > 3 || Math.abs(gesture.dy) > 3,
+    onPanResponderGrant: () => {
+      position.setOffset({ x: position.x.__getValue(), y: position.y.__getValue() });
+      position.setValue({ x: 0, y: 0 });
+    },
+    onPanResponderMove: Animated.event([null, { dx: position.x, dy: position.y }], { useNativeDriver: false }),
+    onPanResponderRelease: () => position.flattenOffset(),
+    onPanResponderTerminate: () => position.flattenOffset(),
+  })).current;
   useEffect(() => subscribeDriveSync(setState), []);
 
   // Successful sync is briefly confirmed, then the chip disappears so it never
@@ -48,9 +61,9 @@ export function DriveSyncIndicator() {
         : `Upload ${state.updates || 1}…`;
 
   return (
-    <View pointerEvents="none" style={{ position: "absolute", top: 48, right: 8, zIndex: 9999, elevation: 12, maxWidth: 112, flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 7, paddingVertical: 4, borderRadius: 14, backgroundColor, opacity: 0.94 }}>
+    <Animated.View {...panResponder.panHandlers} style={{ position: "absolute", left: 0, top: 0, zIndex: 9999, elevation: 12, maxWidth: 112, flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 7, paddingVertical: 4, borderRadius: 14, backgroundColor, opacity: 0.94, transform: position.getTranslateTransform() }}>
       {active ? <ActivityIndicator size="small" color={color} /> : null}
       <Text numberOfLines={1} style={{ color, fontSize: 10, fontWeight: "700" }}>{label}</Text>
-    </View>
+    </Animated.View>
   );
 }
