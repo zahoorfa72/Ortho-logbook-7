@@ -238,7 +238,7 @@ export default function BackupRestoreScreen() {
             setLoading(true);
             const backup = await decryptBackup(selectedBackup.backupText, restorePassword);
             if (isReplace) {
-              const result = restoreBackup(backup);
+              const result = await restoreBackup(backup);
               await storage.secureRemove("ortho_current_user");
               queryClient.clear();
               Alert.alert(
@@ -247,7 +247,7 @@ export default function BackupRestoreScreen() {
                 [{ text: "OK", onPress: () => router.replace("/login") }],
               );
             } else {
-              const result = mergeBackup(backup);
+              const result = await mergeBackup(backup);
               queryClient.clear();
               Alert.alert(
                 "Merge complete",
