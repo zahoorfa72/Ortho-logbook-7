@@ -374,7 +374,7 @@ function restoreReal(value:any,fallback=0,min=-Infinity){const n=typeof value===
 function restoreJsonObject(value:any){try{const parsed=JSON.parse(String(value ?? "{}"));return parsed && typeof parsed==="object" && !Array.isArray(parsed) ? JSON.stringify(parsed) : "{}";}catch{return "{}";}}
 function restoreJsonArray(value:any){try{const parsed=JSON.parse(String(value ?? "[]"));return Array.isArray(parsed) ? JSON.stringify(parsed) : "[]";}catch{return "[]";}}
 
-export function restoreBackup(backup:BackupData){
+export async function restoreBackup(backup:BackupData){
  initializeDatabase({ skipInventoryReset: true });
  if(!backup||![2,3,4,5,6,7].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
  const patients=restoreArray((backup as any).patients);
@@ -539,12 +539,21 @@ export function restoreBackup(backup:BackupData){
   }
  });
  repairDatabaseData();
- if (backup.version >= 6 && backup.branding === null) void storage.removeItem("ortho_branding");
-  else if (backup.version >= 6 && backup.branding && typeof backup.branding === "object") void storage.setItem("ortho_branding", JSON.stringify(backup.branding));
+ // Await settings writes so restore cannot report success before branding,
+ // logos, PDF styling and Drive configuration have been persisted.
+ if (backup.version >= 6 && backup.branding === null) {
+   await storage.removeItem("ortho_branding");
+ } else if (backup.version >= 6 && backup.branding && typeof backup.branding === "object") {
+   await storage.setItem("ortho_branding", JSON.stringify(backup.branding));
+ }
  if (backup.appSettings && typeof backup.appSettings === "object") {
    const settings = backup.appSettings;
-   if (typeof settings.googleOAuthClientId === "string" && settings.googleOAuthClientId) void SecureStore.setItemAsync("ortho_google_drive_client_id", settings.googleOAuthClientId).catch(() => undefined);
-   if (typeof settings.googleCloudProjectId === "string" && settings.googleCloudProjectId) void SecureStore.setItemAsync("ortho_google_drive_cloud_project_id", settings.googleCloudProjectId).catch(() => undefined);
+   if (typeof settings.googleOAuthClientId === "string" && settings.googleOAuthClientId) {
+     await SecureStore.setItemAsync("ortho_google_drive_client_id", settings.googleOAuthClientId).catch(() => undefined);
+   }
+   if (typeof settings.googleCloudProjectId === "string" && settings.googleCloudProjectId) {
+     await SecureStore.setItemAsync("ortho_google_drive_cloud_project_id", settings.googleCloudProjectId).catch(() => undefined);
+   }
  }
  markInventoryResetDone();
  return {patients:patients.length,procedures:procedures.length,inventory:inventory.length,inventoryCategories:inventoryCategories.length,patientImplants:patientImplants.length,expenses:expenses.length,users:users.length,patientHistory:patientHistory.length,inventoryMovements:inventoryMovements.length};
@@ -555,7 +564,7 @@ export function restoreBackup(backup:BackupData){
 //   imports of the same backup idempotent.
 // - Inventory items from a different source phone can still be combined by
 //   matching name + category + size and summing quantities.
-export function mergeBackup(backup: BackupData) {
+export async function mergeBackup(backup: BackupData) {
  initializeDatabase({ skipInventoryReset: true });
  if(!backup||![2,3,4,5,6,7].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
  const stats = { patients: 0, procedures: 0, inventory: 0, inventoryCategories: 0, patientImplants: 0, expenses: 0, users: 0, patientHistory: 0, inventoryMovements: 0, stockReceipts: 0 };
@@ -665,12 +674,21 @@ export function mergeBackup(backup: BackupData) {
    stats.inventoryMovements++;
   }
  });
- if (backup.version >= 6 && backup.branding === null) void storage.removeItem("ortho_branding");
-  else if (backup.version >= 6 && backup.branding && typeof backup.branding === "object") void storage.setItem("ortho_branding", JSON.stringify(backup.branding));
+ // Await settings writes so restore cannot report success before branding,
+ // logos, PDF styling and Drive configuration have been persisted.
+ if (backup.version >= 6 && backup.branding === null) {
+   await storage.removeItem("ortho_branding");
+ } else if (backup.version >= 6 && backup.branding && typeof backup.branding === "object") {
+   await storage.setItem("ortho_branding", JSON.stringify(backup.branding));
+ }
  if (backup.appSettings && typeof backup.appSettings === "object") {
    const settings = backup.appSettings;
-   if (typeof settings.googleOAuthClientId === "string" && settings.googleOAuthClientId) void SecureStore.setItemAsync("ortho_google_drive_client_id", settings.googleOAuthClientId).catch(() => undefined);
-   if (typeof settings.googleCloudProjectId === "string" && settings.googleCloudProjectId) void SecureStore.setItemAsync("ortho_google_drive_cloud_project_id", settings.googleCloudProjectId).catch(() => undefined);
+   if (typeof settings.googleOAuthClientId === "string" && settings.googleOAuthClientId) {
+     await SecureStore.setItemAsync("ortho_google_drive_client_id", settings.googleOAuthClientId).catch(() => undefined);
+   }
+   if (typeof settings.googleCloudProjectId === "string" && settings.googleCloudProjectId) {
+     await SecureStore.setItemAsync("ortho_google_drive_cloud_project_id", settings.googleCloudProjectId).catch(() => undefined);
+   }
  }
  markInventoryResetDone();
  return stats;
