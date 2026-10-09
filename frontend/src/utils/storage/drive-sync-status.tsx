@@ -53,7 +53,7 @@ export function DriveSyncIndicator() {
   const backgroundColor = state.phase === "error" ? "#FEE2E2" : state.phase === "success" ? "#DCFCE7" : "#DBEAFE";
   const color = state.phase === "error" ? "#991B1B" : state.phase === "success" ? "#166534" : "#1D4ED8";
   const label = state.phase === "error"
-    ? "Drive error"
+    ? state.message
     : state.phase === "success"
       ? "Synced"
       : state.phase === "waiting"
@@ -61,9 +61,9 @@ export function DriveSyncIndicator() {
         : `Upload ${state.updates || 1}…`;
 
   return (
-    <Animated.View {...panResponder.panHandlers} style={{ position: "absolute", left: 0, top: 0, zIndex: 9999, elevation: 12, maxWidth: 112, flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 7, paddingVertical: 4, borderRadius: 14, backgroundColor, opacity: 0.94, transform: position.getTranslateTransform() }}>
+    <Animated.View {...panResponder.panHandlers} style={{ position: "absolute", left: 0, top: 0, zIndex: 9999, elevation: 12, maxWidth: state.phase === "error" ? Math.min(280, width - 16) : 112, flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 7, paddingVertical: 4, borderRadius: 14, backgroundColor, opacity: 0.94, transform: position.getTranslateTransform() }}>
       {active ? <ActivityIndicator size="small" color={color} /> : null}
-      <Text numberOfLines={1} style={{ color, fontSize: 10, fontWeight: "700" }}>{label}</Text>
+      <Text numberOfLines={state.phase === "error" ? 3 : 1} style={{ color, fontSize: 10, fontWeight: "700", flexShrink: 1 }}>{label}</Text>
     </Animated.View>
   );
 }
