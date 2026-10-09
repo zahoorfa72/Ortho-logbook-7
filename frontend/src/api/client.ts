@@ -571,7 +571,7 @@ export const api = {
         else if (q >= highCut && q > lowCut) usageLevel = "high";
         else if (q <= lowCut && q < highCut) usageLevel = "low";
         return { id:String(r.id), category:r.category||"", name:r.name||"", size:r.size||"", quantity:q, usageLevel, rank:index+1 };
-      });
+      }) as any;
     }
     if (normalizedPath.startsWith("/inventory")) {
       const q = path.split("?")[1] || "";
@@ -736,7 +736,7 @@ export const api = {
           const billImage=String(entry?.billImage||"");
           const description=String(body?.description||"").trim();
           const existing=db.getFirstSync<any>("SELECT * FROM inventory WHERE category_id=? AND LOWER(COALESCE(size,''))=LOWER(?) LIMIT 1",[categoryId,size]);
-          let inventoryId:String = "";
+          let inventoryId: string = "";
           if(existing){
             const next=Number(existing.quantity||0)+quantity;
             inventoryId=existing.id;
@@ -780,7 +780,7 @@ export const api = {
     // must not depend on stock being zero.
     if (normalizedPath === "/implant-records-bulk-delete") {
       await requireAdmin();
-      const ids=Array.isArray(body?.ids)?[...new Set(body.ids.map(String).filter(Boolean))]:[];
+      const ids=Array.isArray(body?.ids)?[...new Set(body.ids.map((value: unknown) => String(value)).filter((value: string) => Boolean(value)))]:[];
       if(!ids.length) return {success:true,deleted:0} as any;
       const placeholders=ids.map(()=>"?").join(",");
       const rows=db.getAllSync<any>(`SELECT id FROM implant_records WHERE id IN (${placeholders})`,ids);
@@ -789,7 +789,7 @@ export const api = {
     }
     if (normalizedPath === "/inventory-bulk-delete") {
       await requireAdmin();
-      const ids = Array.isArray(body?.ids) ? body.ids.map(String).filter(Boolean) : [];
+      const ids = Array.isArray(body?.ids) ? body.ids.map((value: unknown) => String(value)).filter((value: string) => Boolean(value)) : [];
       const deleted = deleteInventoryRows(ids);
       return { success: true, deleted } as any;
     }
@@ -797,7 +797,7 @@ export const api = {
     if (normalizedPath === "/patients-bulk-delete") {
       const me = await currentUserRow();
       if (!me) throw new Error("Not signed in.");
-      const ids = Array.isArray(body?.ids) ? body.ids.map(String).filter(Boolean) : [];
+      const ids = Array.isArray(body?.ids) ? body.ids.map((value: unknown) => String(value)).filter((value: string) => Boolean(value)) : [];
       const deleted = deletePatientRows(ids, me);
       return { success: true, deleted } as any;
     }
