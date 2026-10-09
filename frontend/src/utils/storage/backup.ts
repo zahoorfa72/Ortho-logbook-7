@@ -1,5 +1,6 @@
 import * as Crypto from "expo-crypto";
 import { File } from "expo-file-system";
+import * as LegacyFileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import nacl from "tweetnacl";
 import { db, initializeDatabase, markInventoryResetDone, repairDatabaseData } from "@/src/db/database";
@@ -159,10 +160,42 @@ export async function exportUnencryptedBackup(filter: BackupFilter = { type: "al
  return JSON.stringify(backup);
 }
 
-// Drive auto-sync uses table snapshots rather than re-uploading the full app.
-// A changed table is replaced as a whole during restore, so deletions are
-// represented safely as well as inserts and edits.
-export async function exportIncrementalBackup(changedTables: string[], onProgress?: (stage: string) => void): Promise<string> {
+// Drive auto-sync keeps a local copy of each successfully uploaded table so
+// subsequent backups can contain only changed rows and deletion tombstones.
+// The cache is promoted only after Google Drive confirms the upload.
+const DELTA_CACHE_PATH = (LegacyFileSystem.documentDirectory || LegacyFileSystem.cacheDirectory || "") + "ortho-drive-delta-cache-v1.json";
+let pendingDeltaCacheText: string | null = null;
+
+async function readDeltaCache(): Promise<{ baselineKey: string; tables: Record<string, any[]> } | null> {
+ try {
+  if (!DELTA_CACHE_PATH) return null;
+  const info = await LegacyFileSystem.getInfoAsync(DELTA_CACHE_PATH);
+  if (!info.exists) return null;
+  const parsed = JSON.parse(await LegacyFileSystem.readAsStringAsync(DELTA_CACHE_PATH));
+  if (!parsed || typeof parsed.baselineKey !== "string" || !parsed.tables || typeof parsed.tables !== "object") return null;
+  return parsed;
+ } catch { return null; }
+}
+
+export async function commitIncrementalSnapshotCache(): Promise<void> {
+ if (!pendingDeltaCacheText || !DELTA_CACHE_PATH) return;
+ const textToSave = pendingDeltaCacheText;
+ try {
+  await LegacyFileSystem.writeAsStringAsync(DELTA_CACHE_PATH, textToSave);
+  if (pendingDeltaCacheText === textToSave) pendingDeltaCacheText = null;
+ } catch (error) {
+  // Cache failure is not a backup failure. The next upload safely falls back
+  // to a table snapshot instead of risking omissions.
+  console.warn("[drive-auto-backup] snapshot cache could not be saved", error);
+  pendingDeltaCacheText = null;
+ }
+}
+
+function rowKey(row: any): string | null {
+ return row && row.id !== undefined && row.id !== null && String(row.id) !== "" ? String(row.id) : null;
+}
+
+export async function exportIncrementalBackup(changedTables: string[], onProgress?: (stage: string) => void, baselineKey = ""): Promise<string> {
  const allowed = new Set([
   "patients","procedures","inventoryCategories","inventory","patientImplants",
   "patientCustomFields","implantRecords","expenses","users","patientHistory",
@@ -171,9 +204,41 @@ export async function exportIncrementalBackup(changedTables: string[], onProgres
  const tables = Array.from(new Set(changedTables)).filter((name) => allowed.has(name));
  if (!tables.length) throw new Error("There are no changed data tables to sync.");
  const backup = await createBackupData({ type: "all" }, onProgress, tables);
+ const previous = await readDeltaCache();
+ const canDiff = !!previous && previous.baselineKey === baselineKey && !!baselineKey;
+ const nextTables: Record<string, any[]> = canDiff ? { ...previous!.tables } : {};
+ const deletedIds: Record<string, string[]> = {};
+ for (const table of tables) {
+  if (table === "branding") continue;
+  const currentRows = Array.isArray((backup as any)[table]) ? (backup as any)[table] as any[] : [];
+  const previousRows = canDiff && Array.isArray(previous!.tables[table]) ? previous!.tables[table] : null;
+  if (!previousRows) {
+   // First sync for this table, or a changed full-backup baseline: use a
+   // complete table snapshot. This is slower once but remains restorable.
+   nextTables[table] = currentRows;
+   continue;
+  }
+  const oldById = new Map<string, any>();
+  const newById = new Map<string, any>();
+  for (const row of previousRows) { const id = rowKey(row); if (id !== null) oldById.set(id, row); }
+  for (const row of currentRows) { const id = rowKey(row); if (id !== null) newById.set(id, row); }
+  const changedRows = currentRows.filter((row) => {
+   const id = rowKey(row);
+   if (id === null) return true;
+   const old = oldById.get(id);
+   return !old || JSON.stringify(old) !== JSON.stringify(row);
+  });
+  deletedIds[table] = Array.from(oldById.keys()).filter((id) => !newById.has(id));
+  (backup as any)[table] = changedRows;
+  nextTables[table] = currentRows;
+ }
  backup.filter = { type: "all" };
  backup.incremental = true;
  backup.changedTables = tables;
+ (backup as any)._rowDelta = canDiff;
+ (backup as any).deletedIds = canDiff ? deletedIds : {};
+ // Do not persist the new baseline until the upload succeeds.
+ pendingDeltaCacheText = JSON.stringify({ baselineKey, tables: nextTables });
  return JSON.stringify(backup);
 }
 
