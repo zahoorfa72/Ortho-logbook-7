@@ -549,18 +549,50 @@ async function downloadDriveJson(fileId: string) {
 function parseDownloadedBackup(raw: string): any {
   let text = String(raw || "").replace(/^\uFEFF/, "").trim();
   if (!text) throw new Error("Google Drive returned an empty backup file.");
-  text = text.replace(/^\)\]}'[,]?\s*/, "");
-  let parsed: any = JSON.parse(text);
-  // Accept legacy files where the complete JSON document was JSON-stringified.
-  if (typeof parsed === "string") {
-    const inner = parsed.replace(/^\uFEFF/, "").trim();
-    if (!inner) throw new Error("Google Drive backup contains an empty wrapped document.");
-    parsed = JSON.parse(inner);
+
+  const candidates: string[] = [];
+  const add = (value: string) => {
+    const normalized = String(value || "").replace(/^\uFEFF/, "").trim().replace(/^\)\]}'[,]?\s*/, "");
+    if (normalized && !candidates.includes(normalized)) candidates.push(normalized);
+  };
+  add(text);
+
+  // Some older Android upload/restore paths wrapped the backup as a JSON
+  // string, URL-encoded text, or base64 text. Try these representations before
+  // marking a Drive file unreadable; never write anything to the database here.
+  try {
+    const outer = JSON.parse(text);
+    if (typeof outer === "string") add(outer);
+  } catch {}
+  try {
+    const decoded = decodeURIComponent(text);
+    if (decoded !== text) add(decoded);
+  } catch {}
+  const compact = text.replace(/\s/g, "");
+  if (/^[A-Za-z0-9+/]+={0,2}$/.test(compact) && compact.length % 4 === 0) {
+    try {
+      const binary = atob(compact);
+      const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+      add(new TextDecoder("utf-8").decode(bytes));
+    } catch {}
   }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("Google Drive file does not contain a backup document.");
+
+  let lastError: unknown;
+  for (const candidate of candidates) {
+    try {
+      let parsed: any = JSON.parse(candidate);
+      // A JSON-string-wrapped document may itself contain another JSON string.
+      for (let depth = 0; typeof parsed === "string" && depth < 2; depth++) {
+        parsed = JSON.parse(parsed.replace(/^\uFEFF/, "").trim());
+      }
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+      lastError = new Error("Google Drive file does not contain a backup document.");
+    } catch (error) {
+      lastError = error;
+    }
   }
-  return parsed;
+  throw new Error("Google Drive file content is not readable JSON. " +
+    (lastError instanceof Error ? lastError.message : "The file may be damaged or not an Ortho Logbook backup."));
 }
 
 async function downloadDriveJsonValidated(fileId: string): Promise<any> {
