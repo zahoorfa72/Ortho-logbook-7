@@ -247,8 +247,16 @@ async function uploadContent(backupText: string, existingId?: string, onProgress
     const originalMessage = String(error?.message || "Google Drive resumable upload failed.");
     // Do not start a second full-file transfer after the explicit overall deadline.
     if (originalMessage.includes("stopped after 5 minutes")) throw error;
-    // Correct multipart/related structure is retained as a fallback for devices
-    // whose native XHR cannot transfer a resumable session body.
+    // Multipart fallback builds a second full-size copy of the JSON in memory.
+    // On Android this can terminate the app for large photo-heavy backups. Only
+    // use it for small files; large uploads fail visibly and keep local data safe.
+    if (bytes.length > 8 * 1024 * 1024) {
+      throw new Error(
+        "Google Drive resumable upload failed: " + originalMessage +
+        " The backup is too large for the safe fallback, so no second full-file copy was attempted. Your data is still on this phone. Check Drive permission/network and retry."
+      );
+    }
+    // Small-file fallback for devices whose native XHR cannot transfer a session body.
     const boundary = "ortho_logbook_drive_" + Date.now().toString(36);
     const metadata = JSON.stringify({ name: BACKUP_NAME, mimeType: "application/json" });
     const body = "--" + boundary + "\r\n" +
@@ -278,21 +286,32 @@ async function uploadContent(backupText: string, existingId?: string, onProgress
   }
 }
 async function backupContentHash(backupText: string, onProgress?: (stage: string) => void) {
-  // Avoid JSON.parse + JSON.stringify on a potentially 50+ MiB backup. That
-  // duplicated the payload in memory and could freeze the UI for a long time.
-  // Only the top-level generated timestamp changes when records are unchanged.
-  const value = backupText.replace(/("createdAt"\s*:\s*")[^"]*(")/, '$1IGNORED_TIMESTAMP$2');
+  // Hash the existing string in place rather than creating a second 50+ MiB
+  // string with replace(). Ignore only the generated createdAt value so a
+  // backup with unchanged records can still be recognized on later runs.
+  const timestampMatch = /("createdAt"\\s*:\\s*")[^"]*(")/.exec(backupText);
+  const ignoreStart = timestampMatch ? timestampMatch.index + timestampMatch[1].length : -1;
+  const ignoreEnd = timestampMatch ? timestampMatch.index + timestampMatch[0].length - timestampMatch[2].length : -1;
+  const ignoredTimestamp = "IGNORED_TIMESTAMP";
   let hash = 2166136261;
   const yieldEvery = 256 * 1024;
-  for (let i = 0; i < value.length; i++) {
-    hash ^= value.charCodeAt(i);
+  for (let i = 0; i < backupText.length; i++) {
+    if (i === ignoreStart) {
+      for (let j = 0; j < ignoredTimestamp.length; j++) {
+        hash ^= ignoredTimestamp.charCodeAt(j);
+        hash = Math.imul(hash, 16777619);
+      }
+      i = ignoreEnd - 1;
+      continue;
+    }
+    hash ^= backupText.charCodeAt(i);
     hash = Math.imul(hash, 16777619);
     if (i > 0 && i % yieldEvery === 0) {
-      onProgress?.("Checking backup contents… " + Math.min(99, Math.round((i / value.length) * 100)) + "%");
+      onProgress?.("Checking backup contents… " + Math.min(99, Math.round((i / backupText.length) * 100)) + "%");
       await new Promise<void>(resolve => setTimeout(resolve, 0));
     }
   }
-  return `fnv1a-${(hash >>> 0).toString(16)}-${value.length}`;
+  return `fnv1a-${(hash >>> 0).toString(16)}-${backupText.length}`;
 }
 
 export async function backupToGoogleDrive(
