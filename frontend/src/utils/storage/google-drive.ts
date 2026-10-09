@@ -138,9 +138,10 @@ async function findLatestBackup() {
   return files.find((file: any) => String(file.name || "").toLowerCase().includes("ortho logbook backup")) || null;
 }
 
-// Google Drive resumable chunks must be multiples of 256 KiB. 4 MiB chunks
-// reduce a 50 MiB backup from about 200 sequential requests to about 13.
-const DRIVE_CHUNK_SIZE = 4 * 1024 * 1024;
+// Use 512 KiB chunks (a multiple of Drive's 256 KiB requirement). Smaller
+// chunks are more reliable on mobile networks and prevent one slow 4 MiB
+// request from blocking a first-time, photo-heavy backup for minutes.
+const DRIVE_CHUNK_SIZE = 512 * 1024;
 
 function parseDriveResponse(text: string): any {
   try { return text ? JSON.parse(text) : {}; } catch { return {}; }
@@ -154,8 +155,7 @@ function uploadChunk(sessionUrl: string, token: string, bytes: Uint8Array, start
     xhr.setRequestHeader("Content-Type", "application/json; charset=UTF-8");
     xhr.setRequestHeader("Content-Range", "bytes " + start + "-" + (end - 1) + "/" + total);
     xhr.onload = () => {
-      const body = xhr.responseText || "";
-      const parsed = parseDriveResponse(body);
+      const parsed = parseDriveResponse(xhr.responseText || "");
       if (xhr.status === 308) {
         const range = xhr.getResponseHeader("Range") || "";
         const match = /bytes=0-(\d+)/i.exec(range);
@@ -165,54 +165,110 @@ function uploadChunk(sessionUrl: string, token: string, bytes: Uint8Array, start
       if (xhr.status >= 200 && xhr.status < 300) { resolve({ done: true, result: parsed }); return; }
       reject(new Error(parsed?.error?.message || ("Google Drive rejected an upload chunk (HTTP " + xhr.status + ").")));
     };
-    xhr.onerror = () => reject(new Error("No HTTP response while sending a Google Drive upload chunk (readyState " + xhr.readyState + ", status " + (xhr.status || "none") + ")."));
-    xhr.ontimeout = () => reject(new Error("Google Drive upload chunk timed out."));
-    xhr.timeout = 45000;
+    xhr.onerror = () => reject(new Error("Network error while sending a Google Drive upload chunk (readyState " + xhr.readyState + ", status " + (xhr.status || "none") + ")."));
+    xhr.ontimeout = () => reject(new Error("Google Drive upload chunk timed out; checking the server's received offset before retrying."));
+    // A slow mobile upload should time out per chunk, not kill the entire backup.
+    xhr.timeout = 90000;
     const chunk = bytes.slice(start, end);
     xhr.send(chunk.buffer as ArrayBuffer);
   });
 }
 
+function queryUploadOffset(sessionUrl: string, token: string, total: number): Promise<{ done: boolean; nextOffset: number; result?: any }> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", sessionUrl);
+    xhr.setRequestHeader("Authorization", "Bearer " + token);
+    xhr.setRequestHeader("Content-Range", "bytes */" + total);
+    xhr.onload = () => {
+      const parsed = parseDriveResponse(xhr.responseText || "");
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve({ done: true, nextOffset: total, result: parsed });
+        return;
+      }
+      if (xhr.status === 308) {
+        const range = xhr.getResponseHeader("Range") || "";
+        const match = /bytes=0-(\d+)/i.exec(range);
+        resolve({ done: false, nextOffset: match ? Number(match[1]) + 1 : 0 });
+        return;
+      }
+      reject(new Error(parsed?.error?.message || ("Google Drive could not resume the upload (HTTP " + xhr.status + ").")));
+    };
+    xhr.onerror = () => reject(new Error("Could not check Google Drive upload progress because the network returned no HTTP response."));
+    xhr.ontimeout = () => reject(new Error("Timed out checking Google Drive upload progress."));
+    xhr.timeout = 30000;
+    xhr.send();
+  });
+}
+
 async function uploadResumable(sessionUrl: string, token: string, bytes: Uint8Array, onProgress?: (stage: string) => void) {
-  const startedAt = Date.now();
   let offset = 0;
   let result: any = null;
+  let consecutiveFailures = 0;
   while (offset < bytes.length) {
-    if (Date.now() - startedAt > 5 * 60 * 1000) throw new Error("Google Drive upload stopped after 5 minutes without completing. Your local data is unchanged; retry on a stable connection.");
     const end = Math.min(offset + DRIVE_CHUNK_SIZE, bytes.length);
-    let lastError: any = null;
     let chunkResult: { done: boolean; result?: any; nextOffset?: number } | null = null;
-    for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      chunkResult = await uploadChunk(sessionUrl, token, bytes, offset, end, bytes.length);
+      consecutiveFailures = 0;
+    } catch (error: any) {
+      // A timed-out request may still have reached Drive. Ask Drive for its
+      // committed byte range instead of blindly restarting or resending data.
+      let status: { done: boolean; nextOffset: number; result?: any };
       try {
-        const response = await uploadChunk(sessionUrl, token, bytes, offset, end, bytes.length);
-        if (!response.done && (response.nextOffset ?? 0) <= offset) {
-          throw new Error("Google Drive did not acknowledge progress for this upload chunk.");
+        status = await queryUploadOffset(sessionUrl, token, bytes.length);
+      } catch (statusError: any) {
+        consecutiveFailures += 1;
+        if (consecutiveFailures >= 5) {
+          throw new Error("Google Drive upload could not recover after repeated network interruptions. Last chunk error: " +
+            String(error?.message || "unknown error") + "; progress check: " +
+            String(statusError?.message || "failed") + ". Your local data is unchanged; retry when the connection is stable.");
         }
-        if (!response.done && (response.nextOffset ?? 0) > end) {
-          throw new Error("Google Drive returned an invalid upload offset.");
-        }
-        chunkResult = response;
-        lastError = null;
-        break;
-      } catch (error: any) {
-        lastError = error;
-        if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 700 * (attempt + 1)));
+        await new Promise(resolve => setTimeout(resolve, Math.min(1500 * consecutiveFailures, 8000)));
+        continue;
       }
+      if (status.done) {
+        result = status.result;
+        offset = bytes.length;
+        break;
+      }
+      if (status.nextOffset > bytes.length) {
+        throw new Error("Google Drive returned an invalid upload offset.");
+      }
+      offset = status.nextOffset;
+      consecutiveFailures += 1;
+      if (consecutiveFailures >= 10) {
+        throw new Error("Google Drive upload repeatedly lost its connection. The upload can be retried and local data is unchanged.");
+      }
+      await new Promise(resolve => setTimeout(resolve, Math.min(800 * consecutiveFailures, 5000)));
+      continue;
     }
-    if (lastError || !chunkResult) throw lastError || new Error("Google Drive upload chunk failed.");
+    if (!chunkResult) continue;
     if (chunkResult.done) {
-      offset = end;
       result = chunkResult.result;
-      if (offset < bytes.length) throw new Error("Google Drive completed the upload earlier than expected; please retry.");
+      offset = bytes.length;
+      break;
+    }
+    const nextOffset = chunkResult.nextOffset ?? 0;
+    if (nextOffset < offset || nextOffset > end) {
+      // Drive may accept only part of a chunk. Reconcile against its own range.
+      const status = await queryUploadOffset(sessionUrl, token, bytes.length);
+      if (status.done) {
+        result = status.result;
+        offset = bytes.length;
+        break;
+      }
+      if (status.nextOffset < 0 || status.nextOffset > bytes.length) {
+        throw new Error("Google Drive returned an invalid upload offset.");
+      }
+      offset = status.nextOffset;
     } else {
-      offset = chunkResult.nextOffset as number;
-      if (offset >= bytes.length) throw new Error("Google Drive did not confirm the final upload chunk. Please retry.");
+      offset = nextOffset;
     }
     onProgress?.("Uploading backup to Google Drive… " + Math.min(100, Math.round((offset / bytes.length) * 100)) + "%");
   }
   return result || {};
 }
-
 async function uploadContent(backupText: string, existingId?: string, onProgress?: (stage: string) => void) {
   const token = await accessToken();
   const bytes = new TextEncoder().encode(backupText);
