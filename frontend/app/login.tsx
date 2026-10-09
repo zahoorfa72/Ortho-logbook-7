@@ -12,6 +12,10 @@ import { PrimaryButton } from "@/src/components/PrimaryButton";
 import { useToast } from "@/src/components/toast";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 import { db, initializeDatabase } from "@/src/db/database";
+import { decryptBackup, getBackupInfo, restoreBackup } from "@/src/utils/storage/backup";
+import { restoreLatestFromGoogleDrive, connectGoogleAccount } from "@/src/utils/storage/google-drive";
+import { queryClient } from "@/src/query-client";
+import { storage } from "@/src/utils/storage";
 
 export default function Login() {
   const styles = useStyles();
@@ -24,6 +28,55 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [adminExists, setAdminExists] = useState(true);
+  const [driveRestoreLoading, setDriveRestoreLoading] = useState(false);
+
+  const restoreFromGoogleDrive = async () => {
+    try {
+      setDriveRestoreLoading(true);
+      await connectGoogleAccount();
+      const remote = await restoreLatestFromGoogleDrive();
+      const info = getBackupInfo(remote.backupText);
+      if (info.encrypted) throw new Error("The Google Drive backup is encrypted. Restore it from Sync & Backup with its password.");
+      Alert.alert(
+        "Restore clinic backup?",
+        "Latest backup: " + remote.name + "\nModified: " + new Date(remote.modifiedTime).toLocaleString() +
+          "\n\nThis replaces the local database with the Drive backup. Continue only if this is the intended backup.",
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Restore",
+            style: "destructive",
+            onPress: async () => {
+              try {
+                setDriveRestoreLoading(true);
+                const backup = await decryptBackup(remote.backupText, "");
+                const result = restoreBackup(backup);
+                await storage.secureRemove("ortho_current_user");
+                queryClient.clear();
+                initializeDatabase();
+                setAdminExists(Number(db.getFirstSync<any>("SELECT COUNT(*) AS n FROM users WHERE role='admin' AND disabled=0")?.n || 0) > 0);
+                Alert.alert(
+                  "Restore complete",
+                  "Clinic backup restored.\nPatients: " + result.patients +
+                    "\nInventory items: " + result.inventory +
+                    "\nUsers: " + result.users +
+                    "\n\nNow log in with an account from the backup.",
+                );
+              } catch (error: any) {
+                Alert.alert("Restore failed", error?.message || "Unable to restore the Google Drive backup.");
+              } finally {
+                setDriveRestoreLoading(false);
+              }
+            },
+          },
+        ],
+      );
+    } catch (error: any) {
+      Alert.alert("Google Drive restore failed", error?.message || "Unable to find or download the latest Drive backup.");
+    } finally {
+      setDriveRestoreLoading(false);
+    }
+  };
 
   useEffect(() => {
     try {
@@ -121,6 +174,18 @@ export default function Login() {
             <View style={styles.dividerLine} />
           </View>
         ) : null}
+
+        <Pressable
+          testID="restore-google-drive-login-button"
+          onPress={restoreFromGoogleDrive}
+          disabled={driveRestoreLoading}
+          style={[styles.joinBtn, { backgroundColor: colors.brandPrimary, marginTop: spacing.md, opacity: driveRestoreLoading ? 0.65 : 1 }]}
+        >
+          <Ionicons name="cloud-download-outline" size={18} color={colors.onBrandPrimary} />
+          <Text style={[styles.joinText, { color: colors.onBrandPrimary }]}>
+            {driveRestoreLoading ? "Restoring from Google Drive…" : "Restore directly from Google Drive"}
+          </Text>
+        </Pressable>
 
         <Pressable
           testID="join-clinic-button"
