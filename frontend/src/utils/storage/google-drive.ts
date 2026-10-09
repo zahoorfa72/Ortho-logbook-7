@@ -221,10 +221,10 @@ async function uploadContent(backupText: string, existingId?: string) {
     const metadata = JSON.stringify({ name: BACKUP_NAME, mimeType: "application/json" });
     const body = "--" + boundary + "\r\n" +
       "Content-Type: application/json; charset=UTF-8\r\n" +
-      "Content-Disposition: form-data; name=\"metadata\"\r\n\r\n" + metadata + "\r\n" +
+      "\r\n" + metadata + "\r\n" +
       "--" + boundary + "\r\n" +
       "Content-Type: application/json; charset=UTF-8\r\n" +
-      "Content-Disposition: form-data; name=\"media\"\r\n\r\n" + backupText + "\r\n" +
+      "\r\n" + backupText + "\r\n" +
       "--" + boundary + "--\r\n";
     const retryTarget = existingId
       ? DRIVE_UPLOAD + "/" + encodeURIComponent(existingId) + "?uploadType=multipart&fields=id,name,modifiedTime,size"
