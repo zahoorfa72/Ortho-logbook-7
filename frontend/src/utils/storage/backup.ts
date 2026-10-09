@@ -111,6 +111,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
  } else {
    branding = null;
  }
+ }
  const appSettings = include("appSettings") ? {
    googleOAuthClientId: (await SecureStore.getItemAsync("ortho_google_drive_client_id").catch(() => null)) || undefined,
    googleCloudProjectId: (await SecureStore.getItemAsync("ortho_google_drive_cloud_project_id").catch(() => null)) || undefined,
