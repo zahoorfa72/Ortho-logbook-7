@@ -74,6 +74,10 @@ jobs:
             yarn install --ignore-scripts
           fi
 
+      - name: TypeScript validation
+        working-directory: frontend
+        run: npx tsc --noEmit
+
       - name: Generate native Android project
         working-directory: frontend
         env:
