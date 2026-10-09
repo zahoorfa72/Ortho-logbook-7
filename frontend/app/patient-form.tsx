@@ -231,10 +231,21 @@ export default function PatientForm() {
     if (!sourceUri || sourceUri.startsWith("data:")) return sourceUri;
     const directory = `${FileSystem.documentDirectory}patient-photos/`;
     await FileSystem.makeDirectoryAsync(directory, { intermediates: true }).catch(() => {});
+    // Keep patient photos sharp enough for clinical reference, while avoiding
+    // full-resolution camera files bloating the offline database and Drive backups.
+    const dimensions = await new Promise<{ width: number; height: number }>((resolve, reject) => {
+      Image.getSize(sourceUri, (width, height) => resolve({ width, height }), reject);
+    });
+    const actions: any[] = [];
+    if (dimensions.width > 1600 || dimensions.height > 1600) {
+      actions.push(dimensions.width >= dimensions.height
+        ? { resize: { width: 1600 } }
+        : { resize: { height: 1600 } });
+    }
     const normalized = await ImageManipulator.manipulateAsync(
       sourceUri,
-      [],
-      { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG },
+      actions,
+      { compress: 0.68, format: ImageManipulator.SaveFormat.JPEG },
     );
     const filename = `patient-photo-${Date.now()}-${Math.random().toString(36).slice(2, 10)}.jpg`;
     const destination = `${directory}${filename}`;
