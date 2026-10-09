@@ -193,7 +193,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       if (typeof saved === "string" && saved) {
         try {
           const parsed = JSON.parse(saved) as BrandingConfig;
-          if (parsed && typeof parsed === "object") setBrandingState({ ...defaultBranding, ...parsed, pdfPatientFields: (Array.isArray(parsed.pdfPatientFields) ? parsed.pdfPatientFields : defaultBranding.pdfPatientFields), pdfHeadingLevels: (Array.isArray(parsed.pdfHeadingLevels) ? parsed.pdfHeadingLevels : defaultBranding.pdfHeadingLevels).map((g:any) => ({ ...g, fields: Array.isArray(g?.fields) ? g.fields : [] })) });
+          if (parsed && typeof parsed === "object") setBrandingState({ ...defaultBranding, ...parsed, pdfPatientFields: (Array.isArray(parsed.pdfPatientFields) ? parsed.pdfPatientFields : defaultBranding.pdfPatientFields), pdfHeadingLevels: (Array.isArray(parsed.pdfHeadingLevels) ? parsed.pdfHeadingLevels : (defaultBranding.pdfHeadingLevels || [])).map((g: any) => ({ ...g, fields: Array.isArray(g?.fields) ? g.fields : [] })) });
         } catch {}
       }
     });
