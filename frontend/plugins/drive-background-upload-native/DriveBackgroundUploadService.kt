@@ -124,7 +124,15 @@ class DriveBackgroundUploadService : Service() {
           failures++
           if (failures >= 5) throw IllegalStateException("Background upload could not recover after repeated network interruptions: ${error.message}")
           Thread.sleep((1000L * failures).coerceAtMost(5000L))
-          val checked = queryOffset()
+          val checked = try {
+            queryOffset()
+          } catch (statusError: Exception) {
+            if (failures >= 5) {
+              throw IllegalStateException("Google Drive progress could not be checked after repeated network interruptions: ${statusError.message}")
+            }
+            // Keep the current offset and retry the chunk after the next delay.
+            continue
+          }
           if (checked.first) {
             finalResult = checked.second
             offset = total
