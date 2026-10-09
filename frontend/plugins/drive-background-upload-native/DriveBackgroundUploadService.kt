@@ -122,13 +122,13 @@ class DriveBackgroundUploadService : Service() {
           throw IllegalStateException("Google Drive rejected an upload chunk (HTTP ${response.first}): ${response.second.take(300)}")
         } catch (error: Exception) {
           failures++
-          if (failures >= 5) throw IllegalStateException("Background upload could not recover after repeated network interruptions: ${error.message}")
-          Thread.sleep((1000L * failures).coerceAtMost(5000L))
+          if (failures >= 12) throw IllegalStateException("Background upload could not recover after 12 network retries: ${error.message}. Check Wi-Fi/mobile data or Private DNS, then retry; local records are unchanged.")
+          Thread.sleep(retryDelayMs(failures))
           val checked = try {
             queryOffset()
           } catch (statusError: Exception) {
-            if (failures >= 5) {
-              throw IllegalStateException("Google Drive progress could not be checked after repeated network interruptions: ${statusError.message}")
+            if (failures >= 12) {
+              throw IllegalStateException("Google Drive progress could not be checked after 12 network retries: ${statusError.message}. Check Wi-Fi/mobile data or Private DNS, then retry; local records are unchanged.")
             }
             // Keep the current offset and retry the chunk after the next delay.
             continue
@@ -201,6 +201,13 @@ class DriveBackgroundUploadService : Service() {
     } finally {
       connection.disconnect()
     }
+  }
+
+  // DNS/network interruptions on Android may last longer than a normal request timeout.
+  // Keep the foreground service alive and back off for several minutes before failing.
+  private fun retryDelayMs(attempt: Int): Long {
+    val exponent = (attempt - 1).coerceIn(0, 4)
+    return minOf(2000L * (1L shl exponent), 30000L)
   }
 
   private fun parseRange(range: String?): Long {
