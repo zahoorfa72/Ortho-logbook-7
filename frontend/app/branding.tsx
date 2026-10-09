@@ -2,7 +2,7 @@ import { router } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system";
 import { Image } from "expo-image";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import Ionicons from "@react-native-vector-icons/ionicons";
@@ -12,6 +12,7 @@ import { api } from "@/src/api/client";
 import { useAuth } from "@/src/auth/AuthContext";
 import { PrimaryButton } from "@/src/components/PrimaryButton";
 import { useToast } from "@/src/components/toast";
+import { triggerAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-backup";
 import {
   BRANDING_PRESETS,
   BrandingConfig,
@@ -61,6 +62,14 @@ export default function BrandingScreen() {
   const [subtitleSizeText, setSubtitleSizeText] = useState(String(branding.pdfSubtitleSize));
   const [titleSizeText, setTitleSizeText] = useState(String(branding.pdfTitleSize));
   const [pdfMarginText, setPdfMarginText] = useState(String(branding.pdfMargin));
+  // Branding is loaded asynchronously from local storage. Keep the editor in
+  // sync with the saved values so font/colour controls don't open on defaults.
+  useEffect(() => {
+    setDraft(branding);
+    setSubtitleSizeText(String(branding.pdfSubtitleSize));
+    setTitleSizeText(String(branding.pdfTitleSize));
+    setPdfMarginText(String(branding.pdfMargin));
+  }, [branding]);
   const { data: customFields = [] } = useQuery<any[]>({ queryKey: ["patient-custom-fields"], queryFn: () => api.get("/patient-custom-fields"), enabled: user?.role === "admin" });
   const patientPdfOptions = (() => {
     const base: [string,string][] = [["date","Date"],["mrNo","MR No"],["name","Patient Name"],["gender","Gender"],["age","Age"],["address","Address"],["diagnosis","Diagnosis"],["procedure","Procedure"],["implants","Implants"],["fileName","File Name"],["hcvPlus","HCV+"],["hbaSg","HbAsg"],["hiv","HIV"]];
@@ -187,6 +196,7 @@ export default function BrandingScreen() {
     setSaving(true);
     try {
       await setBranding(nextDraft);
+      triggerAutomaticDriveBackup("branding");
       toast("Branding updated.", "success");
       router.back();
     } finally {
@@ -196,6 +206,7 @@ export default function BrandingScreen() {
 
   const onReset = async () => {
     await resetBranding();
+    triggerAutomaticDriveBackup("branding");
     setDraft(defaultBranding);
     toast("Reset to default branding.", "success");
   };
