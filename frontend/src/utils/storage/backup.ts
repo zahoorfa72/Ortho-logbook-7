@@ -247,7 +247,16 @@ export async function exportIncrementalBackup(changedTables: string[], onProgres
    return !old || JSON.stringify(old) !== JSON.stringify(row);
   });
   deletedIds[table] = Array.from(oldById.keys()).filter((id) => !newById.has(id));
-  (backup as any)[table] = changedRows;
+  (backup as any)[table] = table === "patients" ? changedRows.map((row) => {
+   const old = oldById.get(String(row.id ?? ""));
+   if (old && old.photo_uri === row.photo_uri && old.photos_json === row.photos_json) {
+    // Patient details changed but the photos did not: leave photo bytes out of
+    // the delta; restore merges these metadata fields with the saved photo.
+    const { photo_uri: _photoUri, photos_json: _photosJson, ...withoutPhotos } = row;
+    return withoutPhotos;
+   }
+   return row;
+  }) : changedRows;
   nextTables[table] = currentRows;
  }
  backup.filter = { type: "all" };
