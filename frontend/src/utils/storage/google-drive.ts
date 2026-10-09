@@ -538,9 +538,47 @@ async function listIncrementalFiles() {
   return files;
 }
 
-async function downloadDriveJson(fileId: string) {
-  const response = await driveRequest(`${DRIVE_API}/${encodeURIComponent(fileId)}?alt=media`);
-  return response.text();
+async function downloadDriveJson(fileId: string): Promise<string> {
+  const url = `${DRIVE_API}/${encodeURIComponent(fileId)}?alt=media`;
+  let fetchError: any = null;
+  try {
+    const response = await driveRequest(url);
+    return await response.text();
+  } catch (error: any) {
+    fetchError = error;
+  }
+
+  // React Native fetch can fail with the generic "Network request failed"
+  // for large Drive media downloads even when Drive's metadata API works.
+  // Retry the same authenticated media request with XHR, which has a separate
+  // native networking path. Keep the local database untouched on either failure.
+  const token = await accessToken();
+  return await new Promise<string>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("GET", url);
+    xhr.setRequestHeader("Authorization", "Bearer " + token);
+    xhr.timeout = 120000;
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(xhr.responseText || "");
+        return;
+      }
+      let message = "Google Drive backup download failed (HTTP " + xhr.status + ").";
+      try {
+        const data = JSON.parse(xhr.responseText || "{}");
+        message = data?.error?.message || message;
+      } catch {}
+      reject(new Error(message));
+    };
+    xhr.onerror = () => reject(new Error(
+      "Google Drive media download failed over both fetch and XHR. Fetch: " +
+      String(fetchError?.message || "network error") +
+      "; XHR returned no HTTP response. Check Google Drive connectivity, VPN, or network restrictions."
+    ));
+    xhr.ontimeout = () => reject(new Error("Google Drive backup download timed out after 120 seconds. Check the connection and retry."));
+    xhr.onabort = () => reject(new Error("Google Drive backup download was cancelled."));
+    xhr.send();
+  });
 }
 
 // Drive media can contain a BOM/XSSI prefix or a JSON string wrapping the
