@@ -641,11 +641,14 @@ async function downloadIncrementalWithRecovery(fileId: string, fileName: string)
     try { raw = (await downloadDriveJson(fileId)).replace(/^\uFEFF/, "").trim(); } catch {}
     const app = extractCompleteJsonProperty(raw, "app");
     const changedTables = extractCompleteJsonProperty(raw, "changedTables");
+    const rowDelta = extractCompleteJsonProperty(raw, "_rowDelta") === true;
+    const deletedIds = extractCompleteJsonProperty(raw, "deletedIds");
+    const fullTables = extractCompleteJsonProperty(raw, "fullTables");
     if (app !== "Ortho Logbook") {
       throw new Error("Incremental backup " + fileName + " could not be recovered. Its contents are unavailable or corrupted.");
     }
     const knownTables = ["patients","procedures","inventoryCategories","inventory","patientImplants","patientCustomFields","implantRecords","expenses","users","patientHistory","inventoryMovements","inventoryPurchaseReceipts","stockReceipts"];
-    const recovered: any = { app, incremental: true, _recoveredFromDamage: true, changedTables: Array.isArray(changedTables) ? changedTables : [] };
+    const recovered: any = { app, incremental: true, _recoveredFromDamage: true, changedTables: Array.isArray(changedTables) ? changedTables : [], _rowDelta: rowDelta, deletedIds: deletedIds && typeof deletedIds === "object" ? deletedIds : {}, fullTables: Array.isArray(fullTables) ? fullTables : [] };
     for (const table of knownTables) {
       const value = extractCompleteJsonProperty(raw, table);
       if (Array.isArray(value)) recovered[table] = value;
@@ -750,7 +753,7 @@ export async function restoreLatestFromGoogleDrive() {
         }
       } else if (["patients","procedures","inventoryCategories","inventory","patientImplants","patientCustomFields","implantRecords","expenses","users","patientHistory","inventoryMovements","inventoryPurchaseReceipts","stockReceipts"].includes(table)) {
         if (Array.isArray(delta[table])) {
-          if (delta._rowDelta === true && !(Array.isArray(delta.fullTables) && delta.fullTables.includes(table))) {
+          if (delta._recoveredFromDamage !== true && delta._rowDelta === true && !(Array.isArray(delta.fullTables) && delta.fullTables.includes(table))) {
             // Apply only changed records and explicit deletion tombstones.
             // This keeps old records intact while allowing true row-level sync.
             const merged = new Map<string, any>();
