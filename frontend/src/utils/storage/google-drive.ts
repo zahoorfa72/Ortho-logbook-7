@@ -125,52 +125,55 @@ async function findLatestBackup() {
   return files.find((file: any) => String(file.name || "").toLowerCase().includes("ortho logbook backup")) || null;
 }
 
+function xhrRequest(url: string, method: string, token: string, body: string, contentType: string): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open(method, url);
+    xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    xhr.setRequestHeader("Content-Type", contentType);
+    xhr.onload = () => {
+      const responseText = xhr.responseText || "";
+      let parsed: any = {};
+      try { parsed = responseText ? JSON.parse(responseText) : {}; } catch {}
+      if (xhr.status >= 200 && xhr.status < 300) resolve(parsed);
+      else reject(new Error(parsed?.error?.message || `Google Drive upload failed (HTTP ${xhr.status}).`));
+    };
+    xhr.onerror = () => reject(new Error("Google Drive upload connection failed. Check that mobile data/Wi-Fi allows Google Drive, then retry."));
+    xhr.ontimeout = () => reject(new Error("Google Drive upload timed out. Try a stable Wi-Fi connection."));
+    xhr.timeout = 180000;
+    xhr.send(body);
+  });
+}
+
 async function uploadContent(backupText: string, existingId?: string) {
   const token = await accessToken();
-  // Use a single multipart request instead of a resumable session. React Native's
-  // fetch can fail to expose Google's resumable-session Location header reliably.
-  // A single request also avoids a second unauthenticated-looking session URL hop.
-  const boundary = "ortho_logbook_drive_boundary_7ma2";
-  const metadata = JSON.stringify({
-    name: BACKUP_NAME,
-    mimeType: "application/json",
-  });
-  const body =
-    `--${boundary}\r\n` +
-    "Content-Type: application/json; charset=UTF-8\r\n\r\n" +
-    metadata + "\r\n" +
-    `--${boundary}\r\n` +
-    "Content-Type: application/json; charset=UTF-8\r\n\r\n" +
-    backupText + "\r\n" +
-    `--${boundary}--`;
-
+  // Start a resumable upload session so large patient-photo backups do not have
+  // to be sent as one oversized multipart request.
   const target = existingId
-    ? `${DRIVE_UPLOAD}/${encodeURIComponent(existingId)}?uploadType=multipart&fields=id,name,modifiedTime,size`
-    : `${DRIVE_UPLOAD}?uploadType=multipart&fields=id,name,modifiedTime,size`;
-
-  let response: Response;
+    ? `${DRIVE_UPLOAD}/${encodeURIComponent(existingId)}?uploadType=resumable&fields=id,name,modifiedTime,size`
+    : `${DRIVE_UPLOAD}?uploadType=resumable&fields=id,name,modifiedTime,size`;
+  let initResponse: Response;
   try {
-    response = await fetch(target, {
+    initResponse = await fetch(target, {
       method: existingId ? "PATCH" : "POST",
       headers: {
         Authorization: `Bearer ${token}`,
-        "Content-Type": `multipart/related; boundary=${boundary}`,
+        "Content-Type": "application/json; charset=UTF-8",
+        "X-Upload-Content-Type": "application/json",
       },
-      body,
+      body: JSON.stringify({ name: BACKUP_NAME, mimeType: "application/json" }),
     });
   } catch (error: any) {
-    throw new Error(`Google Drive network request failed during upload. Check internet access, VPN/firewall, and Google Play Services, then retry. ${error?.message || ""}`.trim());
+    throw new Error(`Could not start Google Drive upload. ${error?.message || "Check your internet connection and retry."}`);
   }
-
-  if (!response.ok) {
-    let message = `Google Drive upload failed (HTTP ${response.status}).`;
-    try {
-      const result = await response.json();
-      message = result?.error?.message || message;
-    } catch {}
+  if (!initResponse.ok) {
+    let message = `Google Drive could not start upload (HTTP ${initResponse.status}).`;
+    try { const result = await initResponse.json(); message = result?.error?.message || message; } catch {}
     throw new Error(message);
   }
-  return response.json();
+  const sessionUrl = initResponse.headers.get("Location");
+  if (!sessionUrl) throw new Error("Google Drive did not provide an upload session. Reconnect your Google account and retry.");
+  return xhrRequest(sessionUrl, "PUT", token, backupText, "application/json; charset=UTF-8");
 }
 
 async function backupContentHash(backupText: string) {
