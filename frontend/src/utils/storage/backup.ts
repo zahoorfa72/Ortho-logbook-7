@@ -405,7 +405,7 @@ export function restoreBackup(backup:BackupData){
 export function mergeBackup(backup: BackupData) {
  initializeDatabase({ skipInventoryReset: true });
  if(!backup||![2,3,4,5,6,7].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
- const stats = { patients: 0, procedures: 0, inventory: 0, expenses: 0, users: 0, patientHistory: 0, inventoryMovements: 0, stockReceipts: 0 };
+ const stats = { patients: 0, procedures: 0, inventory: 0, inventoryCategories: 0, patientImplants: 0, expenses: 0, users: 0, patientHistory: 0, inventoryMovements: 0, stockReceipts: 0 };
  db.withTransactionSync(() => {
   const has = (table: string, id: string) => !!db.getFirstSync<any>(`SELECT id FROM ${table} WHERE id=?`, [id]);
   for (const p of backup.patients) {
