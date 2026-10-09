@@ -2,6 +2,7 @@ import * as SQLite from "expo-sqlite";
 import {
   backupToGoogleDrive,
   getConnectedGoogleAccount,
+  restoreGoogleAccountSilently,
 } from "@/src/utils/storage/google-drive";
 import { setDriveSyncState } from "@/src/utils/storage/drive-sync-status";
 
@@ -14,7 +15,7 @@ let disposed = false;
 function scheduleBackup(updateCount = 1) {
   if (disposed) return;
   pendingUpdates += updateCount;
-  if (!getConnectedGoogleAccount()) return;
+  // Keep changes queued even if Google is not connected right now.
 
   // Do not emit a new UI state for every SQLite write while uploading.
   // Just count changes; a single follow-up backup will run after the debounce.
@@ -36,8 +37,15 @@ function scheduleBackup(updateCount = 1) {
 
 async function runBackup() {
   if (disposed || uploading) return;
+  // Android can retain the Google authorization while the JS current-user
+  // cache is empty after a restart. Recover it without prompting the user.
+  if (!getConnectedGoogleAccount()) await restoreGoogleAccountSilently();
   if (!getConnectedGoogleAccount()) {
-    setDriveSyncState({ phase: "idle", updates: 0, message: "" });
+    setDriveSyncState({
+      phase: "idle",
+      updates: pendingUpdates,
+      message: pendingUpdates > 0 ? "Changes saved on this phone · connect Google to upload" : "",
+    });
     return;
   }
 
@@ -111,10 +119,19 @@ export function startAutomaticDriveBackup() {
     scheduleBackup(1);
   });
 
-  // Check once at startup; subsequent uploads only happen after real DB changes.
+  // Check at startup and when the app returns to the foreground so queued
+  // edits are retried after a restart or temporary interruption.
   scheduleBackup(0);
+  let appStateSubscription: { remove: () => void } | null = null;
+  try {
+    const { AppState } = require("react-native");
+    appStateSubscription = AppState.addEventListener("change", (state: string) => {
+      if (state === "active") scheduleBackup(0);
+    });
+  } catch {}
 
   return () => {
+    appStateSubscription?.remove();
     disposed = true;
     subscription.remove();
     if (timer) {
