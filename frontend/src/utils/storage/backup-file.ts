@@ -62,24 +62,41 @@ export async function shareBackupFile(password: string, filter: BackupFilter = {
   return fileUri;
 }
 
-// Read a picked file into text robustly. DocumentPicker with
-// copyToCacheDirectory:true almost always gives us a file:// URI in the cache
-// directory that File(uri).text() can read. On some Android file managers
-// (older MIUI, some cloud providers) the URI is a content:// URI that
-// File() can't open -- for those we fall back to fetch().
+// Android document providers (Drive, Downloads, Files and OEM file managers)
+// may return content:// URIs. Read those through Expo's legacy SAF-compatible
+// API before trying the newer File API or fetch. Never require users to move
+// a selected backup into app storage manually.
 async function readPickedFile(uri: string): Promise<string> {
+  const errors: unknown[] = [];
+
   try {
-    const file = new File(uri);
-    return await file.text();
-  } catch (primaryErr) {
-    try {
-      const response = await fetch(uri);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      return await response.text();
-    } catch {
-      throw primaryErr instanceof Error ? primaryErr : new Error("Unable to read the selected file.");
-    }
+    return await FileSystem.readAsStringAsync(uri, {
+      encoding: FileSystem.EncodingType.UTF8,
+    });
+  } catch (error) {
+    errors.push(error);
   }
+
+  try {
+    return await new File(uri).text();
+  } catch (error) {
+    errors.push(error);
+  }
+
+  try {
+    const response = await fetch(uri);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return await response.text();
+  } catch (error) {
+    errors.push(error);
+  }
+
+  const detail = errors.find((error) => error instanceof Error) as Error | undefined;
+  throw new Error(
+    detail?.message
+      ? `Android could not read this selected file (${detail.message}). Try selecting the original .orbackup file again.`
+      : "Android could not read the selected file. Try selecting the original .orbackup file again.",
+  );
 }
 
 export async function pickBackupFile() {
