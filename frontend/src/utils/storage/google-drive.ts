@@ -1,7 +1,7 @@
 import { GoogleSignin, statusCodes } from "@react-native-google-signin/google-signin";
 import { NativeModules, Platform } from "react-native";
 import * as FileSystem from "expo-file-system/legacy";
-import { exportUnencryptedBackup, exportIncrementalBackup, type BackupFilter } from "@/src/utils/storage/backup";
+import { exportUnencryptedBackup, exportIncrementalBackup, commitIncrementalSnapshotCache, type BackupFilter } from "@/src/utils/storage/backup";
 import { markBackupTaken } from "@/src/utils/backup-reminder";
 import { storage } from "@/src/utils/storage";
 
@@ -669,11 +669,15 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
     const result = await backupToGoogleDrive(undefined, { type: "all" }, { onProgress });
     return { ...result, baselineCreated: true };
   }
-  const backupText = await exportIncrementalBackup(changedTables, onProgress);
+  const baselineKey = String(base.id) + ":" + String(base.modifiedTime || "");
+  const backupText = await exportIncrementalBackup(changedTables, onProgress, baselineKey);
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const fileName = `Ortho Logbook Incremental ${stamp}.orbackup`;
   onProgress?.("Uploading changed data to Google Drive…");
   const result = await uploadContent(backupText, undefined, onProgress, fileName);
+  // Promote row snapshots only after Drive confirms the upload. If upload fails,
+  // the old cache remains and the next attempt resends the missing changes.
+  await commitIncrementalSnapshotCache();
   await markBackupTaken();
   const completedAt = new Date().toISOString();
   await storage.secureSet(LAST_DRIVE_BACKUP_KEY, completedAt);
@@ -746,9 +750,24 @@ export async function restoreLatestFromGoogleDrive() {
         }
       } else if (["patients","procedures","inventoryCategories","inventory","patientImplants","patientCustomFields","implantRecords","expenses","users","patientHistory","inventoryMovements","inventoryPurchaseReceipts","stockReceipts"].includes(table)) {
         if (Array.isArray(delta[table])) {
-          if (delta._recoveredFromDamage === true && Array.isArray(composed[table])) {
-            // In salvage mode, merge recovered rows by stable ID. Replacing
-            // the whole table could erase older records omitted by truncation.
+          if (delta._rowDelta === true && !(Array.isArray(delta.fullTables) && delta.fullTables.includes(table))) {
+            // Apply only changed records and explicit deletion tombstones.
+            // This keeps old records intact while allowing true row-level sync.
+            const merged = new Map<string, any>();
+            for (const row of Array.isArray(composed[table]) ? composed[table] : []) {
+              const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+              merged.set(key, row);
+            }
+            const deleted = delta.deletedIds && Array.isArray(delta.deletedIds[table]) ? delta.deletedIds[table] : [];
+            for (const id of deleted) merged.delete("id:" + String(id));
+            for (const row of delta[table]) {
+              const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+              merged.set(key, row);
+            }
+            composed[table] = Array.from(merged.values());
+          } else if (delta._recoveredFromDamage === true && Array.isArray(composed[table])) {
+            // Salvaged legacy/table snapshots are merged conservatively because
+            // a damaged file may omit valid rows.
             const merged = new Map<string, any>();
             for (const row of composed[table]) {
               const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
