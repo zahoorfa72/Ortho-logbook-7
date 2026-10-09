@@ -25,7 +25,7 @@ function scheduleBackup(updateCount = 1) {
     phase: "waiting",
     updates: pendingUpdates,
     message: pendingUpdates > 0
-      ? `Sync pending · ${pendingUpdates} update(s)`
+      ? "Changes waiting to sync"
       : "Checking Drive backup…",
   });
   timer = setTimeout(() => {
@@ -48,8 +48,8 @@ async function runBackup() {
     phase: "uploading",
     updates: updatesForThisUpload,
     message: updatesForThisUpload > 0
-      ? `Uploading backup · ${updatesForThisUpload} update(s)`
-      : "Checking and syncing backup…",
+      ? "Preparing backup…"
+      : "Checking Drive backup…",
   });
 
   try {
