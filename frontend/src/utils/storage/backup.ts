@@ -88,7 +88,7 @@ function whereForFilter(filter: BackupFilter, column: string) {
   return { sql: "", args: [] };
 }
 
-async function createBackupData(filter: BackupFilter = { type: "all" }, onProgress?: (stage: string) => void, changedTables?: string[]):Promise<BackupData>{
+async function createBackupData(filter: BackupFilter = { type: "all" }, onProgress?: (stage: string) => void, changedTables?: string[], previousPatientRows?: any[], previousPhotoSources?: Record<string, string>):Promise<BackupData>{
  initializeDatabase();
  const include = (name: string) => !changedTables || changedTables.includes(name);
  let branding: BrandingConfig | null | undefined;
@@ -107,9 +107,21 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
  const patients=include("patients") ? db.getAllSync<any>(`SELECT * FROM patients${pf.sql} ORDER BY date DESC, created_at DESC`, pf.args) : [];
  const selectedPatientIds = new Set(patients.map((p:any)=>p.id));
  const embeddedPatients:any[]=[];
+ const previousPatientsById = new Map<string, any>((previousPatientRows || []).filter((p:any)=>p?.id!=null).map((p:any)=>[String(p.id),p]));
  for(let i=0;i<patients.length;i++){
-   onProgress?.(`Compressing changed patient photos… ${i+1}/${patients.length}`);
-   embeddedPatients.push(await embedPatientPhotos(patients[i]));
+   const patient = patients[i];
+   const patientId = String(patient.id ?? "");
+   const sourceSignature = JSON.stringify([String(patient.photo_uri || ""), String(patient.photos_json || "")]);
+   const previous = previousPatientsById.get(patientId);
+   if (patientId && previous && previousPhotoSources?.[patientId] === sourceSignature &&
+       typeof previous.photos_json === "string") {
+     // Reuse the already-compressed, portable photo bytes when this patient's
+     // photo source has not changed. Editing another field won't recompress it.
+     embeddedPatients.push({...patient, photo_uri: previous.photo_uri || "", photos_json: previous.photos_json});
+   } else {
+     onProgress?.(`Compressing changed patient photos… ${i+1}/${patients.length}`);
+     embeddedPatients.push(await embedPatientPhotos(patient));
+   }
  }
 
  const historyAll=include("patientHistory") ? db.getAllSync<any>("SELECT * FROM patient_history ORDER BY created_at ASC") : [];
@@ -203,9 +215,13 @@ export async function exportIncrementalBackup(changedTables: string[], onProgres
  ]);
  const tables = Array.from(new Set(changedTables)).filter((name) => allowed.has(name));
  if (!tables.length) throw new Error("There are no changed data tables to sync.");
- const backup = await createBackupData({ type: "all" }, onProgress, tables);
  const previous = await readDeltaCache();
  const canDiff = !!previous && previous.baselineKey === baselineKey && !!baselineKey;
+ const backup = await createBackupData(
+  { type: "all" }, onProgress, tables,
+  canDiff ? previous!.tables.patients : undefined,
+  canDiff && previous!.photoSources ? previous!.photoSources : undefined
+ );
  const nextTables: Record<string, any[]> = canDiff ? { ...previous!.tables } : {};
  const deletedIds: Record<string, string[]> = {};
  const fullTables: string[] = [];
@@ -240,8 +256,22 @@ export async function exportIncrementalBackup(changedTables: string[], onProgres
  (backup as any)._rowDelta = canDiff;
  (backup as any).deletedIds = canDiff ? deletedIds : {};
  (backup as any).fullTables = canDiff ? fullTables : tables.filter((table) => table !== "branding");
+ // Track the source URIs separately from portable compressed photo bytes. This
+ // lets future backups reuse unchanged photo payloads without recompressing them.
+ const nextPhotoSources: Record<string, string> = canDiff && previous!.photoSources ? { ...previous!.photoSources } : {};
+ if (tables.includes("patients")) {
+  const sourceRows = db.getAllSync<any>("SELECT id,photo_uri,photos_json FROM patients");
+  const currentIds = new Set<string>();
+  for (const row of sourceRows) {
+   const id = String(row.id ?? "");
+   if (!id) continue;
+   currentIds.add(id);
+   nextPhotoSources[id] = JSON.stringify([String(row.photo_uri || ""), String(row.photos_json || "")]);
+  }
+  for (const id of Object.keys(nextPhotoSources)) if (!currentIds.has(id)) delete nextPhotoSources[id];
+ }
  // Do not persist the new baseline until the upload succeeds.
- pendingDeltaCacheText = JSON.stringify({ baselineKey, tables: nextTables });
+ pendingDeltaCacheText = JSON.stringify({ baselineKey, tables: nextTables, photoSources: nextPhotoSources });
  return JSON.stringify(backup);
 }
 
