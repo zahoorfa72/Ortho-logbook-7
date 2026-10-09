@@ -2,6 +2,7 @@ import * as Crypto from "expo-crypto";
 import { File } from "expo-file-system";
 import * as LegacyFileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
+import * as SecureStore from "expo-secure-store";
 import nacl from "tweetnacl";
 import { db, initializeDatabase, markInventoryResetDone, repairDatabaseData } from "@/src/db/database";
 import { storage } from "@/src/utils/storage";
@@ -15,6 +16,7 @@ type BackupData = {
   patients:any[]; procedures:any[]; inventoryCategories:any[]; inventory:any[]; patientImplants:any[]; patientCustomFields:any[]; implantRecords:any[]; expenses:any[]; users:any[];
   patientHistory:any[]; inventoryMovements:any[]; inventoryPurchaseReceipts:any[]; stockReceipts:any[];
   branding?: BrandingConfig | null;
+  appSettings?: { googleOAuthClientId?: string; googleCloudProjectId?: string };
   filter?: BackupFilter;
   incremental?: boolean;
   changedTables?: string[];
@@ -103,6 +105,10 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
      branding = null;
    }
  }
+ const appSettings = include("appSettings") ? {
+   googleOAuthClientId: (await SecureStore.getItemAsync("ortho_google_drive_client_id").catch(() => null)) || undefined,
+   googleCloudProjectId: (await SecureStore.getItemAsync("ortho_google_drive_cloud_project_id").catch(() => null)) || undefined,
+ } : undefined;
  const pf=whereForFilter(filter, "date");
  const patients=include("patients") ? db.getAllSync<any>(`SELECT * FROM patients${pf.sql} ORDER BY date DESC, created_at DESC`, pf.args) : [];
  const selectedPatientIds = new Set(patients.map((p:any)=>p.id));
@@ -151,6 +157,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
   inventoryPurchaseReceipts:include("inventoryPurchaseReceipts") ? (()=>{const f=whereForFilter(filter,"created_at");return db.getAllSync<any>(`SELECT * FROM inventory_purchase_receipts${f.sql} ORDER BY created_at ASC`,f.args);})() : [],
   stockReceipts:include("stockReceipts") ? (()=>{const f=whereForFilter(filter,"created_at");return db.getAllSync<any>(`SELECT * FROM stock_receipts${f.sql} ORDER BY created_at ASC`,f.args);})() : [],
   branding,
+  appSettings,
  };
 }
 
@@ -213,7 +220,7 @@ export async function exportIncrementalBackup(changedTables: string[], onProgres
  const allowed = new Set([
   "patients","procedures","inventoryCategories","inventory","patientImplants",
   "patientCustomFields","implantRecords","expenses","users","patientHistory",
-  "inventoryMovements","inventoryPurchaseReceipts","stockReceipts","branding"
+  "inventoryMovements","inventoryPurchaseReceipts","stockReceipts","branding","appSettings"
  ]);
  const tables = Array.from(new Set(changedTables)).filter((name) => allowed.has(name));
  if (!tables.length) throw new Error("There are no changed data tables to sync.");
