@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { ActivityIndicator, Alert, Modal, Pressable, RefreshControl, ScrollView, Text, TextInput, View } from "react-native";
 import * as ImagePicker from "expo-image-picker";
+import * as ImageManipulator from "expo-image-manipulator";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -139,12 +140,38 @@ export default function StockScreen(){
   const pickBill=async(id:string)=>{
     const p=await ImagePicker.requestMediaLibraryPermissionsAsync();
     if(!p.granted){toast("Photo permission is required for the bill image.","error");return;}
-    const x=await ImagePicker.launchImageLibraryAsync({mediaTypes:["images"],allowsEditing:true,quality:.55,base64:true});
+    const x=await ImagePicker.launchImageLibraryAsync({mediaTypes:["images"],allowsEditing:true,quality:1});
     if(x.canceled)return;
     const a=x.assets[0];
-    if(!a?.base64){toast("Could not read bill image.","error");return;}
-    if(a.base64.length>2000000){toast("Bill image is too large. Choose a smaller image.","error");return;}
-    updateRow(id,{billImage:"data:"+(a.mimeType||"image/jpeg")+";base64,"+a.base64});
+    if(!a?.uri){toast("Could not read bill image.","error");return;}
+    try{
+      // Compress bills before storing them in the offline database. Keep enough
+      // resolution for printed totals, small text and handwritten notes to remain legible.
+      const actions:any[]=[];
+      const width=Number(a.width||0),height=Number(a.height||0);
+      if(width>1600||height>1600){
+        actions.push(width>=height?{resize:{width:1600}}:{resize:{height:1600}});
+      }
+      let result=await ImageManipulator.manipulateAsync(a.uri,actions,{
+        compress:0.58,
+        format:ImageManipulator.SaveFormat.JPEG,
+        base64:true
+      });
+      // If the bill is still large, use a second quality step rather than rejecting
+      // a normal camera photo. Do not repeatedly recompress already-compressed data.
+      if(result.base64&&result.base64.length>1900000){
+        result=await ImageManipulator.manipulateAsync(result.uri,[],{
+          compress:0.42,
+          format:ImageManipulator.SaveFormat.JPEG,
+          base64:true
+        });
+      }
+      if(!result.base64){toast("Could not compress bill image. Please select it again.","error");return;}
+      if(result.base64.length>2000000){toast("This bill image is still too large after compression. Try cropping closer to the bill.","error");return;}
+      updateRow(id,{billImage:"data:image/jpeg;base64,"+result.base64});
+    }catch{
+      toast("Could not compress bill image. Please select it again.","error");
+    }
   };
 
   const pickerValues=stockPicker==="category"
