@@ -1,0 +1,60 @@
+name: Validate Windows Web Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-windows-web-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Export web-compatible app for Windows testing
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install JavaScript dependencies
+        working-directory: frontend
+        run: |
+          corepack enable
+          if (Test-Path yarn.lock) {
+            yarn install --frozen-lockfile --ignore-scripts
+          } else {
+            yarn install --ignore-scripts
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: TypeScript validation
+        working-directory: frontend
+        run: npx tsc --noEmit
+
+      - name: Export web build for Windows compatibility testing
+        working-directory: frontend
+        env:
+          CI: "1"
+          EXPO_NO_TELEMETRY: "1"
+        run: npx expo export --platform web
+
+      - name: Upload web build
+        uses: actions/upload-artifact@v4
+        with:
+          name: ortho-logbook-windows-web-test
+          path: frontend/dist
+          if-no-files-found: error
+          retention-days: 14
