@@ -32,9 +32,7 @@ export async function connectGoogleAccount() {
   configure();
   try {
     await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
-    // Sign out first so the Android account chooser is shown. This does not
-    // delete Drive files or revoke the user's Google authorization.
-    try { await GoogleSignin.signOut(); } catch {}
+    // Preserve the existing native Google session when reconnecting.
     const result = await GoogleSignin.signIn();
     if (!result || result.type === "cancelled") throw new Error("Google account selection was cancelled.");
     const current = GoogleSignin.getCurrentUser();
@@ -60,6 +58,20 @@ export async function disconnectGoogleAccount() {
 export function getConnectedGoogleAccount(): string | null {
   configure();
   return GoogleSignin.getCurrentUser()?.user?.email || null;
+}
+
+// Rehydrate a previously authorized account without showing an account chooser.
+export async function restoreGoogleAccountSilently(): Promise<string | null> {
+  configure();
+  try {
+    const currentEmail = GoogleSignin.getCurrentUser()?.user?.email;
+    if (currentEmail) return currentEmail;
+    if (!GoogleSignin.hasPreviousSignIn()) return null;
+    await GoogleSignin.signInSilently();
+    return GoogleSignin.getCurrentUser()?.user?.email || null;
+  } catch {
+    return null;
+  }
 }
 
 async function resolveAccessToken(): Promise<string> {
