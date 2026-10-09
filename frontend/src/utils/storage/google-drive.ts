@@ -516,6 +516,23 @@ async function downloadDriveJson(fileId: string) {
   return response.text();
 }
 
+// Google Drive can occasionally return a transient/truncated media response on
+// mobile networks. Retry the download, and tolerate a UTF-8 BOM before parsing.
+async function downloadDriveJsonValidated(fileId: string): Promise<any> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const text = (await downloadDriveJson(fileId)).replace(/^\\uFEFF/, "").trim();
+      if (!text) throw new Error("Google Drive returned an empty backup file.");
+      return JSON.parse(text);
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) await new Promise<void>(resolve => setTimeout(resolve, attempt * 700));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Google Drive backup could not be parsed.");
+}
+
 export async function backupIncrementalToGoogleDrive(changedTables: string[], onProgress?: (stage: string) => void) {
   onProgress?.("Checking the full backup baseline…");
   const base = await findLatestBackup();
@@ -539,9 +556,8 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
 export async function restoreLatestFromGoogleDrive() {
   const file = await findLatestBackup();
   if (!file?.id) throw new Error("No Ortho Logbook backup was found in this Google Drive account.");
-  const baseText = await downloadDriveJson(file.id);
   let composed: any;
-  try { composed = JSON.parse(baseText); } catch { throw new Error("The full Google Drive backup is damaged or unreadable."); }
+  try { composed = await downloadDriveJsonValidated(file.id); } catch { throw new Error("The full Google Drive backup is damaged or unreadable after three download attempts."); }
   if (!composed || composed.app !== "Ortho Logbook" || !Array.isArray(composed.patients) || !Array.isArray(composed.inventory)) {
     throw new Error("The full Google Drive backup is incomplete. No data was restored.");
   }
@@ -556,9 +572,9 @@ export async function restoreLatestFromGoogleDrive() {
   for (const deltaFile of deltas) {
     let delta: any;
     try {
-      delta = JSON.parse(await downloadDriveJson(deltaFile.id));
+      delta = await downloadDriveJsonValidated(deltaFile.id);
     } catch {
-      throw new Error("An incremental Google Drive backup (" + String(deltaFile.name || "unknown file") + ") is unreadable. Restore stopped to prevent silently missing newer data.");
+      throw new Error("An incremental Google Drive backup (" + String(deltaFile.name || "unknown file") + ") is unreadable after three download attempts. Restore stopped to prevent silently missing newer data. Keep this file in Drive; reconnect Google Drive and retry after a stable connection.");
     }
     if (!delta || delta.app !== "Ortho Logbook" || delta.incremental !== true || !Array.isArray(delta.changedTables)) {
       throw new Error("An incremental Google Drive backup (" + String(deltaFile.name || "unknown file") + ") is incomplete. Restore stopped to protect your data.");
