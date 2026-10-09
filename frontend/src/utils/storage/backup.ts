@@ -416,7 +416,8 @@ export function restoreBackup(backup:BackupData){
   }
  });
  repairDatabaseData();
- if (backup.version >= 6 && backup.branding && typeof backup.branding === "object") void storage.setItem("ortho_branding", JSON.stringify(backup.branding));
+ if (backup.version >= 6 && backup.branding === null) void storage.removeItem("ortho_branding");
+  else if (backup.version >= 6 && backup.branding && typeof backup.branding === "object") void storage.setItem("ortho_branding", JSON.stringify(backup.branding));
  markInventoryResetDone();
  return {patients:patients.length,procedures:procedures.length,inventory:inventory.length,inventoryCategories:inventoryCategories.length,patientImplants:patientImplants.length,expenses:expenses.length,users:users.length,patientHistory:patientHistory.length,inventoryMovements:inventoryMovements.length};
 }
@@ -536,7 +537,8 @@ export function mergeBackup(backup: BackupData) {
    stats.inventoryMovements++;
   }
  });
- if (backup.version >= 6 && backup.branding && typeof backup.branding === "object") void storage.setItem("ortho_branding", JSON.stringify(backup.branding));
+ if (backup.version >= 6 && backup.branding === null) void storage.removeItem("ortho_branding");
+  else if (backup.version >= 6 && backup.branding && typeof backup.branding === "object") void storage.setItem("ortho_branding", JSON.stringify(backup.branding));
  markInventoryResetDone();
  return stats;
 }
