@@ -31,6 +31,7 @@ export default function BackupRestoreScreen() {
   const [googleConfigSaved, setGoogleConfigSaved] = useState(false);
   const [googleAccount, setGoogleAccount] = useState<string | null>(null);
   const [driveLoading, setDriveLoading] = useState(false);
+  const [driveStatus, setDriveStatus] = useState("");
   const [selectedBackup, setSelectedBackup] = useState<{
     name: string;
     backupText: string;
@@ -103,6 +104,7 @@ export default function BackupRestoreScreen() {
   const handleConnectGoogle = async () => {
     try {
       setDriveLoading(true);
+      setDriveStatus("Connecting Google account…");
       const email = await connectGoogleAccount();
       setGoogleAccount(email);
       triggerAutomaticDriveBackup();
@@ -111,12 +113,14 @@ export default function BackupRestoreScreen() {
       Alert.alert("Google connection failed", error instanceof Error ? error.message : "Unable to connect Google.");
     } finally {
       setDriveLoading(false);
+      setDriveStatus("");
     }
   };
 
   const handleDisconnectGoogle = async () => {
     try {
       setDriveLoading(true);
+      setDriveStatus("Disconnecting Google account…");
       await disconnectGoogleAccount();
       setGoogleAccount(null);
       Alert.alert("Google account disconnected", "This only signs Ortho Logbook out of Google on this phone. Your Drive backup and local app data are not deleted.");
@@ -134,18 +138,21 @@ export default function BackupRestoreScreen() {
     }
     try {
       setDriveLoading(true);
-      await backupToGoogleDrive(undefined, backupFilter);
+      setDriveStatus("Preparing backup data…");
+      await backupToGoogleDrive(undefined, backupFilter, { onProgress: setDriveStatus });
       Alert.alert("Google Drive backup complete", `Latest unencrypted backup was saved to ${googleAccount}'s Google Drive.`);
     } catch (error) {
       Alert.alert("Drive backup failed", error instanceof Error ? error.message : "Unable to back up to Google Drive.");
     } finally {
       setDriveLoading(false);
+      setDriveStatus("");
     }
   };
 
   const handleDriveRestore = async () => {
     try {
       setDriveLoading(true);
+      setDriveStatus("Finding latest Drive backup…");
       const result = await restoreLatestFromGoogleDrive();
       const info = getBackupInfo(result.backupText);
       setSelectedBackup({ name: result.name, backupText: result.backupText, info });
@@ -403,6 +410,11 @@ export default function BackupRestoreScreen() {
                 </>
               )}
             </Pressable>
+          )}
+          {driveLoading && (
+            <Text style={[styles.hint, { marginTop: spacing.md, marginBottom: 0 }]} accessibilityLiveRegion="polite">
+              {driveStatus || "Working with Google Drive…"}
+            </Text>
           )}
           <Text style={[styles.hint, { marginTop: spacing.md, marginBottom: 0 }]}>
             The Android OAuth client is tied to this app's package/signing certificate; the Google account selected here determines whose Drive is used.
