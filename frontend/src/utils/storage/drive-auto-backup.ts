@@ -64,13 +64,23 @@ async function runBackup() {
     const completedAt = result.completedAt
       ? new Date(result.completedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
       : "";
-    setDriveSyncState({
-      phase: "success",
-      updates: 0,
-      message: result.skipped
-        ? `Drive up to date${completedAt ? ` · ${completedAt}` : ""}`
-        : `Backup uploaded${completedAt ? ` · ${completedAt}` : ""}`,
-    });
+    // Do not report the backup as fully synced if database changes arrived
+    // while the snapshot was uploading. A follow-up upload is queued below.
+    if (pendingUpdates > 0) {
+      setDriveSyncState({
+        phase: "waiting",
+        updates: pendingUpdates,
+        message: "New changes detected · syncing again…",
+      });
+    } else {
+      setDriveSyncState({
+        phase: "success",
+        updates: 0,
+        message: result.skipped
+          ? `Google Drive backup up to date${completedAt ? ` · ${completedAt}` : ""}`
+          : `Uploaded to Google Drive${completedAt ? ` · ${completedAt}` : ""}`,
+      });
+    }
   } catch (error) {
     console.warn("[drive-auto-backup] sync failed:", error);
     const details = error instanceof Error ? error.message : String(error || "Unknown error");
