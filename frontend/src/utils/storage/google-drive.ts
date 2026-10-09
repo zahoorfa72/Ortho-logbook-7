@@ -588,7 +588,7 @@ async function downloadIncrementalWithRecovery(fileId: string, fileName: string)
     // A second pass tries to salvage complete table arrays from a truncated
     // JSON payload. Never invent missing rows or overwrite a table with [].
     let raw = "";
-    try { raw = (await downloadDriveJson(fileId)).replace(/^\\uFEFF/, "").trim(); } catch {}
+    try { raw = (await downloadDriveJson(fileId)).replace(/^\uFEFF/, "").trim(); } catch {}
     const app = extractCompleteJsonProperty(raw, "app");
     const changedTables = extractCompleteJsonProperty(raw, "changedTables");
     if (app !== "Ortho Logbook") {
