@@ -533,6 +533,95 @@ async function downloadDriveJsonValidated(fileId: string): Promise<any> {
   throw lastError instanceof Error ? lastError : new Error("Google Drive backup could not be parsed.");
 }
 
+// If an incremental JSON document was truncated, recover any complete table
+// values that still parse. This is deliberately limited to incremental files;
+// a full baseline must remain structurally valid before restore can proceed.
+function extractCompleteJsonProperty(text: string, key: string): any {
+  const match = new RegExp('"' + key.replace(/[.*+?^\x24{}()|[\\]\\\\]/g, "\\async function downloadDriveJsonValidated(fileId: string): Promise<any> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const text = (await downloadDriveJson(fileId)).replace(/^\uFEFF/, "").trim();
+      if (!text) throw new Error("Google Drive returned an empty backup file.");
+      return JSON.parse(text);
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) await new Promise<void>(resolve => setTimeout(resolve, attempt * 700));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Google Drive backup could not be parsed.");
+}") + '"\\s*:').exec(text);
+  if (!match) return undefined;
+  let start = match.index + match[0].length;
+  while (/\\s/.test(text[start] || "")) start++;
+  const first = text[start];
+  if (first === "[" || first === "{") {
+    const open = first;
+    const close = first === "[" ? "]" : "}";
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let i = start; i < text.length; i++) {
+      const ch = text[i];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (ch === "\\\\") escaped = true;
+        else if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') { inString = true; continue; }
+      if (ch === open) depth++;
+      else if (ch === close && --depth === 0) {
+        try { return JSON.parse(text.slice(start, i + 1)); } catch { return undefined; }
+      }
+    }
+    return undefined;
+  }
+  let end = start;
+  let inString = false;
+  let escaped = false;
+  for (; end < text.length; end++) {
+    const ch = text[end];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\\\") escaped = true;
+      else if (ch === '"') inString = false;
+    } else if (ch === '"') inString = true;
+    else if (ch === "," || ch === "}" || ch === "]") break;
+  }
+  try { return JSON.parse(text.slice(start, end).trim()); } catch { return undefined; }
+}
+
+async function downloadIncrementalWithRecovery(fileId: string, fileName: string): Promise<{ data: any; warning?: string }> {
+  try {
+    const data = await downloadDriveJsonValidated(fileId);
+    return { data };
+  } catch {
+    // A second pass tries to salvage complete table arrays from a truncated
+    // JSON payload. Never invent missing rows or overwrite a table with [].
+    let raw = "";
+    try { raw = (await downloadDriveJson(fileId)).replace(/^\\uFEFF/, "").trim(); } catch {}
+    const app = extractCompleteJsonProperty(raw, "app");
+    const changedTables = extractCompleteJsonProperty(raw, "changedTables");
+    if (app !== "Ortho Logbook") {
+      throw new Error("Incremental backup " + fileName + " could not be recovered. Its contents are unavailable or corrupted.");
+    }
+    const knownTables = ["patients","procedures","inventoryCategories","inventory","patientImplants","patientCustomFields","implantRecords","expenses","users","patientHistory","inventoryMovements","inventoryPurchaseReceipts","stockReceipts"];
+    const recovered: any = { app, incremental: true, changedTables: Array.isArray(changedTables) ? changedTables : [] };
+    for (const table of knownTables) {
+      const value = extractCompleteJsonProperty(raw, table);
+      if (Array.isArray(value)) recovered[table] = value;
+    }
+    const branding = extractCompleteJsonProperty(raw, "branding");
+    if (branding !== undefined) recovered.branding = branding;
+    if (!recovered.changedTables.length) recovered.changedTables = knownTables.filter(table => Array.isArray(recovered[table]));
+    if (!recovered.changedTables.some((table: string) => Array.isArray(recovered[table]) || (table === "branding" && Object.prototype.hasOwnProperty.call(recovered, "branding")))) {
+      throw new Error("Incremental backup " + fileName + " is damaged and contains no recoverable complete table. The full backup and other readable updates can still be restored.");
+    }
+    return { data: recovered, warning: fileName + " was damaged; only complete table data could be recovered." };
+  }
+}
+
 export async function backupIncrementalToGoogleDrive(changedTables: string[], onProgress?: (stage: string) => void) {
   onProgress?.("Checking the full backup baseline…");
   const base = await findLatestBackup();
@@ -574,11 +663,13 @@ export async function restoreLatestFromGoogleDrive() {
   for (const deltaFile of deltas) {
     let delta: any;
     try {
-      delta = await downloadDriveJsonValidated(deltaFile.id);
-    } catch {
-      // Recover the baseline and every readable table snapshot instead of
-      // blocking all old data because one delta file is damaged.
-      recoveryWarnings.push(String(deltaFile.name || "An incremental backup") + " could not be read and was skipped.");
+      const recovered = await downloadIncrementalWithRecovery(deltaFile.id, String(deltaFile.name || "An incremental backup"));
+      delta = recovered.data;
+      if (recovered.warning) recoveryWarnings.push(recovered.warning);
+    } catch (error: any) {
+      // Preserve the full baseline and every other recoverable update. A
+      // damaged delta is reported instead of blocking all older patient data.
+      recoveryWarnings.push(String(error?.message || (String(deltaFile.name || "An incremental backup") + " could not be recovered.")));
       continue;
     }
     if (!delta || delta.app !== "Ortho Logbook" || delta.incremental !== true || !Array.isArray(delta.changedTables)) {
