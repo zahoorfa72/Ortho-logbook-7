@@ -256,9 +256,10 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
         const subKeys:string[]=Array.isArray(cfg.subHeading)?cfg.subHeading.map(String):[];
         const headingLines=headingKeys.map(h=>"<div class='pdfHeadingLine pdfHierarchyText'><b>"+escapeHtml(labels[h]||h)+"</b> — "+escapeHtml(value(p,h)||"—")+"</div>").join("");
         const subLines=subKeys.map(h=>"<div class='pdfSubHeadingLine pdfHierarchyText'><b>"+escapeHtml(labels[h]||h)+"</b> — "+escapeHtml(value(p,h)||"—")+"</div>").join("");
-        const level=levelFor(k);
-        const headingClass=level ? " headingLevel"+level : "";
-        const styled=level ? "<span class='headingText"+headingClass+"'>"+raw+"</span>" : raw;
+        // Main-entry fields always use the independent Main Entry typography.
+        // Heading/Sub-heading typography is applied only to the nested fields
+        // emitted below from pdfHeadingMap, preventing mixed tones in one entry.
+        const styled=raw;
         const infectionAfterDiagnosis = k === "diagnosis" ? infectionLines : "";
         return "<td>"+styled+headingLines+subLines+infectionAfterDiagnosis+(k===mainFields[0]?badge:"")+"</td>";
       }).join("")+"</tr>";
