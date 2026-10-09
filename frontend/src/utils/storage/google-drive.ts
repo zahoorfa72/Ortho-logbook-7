@@ -125,84 +125,126 @@ async function findLatestBackup() {
   return files.find((file: any) => String(file.name || "").toLowerCase().includes("ortho logbook backup")) || null;
 }
 
-function xhrRequest(url: string, method: string, token: string, body: string, contentType: string): Promise<any> {
+const DRIVE_CHUNK_SIZE = 256 * 1024;
+
+function parseDriveResponse(text: string): any {
+  try { return text ? JSON.parse(text) : {}; } catch { return {}; }
+}
+
+function uploadChunk(sessionUrl: string, token: string, bytes: Uint8Array, start: number, end: number, total: number): Promise<{ done: boolean; result?: any }> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open(method, url);
-    xhr.setRequestHeader("Authorization", `Bearer ${token}`);
-    xhr.setRequestHeader("Content-Type", contentType);
+    xhr.open("PUT", sessionUrl);
+    xhr.setRequestHeader("Authorization", "Bearer " + token);
+    xhr.setRequestHeader("Content-Type", "application/json; charset=UTF-8");
+    xhr.setRequestHeader("Content-Range", "bytes " + start + "-" + (end - 1) + "/" + total);
     xhr.onload = () => {
-      const responseText = xhr.responseText || "";
-      let parsed: any = {};
-      try { parsed = responseText ? JSON.parse(responseText) : {}; } catch {}
-      if (xhr.status >= 200 && xhr.status < 300) resolve(parsed);
-      else reject(new Error(parsed?.error?.message || `Google Drive upload failed (HTTP ${xhr.status}).`));
+      const body = xhr.responseText || "";
+      const parsed = parseDriveResponse(body);
+      if (xhr.status === 308) { resolve({ done: false }); return; }
+      if (xhr.status >= 200 && xhr.status < 300) { resolve({ done: true, result: parsed }); return; }
+      reject(new Error(parsed?.error?.message || ("Google Drive rejected an upload chunk (HTTP " + xhr.status + ").")));
     };
-    xhr.onerror = () => reject(new Error(`Google Drive upload connection failed at the upload-session stage (readyState ${xhr.readyState}, status ${xhr.status || "no HTTP response"}). The upload session was created, but Android could not complete the data transfer. Try Wi-Fi or mobile data, disable VPN/Private DNS/ad blockers, and retry. If it repeats, send this full message to diagnose the network path.`));
-    xhr.ontimeout = () => reject(new Error("Google Drive upload timed out. Try a stable Wi-Fi connection."));
+    xhr.onerror = () => reject(new Error("No HTTP response while sending a Google Drive upload chunk (readyState " + xhr.readyState + ", status " + (xhr.status || "none") + ")."));
+    xhr.ontimeout = () => reject(new Error("Google Drive upload chunk timed out."));
     xhr.timeout = 180000;
-    xhr.send(body);
+    const chunk = bytes.slice(start, end);
+    xhr.send(chunk.buffer as ArrayBuffer);
   });
+}
+
+async function uploadResumable(sessionUrl: string, token: string, backupText: string) {
+  const bytes = new TextEncoder().encode(backupText);
+  let offset = 0;
+  let result: any = null;
+  while (offset < bytes.length) {
+    const end = Math.min(offset + DRIVE_CHUNK_SIZE, bytes.length);
+    let lastError: any = null;
+    let chunkResult: { done: boolean; result?: any } | null = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        chunkResult = await uploadChunk(sessionUrl, token, bytes, offset, end, bytes.length);
+        lastError = null;
+        break;
+      } catch (error: any) {
+        lastError = error;
+        if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 700 * (attempt + 1)));
+      }
+    }
+    if (lastError || !chunkResult) throw lastError || new Error("Google Drive upload chunk failed.");
+    offset = end;
+    if (chunkResult.done) {
+      result = chunkResult.result;
+      if (offset < bytes.length) throw new Error("Google Drive completed the upload earlier than expected; please retry.");
+    } else if (offset >= bytes.length) {
+      throw new Error("Google Drive did not confirm the final upload chunk. Please retry.");
+    }
+  }
+  return result || {};
 }
 
 async function uploadContent(backupText: string, existingId?: string) {
   const token = await accessToken();
-  // Start a resumable upload session so large patient-photo backups do not have
-  // to be sent as one oversized multipart request.
+  const bytes = new TextEncoder().encode(backupText);
   const target = existingId
-    ? `${DRIVE_UPLOAD}/${encodeURIComponent(existingId)}?uploadType=resumable&fields=id,name,modifiedTime,size`
-    : `${DRIVE_UPLOAD}?uploadType=resumable&fields=id,name,modifiedTime,size`;
+    ? DRIVE_UPLOAD + "/" + encodeURIComponent(existingId) + "?uploadType=resumable&fields=id,name,modifiedTime,size"
+    : DRIVE_UPLOAD + "?uploadType=resumable&fields=id,name,modifiedTime,size";
   let initResponse: Response;
   try {
     initResponse = await fetch(target, {
       method: existingId ? "PATCH" : "POST",
       headers: {
-        Authorization: `Bearer ${token}`,
+        Authorization: "Bearer " + token,
         "Content-Type": "application/json; charset=UTF-8",
         "X-Upload-Content-Type": "application/json",
+        "X-Upload-Content-Length": String(bytes.length),
       },
       body: JSON.stringify({ name: BACKUP_NAME, mimeType: "application/json" }),
     });
   } catch (error: any) {
-    throw new Error(`Could not start Google Drive upload. ${error?.message || "Check your internet connection and retry."}`);
+    throw new Error("Could not start Google Drive upload session. " + (error?.message || "Check network access and retry."));
   }
   if (!initResponse.ok) {
-    let message = `Google Drive could not start upload (HTTP ${initResponse.status}).`;
+    let message = "Google Drive could not start upload (HTTP " + initResponse.status + ").";
     try { const result = await initResponse.json(); message = result?.error?.message || message; } catch {}
     throw new Error(message);
   }
   const sessionUrl = initResponse.headers.get("Location");
   if (!sessionUrl) throw new Error("Google Drive did not provide an upload session. Reconnect your Google account and retry.");
   try {
-    return await xhrRequest(sessionUrl, "PUT", token, backupText, "application/json; charset=UTF-8");
+    return await uploadResumable(sessionUrl, token, backupText);
   } catch (error: any) {
-    // Some Android network stacks fail when Google returns an upload-session URL.
-    // Retry once using the documented multipart endpoint; keep the same backup ID.
-    if (String(error?.message || "").includes("upload connection failed")) {
-      const boundary = "ortho_logbook_drive_retry_boundary";
-      const body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify({ name: BACKUP_NAME, mimeType: "application/json" })}\r\n--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${backupText}\r\n--${boundary}--`;
-      const retryTarget = existingId
-        ? `${DRIVE_UPLOAD}/${encodeURIComponent(existingId)}?uploadType=multipart&fields=id,name,modifiedTime,size`
-        : `${DRIVE_UPLOAD}?uploadType=multipart&fields=id,name,modifiedTime,size`;
-      try {
-        const retry = await fetch(retryTarget, {
-          method: existingId ? "PATCH" : "POST",
-          headers: { Authorization: `Bearer ${token}`, "Content-Type": `multipart/related; boundary=${boundary}` },
-          body,
-        });
-        if (retry.ok) return retry.json();
-        let message = `Google Drive retry failed (HTTP ${retry.status}).`;
-        try { const data = await retry.json(); message = data?.error?.message || message; } catch {}
-        throw new Error(message);
-      } catch (retryError: any) {
-        if (retryError?.message && !String(retryError.message).includes("Network request failed")) throw retryError;
-        throw new Error(`${error.message} The alternate upload method also failed: ${retryError?.message || "Network request failed"}`);
-      }
+    const originalMessage = String(error?.message || "Google Drive resumable upload failed.");
+    // Correct multipart/related structure is retained as a fallback for devices
+    // whose native XHR cannot transfer a resumable session body.
+    const boundary = "ortho_logbook_drive_" + Date.now().toString(36);
+    const metadata = JSON.stringify({ name: BACKUP_NAME, mimeType: "application/json" });
+    const body = "--" + boundary + "\r\n" +
+      "Content-Type: application/json; charset=UTF-8\r\n" +
+      "Content-Disposition: form-data; name=\"metadata\"\r\n\r\n" + metadata + "\r\n" +
+      "--" + boundary + "\r\n" +
+      "Content-Type: application/json; charset=UTF-8\r\n" +
+      "Content-Disposition: form-data; name=\"media\"\r\n\r\n" + backupText + "\r\n" +
+      "--" + boundary + "--\r\n";
+    const retryTarget = existingId
+      ? DRIVE_UPLOAD + "/" + encodeURIComponent(existingId) + "?uploadType=multipart&fields=id,name,modifiedTime,size"
+      : DRIVE_UPLOAD + "?uploadType=multipart&fields=id,name,modifiedTime,size";
+    try {
+      const retry = await fetch(retryTarget, {
+        method: existingId ? "PATCH" : "POST",
+        headers: { Authorization: "Bearer " + token, "Content-Type": "multipart/related; boundary=" + boundary },
+        body,
+      });
+      if (retry.ok) return await retry.json();
+      let message = "Google Drive multipart fallback failed (HTTP " + retry.status + ").";
+      try { const data = await retry.json(); message = data?.error?.message || message; } catch {}
+      throw new Error(message);
+    } catch (retryError: any) {
+      const retryMessage = String(retryError?.message || "Network request failed");
+      throw new Error("Resumable upload failed: " + originalMessage + " Alternate multipart upload failed: " + retryMessage + ". Local records are unchanged; retry when Google Drive connectivity is available.");
     }
-    throw error;
   }
 }
-
 async function backupContentHash(backupText: string) {
   const parsed = JSON.parse(backupText);
   // Ignore the generated timestamp so unchanged records do not upload again.
