@@ -399,12 +399,12 @@ async function uploadContent(backupText: string, existingId?: string, onProgress
       const boundary = "ortho_logbook_drive_" + Date.now().toString(36);
       const metadata = JSON.stringify({ name: BACKUP_NAME, mimeType: "application/json" });
       const body = "--" + boundary + "\r\n" +
-        "Content-Type: application/json; charset=UTF-8\\r\\n" +
+        "Content-Type: application/json; charset=UTF-8\r\n" +
         "\r\n" + metadata + "\r\n" +
         "--" + boundary + "\r\n" +
-        "Content-Type: application/json; charset=UTF-8\\r\\n" +
+        "Content-Type: application/json; charset=UTF-8\r\n" +
         "\r\n" + backupText + "\r\n" +
-        "--" + boundary + "--\\r\\n";
+        "--" + boundary + "--\r\n";
       const retryTarget = existingId
         ? DRIVE_UPLOAD + "/" + encodeURIComponent(existingId) + "?uploadType=multipart&fields=id,name,modifiedTime,size"
         : DRIVE_UPLOAD + "?uploadType=multipart&fields=id,name,modifiedTime,size";
