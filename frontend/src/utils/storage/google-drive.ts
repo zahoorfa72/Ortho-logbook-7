@@ -555,8 +555,14 @@ export async function restoreLatestFromGoogleDrive() {
     .sort((a: any, b: any) => Date.parse(String(a.modifiedTime)) - Date.parse(String(b.modifiedTime)));
   for (const deltaFile of deltas) {
     let delta: any;
-    try { delta = JSON.parse(await downloadDriveJson(deltaFile.id)); } catch { continue; }
-    if (!delta || delta.app !== "Ortho Logbook" || delta.incremental !== true || !Array.isArray(delta.changedTables)) continue;
+    try {
+      delta = JSON.parse(await downloadDriveJson(deltaFile.id));
+    } catch {
+      throw new Error("An incremental Google Drive backup (" + String(deltaFile.name || "unknown file") + ") is unreadable. Restore stopped to prevent silently missing newer data.");
+    }
+    if (!delta || delta.app !== "Ortho Logbook" || delta.incremental !== true || !Array.isArray(delta.changedTables)) {
+      throw new Error("An incremental Google Drive backup (" + String(deltaFile.name || "unknown file") + ") is incomplete. Restore stopped to protect your data.");
+    }
     for (const table of delta.changedTables) {
       if (table === "branding") {
         if (Object.prototype.hasOwnProperty.call(delta, "branding")) composed.branding = delta.branding;
