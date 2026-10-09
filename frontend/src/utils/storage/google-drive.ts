@@ -75,18 +75,7 @@ export async function restoreGoogleAccountSilently(): Promise<string | null> {
 }
 
 // Rehydrate a previously authorized account without showing an account chooser.
-export async function restoreGoogleAccountSilently(): Promise<string | null> {
-  configure();
-  try {
-    const currentEmail = GoogleSignin.getCurrentUser()?.user?.email;
-    if (currentEmail) return currentEmail;
-    if (!GoogleSignin.hasPreviousSignIn()) return null;
-    await GoogleSignin.signInSilently();
-    return GoogleSignin.getCurrentUser()?.user?.email || null;
-  } catch {
-    return null;
-  }
-}
+
 
 async function resolveAccessToken(): Promise<string> {
   configure();
