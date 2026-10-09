@@ -185,7 +185,7 @@ export default function InventoryCategories() {
                 ])}
                 style={styles.deleteBtn}
               >
-                <Ionicons name="trash-outline" size={18} color={colors.danger} />
+                <Ionicons name="trash-outline" size={18} color={colors.error} />
               </Pressable>
             </View>
           )}
