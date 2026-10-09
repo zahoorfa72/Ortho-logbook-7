@@ -1,7 +1,7 @@
 import { GoogleSignin, statusCodes } from "@react-native-google-signin/google-signin";
 import { NativeModules, Platform } from "react-native";
 import * as FileSystem from "expo-file-system/legacy";
-import { exportUnencryptedBackup, type BackupFilter } from "@/src/utils/storage/backup";
+import { exportUnencryptedBackup, exportIncrementalBackup, type BackupFilter } from "@/src/utils/storage/backup";
 import { markBackupTaken } from "@/src/utils/backup-reminder";
 import { storage } from "@/src/utils/storage";
 
@@ -325,7 +325,7 @@ async function uploadNativeBackground(
   }
 }
 
-async function uploadContent(backupText: string, existingId?: string, onProgress?: (stage: string) => void) {
+async function uploadContent(backupText: string, existingId?: string, onProgress?: (stage: string) => void, fileName: string = BACKUP_NAME) {
   const token = await accessToken();
   const useNativeBackground = Platform.OS === "android" && !!NativeModules.DriveBackgroundUpload?.startUpload;
   let stagedFileUri: string | null = null;
@@ -365,7 +365,7 @@ async function uploadContent(backupText: string, existingId?: string, onProgress
           "X-Upload-Content-Type": "application/json",
           "X-Upload-Content-Length": String(totalBytes),
         },
-        body: JSON.stringify({ name: BACKUP_NAME, mimeType: "application/json" }),
+        body: JSON.stringify({ name: fileName, mimeType: "application/json" }),
       }, 30000);
     } catch (error: any) {
       throw new Error("Could not start Google Drive upload session. " + (error?.message || "Check network access and retry."));
@@ -397,7 +397,7 @@ async function uploadContent(backupText: string, existingId?: string, onProgress
         );
       }
       const boundary = "ortho_logbook_drive_" + Date.now().toString(36);
-      const metadata = JSON.stringify({ name: BACKUP_NAME, mimeType: "application/json" });
+      const metadata = JSON.stringify({ name: fileName, mimeType: "application/json" });
       const body = "--" + boundary + "\r\n" +
         "Content-Type: application/json; charset=UTF-8\r\n" +
         "\r\n" + metadata + "\r\n" +
@@ -495,11 +495,71 @@ export async function backupToGoogleDrive(
   return { ...result, skipped: false, completedAt, accountEmail: getConnectedGoogleAccount() };
 }
 
+async function listIncrementalFiles() {
+  const q = encodeURIComponent("name contains 'Ortho Logbook Incremental' and trashed = false");
+  const response = await driveRequest(`${DRIVE_API}?q=${q}&spaces=drive&pageSize=100&orderBy=modifiedTime%20asc&includeItemsFromAllDrives=true&supportsAllDrives=true&fields=files(id,name,modifiedTime,size,mimeType),nextPageToken`);
+  const data = await response.json();
+  return Array.isArray(data.files) ? data.files : [];
+}
+
+async function downloadDriveJson(fileId: string) {
+  const response = await driveRequest(`${DRIVE_API}/${encodeURIComponent(fileId)}?alt=media`);
+  return response.text();
+}
+
+export async function backupIncrementalToGoogleDrive(changedTables: string[], onProgress?: (stage: string) => void) {
+  onProgress?.("Checking the full backup baseline…");
+  const base = await findLatestBackup();
+  // An incremental cannot restore a phone on its own. Create one complete
+  // baseline once if this Drive account has never had a full backup.
+  if (!base?.id) {
+    const result = await backupToGoogleDrive(undefined, { type: "all" }, { onProgress });
+    return { ...result, baselineCreated: true };
+  }
+  const backupText = await exportIncrementalBackup(changedTables, onProgress);
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const fileName = `Ortho Logbook Incremental ${stamp}.orbackup`;
+  onProgress?.("Uploading changed data to Google Drive…");
+  const result = await uploadContent(backupText, undefined, onProgress, fileName);
+  await markBackupTaken();
+  const completedAt = new Date().toISOString();
+  await storage.secureSet(LAST_DRIVE_BACKUP_KEY, completedAt);
+  return { ...result, skipped: false, completedAt, name: fileName, accountEmail: getConnectedGoogleAccount() };
+}
+
 export async function restoreLatestFromGoogleDrive() {
   const file = await findLatestBackup();
   if (!file?.id) throw new Error("No Ortho Logbook backup was found in this Google Drive account.");
-  const response = await driveRequest(`${DRIVE_API}/${encodeURIComponent(file.id)}?alt=media`);
-  const backupText = await response.text();
-  return { backupText, name: file.name, modifiedTime: file.modifiedTime };
+  const baseText = await downloadDriveJson(file.id);
+  let composed: any;
+  try { composed = JSON.parse(baseText); } catch { throw new Error("The full Google Drive backup is damaged or unreadable."); }
+  if (!composed || composed.app !== "Ortho Logbook" || !Array.isArray(composed.patients) || !Array.isArray(composed.inventory)) {
+    throw new Error("The full Google Drive backup is incomplete. No data was restored.");
+  }
+
+  // Only apply incremental snapshots created after the full baseline. A manual
+  // full backup therefore becomes the new baseline without needing risky file deletion.
+  const baseTime = Date.parse(String(file.modifiedTime || ""));
+  const deltas = (await listIncrementalFiles())
+    .filter((item: any) => item?.id && Number.isFinite(Date.parse(String(item.modifiedTime || ""))) &&
+      (!Number.isFinite(baseTime) || Date.parse(String(item.modifiedTime)) > baseTime))
+    .sort((a: any, b: any) => Date.parse(String(a.modifiedTime)) - Date.parse(String(b.modifiedTime)));
+  for (const deltaFile of deltas) {
+    let delta: any;
+    try { delta = JSON.parse(await downloadDriveJson(deltaFile.id)); } catch { continue; }
+    if (!delta || delta.app !== "Ortho Logbook" || delta.incremental !== true || !Array.isArray(delta.changedTables)) continue;
+    for (const table of delta.changedTables) {
+      if (table === "branding") {
+        if (Object.prototype.hasOwnProperty.call(delta, "branding")) composed.branding = delta.branding;
+      } else if (["patients","procedures","inventoryCategories","inventory","patientImplants","patientCustomFields","implantRecords","expenses","users","patientHistory","inventoryMovements","inventoryPurchaseReceipts","stockReceipts"].includes(table) && Array.isArray(delta[table])) {
+        composed[table] = delta[table];
+      }
+    }
+    composed.createdAt = delta.createdAt || composed.createdAt;
+  }
+  composed.incremental = false;
+  delete composed.changedTables;
+  composed.filter = { type: "all" };
+  return { backupText: JSON.stringify(composed), name: file.name, modifiedTime: file.modifiedTime, appliedIncrementals: deltas.length };
 }
 
