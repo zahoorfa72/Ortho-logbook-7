@@ -289,7 +289,7 @@ async function backupContentHash(backupText: string, onProgress?: (stage: string
   // Hash the existing string in place rather than creating a second 50+ MiB
   // string with replace(). Ignore only the generated createdAt value so a
   // backup with unchanged records can still be recognized on later runs.
-  const timestampMatch = /("createdAt"\\s*:\\s*")[^"]*(")/.exec(backupText);
+  const timestampMatch = /("createdAt"\s*:\s*")[^"]*(")/.exec(backupText);
   const ignoreStart = timestampMatch ? timestampMatch.index + timestampMatch[1].length : -1;
   const ignoreEnd = timestampMatch ? timestampMatch.index + timestampMatch[0].length - timestampMatch[2].length : -1;
   const ignoredTimestamp = "IGNORED_TIMESTAMP";
