@@ -42,14 +42,14 @@ jobs:
 
       - name: TypeScript validation
         working-directory: frontend
-        run: npx tsc --noEmit
+        run: yarn run tsc --noEmit
 
       - name: Export web build for Windows compatibility testing
         working-directory: frontend
         env:
           CI: "1"
           EXPO_NO_TELEMETRY: "1"
-        run: npx expo export --platform web
+        run: yarn run expo export --platform web
 
       - name: Upload web build
         uses: actions/upload-artifact@v4
