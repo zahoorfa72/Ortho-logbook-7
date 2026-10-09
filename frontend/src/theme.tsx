@@ -48,6 +48,7 @@ export type BrandingConfig = {
   logoBase64: string;      // Left logo (used in-app + on PDF left)
   logoBase64Right: string; // Right logo (PDF only)
   pdfSubtitle: string;     // 2-3 lines shown below the title in PDF header
+  pdfReportHeaders?: Record<string, { title?: string; subtitle?: string }>; // Per-report PDF title/subtitle overrides
   pdfLogoLayout: "center" | "left"; // Header layout: centered title with side logos, or left-aligned
   pdfTitleFont: "regular" | "medium" | "semibold" | "bold";
   pdfTitleSize: number;
@@ -107,6 +108,14 @@ export const defaultBranding: BrandingConfig = {
   logoBase64: "",
   logoBase64Right: "",
   pdfSubtitle: "",
+  pdfReportHeaders: {
+    patientList: { title: "", subtitle: "Patient Data" },
+    patientDetail: { title: "", subtitle: "Patient Details" },
+    implantRecords: { title: "", subtitle: "Implant Records" },
+    statistics: { title: "", subtitle: "Patient Statistics" },
+    stock: { title: "", subtitle: "Stock" },
+    lowStock: { title: "", subtitle: "Low Stock" },
+  },
   pdfLogoLayout: "center",
   pdfTitleFont: "bold",
   pdfTitleSize: 24,
