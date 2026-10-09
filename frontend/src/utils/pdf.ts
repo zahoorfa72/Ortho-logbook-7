@@ -187,13 +187,6 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
     ? branding.pdfPatientFields
     : ["date","mrNo","name","gender","age","diagnosis","procedure"];
   const labels: Record<string,string> = {date:"Date",mrNo:"MR No",name:"Patient",gender:"Gender",age:"Age",address:"Address",diagnosis:"Diagnosis",procedure:"Procedure",implants:"Implants",fileName:"File Name",hcvPlus:"HCV+",hbaSg:"HbAsg",hiv:"HIV"};
-  const legacyHierarchy = [
-    { fields: [branding.pdfMainHeadingField || "name"], label: "Main Heading" },
-    { fields: [branding.pdfSubHeadingField || "procedure"], label: "Sub-heading 1" },
-  ];
-  const hierarchy = Array.isArray(branding.pdfHeadingLevels) && branding.pdfHeadingLevels.length
-    ? branding.pdfHeadingLevels.map((x:any) => ({ fields: Array.isArray(x?.fields) ? x.fields.filter(Boolean).map(String) : [], label: String(x?.label || "") })).filter((x:any) => x.fields.length)
-    : legacyHierarchy;
   const headingMap:any = branding.pdfHeadingMap && typeof branding.pdfHeadingMap==="object" ? branding.pdfHeadingMap : {};
   const hierarchyChildFields = new Set<string>();
   Object.values(headingMap).forEach((cfg:any) => {
@@ -204,10 +197,6 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
   // so it must not also appear as a separate Main Entry column.
   const infectionKeys = new Set(["hcvPlus","hbaSg","hiv"]);
   const mainFields = fields.filter((k:string) => !hierarchyChildFields.has(String(k)) && !infectionKeys.has(String(k)));
-  const levelFor = (key:string) => {
-    const index = hierarchy.findIndex((x:any) => x.fields.includes(key));
-    return index >= 0 ? index + 1 : 0;
-  };
   const value = (p: Patient, key: string) => {
     if(key === "gender") return p.gender || "";
     if(key === "age") return p.age || "";
