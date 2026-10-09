@@ -76,10 +76,14 @@ function subtitleLinesHtml(branding: BrandingConfig) {
   }).join("");
 }
 
-function header(branding: BrandingConfig, subtitle: string) {
+function header(branding: BrandingConfig, subtitle: string, reportKey?: string) {
+  const reportHeader = reportKey ? branding.pdfReportHeaders?.[reportKey] : undefined;
+  const reportTitle = String(reportHeader?.title || "").trim() || branding.title;
+  const customReportSubtitle = String(reportHeader?.subtitle || "").trim();
+  const displaySubtitle = customReportSubtitle ? (subtitle ? customReportSubtitle + " — " + subtitle : customReportSubtitle) : subtitle;
   const leftLogo = branding.logoBase64
     ? `<img src="${branding.logoBase64}" class="logo" alt="left logo" />`
-    : `<div class="logoPlaceholder">${escapeHtml(branding.title.slice(0, 2).toUpperCase())}</div>`;
+    : `<div class="logoPlaceholder">${escapeHtml(reportTitle.slice(0, 2).toUpperCase())}</div>`;
   const rightLogo = branding.logoBase64Right
     ? `<img src="${branding.logoBase64Right}" class="logo" alt="right logo" />`
     : branding.logoBase64
@@ -97,9 +101,9 @@ function header(branding: BrandingConfig, subtitle: string) {
       <div class="header headerLeft">
         <div class="logoSide">${leftLogo}</div>
         <div class="titleBlock titleBlockLeft">
-          <div class="title" style="font-size:${titleSize}px;font-weight:${titleWeight};color:${titleColor}">${escapeHtml(branding.title)}</div>
+          <div class="title" style="font-size:${titleSize}px;font-weight:${titleWeight};color:${titleColor}">${escapeHtml(reportTitle)}</div>
           ${customBlock}
-          <div class="subtitle" style="font-size:${subtitleSize}px;font-weight:${subtitleWeight}">${escapeHtml(subtitle)}</div>
+          <div class="subtitle" style="font-size:${subtitleSize}px;font-weight:${subtitleWeight}">${escapeHtml(displaySubtitle)}</div>
           ${branding.pdfShowGeneratedAt === false ? "" : `<div class="printed">Generated on ${escapeHtml(new Date().toLocaleString())}</div>`}
         </div>
       </div>
@@ -271,7 +275,7 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
     });
     if(!rows) rows='<tr><td colspan="'+(mainFields.length+1)+'"><div class="empty">No patients recorded.</div></td></tr>';
     const heads=mainFields.map(k=>"<th>"+escapeHtml(labels[k]||k)+"</th>").join("");
-    const pageHeader = start === 0 ? header(branding,'Patient List — '+patients.length+' record'+(patients.length===1?'':'s')+(fromDate||toDate?' — '+(fromDate||'Start')+' to '+(toDate||'End'):'')) : "";
+    const pageHeader = start === 0 ? header(branding,'Patient List — '+patients.length+' record'+(patients.length===1?'':'s')+(fromDate||toDate?' — '+(fromDate||'Start')+' to '+(toDate||'End'):''), "patientList") : "";
     pageTables.push('<section class="listPage">'+pageHeader+'<table><thead><tr><th class="indexHead">#</th>'+heads+'</tr></thead><tbody>'+rows+'</tbody></table></section>');
   }
   const pageScale = pageSize >= 30 ? 0.70 : pageSize >= 25 ? 0.78 : pageSize >= 20 ? 0.86 : pageSize >= 15 ? 0.94 : 1;
@@ -431,7 +435,7 @@ export async function buildPatientDetailHtml(
       : "";
 
     pages.push(
-      (idx===0 ? header(branding,"Detailed Patient Report — "+patients.length+" record"+(patients.length===1?"":"s")) : "")+
+      (idx===0 ? header(branding,"Detailed Patient Report — "+patients.length+" record"+(patients.length===1?"":"s"), "patientDetail") : "")+
 
       "<section class='patientPage'>"+
       "<div class='patientNumber'>Patient "+(idx+1)+" of "+patients.length+"</div>"+
@@ -471,7 +475,7 @@ export function buildImplantRecordsHtml(branding: BrandingConfig, records:any[])
     const trace=[r.lot_number&&"Lot: "+r.lot_number,r.serial_number&&"SN: "+r.serial_number,r.expiry_date&&"Expiry: "+r.expiry_date].filter(Boolean).join(" · ");
     return "<tr><td>"+(i+1)+"</td><td><strong>"+escapeHtml(r.name)+"</strong><br/><span style='color:#7C7872;font-size:10px'>"+escapeHtml(detail)+"</span></td><td>"+escapeHtml(trace||"—")+"</td><td style='text-align:right'>"+Number(r.quantity||0)+" "+escapeHtml(r.unit||"pcs")+"</td><td>"+escapeHtml(r.supplier||"—")+"</td><td>"+(bills.length?escapeHtml(bills.map((b:any)=>b.name||"Bill").join(", ")):"—")+"</td></tr>";
   }).join("");
-  return "<html><head><meta charset='utf-8'/>"+styles(branding)+"</head><body>"+header(branding,"Detailed Implant Records — "+records.length+" record"+(records.length===1?"":"s"))+"<table><thead><tr><th>#</th><th>Implant / Details</th><th>Traceability</th><th style='text-align:right'>Quantity</th><th>Supplier</th><th>Attached Bills</th></tr></thead><tbody>"+(rows||"<tr><td colspan='6'><div class='empty'>No implant records.</div></td></tr>")+"</tbody></table>"+footer(branding)+"</body></html>";
+  return "<html><head><meta charset='utf-8'/>"+styles(branding)+"</head><body>"+header(branding,"Detailed Implant Records — "+records.length+" record"+(records.length===1?"":"s"), "implantRecords")+"<table><thead><tr><th>#</th><th>Implant / Details</th><th>Traceability</th><th style='text-align:right'>Quantity</th><th>Supplier</th><th>Attached Bills</th></tr></thead><tbody>"+(rows||"<tr><td colspan='6'><div class='empty'>No implant records.</div></td></tr>")+"</tbody></table>"+footer(branding)+"</body></html>";
 }
 
 export function buildStatsHtml(
@@ -499,7 +503,7 @@ export function buildStatsHtml(
     <html>
       <head><meta charset="utf-8"/>${styles(branding)}</head>
       <body>
-        ${header(branding, `Statistics — ${periodLabel}`)}
+        ${header(branding, `Statistics — ${periodLabel}`, "statistics")}
         <div class="kpiRow">
           <div class="kpi">
             <div class="kpiLabel">Total Surgeries</div>
@@ -557,7 +561,7 @@ export function buildInventoryHtml(
     <html>
       <head><meta charset="utf-8"/>${styles(branding)}</head>
       <body>
-        ${header(branding, reportTitle || (lowOnly ? `Low Stock Report — ${list.length} item${list.length === 1 ? "" : "s"}` : `Inventory — ${list.length} items`))}
+        ${header(branding, reportTitle || (lowOnly ? `Low Stock Report — ${list.length} item${list.length === 1 ? "" : "s"}` : `Inventory — ${list.length} items`), lowOnly ? "lowStock" : "stock")}
         <table>
           <thead>
             <tr>
