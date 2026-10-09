@@ -74,6 +74,7 @@ export default function BackupRestoreScreen() {
         await SecureStore.deleteItemAsync("ortho_google_drive_cloud_project_id");
       }
       setGoogleConfigSaved(true);
+      triggerAutomaticDriveBackup("appSettings");
       Alert.alert("Google configuration saved", "This configuration is stored on this phone and can be changed without rebuilding the APK.");
     } catch (error) {
       Alert.alert("Save failed", error instanceof Error ? error.message : "Unable to save Google configuration.");
@@ -95,6 +96,7 @@ export default function BackupRestoreScreen() {
             setGoogleClientId("");
             setGoogleCloudProjectId("");
             setGoogleConfigSaved(false);
+            triggerAutomaticDriveBackup("appSettings");
           },
         },
       ],
