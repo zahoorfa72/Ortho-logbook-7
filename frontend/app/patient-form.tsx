@@ -601,7 +601,7 @@ export default function PatientForm() {
 
               <View style={styles.photoEditActions}>
                 <Pressable style={styles.photoTool} disabled={photoBusy} onPress={() => editPhoto("rotate")}>
-                  <Ionicons name="rotate-right-outline" size={20} color={colors.onSurface} />
+                  <Ionicons name="refresh-outline" size={20} color={colors.onSurface} />
                   <Text style={styles.photoToolText}>Rotate 90°</Text>
                 </Pressable>
                 <Pressable style={styles.photoTool} disabled={photoBusy} onPress={() => editPhoto("crop")}>
