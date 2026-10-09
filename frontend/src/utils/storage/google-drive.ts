@@ -497,9 +497,18 @@ export async function backupToGoogleDrive(
 
 async function listIncrementalFiles() {
   const q = encodeURIComponent("name contains 'Ortho Logbook Incremental' and trashed = false");
-  const response = await driveRequest(`${DRIVE_API}?q=${q}&spaces=drive&pageSize=100&orderBy=modifiedTime%20asc&includeItemsFromAllDrives=true&supportsAllDrives=true&fields=files(id,name,modifiedTime,size,mimeType),nextPageToken`);
-  const data = await response.json();
-  return Array.isArray(data.files) ? data.files : [];
+  const files: any[] = [];
+  let pageToken = "";
+  // Page through the entire delta history so older phones can restore even
+  // after more than 100 incremental uploads.
+  do {
+    const tokenParam = pageToken ? "&pageToken=" + encodeURIComponent(pageToken) : "";
+    const response = await driveRequest(`${DRIVE_API}?q=${q}&spaces=drive&pageSize=100&orderBy=modifiedTime%20asc&includeItemsFromAllDrives=true&supportsAllDrives=true&fields=files(id,name,modifiedTime,size,mimeType),nextPageToken${tokenParam}`);
+    const data = await response.json();
+    if (Array.isArray(data.files)) files.push(...data.files);
+    pageToken = typeof data.nextPageToken === "string" ? data.nextPageToken : "";
+  } while (pageToken);
+  return files;
 }
 
 async function downloadDriveJson(fileId: string) {
