@@ -187,7 +187,23 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
     ? branding.pdfPatientFields
     : ["date","mrNo","name","gender","age","diagnosis","procedure"];
   const labels: Record<string,string> = {date:"Date",mrNo:"MR No",name:"Patient",gender:"Gender",age:"Age",address:"Address",diagnosis:"Diagnosis",procedure:"Procedure",implants:"Implants",fileName:"File Name",hcvPlus:"HCV+",hbaSg:"HbAsg",hiv:"HIV"};
-  const headingMap:any = branding.pdfHeadingMap && typeof branding.pdfHeadingMap==="object" ? branding.pdfHeadingMap : {};
+  const savedHeadingMap:any = branding.pdfHeadingMap && typeof branding.pdfHeadingMap==="object" ? branding.pdfHeadingMap : {};
+  const legacyGroups = Array.isArray(branding.pdfHeadingLevels) ? branding.pdfHeadingLevels : [];
+  const legacyHeadingFields = legacyGroups
+    .filter((g:any)=>["Sub-heading","Sub-heading 1"].includes(String(g?.label||"")))
+    .flatMap((g:any)=>Array.isArray(g?.fields)?g.fields.map(String):[]);
+  const legacySubHeadingFields = legacyGroups
+    .filter((g:any)=>["Sub-sub-heading","Sub-sub-heading 1"].includes(String(g?.label||"")))
+    .flatMap((g:any)=>Array.isArray(g?.fields)?g.fields.map(String):[]);
+  const headingMap:any = { ...savedHeadingMap };
+  // Match the editor's legacy fallback for older saved settings, but preserve
+  // any explicit per-entry mapping (including an intentionally empty one).
+  for (const mainKey of fields) {
+    if (!Object.prototype.hasOwnProperty.call(headingMap, String(mainKey)) &&
+        (legacyHeadingFields.length || legacySubHeadingFields.length)) {
+      headingMap[String(mainKey)] = { heading: [...legacyHeadingFields], subHeading: [...legacySubHeadingFields] };
+    }
+  }
   const hierarchyChildFields = new Set<string>();
   Object.values(headingMap).forEach((cfg:any) => {
     (Array.isArray(cfg?.heading) ? cfg.heading : []).forEach((k:any) => hierarchyChildFields.add(String(k)));
