@@ -141,15 +141,32 @@ async function driveRequest(url: string, init: RequestInit = {}) {
   return response;
 }
 
-async function findLatestBackup() {
-  // Search Drive itself, including backups created by older app authorizations.
-  const q = encodeURIComponent("name contains 'Ortho Logbook Backup' and trashed = false");
-  const response = await driveRequest(
-    `${DRIVE_API}?q=${q}&spaces=drive&pageSize=100&orderBy=modifiedTime%20desc&includeItemsFromAllDrives=true&supportsAllDrives=true&fields=files(id,name,modifiedTime,size,mimeType)`,
+async function findLatestBackupCandidates() {
+  // Search Drive itself, including files in folders and backups created by older app builds.
+  // Drive search can also return a folder whose name contains "Ortho Logbook Backup";
+  // folders are not backup files and must never be selected for media download.
+  const q = encodeURIComponent("name contains 'Ortho Logbook Backup' and mimeType != 'application/vnd.google-apps.folder' and trashed = false");
+  const files: any[] = [];
+  let pageToken = "";
+  do {
+    const tokenParam = pageToken ? "&pageToken=" + encodeURIComponent(pageToken) : "";
+    const response = await driveRequest(
+      `${DRIVE_API}?q=${q}&spaces=drive&pageSize=100&orderBy=modifiedTime%20desc&includeItemsFromAllDrives=true&supportsAllDrives=true&fields=files(id,name,modifiedTime,size,mimeType),nextPageToken${tokenParam}`,
+    );
+    const data = await response.json();
+    if (Array.isArray(data.files)) files.push(...data.files);
+    pageToken = typeof data.nextPageToken === "string" ? data.nextPageToken : "";
+  } while (pageToken);
+  return files.filter((file: any) =>
+    file?.id &&
+    file.mimeType !== "application/vnd.google-apps.folder" &&
+    String(file.name || "").toLowerCase().includes("ortho logbook backup")
   );
-  const data = await response.json();
-  const files = Array.isArray(data.files) ? data.files : [];
-  return files.find((file: any) => String(file.name || "").toLowerCase().includes("ortho logbook backup")) || null;
+}
+
+async function findLatestBackup() {
+  const files = await findLatestBackupCandidates();
+  return files[0] || null;
 }
 
 // Use 512 KiB chunks (a multiple of Drive's 256 KiB requirement). Smaller
@@ -664,12 +681,33 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
 }
 
 export async function restoreLatestFromGoogleDrive() {
-  const file = await findLatestBackup();
-  if (!file?.id) throw new Error("No Ortho Logbook backup was found in this Google Drive account.");
-  let composed: any;
-  try { composed = await downloadDriveJsonValidated(file.id); } catch { throw new Error("The full Google Drive backup is damaged or unreadable after three download attempts."); }
-  if (!composed || composed.app !== "Ortho Logbook" || !Array.isArray(composed.patients) || !Array.isArray(composed.inventory)) {
-    throw new Error("The full Google Drive backup is incomplete. No data was restored.");
+  const candidates = await findLatestBackupCandidates();
+  if (!candidates.length) throw new Error("No Ortho Logbook backup file was found in this Google Drive account. Backup folders are searched recursively; only actual backup files can be restored.");
+  let file: any = null;
+  let composed: any = null;
+  const rejectedFiles: string[] = [];
+  // Prefer the newest valid full backup, but fall back to older full backups
+  // if the newest matching file is damaged or is an unrelated similarly named file.
+  for (const candidate of candidates) {
+    let parsed: any;
+    try {
+      parsed = await downloadDriveJsonValidated(candidate.id);
+    } catch {
+      rejectedFiles.push(String(candidate.name || "Unnamed backup") + " (unreadable)");
+      continue;
+    }
+    if (!parsed || parsed.app !== "Ortho Logbook" || !Array.isArray(parsed.patients) || !Array.isArray(parsed.inventory)) {
+      rejectedFiles.push(String(candidate.name || "Unnamed backup") + " (incomplete format)");
+      continue;
+    }
+    file = candidate;
+    composed = parsed;
+    break;
+  }
+  if (!file || !composed) {
+    throw new Error("No readable full Ortho Logbook backup was found. Checked " + candidates.length + " matching file(s); " +
+      rejectedFiles.slice(0, 3).join(", ") + (rejectedFiles.length > 3 ? ", and more" : "") +
+      ". Your phone data was not changed. Check that the backup file itself—not only a folder—is present in Google Drive.");
   }
 
   // Only apply incremental snapshots created after the full baseline. A manual
