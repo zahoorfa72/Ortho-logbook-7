@@ -547,16 +547,16 @@ async function downloadDriveJson(fileId: string) {
 // actual document (some older upload paths produced this). Normalize those
 // harmless wrappers before deciding that a backup is unreadable.
 function parseDownloadedBackup(raw: string): any {
-  let text = String(raw || "").replace(/^\\uFEFF/, "").trim();
+  let text = String(raw || "").replace(/^\uFEFF/, "").trim();
   if (!text) throw new Error("Google Drive returned an empty backup file.");
-  text = text.replace(/^\\)\\]}'[,]?\\s*/, "");
+  text = text.replace(/^\)\]}'[,]?\s*/, "");
   // Accept legacy Markdown-fenced exports and base64 data-URI wrappers.
-  text = text.replace(/^\\x60{3}(?:json)?\\s*/i, "").replace(/\\s*\\x60{3}\\s*$/, "").trim();
-  const dataUri = /^data:application\\/(?:json|octet-stream);base64,([\\s\\S]+)$/i.exec(text);
+  text = text.replace(/^\x60{3}(?:json)?\s*/i, "").replace(/\s*\x60{3}\s*$/, "").trim();
+  const dataUri = /^data:application\/(?:json|octet-stream);base64,([\s\S]+)$/i.exec(text);
   if (dataUri) text = decodeBackupBase64(dataUri[1]);
   let parsed: any;
   try { parsed = JSON.parse(text); } catch (firstError: any) {
-    if (/^[A-Za-z0-9+/=\\r\\n]+$/.test(text) && text.length > 16) {
+    if (/^[A-Za-z0-9+/=\r\n]+$/.test(text) && text.length > 16) {
       try { parsed = JSON.parse(decodeBackupBase64(text)); } catch {
         throw new Error("Google Drive file is not valid backup JSON (plain and base64 formats both failed).");
       }
@@ -565,15 +565,15 @@ function parseDownloadedBackup(raw: string): any {
     }
   }
   if (typeof parsed === "string") {
-    const inner = parsed.replace(/^\\uFEFF/, "").trim();
+    const inner = parsed.replace(/^\uFEFF/, "").trim();
     if (!inner) throw new Error("Google Drive backup contains an empty wrapped document.");
     parsed = JSON.parse(inner);
   }
-  if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && parsed.backup && typeof parsed.backup === "object") parsed = parsed.backup;
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Google Drive file does not contain a backup document.");
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Google Drive file does not contain a valid Ortho Logbook backup.");
+  }
   return parsed;
 }
-
 function decodeBackupBase64(value: string): string {
   try {
     const decoded = globalThis.atob(value.replace(/\\s/g, ""));
