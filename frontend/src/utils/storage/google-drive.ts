@@ -543,18 +543,34 @@ async function downloadDriveJson(fileId: string) {
   return response.text();
 }
 
-// Google Drive can occasionally return a transient/truncated media response on
-// mobile networks. Retry the download, and tolerate a UTF-8 BOM before parsing.
+// Drive media can contain a BOM/XSSI prefix or a JSON string wrapping the
+// actual document (some older upload paths produced this). Normalize those
+// harmless wrappers before deciding that a backup is unreadable.
+function parseDownloadedBackup(raw: string): any {
+  let text = String(raw || "").replace(/^\uFEFF/, "").trim();
+  if (!text) throw new Error("Google Drive returned an empty backup file.");
+  text = text.replace(/^\)\]}'[,]?\s*/, "");
+  let parsed: any = JSON.parse(text);
+  // Accept legacy files where the complete JSON document was JSON-stringified.
+  if (typeof parsed === "string") {
+    const inner = parsed.replace(/^\uFEFF/, "").trim();
+    if (!inner) throw new Error("Google Drive backup contains an empty wrapped document.");
+    parsed = JSON.parse(inner);
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Google Drive file does not contain a backup document.");
+  }
+  return parsed;
+}
+
 async function downloadDriveJsonValidated(fileId: string): Promise<any> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      const text = (await downloadDriveJson(fileId)).replace(/^\uFEFF/, "").trim();
-      if (!text) throw new Error("Google Drive returned an empty backup file.");
-      return JSON.parse(text);
+      return parseDownloadedBackup(await downloadDriveJson(fileId));
     } catch (error) {
       lastError = error;
-      if (attempt < 3) await new Promise<void>(resolve => setTimeout(resolve, attempt * 700));
+      if (attempt < 3) await new Promise<void>(resolve => setTimeout(resolve, attempt * 900));
     }
   }
   throw lastError instanceof Error ? lastError : new Error("Google Drive backup could not be parsed.");
