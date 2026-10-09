@@ -565,6 +565,39 @@ function extractCompleteJsonProperty(text: string, key: string): any {
         }
       }
     }
+    // For a truncated array, keep only complete top-level elements before
+    // the cut-off. This can recover earlier patient/stock rows without
+    // fabricating the incomplete final row.
+    if (first === "[") {
+      const values: any[] = [];
+      let itemStart = start + 1;
+      const stack: string[] = [];
+      let inString = false, escaped = false;
+      for (let i = start + 1; i < text.length; i++) {
+        const ch = text[i];
+        if (inString) {
+          if (escaped) escaped = false;
+          else if (ch === "\\") escaped = true;
+          else if (ch === '"') inString = false;
+          continue;
+        }
+        if (ch === '"') { inString = true; continue; }
+        if (ch === "{" || ch === "[") stack.push(ch);
+        else if (ch === "}" || ch === "]") {
+          if (stack.length) stack.pop();
+          else if (ch === "]") {
+            const tail = text.slice(itemStart, i).trim();
+            if (tail) { try { values.push(JSON.parse(tail)); } catch {} }
+            return values.length ? values : undefined;
+          }
+        } else if (ch === "," && stack.length === 0) {
+          const item = text.slice(itemStart, i).trim();
+          if (item) { try { values.push(JSON.parse(item)); } catch { break; } }
+          itemStart = i + 1;
+        }
+      }
+      return values.length ? values : undefined;
+    }
     return undefined;
   }
   let end = start, inString = false, escaped = false;
