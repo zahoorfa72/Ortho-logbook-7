@@ -50,7 +50,7 @@ export default function Login() {
               try {
                 setDriveRestoreLoading(true);
                 const backup = await decryptBackup(remote.backupText, "");
-                const result = restoreBackup(backup);
+                const result = await restoreBackup(backup);
                 await storage.secureRemove("ortho_current_user");
                 queryClient.clear();
                 initializeDatabase();
