@@ -533,58 +533,46 @@ async function downloadDriveJsonValidated(fileId: string): Promise<any> {
   throw lastError instanceof Error ? lastError : new Error("Google Drive backup could not be parsed.");
 }
 
-// If an incremental JSON document was truncated, recover any complete table
-// values that still parse. This is deliberately limited to incremental files;
-// a full baseline must remain structurally valid before restore can proceed.
+// If an incremental JSON document was truncated, recover complete table
+// values that still parse. Full baselines are never reconstructed this way.
 function extractCompleteJsonProperty(text: string, key: string): any {
-  const match = new RegExp('"' + key.replace(/[.*+?^\x24{}()|[\\]\\\\]/g, "\\async function downloadDriveJsonValidated(fileId: string): Promise<any> {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      const text = (await downloadDriveJson(fileId)).replace(/^\uFEFF/, "").trim();
-      if (!text) throw new Error("Google Drive returned an empty backup file.");
-      return JSON.parse(text);
-    } catch (error) {
-      lastError = error;
-      if (attempt < 3) await new Promise<void>(resolve => setTimeout(resolve, attempt * 700));
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error("Google Drive backup could not be parsed.");
-}") + '"\\s*:').exec(text);
-  if (!match) return undefined;
-  let start = match.index + match[0].length;
-  while (/\\s/.test(text[start] || "")) start++;
+  const quoted = '"' + key + '"';
+  const keyIndex = text.indexOf(quoted);
+  if (keyIndex < 0) return undefined;
+  let start = keyIndex + quoted.length;
+  while (/\s/.test(text[start] || "")) start++;
+  if (text[start] !== ":") return undefined;
+  start++;
+  while (/\s/.test(text[start] || "")) start++;
   const first = text[start];
   if (first === "[" || first === "{") {
-    const open = first;
     const close = first === "[" ? "]" : "}";
-    let depth = 0;
-    let inString = false;
-    let escaped = false;
+    let depth = 0, inString = false, escaped = false;
     for (let i = start; i < text.length; i++) {
       const ch = text[i];
       if (inString) {
         if (escaped) escaped = false;
-        else if (ch === "\\\\") escaped = true;
+        else if (ch === "\\") escaped = true;
         else if (ch === '"') inString = false;
         continue;
       }
       if (ch === '"') { inString = true; continue; }
-      if (ch === open) depth++;
-      else if (ch === close && --depth === 0) {
-        try { return JSON.parse(text.slice(start, i + 1)); } catch { return undefined; }
+      if (ch === first) depth++;
+      else if (ch === close) {
+        depth--;
+        if (depth === 0) {
+          try { return JSON.parse(text.slice(start, i + 1)); } catch { return undefined; }
+        }
       }
     }
     return undefined;
   }
-  let end = start;
-  let inString = false;
-  let escaped = false;
+  let end = start, inString = false, escaped = false;
   for (; end < text.length; end++) {
     const ch = text[end];
     if (inString) {
       if (escaped) escaped = false;
-      else if (ch === "\\\\") escaped = true;
+      else if (ch === "\\") escaped = true;
       else if (ch === '"') inString = false;
     } else if (ch === '"') inString = true;
     else if (ch === "," || ch === "}" || ch === "]") break;
