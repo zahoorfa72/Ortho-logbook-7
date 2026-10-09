@@ -1,0 +1,92 @@
+name: Build iOS Simulator App
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-ios-simulator-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build unsigned iOS Simulator app
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install JavaScript dependencies
+        working-directory: frontend
+        run: |
+          set -euo pipefail
+          corepack enable
+          if [ -f yarn.lock ]; then
+            yarn install --frozen-lockfile --ignore-scripts
+          else
+            yarn install --ignore-scripts
+          fi
+
+      - name: TypeScript validation
+        working-directory: frontend
+        run: npx tsc --noEmit
+
+      - name: Generate iOS native project
+        working-directory: frontend
+        env:
+          CI: "1"
+          EXPO_NO_TELEMETRY: "1"
+        run: npx expo prebuild --platform ios --no-install --non-interactive --clean
+
+      - name: Install CocoaPods dependencies
+        working-directory: frontend/ios
+        run: pod install
+
+      - name: Build for iOS Simulator without signing
+        working-directory: frontend
+        run: |
+          set -euo pipefail
+          WORKSPACE="$(find ios -maxdepth 1 -name '*.xcworkspace' -print -quit)"
+          if [ -z "$WORKSPACE" ]; then
+            echo "::error::Expo did not generate an Xcode workspace."
+            exit 1
+          fi
+          SCHEME="$(basename "$WORKSPACE" .xcworkspace)"
+          xcodebuild \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build/ios-simulator \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Package simulator build
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find frontend/build/ios-simulator/Build/Products -maxdepth 2 -name '*.app' -type d -print -quit)"
+          if [ -z "$APP_PATH" ]; then
+            echo "::error::No iOS Simulator .app bundle was produced."
+            exit 1
+          fi
+          mkdir -p out
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" out/ortho-logbook-ios-simulator.zip
+
+      - name: Upload iOS Simulator artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ortho-logbook-ios-simulator
+          path: out/ortho-logbook-ios-simulator.zip
+          if-no-files-found: error
+          retention-days: 14
