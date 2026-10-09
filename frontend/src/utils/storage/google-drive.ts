@@ -628,7 +628,7 @@ async function downloadIncrementalWithRecovery(fileId: string, fileName: string)
       throw new Error("Incremental backup " + fileName + " could not be recovered. Its contents are unavailable or corrupted.");
     }
     const knownTables = ["patients","procedures","inventoryCategories","inventory","patientImplants","patientCustomFields","implantRecords","expenses","users","patientHistory","inventoryMovements","inventoryPurchaseReceipts","stockReceipts"];
-    const recovered: any = { app, incremental: true, changedTables: Array.isArray(changedTables) ? changedTables : [] };
+    const recovered: any = { app, incremental: true, _recoveredFromDamage: true, changedTables: Array.isArray(changedTables) ? changedTables : [] };
     for (const table of knownTables) {
       const value = extractCompleteJsonProperty(raw, table);
       if (Array.isArray(value)) recovered[table] = value;
@@ -708,7 +708,22 @@ export async function restoreLatestFromGoogleDrive() {
         }
       } else if (["patients","procedures","inventoryCategories","inventory","patientImplants","patientCustomFields","implantRecords","expenses","users","patientHistory","inventoryMovements","inventoryPurchaseReceipts","stockReceipts"].includes(table)) {
         if (Array.isArray(delta[table])) {
-          composed[table] = delta[table];
+          if (delta._recoveredFromDamage === true && Array.isArray(composed[table])) {
+            // In salvage mode, merge recovered rows by stable ID. Replacing
+            // the whole table could erase older records omitted by truncation.
+            const merged = new Map<string, any>();
+            for (const row of composed[table]) {
+              const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+              merged.set(key, row);
+            }
+            for (const row of delta[table]) {
+              const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+              merged.set(key, row);
+            }
+            composed[table] = Array.from(merged.values());
+          } else {
+            composed[table] = delta[table];
+          }
           appliedAnyTable = true;
         } else {
           recoveryWarnings.push(String(deltaFile.name || "An incremental backup") + " is missing table data for " + table + ".");
