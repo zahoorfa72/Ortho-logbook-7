@@ -547,52 +547,38 @@ async function downloadDriveJson(fileId: string) {
 // actual document (some older upload paths produced this). Normalize those
 // harmless wrappers before deciding that a backup is unreadable.
 function parseDownloadedBackup(raw: string): any {
-  let text = String(raw || "").replace(/^\uFEFF/, "").trim();
+  let text = String(raw || "").replace(/^\\uFEFF/, "").trim();
   if (!text) throw new Error("Google Drive returned an empty backup file.");
-
-  const candidates: string[] = [];
-  const add = (value: string) => {
-    const normalized = String(value || "").replace(/^\uFEFF/, "").trim().replace(/^\)\]}'[,]?\s*/, "");
-    if (normalized && !candidates.includes(normalized)) candidates.push(normalized);
-  };
-  add(text);
-
-  // Some older Android upload/restore paths wrapped the backup as a JSON
-  // string, URL-encoded text, or base64 text. Try these representations before
-  // marking a Drive file unreadable; never write anything to the database here.
-  try {
-    const outer = JSON.parse(text);
-    if (typeof outer === "string") add(outer);
-  } catch {}
-  try {
-    const decoded = decodeURIComponent(text);
-    if (decoded !== text) add(decoded);
-  } catch {}
-  const compact = text.replace(/\s/g, "");
-  if (/^[A-Za-z0-9+/]+={0,2}$/.test(compact) && compact.length % 4 === 0) {
-    try {
-      const binary = atob(compact);
-      const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
-      add(new TextDecoder("utf-8").decode(bytes));
-    } catch {}
-  }
-
-  let lastError: unknown;
-  for (const candidate of candidates) {
-    try {
-      let parsed: any = JSON.parse(candidate);
-      // A JSON-string-wrapped document may itself contain another JSON string.
-      for (let depth = 0; typeof parsed === "string" && depth < 2; depth++) {
-        parsed = JSON.parse(parsed.replace(/^\uFEFF/, "").trim());
+  text = text.replace(/^\\)\\]}'[,]?\\s*/, "");
+  // Accept legacy Markdown-fenced exports and base64 data-URI wrappers.
+  text = text.replace(/^\\x60{3}(?:json)?\\s*/i, "").replace(/\\s*\\x60{3}\\s*$/, "").trim();
+  const dataUri = /^data:application\\/(?:json|octet-stream);base64,([\\s\\S]+)$/i.exec(text);
+  if (dataUri) text = decodeBackupBase64(dataUri[1]);
+  let parsed: any;
+  try { parsed = JSON.parse(text); } catch (firstError: any) {
+    if (/^[A-Za-z0-9+/=\\r\\n]+$/.test(text) && text.length > 16) {
+      try { parsed = JSON.parse(decodeBackupBase64(text)); } catch {
+        throw new Error("Google Drive file is not valid backup JSON (plain and base64 formats both failed).");
       }
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
-      lastError = new Error("Google Drive file does not contain a backup document.");
-    } catch (error) {
-      lastError = error;
+    } else {
+      throw new Error("Google Drive file is not valid backup JSON: " + String(firstError?.message || firstError));
     }
   }
-  throw new Error("Google Drive file content is not readable JSON. " +
-    (lastError instanceof Error ? lastError.message : "The file may be damaged or not an Ortho Logbook backup."));
+  if (typeof parsed === "string") {
+    const inner = parsed.replace(/^\\uFEFF/, "").trim();
+    if (!inner) throw new Error("Google Drive backup contains an empty wrapped document.");
+    parsed = JSON.parse(inner);
+  }
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && parsed.backup && typeof parsed.backup === "object") parsed = parsed.backup;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Google Drive file does not contain a backup document.");
+  return parsed;
+}
+
+function decodeBackupBase64(value: string): string {
+  try {
+    const decoded = globalThis.atob(value.replace(/\\s/g, ""));
+    return decodeURIComponent(Array.from(decoded, ch => "%" + ch.charCodeAt(0).toString(16).padStart(2, "0")).join(""));
+  } catch { throw new Error("Google Drive backup base64 content could not be decoded."); }
 }
 
 async function downloadDriveJsonValidated(fileId: string): Promise<any> {
