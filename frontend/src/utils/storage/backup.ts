@@ -85,7 +85,7 @@ function whereForFilter(filter: BackupFilter, column: string) {
   return { sql: "", args: [] };
 }
 
-async function createBackupData(filter: BackupFilter = { type: "all" }):Promise<BackupData>{
+async function createBackupData(filter: BackupFilter = { type: "all" }, onProgress?: (stage: string) => void):Promise<BackupData>{
  initializeDatabase();
  const brandingRaw=await storage.getItem<string>("ortho_branding","");
  let branding: BrandingConfig | undefined;
@@ -99,7 +99,10 @@ async function createBackupData(filter: BackupFilter = { type: "all" }):Promise<
  const patients=db.getAllSync<any>(`SELECT * FROM patients${pf.sql} ORDER BY date DESC, created_at DESC`, pf.args);
  const selectedPatientIds = new Set(patients.map((p:any)=>p.id));
  const embeddedPatients:any[]=[];
- for(const patient of patients)embeddedPatients.push(await embedPatientPhotos(patient));
+ for(let i=0;i<patients.length;i++){
+   onProgress?.(`Preparing patient photos for backup… ${i+1}/${patients.length}`);
+   embeddedPatients.push(await embedPatientPhotos(patients[i]));
+ }
 
  const historyAll=db.getAllSync<any>("SELECT * FROM patient_history ORDER BY created_at ASC");
  const history=filter.type==="all" ? historyAll : historyAll.filter((h:any)=>selectedPatientIds.has(h.patient_id));
@@ -144,8 +147,8 @@ export async function exportBackup(password:string, filter: BackupFilter = { typ
 
 // Google Drive uses a plain JSON snapshot so automatic backup does not depend on a password.
 // Phone/file backups continue using exportBackup() and remain encrypted.
-export async function exportUnencryptedBackup(filter: BackupFilter = { type: "all" }): Promise<string> {
- const backup = await createBackupData(filter);
+export async function exportUnencryptedBackup(filter: BackupFilter = { type: "all" }, onProgress?: (stage: string) => void): Promise<string> {
+ const backup = await createBackupData(filter, onProgress);
  backup.filter = filter;
  return JSON.stringify(backup);
 }
