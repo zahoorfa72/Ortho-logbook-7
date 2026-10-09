@@ -95,15 +95,21 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
  const include = (name: string) => !changedTables || changedTables.includes(name);
  let branding: BrandingConfig | null | undefined;
  if (include("branding")) {
-   const brandingRaw=await storage.getItem<string>("ortho_branding","");
-   if(typeof brandingRaw==="string" && brandingRaw.trim()){
-     try{
-       const parsed=JSON.parse(brandingRaw);
-       if(parsed && typeof parsed==="object" && !Array.isArray(parsed)) branding=parsed as BrandingConfig;
-     }catch{}
-   } else {
-     branding = null;
-   }
+   // Storage normally returns a JSON string for this legacy key, but older
+ // builds may have stored the branding object directly. Accept both formats
+ // so logos and all PDF/font/colour settings are always included.
+ const brandingRaw=await storage.getItem<any>("ortho_branding","");
+ if(brandingRaw && typeof brandingRaw==="object" && !Array.isArray(brandingRaw)){
+   branding=brandingRaw as BrandingConfig;
+ } else if(typeof brandingRaw==="string" && brandingRaw.trim()){
+   try{
+     let parsed:any=JSON.parse(brandingRaw);
+     if(typeof parsed==="string") parsed=JSON.parse(parsed);
+     if(parsed && typeof parsed==="object" && !Array.isArray(parsed)) branding=parsed as BrandingConfig;
+     else branding=null;
+   }catch{ branding=null; }
+ } else {
+   branding = null;
  }
  const appSettings = include("appSettings") ? {
    googleOAuthClientId: (await SecureStore.getItemAsync("ortho_google_drive_client_id").catch(() => null)) || undefined,
