@@ -77,7 +77,7 @@ export async function restoreGoogleAccountSilently(): Promise<string | null> {
 async function resolveAccessToken(): Promise<string> {
   configure();
   const current = GoogleSignin.getCurrentUser();
-  const scopeVersion = await storage.secureGet(DRIVE_SCOPE_VERSION_KEY, "");
+  const scopeVersion = String((await storage.secureGet(DRIVE_SCOPE_VERSION_KEY, "")) || "");
   if (!current || scopeVersion !== DRIVE_SCOPE_VERSION) {
     await connectGoogleAccount();
   }
@@ -86,7 +86,7 @@ async function resolveAccessToken(): Promise<string> {
     if (!tokens.accessToken) throw new Error("Google did not return a Drive access token.");
     return tokens.accessToken;
   } catch (error: any) {
-    if (error?.code === statusCodes.SIGN_IN_REQUIRED || error?.code === statusCodes.NO_SAVED_CREDENTIAL_FOUND) {
+    if (error?.code === statusCodes.SIGN_IN_REQUIRED || error?.code === "NO_SAVED_CREDENTIAL_FOUND") {
       await connectGoogleAccount();
       const tokens = await GoogleSignin.getTokens();
       if (!tokens.accessToken) throw new Error("Google did not return a Drive access token.");
