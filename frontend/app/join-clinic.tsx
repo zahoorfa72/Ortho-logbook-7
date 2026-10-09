@@ -59,7 +59,7 @@ export default function JoinClinic() {
             try {
               setLoading(true);
               const backup = await decryptBackup(selected.backupText, selected.info.encrypted ? password : "");
-              const result = restoreBackup(backup);
+              const result = await restoreBackup(backup);
               await storage.secureRemove("ortho_current_user");
               queryClient.clear();
               Alert.alert(
