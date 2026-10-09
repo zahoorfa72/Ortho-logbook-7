@@ -138,7 +138,7 @@ function xhrRequest(url: string, method: string, token: string, body: string, co
       if (xhr.status >= 200 && xhr.status < 300) resolve(parsed);
       else reject(new Error(parsed?.error?.message || `Google Drive upload failed (HTTP ${xhr.status}).`));
     };
-    xhr.onerror = () => reject(new Error("Google Drive upload connection failed. Check that mobile data/Wi-Fi allows Google Drive, then retry."));
+    xhr.onerror = () => reject(new Error(`Google Drive upload connection failed at the upload-session stage (readyState ${xhr.readyState}, status ${xhr.status || "no HTTP response"}). The upload session was created, but Android could not complete the data transfer. Try Wi-Fi or mobile data, disable VPN/Private DNS/ad blockers, and retry. If it repeats, send this full message to diagnose the network path.`));
     xhr.ontimeout = () => reject(new Error("Google Drive upload timed out. Try a stable Wi-Fi connection."));
     xhr.timeout = 180000;
     xhr.send(body);
@@ -173,7 +173,34 @@ async function uploadContent(backupText: string, existingId?: string) {
   }
   const sessionUrl = initResponse.headers.get("Location");
   if (!sessionUrl) throw new Error("Google Drive did not provide an upload session. Reconnect your Google account and retry.");
-  return xhrRequest(sessionUrl, "PUT", token, backupText, "application/json; charset=UTF-8");
+  try {
+    return await xhrRequest(sessionUrl, "PUT", token, backupText, "application/json; charset=UTF-8");
+  } catch (error: any) {
+    // Some Android network stacks fail when Google returns an upload-session URL.
+    // Retry once using the documented multipart endpoint; keep the same backup ID.
+    if (String(error?.message || "").includes("upload connection failed")) {
+      const boundary = "ortho_logbook_drive_retry_boundary";
+      const body = `--${boundary}\\r\\nContent-Type: application/json; charset=UTF-8\\r\\n\\r\\n${JSON.stringify({ name: BACKUP_NAME, mimeType: "application/json" })}\\r\\n--${boundary}\\r\\nContent-Type: application/json; charset=UTF-8\\r\\n\\r\\n${backupText}\\r\\n--${boundary}--`;
+      const retryTarget = existingId
+        ? `${DRIVE_UPLOAD}/${encodeURIComponent(existingId)}?uploadType=multipart&fields=id,name,modifiedTime,size`
+        : `${DRIVE_UPLOAD}?uploadType=multipart&fields=id,name,modifiedTime,size`;
+      try {
+        const retry = await fetch(retryTarget, {
+          method: existingId ? "PATCH" : "POST",
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": `multipart/related; boundary=${boundary}` },
+          body,
+        });
+        if (retry.ok) return retry.json();
+        let message = `Google Drive retry failed (HTTP ${retry.status}).`;
+        try { const data = await retry.json(); message = data?.error?.message || message; } catch {}
+        throw new Error(message);
+      } catch (retryError: any) {
+        if (retryError?.message && !String(retryError.message).includes("Network request failed")) throw retryError;
+        throw new Error(`${error.message} The alternate upload method also failed: ${retryError?.message || "Network request failed"}`);
+      }
+    }
+    throw error;
+  }
 }
 
 async function backupContentHash(backupText: string) {
