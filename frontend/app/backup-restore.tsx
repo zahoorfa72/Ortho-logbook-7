@@ -17,7 +17,7 @@ import { triggerAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-back
 
 export default function BackupRestoreScreen() {
   const { user } = useAuth();
-  const { colors, branding } = useTheme();
+  const { colors, branding, setBranding, resetBranding } = useTheme();
   const styles = useStyles();
   const insets = useSafeAreaInsets();
   const [backupPassword, setBackupPassword] = useState("");
@@ -239,6 +239,8 @@ export default function BackupRestoreScreen() {
             const backup = await decryptBackup(selectedBackup.backupText, restorePassword);
             if (isReplace) {
               const result = await restoreBackup(backup);
+              if (backup.branding && typeof backup.branding === "object") await setBranding(backup.branding);
+              else if (backup.version >= 6 && backup.branding === null) await resetBranding();
               await storage.secureRemove("ortho_current_user");
               queryClient.clear();
               Alert.alert(
@@ -248,6 +250,8 @@ export default function BackupRestoreScreen() {
               );
             } else {
               const result = await mergeBackup(backup);
+              if (backup.branding && typeof backup.branding === "object") await setBranding(backup.branding);
+              else if (backup.version >= 6 && backup.branding === null) await resetBranding();
               queryClient.clear();
               Alert.alert(
                 "Merge complete",
