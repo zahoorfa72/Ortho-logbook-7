@@ -136,12 +136,12 @@ async function uploadContent(backupText: string, existingId?: string) {
     mimeType: "application/json",
   });
   const body =
-    `--${boundary}\\r\\n` +
-    "Content-Type: application/json; charset=UTF-8\\r\\n\\r\\n" +
-    metadata + "\\r\\n" +
-    `--${boundary}\\r\\n` +
-    "Content-Type: application/json; charset=UTF-8\\r\\n\\r\\n" +
-    backupText + "\\r\\n" +
+    `--${boundary}\r\n` +
+    "Content-Type: application/json; charset=UTF-8\r\n\r\n" +
+    metadata + "\r\n" +
+    `--${boundary}\r\n` +
+    "Content-Type: application/json; charset=UTF-8\r\n\r\n" +
+    backupText + "\r\n" +
     `--${boundary}--`;
 
   const target = existingId
