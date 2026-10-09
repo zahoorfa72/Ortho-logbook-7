@@ -208,6 +208,7 @@ export async function exportIncrementalBackup(changedTables: string[], onProgres
  const canDiff = !!previous && previous.baselineKey === baselineKey && !!baselineKey;
  const nextTables: Record<string, any[]> = canDiff ? { ...previous!.tables } : {};
  const deletedIds: Record<string, string[]> = {};
+ const fullTables: string[] = [];
  for (const table of tables) {
   if (table === "branding") continue;
   const currentRows = Array.isArray((backup as any)[table]) ? (backup as any)[table] as any[] : [];
@@ -216,6 +217,7 @@ export async function exportIncrementalBackup(changedTables: string[], onProgres
    // First sync for this table, or a changed full-backup baseline: use a
    // complete table snapshot. This is slower once but remains restorable.
    nextTables[table] = currentRows;
+   if (canDiff) fullTables.push(table);
    continue;
   }
   const oldById = new Map<string, any>();
@@ -237,6 +239,7 @@ export async function exportIncrementalBackup(changedTables: string[], onProgres
  backup.changedTables = tables;
  (backup as any)._rowDelta = canDiff;
  (backup as any).deletedIds = canDiff ? deletedIds : {};
+ (backup as any).fullTables = canDiff ? fullTables : tables.filter((table) => table !== "branding");
  // Do not persist the new baseline until the upload succeeds.
  pendingDeltaCacheText = JSON.stringify({ baselineKey, tables: nextTables });
  return JSON.stringify(backup);
