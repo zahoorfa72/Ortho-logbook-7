@@ -205,6 +205,7 @@ async function uploadResumable(sessionUrl: string, token: string, bytes: Uint8Ar
   let offset = 0;
   let result: any = null;
   let consecutiveFailures = 0;
+  let stalledRounds = 0;
   while (offset < bytes.length) {
     const end = Math.min(offset + DRIVE_CHUNK_SIZE, bytes.length);
     let chunkResult: { done: boolean; result?: any; nextOffset?: number } | null = null;
@@ -250,8 +251,9 @@ async function uploadResumable(sessionUrl: string, token: string, bytes: Uint8Ar
       break;
     }
     const nextOffset = chunkResult.nextOffset ?? 0;
-    if (nextOffset < offset || nextOffset > end) {
-      // Drive may accept only part of a chunk. Reconcile against its own range.
+    if (nextOffset <= offset || nextOffset > end) {
+      // Drive may accept only part of a chunk or fail to acknowledge it.
+      // Reconcile against its own range so the loop can never spin forever.
       const status = await queryUploadOffset(sessionUrl, token, bytes.length);
       if (status.done) {
         result = status.result;
@@ -261,8 +263,18 @@ async function uploadResumable(sessionUrl: string, token: string, bytes: Uint8Ar
       if (status.nextOffset < 0 || status.nextOffset > bytes.length) {
         throw new Error("Google Drive returned an invalid upload offset.");
       }
+      if (status.nextOffset <= offset) {
+        stalledRounds += 1;
+        if (stalledRounds >= 10) {
+          throw new Error("Google Drive has not confirmed any uploaded bytes after repeated retries. Your local data is unchanged; retry on a stronger connection.");
+        }
+        await new Promise(resolve => setTimeout(resolve, Math.min(800 * stalledRounds, 5000)));
+        continue;
+      }
+      stalledRounds = 0;
       offset = status.nextOffset;
     } else {
+      stalledRounds = 0;
       offset = nextOffset;
     }
     onProgress?.("Uploading backup to Google Drive… " + Math.min(100, Math.round((offset / bytes.length) * 100)) + "%");
