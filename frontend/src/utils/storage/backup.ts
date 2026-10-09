@@ -235,7 +235,7 @@ export async function exportIncrementalBackup(changedTables: string[], onProgres
  const deletedIds: Record<string, string[]> = {};
  const fullTables: string[] = [];
  for (const table of tables) {
-  if (table === "branding") continue;
+  if (table === "branding" || table === "appSettings") continue;
   const currentRows = Array.isArray((backup as any)[table]) ? (backup as any)[table] as any[] : [];
   const previousRows = canDiff && Array.isArray(previous!.tables[table]) ? previous!.tables[table] : null;
   if (!previousRows) {
@@ -273,7 +273,7 @@ export async function exportIncrementalBackup(changedTables: string[], onProgres
  backup.changedTables = tables;
  (backup as any)._rowDelta = canDiff;
  (backup as any).deletedIds = canDiff ? deletedIds : {};
- (backup as any).fullTables = canDiff ? fullTables : tables.filter((table) => table !== "branding");
+ (backup as any).fullTables = canDiff ? fullTables : tables.filter((table) => table !== "branding" && table !== "appSettings");
  // Track the source URIs separately from portable compressed photo bytes. This
  // lets future backups reuse unchanged photo payloads without recompressing them.
  const nextPhotoSources: Record<string, string> = canDiff && previous!.photoSources ? { ...previous!.photoSources } : {};
@@ -534,6 +534,11 @@ export function restoreBackup(backup:BackupData){
  repairDatabaseData();
  if (backup.version >= 6 && backup.branding === null) void storage.removeItem("ortho_branding");
   else if (backup.version >= 6 && backup.branding && typeof backup.branding === "object") void storage.setItem("ortho_branding", JSON.stringify(backup.branding));
+ if (backup.appSettings && typeof backup.appSettings === "object") {
+   const settings = backup.appSettings;
+   if (typeof settings.googleOAuthClientId === "string" && settings.googleOAuthClientId) void SecureStore.setItemAsync("ortho_google_drive_client_id", settings.googleOAuthClientId).catch(() => undefined);
+   if (typeof settings.googleCloudProjectId === "string" && settings.googleCloudProjectId) void SecureStore.setItemAsync("ortho_google_drive_cloud_project_id", settings.googleCloudProjectId).catch(() => undefined);
+ }
  markInventoryResetDone();
  return {patients:patients.length,procedures:procedures.length,inventory:inventory.length,inventoryCategories:inventoryCategories.length,patientImplants:patientImplants.length,expenses:expenses.length,users:users.length,patientHistory:patientHistory.length,inventoryMovements:inventoryMovements.length};
 }
@@ -655,6 +660,11 @@ export function mergeBackup(backup: BackupData) {
  });
  if (backup.version >= 6 && backup.branding === null) void storage.removeItem("ortho_branding");
   else if (backup.version >= 6 && backup.branding && typeof backup.branding === "object") void storage.setItem("ortho_branding", JSON.stringify(backup.branding));
+ if (backup.appSettings && typeof backup.appSettings === "object") {
+   const settings = backup.appSettings;
+   if (typeof settings.googleOAuthClientId === "string" && settings.googleOAuthClientId) void SecureStore.setItemAsync("ortho_google_drive_client_id", settings.googleOAuthClientId).catch(() => undefined);
+   if (typeof settings.googleCloudProjectId === "string" && settings.googleCloudProjectId) void SecureStore.setItemAsync("ortho_google_drive_cloud_project_id", settings.googleCloudProjectId).catch(() => undefined);
+ }
  markInventoryResetDone();
  return stats;
 }
