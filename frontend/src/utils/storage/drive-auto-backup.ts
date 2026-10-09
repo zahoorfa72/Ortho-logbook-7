@@ -53,7 +53,14 @@ async function runBackup() {
   });
 
   try {
-    const result = await backupToGoogleDrive(undefined, { type: "all" }, { skipIfUnchanged: true });
+    const result = await backupToGoogleDrive(undefined, { type: "all" }, {
+      skipIfUnchanged: true,
+      onProgress: (message) => setDriveSyncState({
+        phase: "uploading",
+        updates: updatesForThisUpload,
+        message,
+      }),
+    });
     const completedAt = result.completedAt
       ? new Date(result.completedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
       : "";
@@ -66,10 +73,11 @@ async function runBackup() {
     });
   } catch (error) {
     console.warn("[drive-auto-backup] sync failed:", error);
+    const details = error instanceof Error ? error.message : String(error || "Unknown error");
     setDriveSyncState({
       phase: "error",
       updates: pendingUpdates,
-      message: "Drive sync failed · changes remain on this phone",
+      message: "Drive sync failed: " + details + " · local data remains on this phone",
     });
   } finally {
     uploading = false;
