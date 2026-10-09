@@ -171,11 +171,13 @@ function uploadChunk(sessionUrl: string, token: string, bytes: Uint8Array, start
   });
 }
 
-async function uploadResumable(sessionUrl: string, token: string, backupText: string) {
+async function uploadResumable(sessionUrl: string, token: string, backupText: string, onProgress?: (stage: string) => void) {
   const bytes = new TextEncoder().encode(backupText);
+  const startedAt = Date.now();
   let offset = 0;
   let result: any = null;
   while (offset < bytes.length) {
+    if (Date.now() - startedAt > 5 * 60 * 1000) throw new Error("Google Drive upload stopped after 5 minutes without completing. Your local data is unchanged; retry on a stable connection.");
     const end = Math.min(offset + DRIVE_CHUNK_SIZE, bytes.length);
     let lastError: any = null;
     let chunkResult: { done: boolean; result?: any; nextOffset?: number } | null = null;
@@ -205,11 +207,12 @@ async function uploadResumable(sessionUrl: string, token: string, backupText: st
       offset = chunkResult.nextOffset as number;
       if (offset >= bytes.length) throw new Error("Google Drive did not confirm the final upload chunk. Please retry.");
     }
+    onProgress?.("Uploading backup to Google Drive… " + Math.min(100, Math.round((offset / bytes.length) * 100)) + "%");
   }
   return result || {};
 }
 
-async function uploadContent(backupText: string, existingId?: string) {
+async function uploadContent(backupText: string, existingId?: string, onProgress?: (stage: string) => void) {
   const token = await accessToken();
   const bytes = new TextEncoder().encode(backupText);
   const target = existingId
@@ -238,7 +241,7 @@ async function uploadContent(backupText: string, existingId?: string) {
   const sessionUrl = initResponse.headers.get("Location");
   if (!sessionUrl) throw new Error("Google Drive did not provide an upload session. Reconnect your Google account and retry.");
   try {
-    return await uploadResumable(sessionUrl, token, backupText);
+    return await uploadResumable(sessionUrl, token, backupText, onProgress);
   } catch (error: any) {
     const originalMessage = String(error?.message || "Google Drive resumable upload failed.");
     // Correct multipart/related structure is retained as a fallback for devices
@@ -301,7 +304,7 @@ export async function backupToGoogleDrive(
   options.onProgress?.("Finding previous Drive backup…");
   const existing = await findLatestBackup();
   options.onProgress?.("Uploading backup to Google Drive…");
-  const result = await uploadContent(backupText, existing?.id);
+  const result = await uploadContent(backupText, existing?.id, options.onProgress);
   await markBackupTaken();
   const completedAt = new Date().toISOString();
   await storage.secureSet(LAST_DRIVE_BACKUP_KEY, completedAt);
