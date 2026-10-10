@@ -824,32 +824,6 @@ async function downloadIncrementalWithRecovery(fileId: string, fileName: string)
   }
 }
 
-async function ensureAutomaticRangeSnapshots(onProgress?: (stage: string) => void) {
-  const now = new Date();
-  const dayKey = now.toISOString().slice(0, 10);
-  const month = dayKey.slice(0, 7);
-  const year = dayKey.slice(0, 4);
-  const failures: string[] = [];
-
-  // Keep exactly one rolling file per month/year and check after each sync.
-  // The content hash ignores generated timestamps, so unchanged ranges are
-  // skipped while edits made later the same day are still uploaded.
-  for (const scope of [
-    { type: "month" as const, value: month, label: "monthly" },
-    { type: "year" as const, value: year, label: "yearly" },
-  ]) {
-    try {
-      onProgress?.("Checking automatic " + scope.label + " Drive backup…");
-      await backupToGoogleDrive(undefined, { type: scope.type, value: scope.value }, { skipIfUnchanged: true, onProgress });
-      await storage.secureSet("ortho_drive_auto_" + scope.label + "_snapshot_day_" + scope.value, dayKey);
-    } catch (error: any) {
-      failures.push(scope.label + " snapshot: " + String(error?.message || "upload failed"));
-      console.warn("[drive-auto-backup] " + scope.label + " snapshot failed", error);
-    }
-  }
-  return failures;
-}
-
 function mergeIncrementalPayloads(previous: any, incoming: any): any {
   if (!previous) return incoming;
   const tableNames = [
@@ -956,10 +930,8 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
     return { skipped: true, completedAt: new Date().toISOString(), name: "No changes", accountEmail: getConnectedGoogleAccount() };
   }
 
-  // Each named Drive backup is a complete, rolling snapshot, not a partial
-  // day or a standalone delta. Refresh all-time first, then the current month
-  // and year from the full local database. Each upload updates the existing
-  // same-name Drive file rather than making a new daily file.
+  // Update one complete master snapshot in place. Period-specific restore
+  // filters this file locally instead of uploading duplicate month/year files.
   onProgress?.("Refreshing the complete all-time backup…");
   const allTimeResult = await backupToGoogleDrive(undefined, { type: "all" }, { onProgress });
   // Keep one rolling master backup. Month/year selection is handled during
@@ -983,9 +955,12 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
 }
 
 export async function restoreLatestFromGoogleDrive() {
-  const candidates = await findLatestBackupCandidates();
-  // Scoped month/year files must not accidentally become the default full restore.
-  // Prefer the all-time snapshot, then the original legacy full-backup filename.
+  const candidates = (await findLatestBackupCandidates()).filter((item:any) =>
+    String(item.name || "") === "Ortho Logbook Backup - All Time.orbackup" ||
+    String(item.name || "") === BACKUP_NAME
+  );
+  // Only complete master snapshots can be restored as an all-time restore.
+  // Month/year/date exports from older builds are never treated as full backups.
   candidates.sort((a:any,b:any) => {
     const rank = (name:string) => /all time/i.test(name) ? 0 : name === BACKUP_NAME ? 1 : /month|year|date/i.test(name) ? 3 : 2;
     return rank(String(a.name || "")) - rank(String(b.name || "")) ||
