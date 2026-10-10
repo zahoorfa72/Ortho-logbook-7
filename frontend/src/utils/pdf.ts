@@ -528,8 +528,8 @@ export function buildStatsHtml(
             <div class="kpiValue">${stats.total_patients}</div>
           </div>
           <div class="kpi">
-            <div class="kpiLabel">Distinct Procedures</div>
-            <div class="kpiValue">${stats.procedures.length}</div>
+            <div class="kpiLabel">${reportKey === "procedureIIStatistics" ? "Distinct Second Procedures" : "Distinct Procedures"}</div>
+            <div class="kpiValue">${reportKey === "procedureIIStatistics" ? stats.procedures.length : new Set([...stats.procedures.map((p) => p.name), ...secondProcedures.map((p) => p.name)]).size}</div>
           </div>
         </div>
         <div class="section">Procedure Breakdown</div>
