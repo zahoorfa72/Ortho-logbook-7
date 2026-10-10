@@ -7,6 +7,7 @@ import { storage } from "@/src/utils/storage";
 
 const LAST_DRIVE_BACKUP_KEY = "ortho_drive_last_successful_backup";
 const LAST_DRIVE_CONTENT_HASH_KEY = "ortho_drive_last_uploaded_content_hash";
+const MASTER_MIGRATION_KEY = "ortho_drive_master_migration_v1";
 const DRIVE_SCOPE_VERSION_KEY = "ortho_drive_scope_version";
 const DRIVE_SCOPE_VERSION = "full-drive-v1";
 export async function getLastDriveBackupStatus(): Promise<string | null> {
@@ -568,6 +569,86 @@ async function backupContentHash(backupText: string, onProgress?: (stage: string
   return `fnv1a-${(hash >>> 0).toString(16)}-${backupText.length}`;
 }
 
+
+function mergeRowsPreservingCurrent(currentRows: any[], oldRows: any[], table: string): any[] {
+  const rows = new Map<string, any>();
+  const keyFor = (row: any) => {
+    if (row?.id !== undefined && row?.id !== null && String(row.id) !== "") return "id:" + String(row.id);
+    if (table === "inventory") return "item:" + [row?.name, row?.category, row?.size].map((v) => String(v || "").trim().toLowerCase()).join("|");
+    return "row:" + JSON.stringify(row);
+  };
+  for (const row of oldRows || []) rows.set(keyFor(row), row);
+  for (const row of currentRows || []) rows.set(keyFor(row), row);
+  return Array.from(rows.values());
+}
+
+async function mergeLegacyDriveHistory(localText: string, onProgress?: (stage: string) => void) {
+  const local = parseDownloadedBackup(localText);
+  const candidates = (await findLatestBackupCandidates()).filter((file: any) => {
+    const name = String(file.name || "");
+    return name === BACKUP_NAME ||
+      name === "Ortho Logbook Backup - All Time.orbackup" ||
+      /Ortho Logbook Backup - (Month|Year|Date) /i.test(name);
+  });
+  const tables = [
+    "patients", "procedures", "inventoryCategories", "inventory", "patientImplants",
+    "patientCustomFields", "implantRecords", "expenses", "users", "patientHistory",
+    "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts",
+  ];
+  let complete = true;
+  let mergedFiles = 0;
+  for (let index = 0; index < candidates.length; index++) {
+    const file = candidates[index];
+    onProgress?.("Merging old backup history… " + (index + 1) + "/" + candidates.length);
+    let old: any;
+    try {
+      old = await downloadDriveJsonValidated(String(file.id));
+      if (!old || old.app !== "Ortho Logbook" || !Array.isArray(old.patients) || !Array.isArray(old.inventory)) {
+        complete = false;
+        continue;
+      }
+    } catch (error) {
+      console.warn("[drive-backup] legacy snapshot could not be merged; keeping it in Drive", file.name, error);
+      complete = false;
+      continue;
+    }
+    if (old.incremental === true) continue;
+    for (const table of tables) {
+      if (!Array.isArray(old[table]) || !Array.isArray(local[table])) continue;
+      local[table] = mergeRowsPreservingCurrent(local[table], old[table], table);
+    }
+    if (!Object.prototype.hasOwnProperty.call(local, "branding") && Object.prototype.hasOwnProperty.call(old, "branding")) local.branding = old.branding;
+    if (!Object.prototype.hasOwnProperty.call(local, "appSettings") && Object.prototype.hasOwnProperty.call(old, "appSettings")) local.appSettings = old.appSettings;
+    mergedFiles++;
+  }
+  local.version = Math.max(Number(local.version || 0), 7);
+  local.filter = { type: "all" };
+  delete local.incremental;
+  delete local.changedTables;
+  delete local._rowDelta;
+  delete local.deletedIds;
+  delete local.fullTables;
+  return { backupText: JSON.stringify(local), complete, mergedFiles, candidateCount: candidates.length };
+}
+
+async function trashDuplicateDriveBackups(masterFileId: string): Promise<string[]> {
+  const failures: string[] = [];
+  const candidates = await findLatestBackupCandidates();
+  for (const file of candidates) {
+    if (!file?.id || String(file.id) === masterFileId) continue;
+    try {
+      await driveRequest(DRIVE_API + "/" + encodeURIComponent(String(file.id)), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ trashed: true }),
+      });
+    } catch (error: any) {
+      failures.push(String(file.name || file.id) + ": " + String(error?.message || "could not move to trash"));
+    }
+  }
+  return failures;
+}
+
 export async function backupToGoogleDrive(
   _password?: string,
   filter: BackupFilter = { type: "all" },
@@ -576,7 +657,17 @@ export async function backupToGoogleDrive(
   // Google Drive backup is intentionally plain JSON at the user's request.
   // Local phone/file backups remain encrypted by exportBackup().
   options.onProgress?.("Preparing backup data…");
-  const backupText = await exportUnencryptedBackup(filter, options.onProgress);
+  let backupText = await exportUnencryptedBackup(filter, options.onProgress);
+  const isMasterBackup = filter.type === "all";
+  let migrationComplete = true;
+  let migrationAttempted = false;
+  if (isMasterBackup && (await storage.secureGet(MASTER_MIGRATION_KEY, "")) !== "1") {
+    migrationAttempted = true;
+    options.onProgress?.("Merging existing Drive backups into the master…");
+    const migration = await mergeLegacyDriveHistory(backupText, options.onProgress);
+    backupText = migration.backupText;
+    migrationComplete = migration.complete;
+  }
   options.onProgress?.("Checking whether backup changed…");
   const contentHash = await backupContentHash(backupText, options.onProgress);
   const fileName = driveBackupName(filter);
@@ -588,7 +679,8 @@ export async function backupToGoogleDrive(
   if (!existing && filter.type === "all") existing = await findBackupByName(BACKUP_NAME);
   const previousHash = await storage.secureGet(LAST_DRIVE_CONTENT_HASH_KEY + ":" + fileName, "");
   const previousSuccess = await getLastDriveBackupStatus();
-  if (existing?.id && previousSuccess && options.skipIfUnchanged && previousHash === contentHash) {
+  if (existing?.id && previousSuccess && options.skipIfUnchanged && previousHash === contentHash &&
+      (!isMasterBackup || (!migrationAttempted && (await storage.secureGet(MASTER_MIGRATION_KEY, "")) === "1"))) {
     return { skipped: true, completedAt: previousSuccess, accountEmail: getConnectedGoogleAccount(), name: fileName };
   }
 
@@ -598,7 +690,14 @@ export async function backupToGoogleDrive(
   const completedAt = new Date().toISOString();
   await storage.secureSet(LAST_DRIVE_BACKUP_KEY, completedAt);
   await storage.secureSet(LAST_DRIVE_CONTENT_HASH_KEY + ":" + fileName, contentHash);
-  return { ...result, skipped: false, completedAt, name: fileName, accountEmail: getConnectedGoogleAccount() };
+  let cleanupFailures: string[] = [];
+  if (isMasterBackup && migrationComplete && result?.id) {
+    // Only after the complete master has been uploaded and size-verified do we
+    // remove redundant old full/month/year files from the visible Drive set.
+    cleanupFailures = await trashDuplicateDriveBackups(String(result.id));
+    await storage.secureSet(MASTER_MIGRATION_KEY, "1");
+  }
+  return { ...result, skipped: false, completedAt, name: fileName, accountEmail: getConnectedGoogleAccount(), cleanupFailures };
 }
 
 async function listIncrementalFiles() {
