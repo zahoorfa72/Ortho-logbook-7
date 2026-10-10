@@ -21,6 +21,7 @@ const DIRTY_TABLES_KEY = "ortho_drive_pending_tables_v1";
 let timer: ReturnType<typeof setTimeout> | null = null;
 let uploading = false;
 let refreshRequested = false;
+let backupPaused = false;
 let disposed = false;
 let initialized = false;
 const pendingTables = new Set<string>();
@@ -66,7 +67,7 @@ function scheduleBackup(tableName?: string) {
   if (disposed) return;
   if (tableName) pendingTables.add(tableName);
   void persistPendingTables();
-  if (!pendingTables.size || uploading) return;
+  if (!pendingTables.size || uploading || backupPaused) return;
   if (timer) clearTimeout(timer);
   setDriveSyncState({
     phase: "waiting",
@@ -80,7 +81,7 @@ function scheduleBackup(tableName?: string) {
 }
 
 async function runBackup() {
-  if (disposed || uploading) return;
+  if (disposed || uploading || backupPaused) return;
   await loadPendingTables();
   if (!pendingTables.size) return;
   if (!getConnectedGoogleAccount()) await restoreGoogleAccountSilently();
@@ -144,7 +145,7 @@ async function runBackup() {
     });
   } finally {
     uploading = false;
-    if (pendingTables.size && !disposed) {
+    if (pendingTables.size && !disposed && !backupPaused) {
       if (timer) clearTimeout(timer);
       const delay = refreshRequested ? 0 : DEBOUNCE_MS;
       refreshRequested = false;
@@ -165,6 +166,16 @@ export function triggerAutomaticDriveBackup(tableName: "branding" | "appSettings
 // syncable table, but the exporter uploads only real differences from the last
 // confirmed snapshot. If an upload is stalled, queue an immediate retry as soon
 // as the current request's timeout/recovery path releases the upload lock.
+export function setAutomaticDriveBackupPaused(paused: boolean) {
+  backupPaused = paused;
+  if (paused) {
+    if (timer) clearTimeout(timer);
+    timer = null;
+    return;
+  }
+  if (pendingTables.size && !disposed) scheduleBackup();
+}
+
 export function refreshAutomaticDriveBackup() {
   void loadPendingTables().then(async () => {
     ALL_SYNC_TABLES.forEach((name) => pendingTables.add(name));
