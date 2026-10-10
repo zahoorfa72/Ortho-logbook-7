@@ -29,7 +29,7 @@ import { triggerAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-back
      ...backup,
      patients,
      patientImplants: (backup.patientImplants || []).filter((row: any) => patientIds.has(String(row.patient_id))),
-     patientHistory: (backup.patientHistory || []).filter((row: any) => inPeriod(row, "created_at")),
+     patientHistory: (backup.patientHistory || []).filter((row: any) => patientIds.has(String(row.patient_id)) && inPeriod(row, "created_at")),
      expenses: (backup.expenses || []).filter((row: any) => inPeriod(row, "date", "created_at")),
      implantRecords: (backup.implantRecords || []).filter((row: any) => inPeriod(row, "created_at", "updated_at")),
      inventoryMovements: (backup.inventoryMovements || []).filter((row: any) => inPeriod(row, "created_at")),
