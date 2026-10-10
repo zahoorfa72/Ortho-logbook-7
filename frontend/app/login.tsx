@@ -29,12 +29,15 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const [adminExists, setAdminExists] = useState(true);
   const [driveRestoreLoading, setDriveRestoreLoading] = useState(false);
+  const [driveRestoreMessage, setDriveRestoreMessage] = useState("");
 
   const restoreFromGoogleDrive = async () => {
     try {
       setDriveRestoreLoading(true);
+      setDriveRestoreMessage("Connecting to Google Drive…");
       await connectGoogleAccount();
-      const remote = await restoreLatestFromGoogleDrive();
+      setDriveRestoreMessage("Searching for backup…");
+      const remote = await restoreLatestFromGoogleDrive((message) => setDriveRestoreMessage(message));
       const info = getBackupInfo(remote.backupText);
       if (info.encrypted) throw new Error("The Google Drive backup is encrypted. Restore it from Sync & Backup with its password.");
       Alert.alert(
@@ -49,6 +52,7 @@ export default function Login() {
             onPress: async () => {
               try {
                 setDriveRestoreLoading(true);
+                setDriveRestoreMessage("Restoring patients, photos and settings…");
                 const backup = await decryptBackup(remote.backupText, "");
                 const result = await restoreBackup(backup);
                 await storage.secureRemove("ortho_current_user");
@@ -75,6 +79,7 @@ export default function Login() {
       Alert.alert("Google Drive restore failed", error?.message || "Unable to find or download the latest Drive backup.");
     } finally {
       setDriveRestoreLoading(false);
+      setDriveRestoreMessage("");
     }
   };
 
@@ -183,7 +188,7 @@ export default function Login() {
         >
           <Ionicons name="cloud-download-outline" size={18} color={colors.onBrandPrimary} />
           <Text style={[styles.joinText, { color: colors.onBrandPrimary }]}>
-            {driveRestoreLoading ? "Restoring from Google Drive…" : "Restore directly from Google Drive"}
+            {driveRestoreLoading ? (driveRestoreMessage || "Restoring from Google Drive…") : "Restore directly from Google Drive"}
           </Text>
         </Pressable>
 
