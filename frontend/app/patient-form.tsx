@@ -43,7 +43,7 @@ const empty = (): Patient => ({
 
 export default function PatientForm() {
   const styles = useStyles();
-  const { colors } = useTheme();
+  const { colors, branding } = useTheme();
   const insets = useSafeAreaInsets();
   const toast = useToast();
   const qc = useQueryClient();
@@ -670,14 +670,18 @@ export default function PatientForm() {
           </View>
         </Modal>
         <Text style={styles.section}>Patient Details</Text>
-        <Field label="MRNo" testID="patient-mrno-input" value={p.mrNo} onChangeText={set("mrNo")} placeholder="e.g. 10234" />
-        <Field label="Patient Name" testID="patient-name-input" value={p.name} onChangeText={set("name")} placeholder="Full name" autoCapitalize="words" />
-        <Text style={styles.label}>Gender</Text>
-        <View style={{ marginBottom: spacing.lg }}>
-          <Segmented options={["Male", "Female", "Other"]} value={p.gender} onChange={set("gender")} />
-        </View>
-        <Field label="Age" testID="patient-age-input" value={p.age} onChangeText={set("age")} keyboardType="number-pad" placeholder="e.g. 45" />
-        <Field label="Address" testID="patient-address-input" value={p.address} onChangeText={set("address")} placeholder="Patient address" />
+        {(Array.isArray(branding.patientFormFieldOrder) && branding.patientFormFieldOrder.length
+          ? [...branding.patientFormFieldOrder.filter((key:string)=>["mrNo","name","gender","age","address"].includes(key)), ...["mrNo","name","gender","age","address"].filter(key=>!branding.patientFormFieldOrder!.includes(key))]
+          : ["mrNo","name","gender","age","address"]).map((key:string) => {
+            switch (key) {
+              case "mrNo": return <Field key={key} label="MRNo" testID="patient-mrno-input" value={p.mrNo} onChangeText={set("mrNo")} placeholder="e.g. 10234" />;
+              case "name": return <Field key={key} label="Patient Name" testID="patient-name-input" value={p.name} onChangeText={set("name")} placeholder="Full name" autoCapitalize="words" />;
+              case "gender": return <View key={key}><Text style={styles.label}>Gender</Text><View style={{ marginBottom: spacing.lg }}><Segmented options={["Male", "Female", "Other"]} value={p.gender} onChange={set("gender")} /></View></View>;
+              case "age": return <Field key={key} label="Age" testID="patient-age-input" value={p.age} onChangeText={set("age")} keyboardType="number-pad" placeholder="e.g. 45" />;
+              case "address": return <Field key={key} label="Address" testID="patient-address-input" value={p.address} onChangeText={set("address")} placeholder="Patient address" />;
+              default: return null;
+            }
+          })}
 
         <Text style={styles.section}>Infection Screening</Text>
         {([
