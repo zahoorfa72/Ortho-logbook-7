@@ -15,6 +15,33 @@ import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/s
 import { backupToGoogleDrive, connectGoogleAccount, disconnectGoogleAccount, getConnectedGoogleAccount, restoreLatestFromGoogleDrive, listGoogleDriveBackups, restoreGoogleDriveBackupById } from "@/src/utils/storage/google-drive";
 import { triggerAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-backup";
 
+ // Selective restore reads from the single complete Drive master snapshot.
+ // Period restores merge only records belonging to that period and never wipe
+ // unrelated months or years. Current stock quantities are not historical data.
+ function filterBackupForPeriod(backup: any, type: "month" | "year", value: string) {
+   const prefix = value.trim();
+   const valid = type === "month" ? /^\d{4}-\d{2}$/.test(prefix) : /^\d{4}$/.test(prefix);
+   if (!valid) throw new Error(type === "month" ? "Enter the month as YYYY-MM." : "Enter the year as YYYY.");
+   const inPeriod = (row: any, ...fields: string[]) => fields.some((field) => String(row?.[field] ?? "").startsWith(prefix));
+   const patients = (backup.patients || []).filter((row: any) => inPeriod(row, "date"));
+   const patientIds = new Set(patients.map((row: any) => String(row.id)));
+   return {
+     ...backup,
+     patients,
+     patientImplants: (backup.patientImplants || []).filter((row: any) => patientIds.has(String(row.patient_id))),
+     patientHistory: (backup.patientHistory || []).filter((row: any) => inPeriod(row, "created_at")),
+     expenses: (backup.expenses || []).filter((row: any) => inPeriod(row, "date", "created_at")),
+     implantRecords: (backup.implantRecords || []).filter((row: any) => inPeriod(row, "created_at", "updated_at")),
+     inventoryMovements: (backup.inventoryMovements || []).filter((row: any) => inPeriod(row, "created_at")),
+     inventoryPurchaseReceipts: (backup.inventoryPurchaseReceipts || []).filter((row: any) => inPeriod(row, "added_date", "created_at")),
+     stockReceipts: (backup.stockReceipts || []).filter((row: any) => inPeriod(row, "added_date", "created_at")),
+     inventory: [],
+     filter: { type, value: prefix },
+     incremental: false,
+     changedTables: undefined,
+   };
+ }
+
 export default function BackupRestoreScreen() {
   const { user } = useAuth();
   const { colors, branding, setBranding, resetBranding } = useTheme();
@@ -25,6 +52,8 @@ export default function BackupRestoreScreen() {
   const [loading, setLoading] = useState(false);
   const [backupFilter, setBackupFilter] = useState<BackupFilter>({ type: "all" });
   const [filterValue, setFilterValue] = useState("");
+  const [restorePeriod, setRestorePeriod] = useState<"all" | "month" | "year">("all");
+  const [restorePeriodValue, setRestorePeriodValue] = useState(new Date().toISOString().slice(0, 7));
   const [mode, setMode] = useState<"Merge (safe)" | "Replace">("Merge (safe)");
   const [googleClientId, setGoogleClientId] = useState("");
   const [googleCloudProjectId, setGoogleCloudProjectId] = useState("");
@@ -142,7 +171,8 @@ export default function BackupRestoreScreen() {
     try {
       setDriveLoading(true);
       setDriveStatus("Preparing backup data…");
-      await backupToGoogleDrive(undefined, backupFilter, { onProgress: setDriveStatus });
+      // Drive uses one complete master snapshot; range selection is for local/file backups only.
+      await backupToGoogleDrive(undefined, { type: "all" }, { onProgress: setDriveStatus });
       Alert.alert("Google Drive backup complete", `Latest unencrypted backup was saved to ${googleAccount}'s Google Drive.`);
     } catch (error) {
       Alert.alert("Drive backup failed", error instanceof Error ? error.message : "Unable to back up to Google Drive.");
@@ -155,7 +185,7 @@ export default function BackupRestoreScreen() {
   const handleLoadDriveBackups = async () => {
     try {
       setDriveLoading(true);
-      setDriveStatus("Finding monthly, yearly and all-time backups…");
+      setDriveStatus("Finding the single master backup…");
       const files = await listGoogleDriveBackups();
       setDriveBackups(files);
       if (!files.length) Alert.alert("No Drive backups", "No Ortho Logbook backup files were found in this Google account.");
@@ -170,12 +200,14 @@ export default function BackupRestoreScreen() {
   const handleChooseDriveBackup = async (file: {id:string;name:string;modifiedTime:string}) => {
     try {
       setDriveLoading(true);
-      setDriveStatus("Downloading selected backup…");
+      setDriveStatus("Downloading master backup…");
       const result = await restoreGoogleDriveBackupById(file.id);
       const info = getBackupInfo(result.backupText);
       setSelectedBackup({ name: result.name, backupText: result.backupText, info });
       setRestorePassword("");
-      Alert.alert("Backup selected", `${result.name}\nUpdated: ${new Date(result.modifiedTime).toLocaleString()}\nChoose Merge or Replace below.`);
+      setRestorePeriod("all");
+      setRestorePeriodValue(new Date().toISOString().slice(0, 7));
+      Alert.alert("Master backup selected", result.name + "\nUpdated: " + new Date(result.modifiedTime).toLocaleString() + "\nChoose all-time or a month/year to restore.");
     } catch (error) {
       Alert.alert("Selected backup failed", error instanceof Error ? error.message : "Unable to download this backup.");
     } finally {
@@ -187,12 +219,14 @@ export default function BackupRestoreScreen() {
   const handleDriveRestore = async () => {
     try {
       setDriveLoading(true);
-      setDriveStatus("Finding latest Drive backup…");
+      setDriveStatus("Finding the latest master backup…");
       const result = await restoreLatestFromGoogleDrive();
       const info = getBackupInfo(result.backupText);
       setSelectedBackup({ name: result.name, backupText: result.backupText, info });
       setRestorePassword("");
-      Alert.alert("Backup found", `Latest backup from ${new Date(result.modifiedTime).toLocaleString()} is ready. Choose Merge or Replace below.`);
+      setRestorePeriod("all");
+      setRestorePeriodValue(new Date().toISOString().slice(0, 7));
+      Alert.alert("Master backup found", "Updated: " + new Date(result.modifiedTime).toLocaleString() + "\nChoose all-time or a month/year to restore.");
     } catch (error) {
       Alert.alert("Drive restore failed", error instanceof Error ? error.message : "Unable to download the latest Google Drive backup.");
     } finally {
@@ -255,21 +289,37 @@ export default function BackupRestoreScreen() {
       Alert.alert("Password required", "Enter the password used when this encrypted backup was created.");
       return;
     }
-
-    const isReplace = mode === "Replace";
-    const title = isReplace ? "Replace with backup?" : "Merge backup?";
-    const message = isReplace
-      ? "This wipes all current data and replaces it with the backup. You will be logged out."
-      : "New records will be added. Re-importing the same backup will not add inventory again. Inventory from a different phone can be combined by item.";
+    const isPeriodRestore = restorePeriod !== "all";
+    if (isPeriodRestore && !(restorePeriod === "month" ? /^\d{4}-\d{2}$/.test(restorePeriodValue.trim()) : /^\d{4}$/.test(restorePeriodValue.trim()))) {
+      Alert.alert("Choose a valid period", restorePeriod === "month" ? "Enter the month as YYYY-MM." : "Enter the year as YYYY.");
+      return;
+    }
+    // Period restore is merge-only so other months/years are never wiped.
+    const isReplace = !isPeriodRestore && mode === "Replace";
+    const title = isPeriodRestore ? "Restore selected period?" : isReplace ? "Replace with backup?" : "Merge backup?";
+    const message = isPeriodRestore
+      ? "Merge records from " + (restorePeriod === "month" ? "month " : "year ") + restorePeriodValue.trim() + " into this phone. Other periods stay untouched; current stock quantities are not replayed."
+      : isReplace
+        ? "This wipes all current data and replaces it with the backup. You will be logged out."
+        : "New records will be added. Re-importing the same backup will not add inventory again. Inventory from a different phone can be combined by item.";
     Alert.alert(title, message, [
       { text: "Cancel", style: "cancel" },
       {
-        text: isReplace ? "Replace" : "Merge",
+        text: isPeriodRestore ? "Restore Period" : isReplace ? "Replace" : "Merge",
         style: isReplace ? "destructive" : "default",
         onPress: async () => {
           try {
             setLoading(true);
-            const backup = await decryptBackup(selectedBackup.backupText, restorePassword);
+            const completeBackup = await decryptBackup(selectedBackup.backupText, restorePassword);
+            const backup = isPeriodRestore
+              ? filterBackupForPeriod(completeBackup, restorePeriod as "month" | "year", restorePeriodValue)
+              : completeBackup;
+            if (isPeriodRestore && !backup.patients.length && !backup.expenses.length && !backup.patientHistory.length &&
+                !backup.inventoryMovements.length && !backup.inventoryPurchaseReceipts.length && !backup.stockReceipts.length &&
+                !backup.implantRecords.length) {
+              Alert.alert("No records in this period", "The master backup contains no restorable records for this month/year.");
+              return;
+            }
             if (isReplace) {
               const result = await restoreBackup(backup);
               if (backup.branding && typeof backup.branding === "object") await setBranding(backup.branding);
@@ -278,20 +328,27 @@ export default function BackupRestoreScreen() {
               queryClient.clear();
               Alert.alert(
                 "Restore complete",
-                `Replaced with backup:\nPatients: ${result.patients}\nInventory categories: ${result.inventoryCategories || 0}\nInventory items: ${result.inventory}\nPatient inventory records: ${result.patientImplants || 0}\nProcedures: ${result.procedures}\nUsers: ${result.users}\n\nPlease log in again.`,
+                "Replaced with backup:\nPatients: " + result.patients + "\nInventory categories: " + (result.inventoryCategories || 0) +
+                "\nInventory items: " + result.inventory + "\nPatient inventory records: " + (result.patientImplants || 0) +
+                "\nProcedures: " + result.procedures + "\nUsers: " + result.users + "\n\nPlease log in again.",
                 [{ text: "OK", onPress: () => router.replace("/login") }],
               );
             } else {
               const result = await mergeBackup(backup);
-              if (backup.branding && typeof backup.branding === "object") await setBranding(backup.branding);
-              else if (backup.version >= 6 && backup.branding === null) await resetBranding();
+              if (!isPeriodRestore) {
+                if (backup.branding && typeof backup.branding === "object") await setBranding(backup.branding);
+                else if (backup.version >= 6 && backup.branding === null) await resetBranding();
+              }
               queryClient.clear();
               Alert.alert(
-                "Merge complete",
-                `Added:\nNew patients: ${result.patients}\nInventory changes: ${result.inventory}\nInventory categories: ${result.inventoryCategories || 0}\nPatient inventory records: ${result.patientImplants || 0}\nNew procedures: ${result.procedures}\nNew users: ${result.users}\nHistory entries: ${result.patientHistory}`,
+                isPeriodRestore ? "Period restore complete" : "Merge complete",
+                "Added:\nNew patients: " + result.patients + "\nInventory changes: " + result.inventory +
+                "\nInventory categories: " + (result.inventoryCategories || 0) + "\nPatient inventory records: " + (result.patientImplants || 0) +
+                "\nNew procedures: " + result.procedures + "\nNew users: " + result.users + "\nHistory entries: " + result.patientHistory,
               );
               setSelectedBackup(null);
               setRestorePassword("");
+              setRestorePeriod("all");
             }
           } catch (error) {
             Alert.alert("Restore failed", error instanceof Error ? error.message : "Unable to restore the backup.");
@@ -433,7 +490,7 @@ export default function BackupRestoreScreen() {
                 disabled={driveLoading}
               >
                 <Ionicons name="list-outline" size={18} color={colors.onSurface} />
-                <Text style={styles.secondaryText}>Browse Month / Year / All-Time Backups</Text>
+                <Text style={styles.secondaryText}>Select Master Backup for Period Restore</Text>
               </Pressable>
               {driveBackups.map((file) => (
                 <Pressable
@@ -447,7 +504,7 @@ export default function BackupRestoreScreen() {
                     {file.modifiedTime ? new Date(file.modifiedTime).toLocaleString() : "Drive backup"}
                     {file.size ? " · " + (Number(file.size) / (1024 * 1024)).toFixed(1) + " MB" : ""}
                   </Text>
-                  <Text style={styles.hint}>Tap to download and select this backup</Text>
+                  <Text style={styles.hint}>Tap to download the master backup, then choose all-time, month, or year restore</Text>
                 </Pressable>
               ))}
               <Pressable
@@ -485,7 +542,7 @@ export default function BackupRestoreScreen() {
 
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Backup Range</Text>
-          <Text style={styles.cardSub}>Choose the patient date range for manual Drive snapshots and encrypted phone backups. All Time, Month (YYYY-MM), and Year (YYYY) are saved as separate Drive files; automatic sync keeps the all-time baseline plus incremental updates.</Text>
+          <Text style={styles.cardSub}>Choose the patient date range for manual Drive snapshots and encrypted phone backups. Google Drive keeps one rolling master backup. Patient photos are compressed in the backup; month/year restore filters this master without storing duplicate full copies.</Text>
           <Segmented
             options={["All", "Date", "Month", "Year"] as any}
             value={backupFilter.type === "all" ? "All" : backupFilter.type.charAt(0).toUpperCase() + backupFilter.type.slice(1)}
@@ -594,11 +651,34 @@ export default function BackupRestoreScreen() {
 
           {selectedBackup && (
             <View style={styles.selectedBox}>
-              <Text style={styles.selectedTitle}>Selected backup</Text>
+              <Text style={styles.selectedTitle}>Selected master backup</Text>
               <Text style={styles.fileName}>{selectedBackup.name}</Text>
               <Text style={styles.fileInfo}>
                 Created: {new Date(selectedBackup.info.createdAt).toLocaleString()}
               </Text>
+              <Text style={[styles.hint, { marginTop: spacing.md }]}>Restore everything or select a period. Period restore merges records and does not delete other months/years.</Text>
+              <Segmented
+                options={["All Time", "Month", "Year"] as any}
+                value={restorePeriod === "all" ? "All Time" : restorePeriod === "month" ? "Month" : "Year"}
+                onChange={(v) => {
+                  const next = v === "Month" ? "month" : v === "Year" ? "year" : "all";
+                  setRestorePeriod(next as any);
+                  setMode("Merge (safe)");
+                  if (next === "month") setRestorePeriodValue((old) => /^\d{4}-\d{2}$/.test(old) ? old : new Date().toISOString().slice(0, 7));
+                  if (next === "year") setRestorePeriodValue(new Date().toISOString().slice(0, 4));
+                }}
+                testIDPrefix="restore-period"
+              />
+              {restorePeriod !== "all" && (
+                <TextInput
+                  value={restorePeriodValue}
+                  onChangeText={setRestorePeriodValue}
+                  placeholder={restorePeriod === "month" ? "YYYY-MM" : "YYYY"}
+                  keyboardType="numbers-and-punctuation"
+                  placeholderTextColor={colors.muted}
+                  style={[styles.input, { marginTop: spacing.sm }]}
+                />
+              )}
             </View>
           )}
 
@@ -637,7 +717,7 @@ export default function BackupRestoreScreen() {
                   <ActivityIndicator color={colors.onBrandPrimary} />
                 ) : (
                   <Text style={styles.primaryText}>
-                    {mode === "Replace" ? "Replace All Data" : "Merge Backup"}
+                    {restorePeriod !== "all" ? "Restore Selected Period" : mode === "Replace" ? "Replace All Data" : "Merge Backup"}
                   </Text>
                 )}
               </Pressable>
