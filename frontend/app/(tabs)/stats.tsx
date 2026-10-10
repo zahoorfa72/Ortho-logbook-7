@@ -94,6 +94,7 @@ export default function StatsScreen() {
             <View style={styles.heroTopRow}>
               <Text style={styles.heroLabel}>Statistics</Text>
               {user?.role === "admin" ? (
+                <View style={{ flexDirection: "row", gap: spacing.xs }}>
                 <Pressable
                   testID="stats-export-pdf"
                   onPress={requestExport}
@@ -120,6 +121,7 @@ export default function StatsScreen() {
                   )}
                   <Text style={styles.heroExportText}>2nd Proc PDF</Text>
                 </Pressable>
+                </View>
               ) : null}
             </View>
             <Text style={styles.heroPeriod}>{periodLabel}</Text>
