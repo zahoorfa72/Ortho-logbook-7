@@ -24,13 +24,32 @@ type BackupData = {
 };
 type EncryptedBackup = {
   version:number; app:string; encrypted:true; algorithm:"XSalsa20-Poly1305"; kdf:"SHA-256";
-  createdAt:string; salt:string; nonce:string; ciphertext:string;
+  createdAt:string; salt:string; nonce:string; ciphertext:string; ciphertextEncoding?: "base64";
 };
 
 const bytesToHex=(b:Uint8Array)=>Array.from(b).map(x=>x.toString(16).padStart(2,"0")).join("");
 function hexToBytes(hex:string){if(!hex||hex.length%2)throw new Error("Invalid encrypted backup data.");const b=new Uint8Array(hex.length/2);for(let i=0;i<b.length;i++){const n=parseInt(hex.slice(i*2,i*2+2),16);if(Number.isNaN(n))throw new Error("Invalid encrypted backup data.");b[i]=n;}return b;}
 const stringToBytes=(v:string)=>new TextEncoder().encode(v);
 const bytesToString=(b:Uint8Array)=>new TextDecoder().decode(b);
+// Base64 is much smaller than hex for large encrypted backups. Process in small
+// chunks so btoa does not spread a huge byte array onto the JS call stack.
+function bytesToBase64(bytes: Uint8Array): string {
+  let output = "";
+  const chunkSize = 0x6000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
+    let binary = "";
+    for (let j = 0; j < chunk.length; j++) binary += String.fromCharCode(chunk[j]);
+    output += globalThis.btoa(binary);
+  }
+  return output;
+}
+function base64ToBytes(value: string): Uint8Array {
+  const binary = globalThis.atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
 async function deriveKey(password:string,salt:Uint8Array){if(!password||password.length<8)throw new Error("Backup password must contain at least 8 characters.");const h=await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256,`${bytesToHex(salt)}:${password}`);return hexToBytes(h);}
 
 function photoMime(uri:string){
@@ -47,26 +66,29 @@ function photoMime(uri:string){
 // inside the encrypted backup.
 async function embedPhoto(uri:string):Promise<string>{
   if(!uri)return "";
-  if(uri.startsWith("data:"))return uri;
   try{
-    // Backup copies are deliberately made small: resize to max 1280px and
-    // use strong JPEG compression. This does not change the patient's stored photo.
-    // Keep portable backups small enough for mid-range Android phones. A large
-    // all-time backup previously caused a 150–200 MB allocation and crashed at
-    // the Android app heap limit. Limit the longest edge (portrait and landscape)
-    // and compress only the backup copy; original local photos are untouched.
-    const dimensions = await new Promise<{width:number;height:number}>((resolve,reject) => {
-      Image.getSize(uri, (width,height) => resolve({width,height}), reject);
-    });
-    const longest = Math.max(dimensions.width, dimensions.height);
-    const resize = longest > 720
-      ? (dimensions.width >= dimensions.height
+    // Recompress existing data URIs too: older backups stored original-size
+    // base64 images and could push a manual backup beyond Android's heap limit.
+    // This changes only the backup copy, never the original patient photo.
+    let resizeActions: any[] = [];
+    try {
+      const dimensions = await new Promise<{width:number;height:number}>((resolve,reject) => {
+        Image.getSize(uri, (width,height) => resolve({width,height}), reject);
+      });
+      const longest = Math.max(dimensions.width, dimensions.height);
+      if (longest > 720) {
+        resizeActions = [dimensions.width >= dimensions.height
           ? {resize:{width:720}}
-          : {resize:{height:720}})
-      : null;
+          : {resize:{height:720}}];
+      }
+    } catch {
+      // Some Android providers do not report dimensions for data: URIs.
+      // A conservative width cap still bounds the usual portrait photo to ~720px.
+      resizeActions = [{resize:{width:480}}];
+    }
     const result=await ImageManipulator.manipulateAsync(
       uri,
-      resize ? [resize] : [],
+      resizeActions,
       {compress:0.2,format:ImageManipulator.SaveFormat.JPEG,base64:true}
     );
     if(!result.base64)throw new Error("Empty compressed photo.");
@@ -192,7 +214,7 @@ export async function exportBackup(password:string, filter: BackupFilter = { typ
  const nonce=await Crypto.getRandomBytesAsync(nacl.secretbox.nonceLength);
  const key=await deriveKey(password,salt);
  const ciphertext=nacl.secretbox(stringToBytes(JSON.stringify(backup)),nonce,key);
- return JSON.stringify({version:BACKUP_VERSION,app:BACKUP_APP,encrypted:true,algorithm:"XSalsa20-Poly1305",kdf:"SHA-256",createdAt:backup.createdAt,salt:bytesToHex(salt),nonce:bytesToHex(nonce),ciphertext:bytesToHex(ciphertext)} satisfies EncryptedBackup);
+ return JSON.stringify({version:BACKUP_VERSION,app:BACKUP_APP,encrypted:true,algorithm:"XSalsa20-Poly1305",kdf:"SHA-256",createdAt:backup.createdAt,salt:bytesToHex(salt),nonce:bytesToHex(nonce),ciphertext:bytesToBase64(ciphertext),ciphertextEncoding:"base64"} satisfies EncryptedBackup);
 }
 
 // Google Drive uses a plain JSON snapshot so automatic backup does not depend on a password.
@@ -346,7 +368,8 @@ export async function decryptBackup(text:string,password:string):Promise<BackupD
  }
  try{
   const key=await deriveKey(password,hexToBytes(b.salt));
-  const plain=nacl.secretbox.open(hexToBytes(b.ciphertext),hexToBytes(b.nonce),key);
+  const cipherBytes=b.ciphertextEncoding === "base64" ? base64ToBytes(b.ciphertext) : hexToBytes(b.ciphertext);
+  const plain=nacl.secretbox.open(cipherBytes,hexToBytes(b.nonce),key);
   if(!plain)throw new Error("Incorrect backup password or damaged backup.");
   const data=JSON.parse(bytesToString(plain)) as BackupData;
   if(!data||![2,3,4,5,6,7].includes(data.version)||data.app!==BACKUP_APP)throw new Error("The decrypted backup is invalid.");
