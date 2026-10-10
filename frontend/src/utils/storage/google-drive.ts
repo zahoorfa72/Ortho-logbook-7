@@ -664,7 +664,7 @@ async function mergeLegacyDriveHistory(localText: string, onProgress?: (stage: s
   }
   // Merge legacy incremental rows before moving their timestamps behind the
   // master file. If there is no old full baseline, preserve current local rows
-  // and only fill missing IDs; retain old files for one more verified pass.
+  // and only fill missing IDs. Keep the current phone authoritative.
   const fullBaseline = candidates
     .filter((file: any) => String(file.name || "") === "Ortho Logbook Backup - All Time.orbackup" || String(file.name || "") === BACKUP_NAME)
     .sort((a: any, b: any) => Date.parse(String(b.modifiedTime || "")) - Date.parse(String(a.modifiedTime || "")))[0];
@@ -691,7 +691,7 @@ async function mergeLegacyDriveHistory(localText: string, onProgress?: (stage: s
     }
   }
 
-  const cleanupSafe = hasFullBaseline || (candidates.length === 0 && allDeltas.length === 0);
+  const cleanupSafe = complete;
   local.version = Math.max(Number(local.version || 0), 7);
   local.filter = { type: "all" };
   delete local.incremental;
