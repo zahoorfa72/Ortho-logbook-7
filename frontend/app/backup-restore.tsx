@@ -183,8 +183,8 @@ export default function BackupRestoreScreen() {
           (migrationPending
             ? "\nSome older backup files could not be fully merged, so they were kept for safety. Retry after checking those files."
             : cleanupFailures.length
-              ? "\nOld duplicate backups could not all be moved to trash: " + cleanupFailures.join("; ")
-              : "\nOld duplicate full/month/year backup files were cleaned up after verification.")
+              ? "\nOld duplicate backup files could not all be permanently deleted: " + cleanupFailures.join("; ")
+              : "\nRedundant full/month/year and incremental backup files were permanently deleted after the merged master was verified.")
       );
     } catch (error) {
       Alert.alert("Drive backup failed", error instanceof Error ? error.message : "Unable to back up to Google Drive.");
