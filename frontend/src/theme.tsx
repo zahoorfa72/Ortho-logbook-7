@@ -64,6 +64,8 @@ export type BrandingConfig = {
   pdfPageSize: "A4" | "Letter";
   pdfOrientation: "portrait" | "landscape";
   pdfPatientFields?: string[];
+  /** Admin-defined order for core fields on the patient add/edit form. */
+  patientFormFieldOrder?: string[];
   pdfMainHeadingField?: string;
   pdfSubHeadingField?: string;
   pdfHeadingLevels?: { fields: string[]; label?: string }[];
@@ -136,6 +138,7 @@ export const defaultBranding: BrandingConfig = {
   pdfPageSize: "A4",
   pdfOrientation: "portrait",
   pdfPatientFields: ["date","mrNo","name","gender","age","address","diagnosis","procedure"],
+  patientFormFieldOrder: ["mrNo","name","gender","age","address"],
   pdfMainHeadingField: "name",
   pdfSubHeadingField: "procedure",
   pdfHeadingLevels: [
