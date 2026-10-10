@@ -17,7 +17,7 @@ type BackupData = {
   patients:any[]; procedures:any[]; inventoryCategories:any[]; inventory:any[]; patientImplants:any[]; patientCustomFields:any[]; implantRecords:any[]; expenses:any[]; users:any[];
   patientHistory:any[]; inventoryMovements:any[]; inventoryPurchaseReceipts:any[]; stockReceipts:any[];
   branding?: BrandingConfig | null;
-  appSettings?: { googleOAuthClientId?: string; googleCloudProjectId?: string };
+  appSettings?: { googleOAuthClientId?: string; googleCloudProjectId?: string; googleAccountEmail?: string };
   filter?: BackupFilter;
   incremental?: boolean;
   changedTables?: string[];
@@ -172,6 +172,8 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
  const appSettings = include("appSettings") ? {
    googleOAuthClientId: (await SecureStore.getItemAsync("ortho_google_drive_client_id").catch(() => null)) || undefined,
    googleCloudProjectId: (await SecureStore.getItemAsync("ortho_google_drive_cloud_project_id").catch(() => null)) || undefined,
+   // Recovery metadata only; Google credentials must be re-authorized after reinstall.
+   googleAccountEmail: (await SecureStore.getItemAsync("ortho_drive_account_email").catch(() => null)) || undefined,
  } : undefined;
  const pf=whereForFilter(filter, "date");
  const patients=include("patients") ? db.getAllSync<any>(`SELECT * FROM patients${pf.sql} ORDER BY date DESC, created_at DESC`, pf.args) : [];
@@ -680,6 +682,9 @@ export async function restoreBackup(backup:BackupData){
    if (typeof settings.googleCloudProjectId === "string" && settings.googleCloudProjectId) {
      await SecureStore.setItemAsync("ortho_google_drive_cloud_project_id", settings.googleCloudProjectId).catch(() => undefined);
    }
+   if (typeof settings.googleAccountEmail === "string" && settings.googleAccountEmail) {
+     await SecureStore.setItemAsync("ortho_drive_account_email", settings.googleAccountEmail).catch(() => undefined);
+   }
  }
  markInventoryResetDone();
  return {patients:patients.length,procedures:procedures.length,inventory:inventory.length,inventoryCategories:inventoryCategories.length,patientImplants:patientImplants.length,expenses:expenses.length,users:users.length,patientHistory:patientHistory.length,inventoryMovements:inventoryMovements.length};
@@ -814,6 +819,9 @@ export async function mergeBackup(backup: BackupData) {
    }
    if (typeof settings.googleCloudProjectId === "string" && settings.googleCloudProjectId) {
      await SecureStore.setItemAsync("ortho_google_drive_cloud_project_id", settings.googleCloudProjectId).catch(() => undefined);
+   }
+   if (typeof settings.googleAccountEmail === "string" && settings.googleAccountEmail) {
+     await SecureStore.setItemAsync("ortho_drive_account_email", settings.googleAccountEmail).catch(() => undefined);
    }
  }
  markInventoryResetDone();
