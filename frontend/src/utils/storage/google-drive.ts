@@ -164,19 +164,61 @@ async function findLatestBackupCandidates() {
   );
 }
 
+function driveBackupName(filter: BackupFilter): string {
+  if (filter.type === "month") {
+    const month = String(filter.value || "").trim();
+    if (!/^\\d{4}-\\d{2}$/.test(month)) throw new Error("Enter the month as YYYY-MM before backing up.");
+    return `Ortho Logbook Backup - Month ${month}.orbackup`;
+  }
+  if (filter.type === "year") {
+    const year = String(filter.value || "").trim();
+    if (!/^\\d{4}$/.test(year)) throw new Error("Enter the year as YYYY before backing up.");
+    return `Ortho Logbook Backup - Year ${year}.orbackup`;
+  }
+  if (filter.type === "date") {
+    const date = String(filter.value || "").trim();
+    if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(date)) throw new Error("Enter the date as YYYY-MM-DD before backing up.");
+    return `Ortho Logbook Backup - Date ${date}.orbackup`;
+  }
+  return "Ortho Logbook Backup - All Time.orbackup";
+}
+
+async function findBackupByName(name: string) {
+  const q = encodeURIComponent("name = '" + name.replace(/'/g, "\\\\'") + "' and trashed = false");
+  const response = await driveRequest(`${DRIVE_API}?q=${q}&spaces=drive&pageSize=10&orderBy=modifiedTime%20desc&fields=files(id,name,modifiedTime,size,mimeType)`);
+  const data = await response.json();
+  return Array.isArray(data.files) ? data.files.find((item: any) => item?.id && item.mimeType !== "application/vnd.google-apps.folder") || null : null;
+}
+
+export async function listGoogleDriveBackups(): Promise<Array<{id:string;name:string;modifiedTime:string;size?:string}>> {
+  const files = await findLatestBackupCandidates();
+  return files
+    .filter((file:any) => /ortho logbook backup/i.test(String(file.name || "")) && file.id)
+    .map((file:any) => ({id:String(file.id),name:String(file.name || "Ortho Logbook Backup"),modifiedTime:String(file.modifiedTime || ""),size:file.size == null ? undefined : String(file.size)}))
+    .sort((a,b) => Date.parse(b.modifiedTime || "") - Date.parse(a.modifiedTime || ""));
+}
+
+export async function restoreGoogleDriveBackupById(fileId: string) {
+  if (!fileId) throw new Error("Select a Google Drive backup first.");
+  const metadataResponse = await driveRequest(`${DRIVE_API}/${encodeURIComponent(fileId)}?fields=id,name,modifiedTime,size,mimeType,trashed`);
+  const metadata = await metadataResponse.json();
+  if (!metadata?.id || metadata.trashed || metadata.mimeType === "application/vnd.google-apps.folder") {
+    throw new Error("The selected Google Drive item is not a backup file.");
+  }
+  const parsed = await downloadDriveJsonValidated(fileId);
+  if (!parsed || parsed.app !== "Ortho Logbook" || !Array.isArray(parsed.patients) || !Array.isArray(parsed.inventory)) {
+    throw new Error("The selected file is not a complete Ortho Logbook backup.");
+  }
+  return {name:String(metadata.name || "Ortho Logbook Backup"),modifiedTime:String(metadata.modifiedTime || ""),backupText:JSON.stringify(parsed)};
+}
+
 async function findLatestBackup() {
   // Auto-sync only needs the newest full baseline. Do not page through the entire
   // Drive history on every tiny edit; restore still uses the exhaustive search.
-  const q = encodeURIComponent("name contains 'Ortho Logbook Backup' and mimeType != 'application/vnd.google-apps.folder' and trashed = false");
-  const response = await driveRequest(
-    `${DRIVE_API}?q=${q}&spaces=drive&pageSize=1&orderBy=modifiedTime%20desc&includeItemsFromAllDrives=true&supportsAllDrives=true&fields=files(id,name,modifiedTime,size,mimeType)`,
-  );
-  const data = await response.json();
-  const file = Array.isArray(data.files) ? data.files.find((item: any) =>
-    item?.id && item.mimeType !== "application/vnd.google-apps.folder" &&
-    String(item.name || "").toLowerCase().includes("ortho logbook backup")
-  ) : null;
-  return file || null;
+  const current = await findBackupByName("Ortho Logbook Backup - All Time.orbackup");
+  if (current) return current;
+  // Compatibility with the original filename used by earlier releases.
+  return await findBackupByName(BACKUP_NAME);
 }
 
 // Use 512 KiB chunks (a multiple of Drive's 256 KiB requirement). Smaller
@@ -529,27 +571,26 @@ export async function backupToGoogleDrive(
   const backupText = await exportUnencryptedBackup(filter, options.onProgress);
   options.onProgress?.("Checking whether backup changed…");
   const contentHash = await backupContentHash(backupText, options.onProgress);
-  // Always verify that a backup file actually exists in Drive before skipping.
-  // A hash may remain on this phone after a file was deleted in Drive, or may
-  // have been saved by an older build before its first upload completed.
-  // In that situation the first automatic backup must CREATE a new Drive file.
-  options.onProgress?.("Finding previous Drive backup…");
-  const existing = await findLatestBackup();
-  const previousHash = await storage.secureGet(LAST_DRIVE_CONTENT_HASH_KEY, "");
+  const fileName = driveBackupName(filter);
+  // Find only this exact scope so a month/year backup can never overwrite the
+  // all-time backup or another month.
+  options.onProgress?.("Finding this range's Drive backup…");
+  let existing = await findBackupByName(fileName);
+  // Upgrade path: reuse the legacy full backup only for an all-time request.
+  if (!existing && filter.type === "all") existing = await findBackupByName(BACKUP_NAME);
+  const previousHash = await storage.secureGet(LAST_DRIVE_CONTENT_HASH_KEY + ":" + fileName, "");
   const previousSuccess = await getLastDriveBackupStatus();
   if (existing?.id && previousSuccess && options.skipIfUnchanged && previousHash === contentHash) {
-    return { skipped: true, completedAt: previousSuccess, accountEmail: getConnectedGoogleAccount(), name: BACKUP_NAME };
+    return { skipped: true, completedAt: previousSuccess, accountEmail: getConnectedGoogleAccount(), name: fileName };
   }
 
-  // No matching file means first-time upload: uploadContent uses POST to create
-  // a new Drive file; PATCH is only used when an existing Drive file was found.
   options.onProgress?.("Uploading backup to Google Drive…");
-  const result = await uploadContent(backupText, existing?.id, options.onProgress);
+  const result = await uploadContent(backupText, existing?.id, options.onProgress, fileName);
   await markBackupTaken();
   const completedAt = new Date().toISOString();
   await storage.secureSet(LAST_DRIVE_BACKUP_KEY, completedAt);
-  await storage.secureSet(LAST_DRIVE_CONTENT_HASH_KEY, contentHash);
-  return { ...result, skipped: false, completedAt, accountEmail: getConnectedGoogleAccount() };
+  await storage.secureSet(LAST_DRIVE_CONTENT_HASH_KEY + ":" + fileName, contentHash);
+  return { ...result, skipped: false, completedAt, name: fileName, accountEmail: getConnectedGoogleAccount() };
 }
 
 async function listIncrementalFiles() {
