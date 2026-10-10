@@ -13,7 +13,7 @@ import { buildPatientDetailHtml, generateAndSharePdf } from "@/src/utils/pdf";
 
 type Patient = {
   id:string; mrNo:string; name:string; gender:string; age:string; diagnosis:string;
-  procedure:string; implant:string; implantII:string; date:string; address:string;
+  procedure:string; procedureII?:string; implant:string; implantII:string; date:string; address:string;
   fileName:string; photos:string[]; operationCount?:number; totalOperations?:number;
   customData?:Record<string,string>; implants?:any[];
 };
@@ -29,7 +29,7 @@ function occurrenceLabel(n:number) {
 const baseFields:Field[] = [
   {key:"date",label:"Date"}, {key:"mrNo",label:"MR No"}, {key:"name",label:"Patient Name"},
   {key:"gender",label:"Gender"}, {key:"age",label:"Age"}, {key:"address",label:"Address"},
-  {key:"diagnosis",label:"Diagnosis"}, {key:"procedure",label:"Procedure"},
+  {key:"diagnosis",label:"Diagnosis"}, {key:"procedure",label:"Procedure"}, {key:"procedureII",label:"Procedure 2"},
   {key:"implants",label:"Implants"}, {key:"fileName",label:"File Name"},
   {key:"hcvPlus",label:"HCV+"}, {key:"hbaSg",label:"HbAsg"}, {key:"hiv",label:"HIV"},
 ];
