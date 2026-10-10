@@ -4,7 +4,7 @@ import {
   getConnectedGoogleAccount,
   restoreGoogleAccountSilently,
 } from "@/src/utils/storage/google-drive";
-import { setDriveSyncState } from "@/src/utils/storage/drive-sync-status";
+import { setDriveSyncState, setDriveSyncRefreshHandler } from "@/src/utils/storage/drive-sync-status";
 import { storage } from "@/src/utils/storage";
 
 // Batch rapid edits into one sync; this avoids repeated uploads while typing/saving related fields.
@@ -20,6 +20,7 @@ const ALL_SYNC_TABLES = [
 const DIRTY_TABLES_KEY = "ortho_drive_pending_tables_v1";
 let timer: ReturnType<typeof setTimeout> | null = null;
 let uploading = false;
+let refreshRequested = false;
 let disposed = false;
 let initialized = false;
 const pendingTables = new Set<string>();
@@ -145,10 +146,12 @@ async function runBackup() {
     uploading = false;
     if (pendingTables.size && !disposed) {
       if (timer) clearTimeout(timer);
+      const delay = refreshRequested ? 0 : DEBOUNCE_MS;
+      refreshRequested = false;
       timer = setTimeout(() => {
         timer = null;
         void runBackup();
-      }, DEBOUNCE_MS);
+      }, delay);
     }
   }
 }
@@ -158,8 +161,37 @@ export function triggerAutomaticDriveBackup(tableName: "branding" | "appSettings
   scheduleBackup(tableName);
 }
 
+// Called when the user taps the floating sync indicator. It re-checks every
+// syncable table, but the exporter uploads only real differences from the last
+// confirmed snapshot. If an upload is stalled, queue an immediate retry as soon
+// as the current request's timeout/recovery path releases the upload lock.
+export function refreshAutomaticDriveBackup() {
+  void loadPendingTables().then(async () => {
+    ALL_SYNC_TABLES.forEach((name) => pendingTables.add(name));
+    await persistPendingTables();
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    if (uploading) {
+      refreshRequested = true;
+      setDriveSyncState({
+        phase: "waiting",
+        updates: pendingTables.size,
+        message: "Refresh requested · retry will start after the current upload releases",
+      });
+      return;
+    }
+    timer = setTimeout(() => {
+      timer = null;
+      void runBackup();
+    }, 0);
+  });
+}
+
 export function startAutomaticDriveBackup() {
   disposed = false;
+  const unregisterRefresh = setDriveSyncRefreshHandler(refreshAutomaticDriveBackup);
   void loadPendingTables().then(() => {
     // A startup integrity pass compares local records with the last confirmed
     // cache. It may inspect every table, but Drive is updated only if the row
@@ -186,6 +218,7 @@ export function startAutomaticDriveBackup() {
 
   return () => {
     appStateSubscription?.remove();
+    unregisterRefresh();
     disposed = true;
     subscription.remove();
     if (timer) {
