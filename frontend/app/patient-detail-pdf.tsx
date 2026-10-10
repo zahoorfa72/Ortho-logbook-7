@@ -53,7 +53,7 @@ export default function PatientDetailPdfScreen() {
     ...baseFields.map(f=>f.key==="procedureII"?{...f,label:branding.procedureSecondLabel?.trim() || "Procedure 2"}:f),
     ...customFields.filter((f:any)=>f?.key && f?.label && !baseFields.some(x=>x.key===String(f.key)))
       .map((f:any)=>({key:String(f.key),label:String(f.label)}))
-  ],[customFields]);
+  ],[customFields,branding.procedureSecondLabel]);
 
   const toggleField=(key:string)=>{
     setFields(prev=>prev.some(x=>x.key===key) ? prev.filter(x=>x.key!==key) : [...prev,{key,label:allFields.find(x=>x.key===key)?.label||key}]);
