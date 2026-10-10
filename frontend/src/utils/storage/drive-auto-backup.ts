@@ -8,6 +8,14 @@ import { setDriveSyncState } from "@/src/utils/storage/drive-sync-status";
 import { storage } from "@/src/utils/storage";
 
 const DEBOUNCE_MS = 1000;
+// Re-scan every syncable table on app launch/foreground. SQLite change events can be
+// missed while Android suspends/recreates the app; the incremental exporter compares
+// local rows with its last confirmed snapshot, so unchanged data is not re-uploaded.
+const ALL_SYNC_TABLES = [
+  "patients", "procedures", "inventoryCategories", "inventory", "patientImplants",
+  "patientCustomFields", "implantRecords", "expenses", "users", "patientHistory",
+  "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts", "branding", "appSettings",
+] as const;
 const DIRTY_TABLES_KEY = "ortho_drive_pending_tables_v1";
 let timer: ReturnType<typeof setTimeout> | null = null;
 let uploading = false;
@@ -102,8 +110,10 @@ async function runBackup() {
       ? new Date(result.completedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
       : "";
     const successMessage = result.baselineCreated
-      ? "Full backup baseline created" + (completedAt ? " · " + completedAt : "")
-      : "Changed data synced to Google Drive" + (completedAt ? " · " + completedAt : "");
+      ? "Full backup baseline uploaded and confirmed" + (completedAt ? " · " + completedAt : "")
+      : result.skipped
+        ? "Drive checked · no new changes to upload" + (completedAt ? " · " + completedAt : "")
+        : "Changed data uploaded to Google Drive" + (completedAt ? " · " + completedAt : "");
     if (pendingTables.size) {
       setDriveSyncState({ phase: "waiting", updates: pendingTables.size, message: "New changes detected · syncing again…" });
     } else {
@@ -141,7 +151,10 @@ export function triggerAutomaticDriveBackup(tableName: "branding" | "appSettings
 export function startAutomaticDriveBackup() {
   disposed = false;
   void loadPendingTables().then(() => {
-    if (pendingTables.size) scheduleBackup();
+    // Full integrity pass catches records/photos changed while the app was paused,
+    // and also repairs a stale/missing pending-table queue after an app update.
+    ALL_SYNC_TABLES.forEach((name) => pendingTables.add(name));
+    scheduleBackup();
   });
   const subscription = SQLite.addDatabaseChangeListener((event: any) => {
     const changedTable = tableMap[String(event?.tableName || "")];
@@ -149,13 +162,16 @@ export function startAutomaticDriveBackup() {
     if (changedTable) scheduleBackup(changedTable);
   });
 
-  // Returning to the foreground retries only already-queued edits. It does
-  // not manufacture a new backup request and never uploads on tab navigation.
+  // Returning to the foreground performs a lightweight row-diff integrity pass.
+  // It catches missed SQLite events without re-uploading unchanged records/photos.
   let appStateSubscription: { remove: () => void } | null = null;
   try {
     const { AppState } = require("react-native");
     appStateSubscription = AppState.addEventListener("change", (state: string) => {
-      if (state === "active" && pendingTables.size) scheduleBackup();
+      if (state === "active") {
+        ALL_SYNC_TABLES.forEach((name) => pendingTables.add(name));
+        scheduleBackup();
+      }
     });
   } catch {}
 
