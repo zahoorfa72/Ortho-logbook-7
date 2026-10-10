@@ -40,6 +40,7 @@ type InventoryItem = {
 type StatsData = {
   total_patients: number;
   procedures: { name: string; count: number }[];
+  proceduresII?: { name: string; count: number }[];
 };
 
 const escapeHtml = (v: any) =>
@@ -487,8 +488,11 @@ export function buildStatsHtml(
   branding: BrandingConfig,
   stats: StatsData,
   periodLabel: string,
+  reportKey = "statistics",
 ): string {
   const max = Math.max(1, ...stats.procedures.map((p) => p.count));
+  const secondProcedures = stats.proceduresII || [];
+  const maxSecond = Math.max(1, ...secondProcedures.map((p) => p.count));
   const rows = stats.procedures.length
     ? stats.procedures
         .map(
@@ -504,11 +508,20 @@ export function buildStatsHtml(
         )
         .join("")
     : `<tr><td colspan="3"><div class="empty">No procedure data.</div></td></tr>`;
+  const secondRows = secondProcedures.length
+    ? secondProcedures.map((p) => `
+        <tr>
+          <td>${escapeHtml(p.name)}</td>
+          <td style="width:80px;text-align:right"><strong>${p.count}</strong></td>
+          <td style="width:200px"><div class="bar"><div class="barFill" style="width:${(p.count / maxSecond) * 100}%"></div></div></td>
+        </tr>
+      `).join("")
+    : `<tr><td colspan="3"><div class="empty">No second-procedure data.</div></td></tr>`;
   return `
     <html>
       <head><meta charset="utf-8"/>${styles(branding)}</head>
       <body>
-        ${header(branding, `Statistics — ${periodLabel}`, "statistics")}
+        ${header(branding, `${reportKey === "procedureIIStatistics" ? "Second Procedure Statistics" : "Statistics"} — ${periodLabel}`, reportKey)}
         <div class="kpiRow">
           <div class="kpi">
             <div class="kpiLabel">Total Surgeries</div>
@@ -530,10 +543,21 @@ export function buildStatsHtml(
           </thead>
           <tbody>${rows}</tbody>
         </table>
+        ${reportKey === "procedureIIStatistics" ? "" : `
+          <div class="section">Second Procedure Breakdown</div>
+          <table>
+            <thead><tr><th>Second Procedure</th><th style="text-align:right">Count</th><th>Share</th></tr></thead>
+            <tbody>${secondRows}</tbody>
+          </table>
+        `}
         ${footer(branding)}
       </body>
     </html>
   `;
+}
+
+export function buildSecondProcedureStatsHtml(branding: BrandingConfig, stats: StatsData, periodLabel: string): string {
+  return buildStatsHtml(branding, { total_patients: stats.total_patients, procedures: stats.proceduresII || [] }, periodLabel, "procedureIIStatistics");
 }
 
 export function buildInventoryHtml(
