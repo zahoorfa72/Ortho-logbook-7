@@ -352,6 +352,36 @@ async function uploadNativeBackground(
   }
 }
 
+async function verifyUploadedFile(
+  result: any,
+  expectedName: string,
+  expectedBytes: number,
+  existingId?: string,
+): Promise<any> {
+  // Never report success or advance the incremental snapshot cache just because
+  // the transfer loop ended. Confirm Drive has a real file with the full byte size.
+  let fileId = String(existingId || result?.id || "");
+  if (!fileId) {
+    const q = encodeURIComponent("name = '" + expectedName.replace(/'/g, "\\'") + "' and trashed = false");
+    const response = await driveRequest(
+      `${DRIVE_API}?q=${q}&spaces=drive&pageSize=10&orderBy=modifiedTime%20desc&fields=files(id,name,size,modifiedTime,mimeType,trashed)`,
+    );
+    const data = await response.json();
+    const match = Array.isArray(data.files)
+      ? data.files.find((item: any) => item?.name === expectedName && item?.id && item?.mimeType !== "application/vnd.google-apps.folder" && !item?.trashed && Number(item?.size) === expectedBytes)
+      : null;
+    if (!match) throw new Error("Google Drive did not confirm the complete backup file. The upload is not marked successful; local data is safe. Retry when connected.");
+    return match;
+  }
+
+  const response = await driveRequest(`${DRIVE_API}/${encodeURIComponent(fileId)}?fields=id,name,size,modifiedTime,mimeType,trashed`);
+  const file = await response.json();
+  if (!file?.id || file.trashed === true || Number(file.size) !== expectedBytes || file.name !== expectedName) {
+    throw new Error("Google Drive received an incomplete or mismatched backup file. The upload is not marked successful; local data is safe. Retry when connected.");
+  }
+  return file;
+}
+
 async function uploadContent(backupText: string, existingId?: string, onProgress?: (stage: string) => void, fileName: string = BACKUP_NAME) {
   const token = await accessToken();
   const useNativeBackground = Platform.OS === "android" && !!NativeModules.DriveBackgroundUpload?.startUpload;
@@ -409,7 +439,7 @@ async function uploadContent(backupText: string, existingId?: string, onProgress
       // The Android foreground service owns the file transfer. It continues
       // sending 512 KiB Drive chunks while the app is backgrounded or the
       // screen is locked, and reconciles progress with Drive after interruptions.
-      return await uploadNativeBackground(sessionUrl, token, stagedFileUri, totalBytes, onProgress);
+      const nativeResult = await uploadNativeBackground(sessionUrl, token, stagedFileUri, totalBytes, onProgress);\n      return await verifyUploadedFile(nativeResult, fileName, totalBytes, existingId);
     }
 
     try {
@@ -441,7 +471,7 @@ async function uploadContent(backupText: string, existingId?: string, onProgress
           headers: { Authorization: "Bearer " + token, "Content-Type": "multipart/related; boundary=" + boundary },
           body,
         }, 45000);
-        if (retry.ok) return await retry.json();
+        if (retry.ok) return await verifyUploadedFile(await retry.json(), fileName, totalBytes, existingId);
         let message = "Google Drive multipart fallback failed (HTTP " + retry.status + ").";
         try { const data = await retry.json(); message = data?.error?.message || message; } catch {}
         throw new Error(message);
