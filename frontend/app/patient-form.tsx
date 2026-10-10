@@ -24,7 +24,7 @@ import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/s
 
 type Patient = {
   id: string; mrNo: string; name: string; gender: string; age: string;
-  diagnosis: string; procedure: string; implant: string; implantII: string; implants?: SelectedImplant[];
+  diagnosis: string; procedure: string; procedureII?: string; implant: string; implantII: string; implants?: SelectedImplant[];
   address: string; fileName: string; photoUri: string; photos: string[]; date: string;
   operationCount?: number; totalOperations?: number; customData?: Record<string,string>;
   hcvPlus?: boolean; hbaSg?: boolean; hiv?: boolean;
@@ -36,7 +36,7 @@ type SelectedImplant = { id: string; inventoryId: string; name: string; category
 const today = () => new Date().toISOString().slice(0, 10);
 const empty = (): Patient => ({
   id: "", mrNo: "", name: "", gender: "", age: "", diagnosis: "",
-  procedure: "", implant: "", implantII: "", address: "", fileName: "",
+  procedure: "", procedureII: "", implant: "", implantII: "", address: "", fileName: "",
   photoUri: "", photos: [], date: today(), implants: [], customData: {},
   hcvPlus: false, hbaSg: false, hiv: false,
 });
@@ -82,6 +82,8 @@ export default function PatientForm() {
     for (const pt of patients ?? []) {
       const n = pt.procedure?.trim();
       if (n && !byLower.has(n.toLowerCase())) byLower.set(n.toLowerCase(), n);
+      const n2 = (pt as any).procedureII?.trim();
+      if (n2 && !byLower.has(n2.toLowerCase())) byLower.set(n2.toLowerCase(), n2);
     }
     return [...byLower.values()]
       .sort((a, b) => a.localeCompare(b))
@@ -671,7 +673,7 @@ export default function PatientForm() {
         </Modal>
         <Text style={styles.section}>Patient Details</Text>
         {(() => {
-          const builtIn = ["mrNo","name","gender","age","address","diagnosis","procedure","fileName","date"];
+          const builtIn = ["mrNo","name","gender","age","address","diagnosis","procedure","procedureII","fileName","date"];
           const customKeys = customFields.filter((f:any)=>f?.key && f?.label).map((f:any)=>String(f.key));
           const allowed = [...builtIn,...customKeys.filter((k:string)=>!builtIn.includes(k))];
           const saved = Array.isArray(branding.patientFormFieldOrder) ? branding.patientFormFieldOrder : [];
@@ -687,6 +689,7 @@ export default function PatientForm() {
               case "address": return <Field key={key} label="Address" testID="patient-address-input" value={p.address} onChangeText={set("address")} placeholder="Patient address" />;
               case "diagnosis": return <Field key={key} label="Diagnosis" testID="patient-diagnosis-input" value={p.diagnosis} onChangeText={set("diagnosis")} placeholder="Diagnosis" />;
               case "procedure": return <View key={key}><AutocompleteField label="Procedure" testID="patient-procedure-input" value={p.procedure} onChangeText={set("procedure")} placeholder="Type to search procedures" suggestions={procedureSuggestions} />{!!procedures?.length && <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.quickScroller} contentContainerStyle={styles.quickRow}>{procedures.map((x) => <Pressable key={x.id} style={styles.quickChip} onPress={() => set("procedure")(x.name)}><Text style={styles.quickChipText}>{x.name}</Text></Pressable>)}</ScrollView>}</View>;
+              case "procedureII": return <View key={key}><AutocompleteField label={branding.procedureSecondLabel?.trim() || "Procedure 2"} testID="patient-procedure2-input" value={p.procedureII || ""} onChangeText={set("procedureII")} placeholder="Type to search second procedure" suggestions={procedureSuggestions} />{!!procedures?.length && <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.quickScroller} contentContainerStyle={styles.quickRow}>{procedures.map((x) => <Pressable key={x.id} style={styles.quickChip} onPress={() => set("procedureII")(x.name)}><Text style={styles.quickChipText}>{x.name}</Text></Pressable>)}</ScrollView>}</View>;
               case "fileName": return <Field key={key} label="File / Reference" testID="patient-file-input" value={p.fileName} onChangeText={set("fileName")} placeholder="File reference" />;
               case "date": return <Field key={key} label="Date" testID="patient-date-input" value={p.date} onChangeText={set("date")} placeholder="YYYY-MM-DD" />;
               default: {
