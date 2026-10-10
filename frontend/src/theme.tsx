@@ -138,7 +138,7 @@ export const defaultBranding: BrandingConfig = {
   pdfPageSize: "A4",
   pdfOrientation: "portrait",
   pdfPatientFields: ["date","mrNo","name","gender","age","address","diagnosis","procedure"],
-  patientFormFieldOrder: ["mrNo","name","gender","age","address"],
+  patientFormFieldOrder: ["mrNo","name","gender","age","address","diagnosis","procedure","fileName","date"],
   pdfMainHeadingField: "name",
   pdfSubHeadingField: "procedure",
   pdfHeadingLevels: [
