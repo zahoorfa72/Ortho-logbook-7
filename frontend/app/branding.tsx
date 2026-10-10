@@ -336,19 +336,54 @@ export default function BrandingScreen() {
             <View style={styles.sizeRow}><Text style={styles.colorLabel}>Line size</Text><View style={styles.sizeControls}><Pressable style={styles.sizeButton} onPress={()=>updateLine({size:Math.max(8,Number(line.size||12)-1)})}><Ionicons name="remove" size={18} color={colors.onSurface}/></Pressable><TextInput keyboardType="number-pad" value={String(line.size||12)} onChangeText={v=>updateLine({size:Math.max(8,Math.min(48,Number(v.replace(/[^0-9]/g,""))||12))})} style={styles.smallSizeInput}/><Pressable style={styles.sizeButton} onPress={()=>updateLine({size:Math.min(48,Number(line.size||12)+1)})}><Ionicons name="add" size={18} color={colors.onSurface}/></Pressable></View></View>
           </View>;
         })}
+        <Text style={[styles.label, { marginTop: spacing.md }]}>Patient Add/Edit Form — field order</Text>
+        <Text style={styles.hint}>Use the arrows to arrange MR No, Patient Name, Gender, Age and Address in the order you prefer. This changes the entry form layout only, not saved patient data.</Text>
+        {(() => {
+          const defaults = ["mrNo","name","gender","age","address"];
+          const labels:Record<string,string> = {mrNo:"MR No",name:"Patient Name",gender:"Gender",age:"Age",address:"Address"};
+          const order = [...(Array.isArray(draft.patientFormFieldOrder)?draft.patientFormFieldOrder.filter((k:string)=>defaults.includes(k)):defaults)];
+          defaults.forEach(k=>{if(!order.includes(k))order.push(k)});
+          const move=(key:string,delta:number)=>setDraft(d=>{
+            const current=[...(Array.isArray(d.patientFormFieldOrder)?d.patientFormFieldOrder.filter((k:string)=>defaults.includes(k)):defaults)];
+            defaults.forEach(k=>{if(!current.includes(k))current.push(k)});
+            const i=current.indexOf(key), j=i+delta;
+            if(j<0||j>=current.length)return d;
+            [current[i],current[j]]=[current[j],current[i]];
+            return {...d,patientFormFieldOrder:current};
+          });
+          return order.map((key,i)=><View key={"form-order-"+key} style={{flexDirection:"row",alignItems:"center",gap:spacing.sm,marginBottom:spacing.xs}}>
+            <View style={{flex:1,padding:spacing.sm,borderWidth:1,borderColor:colors.border,borderRadius:radius.sm,backgroundColor:colors.surfaceSecondary}}><Text style={styles.fieldToggleText}>{i+1}. {labels[key]}</Text></View>
+            <Pressable accessibilityLabel={"Move "+labels[key]+" up"} disabled={i===0} style={[styles.sizeButton,{opacity:i===0?0.35:1}]} onPress={()=>move(key,-1)}><Ionicons name="chevron-up" size={18} color={colors.onSurface}/></Pressable>
+            <Pressable accessibilityLabel={"Move "+labels[key]+" down"} disabled={i===order.length-1} style={[styles.sizeButton,{opacity:i===order.length-1?0.35:1}]} onPress={()=>move(key,1)}><Ionicons name="chevron-down" size={18} color={colors.onSurface}/></Pressable>
+          </View>);
+        })()}
         <Text style={[styles.label, { marginTop: spacing.md }]}>Patient fields in PDF</Text>
         <Text style={styles.hint}>Every available patient section is listed here. Check marks decide exactly which sections the admin wants in the Patient PDF. Custom fields created in Patient Fields also appear here.</Text>
         {patientPdfOptions.map(([key,label]) => {
-          const active=(draft.pdfPatientFields||defaultBranding.pdfPatientFields||[]).includes(key);
-          return <Pressable key={key} onPress={()=>setDraft(d=>{
-  const current=d.pdfPatientFields||defaultBranding.pdfPatientFields||[];
-  const next=active?current.filter(x=>x!==key):[...current,key];
-  const levels=(d.pdfHeadingLevels||defaultBranding.pdfHeadingLevels||[]).map((g:any)=>({...g,fields:(g.fields||[]).filter((x:string)=>next.includes(x))}));
-  return {...d,pdfPatientFields:next,pdfHeadingLevels:levels};
-})} style={styles.fieldToggle}>
-            <Ionicons name={active?"checkbox":"square-outline"} size={21} color={active?colors.brandPrimary:colors.muted}/>
-            <Text style={styles.fieldToggleText}>{label}</Text>
-          </Pressable>;
+          const current = [...(draft.pdfPatientFields||defaultBranding.pdfPatientFields||[])];
+          const active=current.includes(key);
+          const move=(delta:number)=>setDraft(d=>{
+            const order=[...(d.pdfPatientFields||defaultBranding.pdfPatientFields||[])];
+            const i=order.indexOf(String(key)), j=i+delta;
+            if(i<0||j<0||j>=order.length)return d;
+            [order[i],order[j]]=[order[j],order[i]];
+            return {...d,pdfPatientFields:order};
+          });
+          return <View key={key} style={{flexDirection:"row",alignItems:"center",gap:spacing.xs}}>
+            <Pressable onPress={()=>setDraft(d=>{
+              const fields=d.pdfPatientFields||defaultBranding.pdfPatientFields||[];
+              const next=active?fields.filter(x=>x!==key):[...fields,key];
+              const levels=(d.pdfHeadingLevels||defaultBranding.pdfHeadingLevels||[]).map((g:any)=>({...g,fields:(g.fields||[]).filter((x:string)=>next.includes(x))}));
+              return {...d,pdfPatientFields:next,pdfHeadingLevels:levels};
+            })} style={[styles.fieldToggle,{flex:1}]}>
+              <Ionicons name={active?"checkbox":"square-outline"} size={21} color={active?colors.brandPrimary:colors.muted}/>
+              <Text style={styles.fieldToggleText}>{active?(current.indexOf(key)+1)+". ":""}{label}</Text>
+            </Pressable>
+            {active?<>
+              <Pressable accessibilityLabel={"Move "+label+" up in PDF"} disabled={current.indexOf(key)===0} style={[styles.sizeButton,{opacity:current.indexOf(key)===0?0.35:1}]} onPress={()=>move(-1)}><Ionicons name="chevron-up" size={18} color={colors.onSurface}/></Pressable>
+              <Pressable accessibilityLabel={"Move "+label+" down in PDF"} disabled={current.indexOf(key)===current.length-1} style={[styles.sizeButton,{opacity:current.indexOf(key)===current.length-1?0.35:1}]} onPress={()=>move(1)}><Ionicons name="chevron-down" size={18} color={colors.onSurface}/></Pressable>
+            </>:<View style={{width:76}}/>}
+          </View>;
         })}
         {(() => {
           type HeadingMap = { heading:string[]; subHeading:string[] };
