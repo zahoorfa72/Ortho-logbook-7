@@ -191,7 +191,8 @@ export function refreshAutomaticDriveBackup() {
 
 export function startAutomaticDriveBackup() {
   disposed = false;
-  const unregisterRefresh = setDriveSyncRefreshHandler(refreshAutomaticDriveBackup);
+  setDriveSyncRefreshHandler(refreshAutomaticDriveBackup);
+  const unregisterRefresh = () => setDriveSyncRefreshHandler(null);
   void loadPendingTables().then(() => {
     // A startup integrity pass compares local records with the last confirmed
     // cache. It may inspect every table, but Drive is updated only if the row
