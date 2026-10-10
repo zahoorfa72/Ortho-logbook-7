@@ -66,6 +66,8 @@ export type BrandingConfig = {
   pdfPatientFields?: string[];
   /** Admin-defined order for core fields on the patient add/edit form. */
   patientFormFieldOrder?: string[];
+  /** Admin-editable label for the second procedure input. */
+  procedureSecondLabel?: string;
   pdfMainHeadingField?: string;
   pdfSubHeadingField?: string;
   pdfHeadingLevels?: { fields: string[]; label?: string }[];
@@ -138,7 +140,8 @@ export const defaultBranding: BrandingConfig = {
   pdfPageSize: "A4",
   pdfOrientation: "portrait",
   pdfPatientFields: ["date","mrNo","name","gender","age","address","diagnosis","procedure"],
-  patientFormFieldOrder: ["mrNo","name","gender","age","address","diagnosis","procedure","fileName","date"],
+  patientFormFieldOrder: ["mrNo","name","gender","age","address","diagnosis","procedure","procedureII","fileName","date"],
+  procedureSecondLabel: "Procedure 2",
   pdfMainHeadingField: "name",
   pdfSubHeadingField: "procedure",
   pdfHeadingLevels: [
