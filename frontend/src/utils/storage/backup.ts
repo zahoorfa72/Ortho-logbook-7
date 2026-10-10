@@ -64,38 +64,40 @@ function photoMime(uri:string){
 // This is the important difference from the old backup: file:// or content://
 // paths are not portable between phones, so the actual photo bytes are stored
 // inside the encrypted backup.
-async function embedPhoto(uri:string, cache?: Map<string,string>):Promise<string>{
+async function embedPhoto(uri:string, cache?: Map<string,string>, profile: "patient" | "document" = "patient"):Promise<string>{
   if(!uri)return "";
-  const cached = cache?.get(uri);
+  const cacheKey = profile + ":" + uri;
+  const cached = cache?.get(cacheKey);
   if (cached) return cached;
   try{
-    // Recompress existing data URIs too: older backups stored original-size
-    // base64 images and could push a manual backup beyond Android's heap limit.
-    // This changes only the backup copy, never the original patient photo.
+    // Recompress existing data URIs too. This affects only the backup copy,
+    // never the original local photo. Patient images prioritize small storage;
+    // bills use a larger dimension/quality so printed text remains readable.
+    const maxDimension = profile === "document" ? 1280 : 720;
+    const fallbackWidth = profile === "document" ? 960 : 480;
+    const quality = profile === "document" ? 0.42 : 0.2;
     let resizeActions: any[] = [];
     try {
       const dimensions = await new Promise<{width:number;height:number}>((resolve,reject) => {
         Image.getSize(uri, (width,height) => resolve({width,height}), reject);
       });
       const longest = Math.max(dimensions.width, dimensions.height);
-      if (longest > 720) {
+      if (longest > maxDimension) {
         resizeActions = [dimensions.width >= dimensions.height
-          ? {resize:{width:720}}
-          : {resize:{height:720}}];
+          ? {resize:{width:maxDimension}}
+          : {resize:{height:maxDimension}}];
       }
     } catch {
-      // Some Android providers do not report dimensions for data: URIs.
-      // A conservative width cap still bounds the usual portrait photo to ~720px.
-      resizeActions = [{resize:{width:480}}];
+      resizeActions = [{resize:{width:fallbackWidth}}];
     }
     const result=await ImageManipulator.manipulateAsync(
       uri,
       resizeActions,
-      {compress:0.2,format:ImageManipulator.SaveFormat.JPEG,base64:true}
+      {compress:quality,format:ImageManipulator.SaveFormat.JPEG,base64:true}
     );
     if(!result.base64)throw new Error("Empty compressed photo.");
-    const portable = `data:image/jpeg;base64,${result.base64}`;
-    cache?.set(uri, portable);
+    const portable = \`data:image/jpeg;base64,\${result.base64}\`;
+    cache?.set(cacheKey, portable);
     return portable;
   }catch{
     throw new Error("Could not compress a patient photo for backup. Please make sure the photo is still available on this device and try again.");
@@ -104,7 +106,7 @@ async function embedPhoto(uri:string, cache?: Map<string,string>):Promise<string
 
 async function embedOptionalPhoto(uri: string, cache?: Map<string,string>): Promise<string> {
   if (!uri) return uri;
-  try { return await embedPhoto(uri, cache); }
+  try { return await embedPhoto(uri, cache, "document"); }
   catch (error) {
     // A bill attachment must not prevent the entire backup from succeeding.
     // Valid local/data URIs are compressed and embedded; legacy unsupported
@@ -248,7 +250,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
         const compressed = [];
         for (const file of parsed) {
           if (typeof file === "string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(file)) {
-            try { compressed.push(await embedPhoto(file, compressedPhotoCache)); } catch { compressed.push(file); }
+            try { compressed.push(await embedPhoto(file, compressedPhotoCache, "document")); } catch { compressed.push(file); }
           } else compressed.push(file);
         }
         billFiles = JSON.stringify(compressed);
