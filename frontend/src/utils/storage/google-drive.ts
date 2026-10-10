@@ -816,6 +816,33 @@ async function downloadIncrementalWithRecovery(fileId: string, fileName: string)
   }
 }
 
+async function ensureAutomaticRangeSnapshots(onProgress?: (stage: string) => void) {
+  const now = new Date();
+  const dayKey = now.toISOString().slice(0, 10);
+  const month = dayKey.slice(0, 7);
+  const year = dayKey.slice(0, 4);
+  const failures: string[] = [];
+
+  // Keep one rolling monthly file and one rolling yearly file. They are
+  // refreshed at most once per calendar day so ordinary edits stay fast;
+  // the all-time baseline + incremental log still captures every edit.
+  for (const scope of [
+    { type: "month" as const, value: month, key: "ortho_drive_auto_month_snapshot_day_" + month, label: "monthly" },
+    { type: "year" as const, value: year, key: "ortho_drive_auto_year_snapshot_day_" + year, label: "yearly" },
+  ]) {
+    if (await storage.secureGet(scope.key, "") === dayKey) continue;
+    try {
+      onProgress?.("Refreshing automatic " + scope.label + " Drive snapshot…");
+      await backupToGoogleDrive(undefined, { type: scope.type, value: scope.value }, { skipIfUnchanged: true, onProgress });
+      await storage.secureSet(scope.key, dayKey);
+    } catch (error: any) {
+      failures.push(scope.label + " snapshot: " + String(error?.message || "upload failed"));
+      console.warn("[drive-auto-backup] " + scope.label + " snapshot failed", error);
+    }
+  }
+  return failures;
+}
+
 export async function backupIncrementalToGoogleDrive(changedTables: string[], onProgress?: (stage: string) => void) {
   onProgress?.("Checking the full backup baseline…");
   const base = await findLatestBackup();
@@ -823,7 +850,8 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
   // baseline once if this Drive account has never had a full backup.
   if (!base?.id) {
     const result = await backupToGoogleDrive(undefined, { type: "all" }, { onProgress });
-    return { ...result, baselineCreated: true };
+    const snapshotFailures = await ensureAutomaticRangeSnapshots(onProgress);
+    return { ...result, baselineCreated: true, snapshotFailures };
   }
   const baselineKey = String(base.id) + ":" + String(base.modifiedTime || "");
   const backupText = await exportIncrementalBackup(changedTables, onProgress, baselineKey);
@@ -851,7 +879,8 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
   await markBackupTaken();
   const completedAt = new Date().toISOString();
   await storage.secureSet(LAST_DRIVE_BACKUP_KEY, completedAt);
-  return { ...result, skipped: false, completedAt, name: fileName, accountEmail: getConnectedGoogleAccount() };
+  const snapshotFailures = await ensureAutomaticRangeSnapshots(onProgress);
+  return { ...result, skipped: false, completedAt, name: fileName, accountEmail: getConnectedGoogleAccount(), snapshotFailures };
 }
 
 export async function restoreLatestFromGoogleDrive() {
