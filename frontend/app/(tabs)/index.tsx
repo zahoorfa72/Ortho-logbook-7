@@ -49,6 +49,7 @@ type Patient = {
   age: string;
   diagnosis: string;
   procedure: string;
+  procedureII?: string;
   implant: string;
   implantII: string;
   date: string;
@@ -211,7 +212,7 @@ export default function Logbook() {
     const q = query.trim().toLowerCase();
     let list = patientsWithOperationCounts.filter((p) =>
       !q ||
-      [p.mrNo, p.name, p.diagnosis, p.procedure, p.implant, p.implantII, ...(p.implants || []).flatMap(x => [x.category, x.name, x.size])]
+      [p.mrNo, p.name, p.diagnosis, p.procedure, p.procedureII, p.implant, p.implantII, ...(p.implants || []).flatMap(x => [x.category, x.name, x.size])]
         .join(" ")
         .toLowerCase()
         .includes(q),
@@ -520,6 +521,7 @@ export default function Logbook() {
               <View style={styles.chipRow}>
                 {chip(item.diagnosis, "dx")}
                 {chip(item.procedure, "px")}
+                {chip(item.procedureII || "", "px2")}
               </View>
               {infectionResults(item).length ? (
                 <View style={styles.infectionRow}>
