@@ -96,7 +96,7 @@ async function embedPhoto(uri:string, cache?: Map<string,string>, profile: "pati
       {compress:quality,format:ImageManipulator.SaveFormat.JPEG,base64:true}
     );
     if(!result.base64)throw new Error("Empty compressed photo.");
-    const portable = \`data:image/jpeg;base64,\${result.base64}\`;
+    const portable = `data:image/jpeg;base64,${result.base64}`;
     cache?.set(cacheKey, portable);
     return portable;
   }catch{
