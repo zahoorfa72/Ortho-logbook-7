@@ -298,8 +298,9 @@ export async function exportUnencryptedBackup(filter: BackupFilter = { type: "al
 }
 
 // Drive auto-sync keeps a local copy of each successfully uploaded table so
-// subsequent backups can contain only changed rows and deletion tombstones.
-// The cache is promoted only after Google Drive confirms the upload.
+// subsequent backups can contain only locally changed rows and deletion tombstones,
+// even if another device has advanced the shared master file. The cache is promoted
+// only after Google Drive confirms the merged upload.
 const DELTA_CACHE_PATH = (LegacyFileSystem.documentDirectory || LegacyFileSystem.cacheDirectory || "") + "ortho-drive-delta-cache-v1.json";
 let pendingDeltaCacheText: string | null = null;
 
@@ -356,7 +357,7 @@ export async function exportIncrementalBackup(changedTables: string[], onProgres
  const tables = Array.from(new Set(changedTables)).filter((name) => allowed.has(name));
  if (!tables.length) throw new Error("There are no changed data tables to sync.");
  const previous = await readDeltaCache();
- const canDiff = !!previous && previous.baselineKey === baselineKey && !!baselineKey;
+ const canDiff = !!previous;
  const backup = await createBackupData(
   { type: "all" }, onProgress, tables,
   canDiff ? previous!.tables.patients : undefined,
