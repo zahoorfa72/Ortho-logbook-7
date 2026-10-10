@@ -867,7 +867,8 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
     // SQLite can emit duplicate/no-op change events. Avoid a Drive upload when
     // the table diff proves that no stored record actually changed.
     await commitIncrementalSnapshotCache();
-    return { skipped: true, completedAt: new Date().toISOString(), name: "No changes", accountEmail: getConnectedGoogleAccount() };
+    const snapshotFailures = await ensureAutomaticRangeSnapshots(onProgress);
+    return { skipped: true, completedAt: new Date().toISOString(), name: "No changes", accountEmail: getConnectedGoogleAccount(), snapshotFailures };
   }
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const fileName = `Ortho Logbook Incremental ${stamp}.orbackup`;
