@@ -583,7 +583,7 @@ function mergeRowsPreservingCurrent(currentRows: any[], oldRows: any[], table: s
 }
 
 
-function applyIncrementalToMaster(local: any, incoming: any) {
+function applyIncrementalToMaster(local: any, incoming: any, preserveCurrent = false) {
   const tables = [
     "patients", "procedures", "inventoryCategories", "inventory", "patientImplants",
     "patientCustomFields", "implantRecords", "expenses", "users", "patientHistory",
@@ -594,7 +594,9 @@ function applyIncrementalToMaster(local: any, incoming: any) {
   for (const table of tables) {
     if (!changed.has(table) || !Array.isArray(incoming[table])) continue;
     if (incoming._rowDelta !== true || full.has(table)) {
-      local[table] = incoming[table];
+      local[table] = preserveCurrent
+        ? mergeRowsPreservingCurrent(local[table] || [], incoming[table], table)
+        : incoming[table];
       continue;
     }
     const rows = new Map<string, any>();
@@ -602,10 +604,11 @@ function applyIncrementalToMaster(local: any, incoming: any) {
       const key = row?.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
       rows.set(key, row);
     }
-    for (const id of Array.isArray(incoming.deletedIds?.[table]) ? incoming.deletedIds[table] : []) rows.delete("id:" + String(id));
+    if (!preserveCurrent) for (const id of Array.isArray(incoming.deletedIds?.[table]) ? incoming.deletedIds[table] : []) rows.delete("id:" + String(id));
     for (const row of incoming[table]) {
       const key = row?.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
       const old = rows.get(key);
+      if (preserveCurrent && old) continue;
       if (table === "patients" && old &&
           !Object.prototype.hasOwnProperty.call(row, "photo_uri") &&
           !Object.prototype.hasOwnProperty.call(row, "photos_json")) {
@@ -659,33 +662,36 @@ async function mergeLegacyDriveHistory(localText: string, onProgress?: (stage: s
     if (!Object.prototype.hasOwnProperty.call(local, "appSettings") && Object.prototype.hasOwnProperty.call(old, "appSettings")) local.appSettings = old.appSettings;
     mergedFiles++;
   }
-  // Apply incremental records created after the newest full baseline before
-  // advancing the master timestamp; otherwise those older delta files would no
-  // longer be eligible during a later restore.
+  // Merge legacy incremental rows before moving their timestamps behind the
+  // master file. If there is no old full baseline, preserve current local rows
+  // and only fill missing IDs; retain old files for one more verified pass.
   const fullBaseline = candidates
     .filter((file: any) => String(file.name || "") === "Ortho Logbook Backup - All Time.orbackup" || String(file.name || "") === BACKUP_NAME)
     .sort((a: any, b: any) => Date.parse(String(b.modifiedTime || "")) - Date.parse(String(a.modifiedTime || "")))[0];
+  const hasFullBaseline = !!fullBaseline;
   const baselineTime = fullBaseline ? Date.parse(String(fullBaseline.modifiedTime || "")) :
     Math.max(0, ...candidates.map((file: any) => Date.parse(String(file.modifiedTime || ""))).filter(Number.isFinite));
-  const deltas = (await listIncrementalFiles())
-    .filter((file: any) => file?.id && Number.isFinite(Date.parse(String(file.modifiedTime || ""))) &&
-      (!Number.isFinite(baselineTime) || Date.parse(String(file.modifiedTime)) > baselineTime))
-    .sort((a: any, b: any) => Date.parse(String(a.modifiedTime)) - Date.parse(String(b.modifiedTime)));
+  const allDeltas = await listIncrementalFiles();
+  const deltas = hasFullBaseline
+    ? allDeltas.filter((file: any) => file?.id && Number.isFinite(Date.parse(String(file.modifiedTime || ""))) &&
+        (!Number.isFinite(baselineTime) || Date.parse(String(file.modifiedTime)) > baselineTime))
+        .sort((a: any, b: any) => Date.parse(String(a.modifiedTime)) - Date.parse(String(b.modifiedTime)))
+    : allDeltas.filter((file: any) => file?.id)
+        .sort((a: any, b: any) => Date.parse(String(a.modifiedTime || "")) - Date.parse(String(b.modifiedTime || "")));
   for (let index = 0; index < deltas.length; index++) {
     const deltaFile = deltas[index];
     onProgress?.("Merging saved changes… " + (index + 1) + "/" + deltas.length);
     try {
       const recovered = await downloadIncrementalWithRecovery(String(deltaFile.id), String(deltaFile.name || "Incremental backup"));
       if (recovered.warning) complete = false;
-      if (recovered.data?.incremental === true) applyIncrementalToMaster(local, recovered.data);
+      if (recovered.data?.incremental === true) applyIncrementalToMaster(local, recovered.data, !hasFullBaseline);
     } catch (error) {
       complete = false;
       console.warn("[drive-backup] incremental history could not be merged; retaining legacy files", deltaFile.name, error);
     }
   }
 
-  const hasFullBaseline = candidates.some((file: any) => String(file.name || "") === "Ortho Logbook Backup - All Time.orbackup" || String(file.name || "") === BACKUP_NAME);
-  const cleanupSafe = candidates.length === 0 || hasFullBaseline;
+  const cleanupSafe = hasFullBaseline || (candidates.length === 0 && allDeltas.length === 0);
   local.version = Math.max(Number(local.version || 0), 7);
   local.filter = { type: "all" };
   delete local.incremental;
