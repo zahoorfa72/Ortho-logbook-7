@@ -10,6 +10,11 @@ export type DriveSyncState =
 
 let current: DriveSyncState = { phase: "idle", updates: 0, message: "" };
 const listeners = new Set<(state: DriveSyncState) => void>();
+let refreshHandler: (() => void) | null = null;
+
+export function setDriveSyncRefreshHandler(handler: (() => void) | null) {
+  refreshHandler = handler;
+}
 
 export function setDriveSyncState(next: DriveSyncState) {
   if (current.phase === next.phase && current.updates === next.updates && current.message === next.message) return;
@@ -37,7 +42,11 @@ export function DriveSyncIndicator() {
       });
     },
     onPanResponderMove: Animated.event([null, { dx: position.x, dy: position.y }], { useNativeDriver: false }),
-    onPanResponderRelease: () => position.flattenOffset(),
+    onPanResponderRelease: (_, gesture) => {
+      position.flattenOffset();
+      // A short touch refreshes/retries Drive sync; a drag only moves the tag.
+      if (Math.abs(gesture.dx) < 8 && Math.abs(gesture.dy) < 8) refreshHandler?.();
+    },
     onPanResponderTerminate: () => position.flattenOffset(),
   })).current;
   useEffect(() => subscribeDriveSync(setState), []);
