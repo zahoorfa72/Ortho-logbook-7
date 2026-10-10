@@ -193,7 +193,13 @@ async function findBackupByName(name: string) {
 export async function listGoogleDriveBackups(): Promise<Array<{id:string;name:string;modifiedTime:string;size?:string}>> {
   const files = await findLatestBackupCandidates();
   return files
-    .filter((file:any) => /ortho logbook backup/i.test(String(file.name || "")) && file.id)
+    // New builds use one rolling master file. Ignore legacy month/year/date
+    // snapshots in the picker so a partial historical file cannot be mistaken
+    // for a complete restore. Those old files are left untouched in Drive.
+    .filter((file:any) => file.id && (
+      String(file.name || "") === "Ortho Logbook Backup - All Time.orbackup" ||
+      String(file.name || "") === BACKUP_NAME
+    ))
     .map((file:any) => ({id:String(file.id),name:String(file.name || "Ortho Logbook Backup"),modifiedTime:String(file.modifiedTime || ""),size:file.size == null ? undefined : String(file.size)}))
     .sort((a,b) => Date.parse(b.modifiedTime || "") - Date.parse(a.modifiedTime || ""));
 }
@@ -923,8 +929,8 @@ export async function ensureGoogleDriveBaseline(onProgress?: (stage: string) => 
   if (existing?.id) return { skipped: true, name: String(existing.name || "Ortho Logbook Backup - All Time.orbackup") };
   onProgress?.("Creating the first complete all-time backup…");
   const result = await backupToGoogleDrive(undefined, { type: "all" }, { onProgress });
-  const snapshotFailures = await ensureAutomaticRangeSnapshots(onProgress);
-  return { ...result, baselineCreated: true, snapshotFailures };
+  // A single complete master file avoids tripling storage with month/year copies.
+  return { ...result, baselineCreated: true, snapshotFailures: [] };
 }
 
 export async function backupIncrementalToGoogleDrive(changedTables: string[], onProgress?: (stage: string) => void) {
@@ -956,10 +962,8 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
   // same-name Drive file rather than making a new daily file.
   onProgress?.("Refreshing the complete all-time backup…");
   const allTimeResult = await backupToGoogleDrive(undefined, { type: "all" }, { onProgress });
-  const snapshotFailures = await ensureAutomaticRangeSnapshots(onProgress);
-  if (snapshotFailures.length) {
-    throw new Error("The all-time backup was updated, but these range backups need retry: " + snapshotFailures.join("; "));
-  }
+  // Keep one rolling master backup. Month/year selection is handled during
+  // restore by filtering this complete snapshot, not by uploading duplicates.
 
   const refreshedBase = await findLatestBackup();
   if (!refreshedBase?.id) throw new Error("The all-time backup was uploaded but could not be found again to confirm it.");
