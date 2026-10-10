@@ -955,10 +955,11 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
   if (existingFile?.id) {
     try {
       const previous = await downloadDriveJsonValidated(String(existingFile.id));
-      if (previous?.app === "Ortho Logbook" && previous?.incremental === true && Array.isArray(previous.changedTables)) {
-        existingDelta = previous;
-        existingDeltaId = String(existingFile.id);
+      if (previous?.app !== "Ortho Logbook" || previous?.incremental !== true || !Array.isArray(previous.changedTables)) {
+        throw new Error("The existing rolling Drive updates file has an unexpected format and was not overwritten.");
       }
+      existingDelta = previous;
+      existingDeltaId = String(existingFile.id);
     } catch (error: any) {
       throw new Error("Could not safely merge the existing rolling Drive updates file: " + String(error?.message || error));
     }
