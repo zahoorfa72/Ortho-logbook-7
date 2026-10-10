@@ -167,17 +167,17 @@ async function findLatestBackupCandidates() {
 function driveBackupName(filter: BackupFilter): string {
   if (filter.type === "month") {
     const month = String(filter.value || "").trim();
-    if (!/^\\d{4}-\\d{2}$/.test(month)) throw new Error("Enter the month as YYYY-MM before backing up.");
+    if (!/^\d{4}-\d{2}$/.test(month)) throw new Error("Enter the month as YYYY-MM before backing up.");
     return `Ortho Logbook Backup - Month ${month}.orbackup`;
   }
   if (filter.type === "year") {
     const year = String(filter.value || "").trim();
-    if (!/^\\d{4}$/.test(year)) throw new Error("Enter the year as YYYY before backing up.");
+    if (!/^\d{4}$/.test(year)) throw new Error("Enter the year as YYYY before backing up.");
     return `Ortho Logbook Backup - Year ${year}.orbackup`;
   }
   if (filter.type === "date") {
     const date = String(filter.value || "").trim();
-    if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(date)) throw new Error("Enter the date as YYYY-MM-DD before backing up.");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error("Enter the date as YYYY-MM-DD before backing up.");
     return `Ortho Logbook Backup - Date ${date}.orbackup`;
   }
   return "Ortho Logbook Backup - All Time.orbackup";
