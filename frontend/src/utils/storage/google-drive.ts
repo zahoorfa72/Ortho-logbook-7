@@ -825,24 +825,97 @@ async function ensureAutomaticRangeSnapshots(onProgress?: (stage: string) => voi
   const year = dayKey.slice(0, 4);
   const failures: string[] = [];
 
-  // Keep one rolling monthly file and one rolling yearly file. They are
-  // refreshed at most once per calendar day so ordinary edits stay fast;
-  // the all-time baseline + incremental log still captures every edit.
+  // Keep exactly one rolling file per month/year and check after each sync.
+  // The content hash ignores generated timestamps, so unchanged ranges are
+  // skipped while edits made later the same day are still uploaded.
   for (const scope of [
-    { type: "month" as const, value: month, key: "ortho_drive_auto_month_snapshot_day_" + month, label: "monthly" },
-    { type: "year" as const, value: year, key: "ortho_drive_auto_year_snapshot_day_" + year, label: "yearly" },
+    { type: "month" as const, value: month, label: "monthly" },
+    { type: "year" as const, value: year, label: "yearly" },
   ]) {
-    if (await storage.secureGet(scope.key, "") === dayKey) continue;
     try {
-      onProgress?.("Refreshing automatic " + scope.label + " Drive snapshot…");
+      onProgress?.("Checking automatic " + scope.label + " Drive backup…");
       await backupToGoogleDrive(undefined, { type: scope.type, value: scope.value }, { skipIfUnchanged: true, onProgress });
-      await storage.secureSet(scope.key, dayKey);
+      await storage.secureSet("ortho_drive_auto_" + scope.label + "_snapshot_day_" + scope.value, dayKey);
     } catch (error: any) {
       failures.push(scope.label + " snapshot: " + String(error?.message || "upload failed"));
       console.warn("[drive-auto-backup] " + scope.label + " snapshot failed", error);
     }
   }
   return failures;
+}
+
+function mergeIncrementalPayloads(previous: any, incoming: any): any {
+  if (!previous) return incoming;
+  const tableNames = [
+    "patients", "procedures", "inventoryCategories", "inventory", "patientImplants",
+    "patientCustomFields", "implantRecords", "expenses", "users", "patientHistory",
+    "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts",
+  ];
+  const changedTables = Array.from(new Set([
+    ...(Array.isArray(previous.changedTables) ? previous.changedTables : []),
+    ...(Array.isArray(incoming.changedTables) ? incoming.changedTables : []),
+  ]));
+  const previousFull = new Set<string>(Array.isArray(previous.fullTables) ? previous.fullTables : []);
+  const incomingFull = new Set<string>(Array.isArray(incoming.fullTables) ? incoming.fullTables : []);
+  const fullTables = new Set<string>(previousFull);
+  const deletedIds: Record<string, string[]> = {
+    ...(previous.deletedIds && typeof previous.deletedIds === "object" ? previous.deletedIds : {}),
+  };
+  const merged: any = { ...previous, ...incoming, changedTables, fullTables: [] };
+
+  for (const table of tableNames) {
+    const wasChanged = Array.isArray(previous.changedTables) && previous.changedTables.includes(table);
+    const isChanged = Array.isArray(incoming.changedTables) && incoming.changedTables.includes(table);
+    if (!isChanged) continue;
+    const newRows = Array.isArray(incoming[table]) ? incoming[table] : [];
+    const oldRows = Array.isArray(previous[table]) ? previous[table] : [];
+    const incomingIsFull = incoming._rowDelta !== true || incomingFull.has(table);
+
+    if (incomingIsFull) {
+      merged[table] = newRows;
+      fullTables.add(table);
+      deletedIds[table] = Array.isArray(incoming.deletedIds?.[table]) ? incoming.deletedIds[table] : [];
+      continue;
+    }
+
+    const rows = new Map<string, any>();
+    if (wasChanged) {
+      for (const row of oldRows) {
+        const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+        rows.set(key, row);
+      }
+    }
+    const tombstones = new Set<string>([
+      ...(Array.isArray(deletedIds[table]) ? deletedIds[table].map(String) : []),
+      ...(Array.isArray(incoming.deletedIds?.[table]) ? incoming.deletedIds[table].map(String) : []),
+    ]);
+    for (const id of incoming.deletedIds?.[table] || []) rows.delete("id:" + String(id));
+    for (const row of newRows) {
+      const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+      const old = rows.get(key);
+      if (table === "patients" && old &&
+          !Object.prototype.hasOwnProperty.call(row, "photo_uri") &&
+          !Object.prototype.hasOwnProperty.call(row, "photos_json")) {
+        rows.set(key, { ...old, ...row });
+      } else {
+        rows.set(key, row);
+      }
+      if (row && row.id != null) tombstones.delete(String(row.id));
+    }
+    merged[table] = Array.from(rows.values());
+    deletedIds[table] = Array.from(tombstones);
+  }
+
+  for (const table of ["branding", "appSettings"]) {
+    if (!Object.prototype.hasOwnProperty.call(incoming, table) &&
+        Object.prototype.hasOwnProperty.call(previous, table)) merged[table] = previous[table];
+  }
+  merged._rowDelta = true;
+  merged.deletedIds = deletedIds;
+  merged.fullTables = Array.from(fullTables);
+  merged.incremental = true;
+  merged.filter = { type: "all" };
+  return merged;
 }
 
 export async function backupIncrementalToGoogleDrive(changedTables: string[], onProgress?: (stage: string) => void) {
@@ -872,12 +945,30 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
     const snapshotFailures = await ensureAutomaticRangeSnapshots(onProgress);
     return { skipped: true, completedAt: new Date().toISOString(), name: "No changes", accountEmail: getConnectedGoogleAccount(), snapshotFailures };
   }
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const fileName = `Ortho Logbook Incremental ${stamp}.orbackup`;
-  onProgress?.("Uploading changed data to Google Drive…");
-  const result = await uploadContent(backupText, undefined, onProgress, fileName);
-  // Promote row snapshots only after Drive confirms the upload. If upload fails,
-  // the old cache remains and the next attempt resends the missing changes.
+  // Keep a single rolling incremental file instead of creating a new Drive
+  // file for every edit/day. Merge this upload into the previous delta so the
+  // file remains restorable from the original all-time baseline.
+  const fileName = "Ortho Logbook Incremental.orbackup";
+  let existingDelta: any = null;
+  let existingDeltaId: string | undefined;
+  const existingFile = await findBackupByName(fileName);
+  if (existingFile?.id) {
+    try {
+      const previousText = await downloadDriveJsonValidated(String(existingFile.id));
+      const previous = JSON.parse(previousText);
+      if (previous?.app === "Ortho Logbook" && previous?.incremental === true && Array.isArray(previous.changedTables)) {
+        existingDelta = previous;
+        existingDeltaId = String(existingFile.id);
+      }
+    } catch (error: any) {
+      throw new Error("Could not safely merge the existing rolling Drive updates file: " + String(error?.message || error));
+    }
+  }
+  const mergedDelta = mergeIncrementalPayloads(existingDelta, delta);
+  const mergedText = JSON.stringify(mergedDelta);
+  onProgress?.("Uploading merged changes to Google Drive…");
+  const result = await uploadContent(mergedText, existingDeltaId, onProgress, fileName);
+  // Promote row snapshots only after Drive confirms the merged file is complete.
   await commitIncrementalSnapshotCache();
   await markBackupTaken();
   const completedAt = new Date().toISOString();
