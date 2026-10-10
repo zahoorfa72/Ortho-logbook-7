@@ -684,6 +684,8 @@ async function mergeLegacyDriveHistory(localText: string, onProgress?: (stage: s
     }
   }
 
+  const hasFullBaseline = candidates.some((file: any) => String(file.name || "") === "Ortho Logbook Backup - All Time.orbackup" || String(file.name || "") === BACKUP_NAME);
+  const cleanupSafe = candidates.length === 0 || hasFullBaseline;
   local.version = Math.max(Number(local.version || 0), 7);
   local.filter = { type: "all" };
   delete local.incremental;
@@ -691,22 +693,31 @@ async function mergeLegacyDriveHistory(localText: string, onProgress?: (stage: s
   delete local._rowDelta;
   delete local.deletedIds;
   delete local.fullTables;
-  return { backupText: JSON.stringify(local), complete, mergedFiles, candidateCount: candidates.length };
+  return { backupText: JSON.stringify(local), complete, cleanupSafe, mergedFiles, candidateCount: candidates.length };
 }
 
-async function trashDuplicateDriveBackups(masterFileId: string): Promise<string[]> {
+async function deleteDuplicateDriveBackups(masterFileId: string): Promise<string[]> {
   const failures: string[] = [];
   const candidates = await findLatestBackupCandidates();
   for (const file of candidates) {
     if (!file?.id || String(file.id) === masterFileId) continue;
     try {
-      await driveRequest(DRIVE_API + "/" + encodeURIComponent(String(file.id)), {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ trashed: true }),
+      await driveRequest(DRIVE_API + "/" + encodeURIComponent(String(file.id)) + "?supportsAllDrives=true", {
+        method: "DELETE",
       });
     } catch (error: any) {
       failures.push(String(file.name || file.id) + ": " + String(error?.message || "could not move to trash"));
+    }
+  }
+  // Incremental deltas are also redundant after every applicable delta has
+  // been merged into and verified in the master backup.
+  const deltas = await listIncrementalFiles();
+  for (const file of deltas) {
+    if (!file?.id) continue;
+    try {
+      await driveRequest(DRIVE_API + "/" + encodeURIComponent(String(file.id)) + "?supportsAllDrives=true", { method: "DELETE" });
+    } catch (error: any) {
+      failures.push(String(file.name || file.id) + ": " + String(error?.message || "could not delete old incremental backup"));
     }
   }
   return failures;
@@ -723,6 +734,7 @@ export async function backupToGoogleDrive(
   let backupText = await exportUnencryptedBackup(filter, options.onProgress);
   const isMasterBackup = filter.type === "all";
   let migrationComplete = true;
+  let cleanupSafe = true;
   let migrationAttempted = false;
   if (isMasterBackup && (await storage.secureGet(MASTER_MIGRATION_KEY, "")) !== "1") {
     migrationAttempted = true;
@@ -730,6 +742,7 @@ export async function backupToGoogleDrive(
     const migration = await mergeLegacyDriveHistory(backupText, options.onProgress);
     backupText = migration.backupText;
     migrationComplete = migration.complete;
+    cleanupSafe = migration.cleanupSafe;
   }
   options.onProgress?.("Checking whether backup changed…");
   const contentHash = await backupContentHash(backupText, options.onProgress);
@@ -754,13 +767,16 @@ export async function backupToGoogleDrive(
   await storage.secureSet(LAST_DRIVE_BACKUP_KEY, completedAt);
   await storage.secureSet(LAST_DRIVE_CONTENT_HASH_KEY + ":" + fileName, contentHash);
   let cleanupFailures: string[] = [];
-  if (isMasterBackup && migrationComplete && result?.id) {
-    // Only after the complete master has been uploaded and size-verified do we
-    // remove redundant old full/month/year files from the visible Drive set.
-    cleanupFailures = await trashDuplicateDriveBackups(String(result.id));
-    await storage.secureSet(MASTER_MIGRATION_KEY, "1");
+  if (isMasterBackup && migrationComplete && cleanupSafe && result?.id) {
+    // Permanently remove redundant full/range/delta files only after the master
+    // upload was verified and a complete full baseline was available to merge.
+    cleanupFailures = await deleteDuplicateDriveBackups(String(result.id));
+    if (!cleanupFailures.length) await storage.secureSet(MASTER_MIGRATION_KEY, "1");
   }
-  return { ...result, skipped: false, completedAt, name: fileName, accountEmail: getConnectedGoogleAccount(), cleanupFailures, migrationPending: isMasterBackup && !migrationComplete };
+  return {
+    ...result, skipped: false, completedAt, name: fileName, accountEmail: getConnectedGoogleAccount(),
+    cleanupFailures, migrationPending: isMasterBackup && (!migrationComplete || !cleanupSafe || cleanupFailures.length > 0),
+  };
 }
 
 async function listIncrementalFiles() {
