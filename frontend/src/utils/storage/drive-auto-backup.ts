@@ -69,7 +69,7 @@ function scheduleBackup(tableName?: string) {
   setDriveSyncState({
     phase: "waiting",
     updates: pendingTables.size,
-    message: "Changed data waiting to sync",
+    message: "Checking whether saved data changed…",
   });
   timer = setTimeout(() => {
     timer = null;
@@ -99,7 +99,7 @@ async function runBackup() {
   setDriveSyncState({
     phase: "uploading",
     updates: batch.length,
-    message: "Preparing changed data…",
+    message: "Checking saved records for changes…",
   });
 
   try {
