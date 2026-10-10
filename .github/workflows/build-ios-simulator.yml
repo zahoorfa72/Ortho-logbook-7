@@ -15,16 +15,16 @@ concurrency:
 jobs:
   build:
     name: Build unsigned iOS Simulator app
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 60
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Select Xcode with Swift 6.2 support
+      - name: Select Xcode with Swift 6.3 support
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: '26.0'
+          xcode-version: '26.6'
 
       - name: Verify Xcode and Swift versions
         run: |
