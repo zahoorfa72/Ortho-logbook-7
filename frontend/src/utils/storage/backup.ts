@@ -4,6 +4,7 @@ import * as LegacyFileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as SecureStore from "expo-secure-store";
 import nacl from "tweetnacl";
+import { Image } from "react-native";
 import { db, initializeDatabase, markInventoryResetDone, repairDatabaseData } from "@/src/db/database";
 import { storage } from "@/src/utils/storage";
 import type { BrandingConfig } from "@/src/theme";
@@ -54,9 +55,18 @@ async function embedPhoto(uri:string):Promise<string>{
     // all-time backup previously caused a 150–200 MB allocation and crashed at
     // the Android app heap limit. Limit the longest edge (portrait and landscape)
     // and compress only the backup copy; original local photos are untouched.
+    const dimensions = await new Promise<{width:number;height:number}>((resolve,reject) => {
+      Image.getSize(uri, (width,height) => resolve({width,height}), reject);
+    });
+    const longest = Math.max(dimensions.width, dimensions.height);
+    const resize = longest > 720
+      ? (dimensions.width >= dimensions.height
+          ? {resize:{width:720}}
+          : {resize:{height:720}})
+      : null;
     const result=await ImageManipulator.manipulateAsync(
       uri,
-      [{resize:{width:720}}],
+      resize ? [resize] : [],
       {compress:0.2,format:ImageManipulator.SaveFormat.JPEG,base64:true}
     );
     if(!result.base64)throw new Error("Empty compressed photo.");
