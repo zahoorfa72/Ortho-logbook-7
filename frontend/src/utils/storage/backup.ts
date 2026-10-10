@@ -64,8 +64,10 @@ function photoMime(uri:string){
 // This is the important difference from the old backup: file:// or content://
 // paths are not portable between phones, so the actual photo bytes are stored
 // inside the encrypted backup.
-async function embedPhoto(uri:string):Promise<string>{
+async function embedPhoto(uri:string, cache?: Map<string,string>):Promise<string>{
   if(!uri)return "";
+  const cached = cache?.get(uri);
+  if (cached) return cached;
   try{
     // Recompress existing data URIs too: older backups stored original-size
     // base64 images and could push a manual backup beyond Android's heap limit.
@@ -92,13 +94,15 @@ async function embedPhoto(uri:string):Promise<string>{
       {compress:0.2,format:ImageManipulator.SaveFormat.JPEG,base64:true}
     );
     if(!result.base64)throw new Error("Empty compressed photo.");
-    return `data:image/jpeg;base64,${result.base64}`;
+    const portable = `data:image/jpeg;base64,${result.base64}`;
+    cache?.set(uri, portable);
+    return portable;
   }catch{
     throw new Error("Could not compress a patient photo for backup. Please make sure the photo is still available on this device and try again.");
   }
 }
 
-async function embedPatientPhotos(row:any){
+async function embedPatientPhotos(row:any, cache?: Map<string,string>){
   const raw = row.photos_json;
   let photos:string[]=[];
   if(raw){
@@ -109,7 +113,7 @@ async function embedPatientPhotos(row:any){
   }
   if(!photos.length && row.photo_uri)photos=[String(row.photo_uri)];
   const embedded:string[]=[];
-  for(const uri of photos)embedded.push(await embedPhoto(uri));
+  for(const uri of photos)embedded.push(await embedPhoto(uri, cache));
   return {
     ...row,
     // The first photo is already present in photos_json. Duplicating its
@@ -158,6 +162,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
  const pf=whereForFilter(filter, "date");
  const patients=include("patients") ? db.getAllSync<any>(`SELECT * FROM patients${pf.sql} ORDER BY date DESC, created_at DESC`, pf.args) : [];
  const selectedPatientIds = new Set(patients.map((p:any)=>p.id));
+ const compressedPhotoCache = new Map<string,string>();
  const embeddedPatients:any[]=[];
  const previousPatientsById = new Map<string, any>((previousPatientRows || []).filter((p:any)=>p?.id!=null).map((p:any)=>[String(p.id),p]));
  for(let i=0;i<patients.length;i++){
@@ -172,20 +177,48 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
      embeddedPatients.push({...patient, photo_uri: previous.photo_uri || "", photos_json: previous.photos_json});
    } else {
      onProgress?.(`Compressing changed patient photos… ${i+1}/${patients.length}`);
-     embeddedPatients.push(await embedPatientPhotos(patient));
+     embeddedPatients.push(await embedPatientPhotos(patient, compressedPhotoCache));
    }
  }
 
  const historyAll=include("patientHistory") ? db.getAllSync<any>("SELECT * FROM patient_history ORDER BY created_at ASC") : [];
  const history=filter.type==="all" ? historyAll : historyAll.filter((h:any)=>selectedPatientIds.has(h.patient_id));
- const embeddedHistory=history.map((h:any)=>{
-   try{
-     const snap=JSON.parse(String(h.snapshot_json||""));
-     if(snap && Array.isArray(snap.photos)) snap.photos=snap.photos.slice();
-     if(snap && snap.photoUri && !snap.photos?.length) snap.photos=[snap.photoUri];
-     return {...h,snapshot_json:JSON.stringify(snap)};
-   }catch{return h;}
- });
+ const embeddedHistory:any[]=[];
+ for (let historyIndex = 0; historyIndex < history.length; historyIndex++) {
+   const h = history[historyIndex];
+   try {
+     const snap = JSON.parse(String(h.snapshot_json || ""));
+     // Historical patient snapshots can contain another copy of every photo.
+     // Keep history intact but compress/embed those copies too, and reuse
+     // already-compressed identical photos instead of allocating them again.
+     let historyPhotos: string[] = Array.isArray(snap?.photos)
+       ? snap.photos.filter((photo:any) => typeof photo === "string" && photo.length > 0)
+       : [];
+     const photosJson = snap?.photos_json;
+     if (!historyPhotos.length && typeof photosJson === "string") {
+       try {
+         const parsedPhotos = JSON.parse(photosJson);
+         if (Array.isArray(parsedPhotos)) historyPhotos = parsedPhotos.filter((photo:any) => typeof photo === "string" && photo.length > 0);
+       } catch {}
+     }
+     const singlePhoto = typeof snap?.photoUri === "string" && snap.photoUri
+       ? snap.photoUri
+       : typeof snap?.photo_uri === "string" ? snap.photo_uri : "";
+     if (!historyPhotos.length && singlePhoto) historyPhotos = [singlePhoto];
+     if (historyPhotos.length) {
+       const embeddedHistoryPhotos: string[] = [];
+       for (const photo of historyPhotos) embeddedHistoryPhotos.push(await embedPhoto(photo, compressedPhotoCache));
+       if (Array.isArray(snap.photos)) snap.photos = embeddedHistoryPhotos;
+       else if (typeof snap.photos_json === "string") snap.photos_json = JSON.stringify(embeddedHistoryPhotos);
+       else snap.photos = embeddedHistoryPhotos;
+       if (snap.photoUri) snap.photoUri = "";
+       if (snap.photo_uri) snap.photo_uri = "";
+     }
+     embeddedHistory.push({...h, snapshot_json:JSON.stringify(snap)});
+   } catch {
+     embeddedHistory.push(h);
+   }
+ }
 
  return {
   version:BACKUP_VERSION,app:BACKUP_APP,createdAt:new Date().toISOString(),
