@@ -671,14 +671,18 @@ export default function PatientForm() {
         </Modal>
         <Text style={styles.section}>Patient Details</Text>
         {(Array.isArray(branding.patientFormFieldOrder) && branding.patientFormFieldOrder.length
-          ? [...branding.patientFormFieldOrder.filter((key:string)=>["mrNo","name","gender","age","address"].includes(key)), ...["mrNo","name","gender","age","address"].filter(key=>!branding.patientFormFieldOrder!.includes(key))]
-          : ["mrNo","name","gender","age","address"]).map((key:string) => {
+          ? [...branding.patientFormFieldOrder.filter((key:string)=>["mrNo","name","gender","age","address","diagnosis","procedure","fileName","date"].includes(key)), ...["mrNo","name","gender","age","address","diagnosis","procedure","fileName","date"].filter(key=>!branding.patientFormFieldOrder!.includes(key))]
+          : ["mrNo","name","gender","age","address","diagnosis","procedure","fileName","date"]).map((key:string) => {
             switch (key) {
               case "mrNo": return <Field key={key} label="MRNo" testID="patient-mrno-input" value={p.mrNo} onChangeText={set("mrNo")} placeholder="e.g. 10234" />;
               case "name": return <Field key={key} label="Patient Name" testID="patient-name-input" value={p.name} onChangeText={set("name")} placeholder="Full name" autoCapitalize="words" />;
               case "gender": return <View key={key}><Text style={styles.label}>Gender</Text><View style={{ marginBottom: spacing.lg }}><Segmented options={["Male", "Female", "Other"]} value={p.gender} onChange={set("gender")} /></View></View>;
               case "age": return <Field key={key} label="Age" testID="patient-age-input" value={p.age} onChangeText={set("age")} keyboardType="number-pad" placeholder="e.g. 45" />;
               case "address": return <Field key={key} label="Address" testID="patient-address-input" value={p.address} onChangeText={set("address")} placeholder="Patient address" />;
+              case "diagnosis": return <Field key={key} label="Diagnosis" testID="patient-diagnosis-input" value={p.diagnosis} onChangeText={set("diagnosis")} placeholder="Diagnosis" />;
+              case "procedure": return <View key={key}><AutocompleteField label="Procedure" testID="patient-procedure-input" value={p.procedure} onChangeText={set("procedure")} placeholder="Type to search procedures" suggestions={procedureSuggestions} />{!!procedures?.length && <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.quickScroller} contentContainerStyle={styles.quickRow}>{procedures.map((x) => <Pressable key={x.id} style={styles.quickChip} onPress={() => set("procedure")(x.name)}><Text style={styles.quickChipText}>{x.name}</Text></Pressable>)}</ScrollView>}</View>;
+              case "fileName": return <Field key={key} label="File / Reference" testID="patient-file-input" value={p.fileName} onChangeText={set("fileName")} placeholder="File reference" />;
+              case "date": return <Field key={key} label="Date" testID="patient-date-input" value={p.date} onChangeText={set("date")} placeholder="YYYY-MM-DD" />;
               default: return null;
             }
           })}
@@ -704,9 +708,6 @@ export default function PatientForm() {
           </Pressable>
         ))}
 
-        <Text style={styles.section}>Clinical Details</Text>
-        <Field label="Diagnosis" testID="patient-diagnosis-input" value={p.diagnosis} onChangeText={set("diagnosis")} placeholder="Diagnosis" />
-        <AutocompleteField label="Procedure" testID="patient-procedure-input" value={p.procedure} onChangeText={set("procedure")} placeholder="Type to search procedures" suggestions={procedureSuggestions} />
         {!!procedures?.length && (
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.quickScroller} contentContainerStyle={styles.quickRow}>
             {procedures.map((x) => (
@@ -768,8 +769,6 @@ export default function PatientForm() {
         ) : (
           <Text style={styles.hint}>Select one or more inventory items. Each category, item and size is kept separately.</Text>
         )}
-        <Field label="File / Reference" testID="patient-file-input" value={p.fileName} onChangeText={set("fileName")} placeholder="File reference" />
-        <Field label="Date" testID="patient-date-input" value={p.date} onChangeText={set("date")} placeholder="YYYY-MM-DD" />
         {!!customFields.length && (
           <>
             <Text style={styles.section}>Additional Patient Fields</Text>
