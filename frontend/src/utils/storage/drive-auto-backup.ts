@@ -1,7 +1,6 @@
 import * as SQLite from "expo-sqlite";
 import {
   backupIncrementalToGoogleDrive,
-  ensureGoogleDriveBaseline,
   getConnectedGoogleAccount,
   restoreGoogleAccountSilently,
 } from "@/src/utils/storage/google-drive";
@@ -155,24 +154,12 @@ export function triggerAutomaticDriveBackup(tableName: "branding" | "appSettings
 
 export function startAutomaticDriveBackup() {
   disposed = false;
-  void loadPendingTables().then(async () => {
-    // Do not mark every table dirty on launch: doing so made ordinary app
-    // opens/navigation look like a request to back up. Only create a first
-    // baseline when this Drive account has no all-time backup yet.
-    if (pendingTables.size) {
-      scheduleBackup();
-      return;
-    }
-    try {
-      if (!getConnectedGoogleAccount()) await restoreGoogleAccountSilently();
-      if (getConnectedGoogleAccount()) {
-        await ensureGoogleDriveBaseline((message) => {
-          setDriveSyncState({ phase: "uploading", updates: 0, message });
-        });
-      }
-    } catch (error) {
-      console.warn("[drive-auto-backup] initial baseline check failed:", error);
-    }
+  void loadPendingTables().then(() => {
+    // A startup integrity pass compares local records with the last confirmed
+    // cache. It may inspect every table, but Drive is updated only if the row
+    // diff finds real changes. Foreground/scroll events do not force a new pass.
+    ALL_SYNC_TABLES.forEach((name) => pendingTables.add(name));
+    scheduleBackup();
   });
   const subscription = SQLite.addDatabaseChangeListener((event: any) => {
     const changedTable = tableMap[String(event?.tableName || "")];
