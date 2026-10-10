@@ -16,6 +16,7 @@ import { decryptBackup, getBackupInfo, restoreBackup } from "@/src/utils/storage
 import { restoreLatestFromGoogleDrive, connectGoogleAccount } from "@/src/utils/storage/google-drive";
 import { queryClient } from "@/src/query-client";
 import { storage } from "@/src/utils/storage";
+import { setAutomaticDriveBackupPaused } from "@/src/utils/storage/drive-auto-backup";
 
 export default function Login() {
   const styles = useStyles();
@@ -32,6 +33,8 @@ export default function Login() {
   const [driveRestoreMessage, setDriveRestoreMessage] = useState("");
 
   const restoreFromGoogleDrive = async () => {
+    let waitingForRestoreChoice = false;
+    setAutomaticDriveBackupPaused(true);
     try {
       setDriveRestoreLoading(true);
       setDriveRestoreMessage("Connecting to Google Drive…");
@@ -45,7 +48,7 @@ export default function Login() {
         "Latest backup: " + remote.name + "\nModified: " + new Date(remote.modifiedTime).toLocaleString() +
           "\n\nThis replaces the local database with the Drive backup. Continue only if this is the intended backup.",
         [
-          { text: "Cancel", style: "cancel" },
+          { text: "Cancel", style: "cancel", onPress: () => setAutomaticDriveBackupPaused(false) },
           {
             text: "Restore",
             style: "destructive",
@@ -70,14 +73,19 @@ export default function Login() {
                 Alert.alert("Restore failed", error?.message || "Unable to restore the Google Drive backup.");
               } finally {
                 setDriveRestoreLoading(false);
+                setDriveRestoreMessage("");
+                setAutomaticDriveBackupPaused(false);
               }
             },
           },
         ],
+        { cancelable: false },
       );
+      waitingForRestoreChoice = true;
     } catch (error: any) {
       Alert.alert("Google Drive restore failed", error?.message || "Unable to find or download the latest Drive backup.");
     } finally {
+      if (!waitingForRestoreChoice) setAutomaticDriveBackupPaused(false);
       setDriveRestoreLoading(false);
       setDriveRestoreMessage("");
     }
