@@ -365,7 +365,7 @@ export async function exportIncrementalBackup(changedTables: string[], onProgres
   canDiff ? previous!.tables.patients : undefined,
   canDiff && previous!.photoSources ? previous!.photoSources : undefined
  );
- const nextTables: Record<string, any[]> = canDiff ? { ...previous!.tables } : {};
+ const nextTables: Record<string, any> = canDiff ? { ...previous!.tables } : {};
  const deletedIds: Record<string, string[]> = {};
  const fullTables: string[] = [];
  for (const table of tables) {
