@@ -337,10 +337,10 @@ export default function BrandingScreen() {
           </View>;
         })}
         <Text style={[styles.label, { marginTop: spacing.md }]}>Patient Add/Edit Form — field order</Text>
-        <Text style={styles.hint}>Use the arrows to arrange MR No, Patient Name, Gender, Age and Address in the order you prefer. This changes the entry form layout only, not saved patient data.</Text>
+        <Text style={styles.hint}>Use the arrows to arrange MR No, Patient Name, Gender, Age, Address, Diagnosis, Procedure, File / Reference and Date in the order you prefer. This changes the entry form layout only, not saved patient data.</Text>
         {(() => {
-          const defaults = ["mrNo","name","gender","age","address"];
-          const labels:Record<string,string> = {mrNo:"MR No",name:"Patient Name",gender:"Gender",age:"Age",address:"Address"};
+          const defaults = ["mrNo","name","gender","age","address","diagnosis","procedure","fileName","date"];
+          const labels:Record<string,string> = {mrNo:"MR No",name:"Patient Name",gender:"Gender",age:"Age",address:"Address",diagnosis:"Diagnosis",procedure:"Procedure",fileName:"File / Reference",date:"Date"};
           const order = [...(Array.isArray(draft.patientFormFieldOrder)?draft.patientFormFieldOrder.filter((k:string)=>defaults.includes(k)):defaults)];
           defaults.forEach(k=>{if(!order.includes(k))order.push(k)});
           const move=(key:string,delta:number)=>setDraft(d=>{
