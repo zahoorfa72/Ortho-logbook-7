@@ -277,15 +277,28 @@ async function readDeltaCache(): Promise<DriveDeltaCache | null> {
  } catch { return null; }
 }
 
-export async function commitIncrementalSnapshotCache(): Promise<void> {
- if (!pendingDeltaCacheText || !DELTA_CACHE_PATH) return;
- const textToSave = pendingDeltaCacheText;
+export async function commitIncrementalSnapshotCache(baselineKey?: string): Promise<void> {
+ if (!DELTA_CACHE_PATH) return;
+ let textToSave = pendingDeltaCacheText;
  try {
+  if (!textToSave) {
+   const existing = await readDeltaCache();
+   if (!existing) return;
+   textToSave = JSON.stringify(existing);
+  }
+  // When a new full all-time snapshot is uploaded, the row cache now describes
+  // that exact baseline. Rebase it so the next edit is diffed against the new
+  // full file instead of resending every table.
+  if (baselineKey) {
+   const parsed = JSON.parse(textToSave);
+   parsed.baselineKey = baselineKey;
+   textToSave = JSON.stringify(parsed);
+  }
   await LegacyFileSystem.writeAsStringAsync(DELTA_CACHE_PATH, textToSave);
-  if (pendingDeltaCacheText === textToSave) pendingDeltaCacheText = null;
+  pendingDeltaCacheText = null;
  } catch (error) {
-  // Cache failure is not a backup failure. The next upload safely falls back
-  // to a table snapshot instead of risking omissions.
+  // Cache failure is not a backup failure. The next sync safely falls back
+  // to a complete table snapshot instead of risking omissions.
   console.warn("[drive-auto-backup] snapshot cache could not be saved", error);
   pendingDeltaCacheText = null;
  }
