@@ -306,7 +306,7 @@ export async function exportUnencryptedBackup(filter: BackupFilter = { type: "al
 const DELTA_CACHE_PATH = (LegacyFileSystem.documentDirectory || LegacyFileSystem.cacheDirectory || "") + "ortho-drive-delta-cache-v1.json";
 let pendingDeltaCacheText: string | null = null;
 
-type DriveDeltaCache = { baselineKey: string; tables: Record<string, any[]>; photoSources?: Record<string, string> };
+type DriveDeltaCache = { baselineKey: string; tables: Record<string, any>; photoSources?: Record<string, string> };
 
 async function readDeltaCache(): Promise<DriveDeltaCache | null> {
  try {
@@ -369,7 +369,11 @@ export async function exportIncrementalBackup(changedTables: string[], onProgres
  const deletedIds: Record<string, string[]> = {};
  const fullTables: string[] = [];
  for (const table of tables) {
-  if (table === "branding" || table === "appSettings") continue;
+  if (table === "branding" || table === "appSettings") {
+   nextTables[table] = (backup as any)[table] ?? null;
+   // Settings are compared with the last confirmed cache below; app launch/navigation is not a change.
+   continue;
+  }
   const currentRows = Array.isArray((backup as any)[table]) ? (backup as any)[table] as any[] : [];
   const previousRows = canDiff && Array.isArray(previous!.tables[table]) ? previous!.tables[table] : null;
   if (!previousRows) {
@@ -402,12 +406,22 @@ export async function exportIncrementalBackup(changedTables: string[], onProgres
   }) : changedRows;
   nextTables[table] = currentRows;
  }
+ const effectiveTables = tables.filter((table) => {
+  if (table === "branding" || table === "appSettings") {
+   const currentValue = (backup as any)[table] ?? null;
+   const previousValue = canDiff ? previous!.tables[table] : undefined;
+   return !canDiff || JSON.stringify(previousValue) !== JSON.stringify(currentValue);
+  }
+  const rows = Array.isArray((backup as any)[table]) ? (backup as any)[table] : [];
+  const hasDeletes = Array.isArray(deletedIds[table]) && deletedIds[table].length > 0;
+  return !canDiff || fullTables.includes(table) || rows.length > 0 || hasDeletes;
+ });
  backup.filter = { type: "all" };
  backup.incremental = true;
- backup.changedTables = tables;
+ backup.changedTables = effectiveTables;
  (backup as any)._rowDelta = canDiff;
  (backup as any).deletedIds = canDiff ? deletedIds : {};
- (backup as any).fullTables = canDiff ? fullTables : tables.filter((table) => table !== "branding" && table !== "appSettings");
+ (backup as any).fullTables = canDiff ? fullTables : effectiveTables.filter((table) => table !== "branding" && table !== "appSettings");
  // Track the source URIs separately from portable compressed photo bytes. This
  // lets future backups reuse unchanged photo payloads without recompressing them.
  const nextPhotoSources: Record<string, string> = canDiff && previous!.photoSources ? { ...previous!.photoSources } : {};
