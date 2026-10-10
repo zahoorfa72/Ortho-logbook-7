@@ -38,6 +38,7 @@ export async function connectGoogleAccount() {
     if (!result || result.type === "cancelled") throw new Error("Google account selection was cancelled.");
     const current = GoogleSignin.getCurrentUser();
     if (!current?.user?.email) throw new Error("Google account was not returned.");
+    await storage.secureSet("ortho_drive_account_email", current.user.email);
     await storage.secureSet(DRIVE_SCOPE_VERSION_KEY, DRIVE_SCOPE_VERSION);
     return current.user.email;
   } catch (error: any) {
