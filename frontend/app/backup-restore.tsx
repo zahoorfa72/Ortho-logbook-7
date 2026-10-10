@@ -12,7 +12,7 @@ import { queryClient } from "@/src/query-client";
 import { useAuth } from "@/src/auth/AuthContext";
 import { Segmented } from "@/src/components/Segmented";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
-import { backupToGoogleDrive, connectGoogleAccount, disconnectGoogleAccount, getConnectedGoogleAccount, restoreLatestFromGoogleDrive } from "@/src/utils/storage/google-drive";
+import { backupToGoogleDrive, connectGoogleAccount, disconnectGoogleAccount, getConnectedGoogleAccount, restoreLatestFromGoogleDrive, listGoogleDriveBackups, restoreGoogleDriveBackupById } from "@/src/utils/storage/google-drive";
 import { triggerAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-backup";
 
 export default function BackupRestoreScreen() {
@@ -32,6 +32,7 @@ export default function BackupRestoreScreen() {
   const [googleAccount, setGoogleAccount] = useState<string | null>(null);
   const [driveLoading, setDriveLoading] = useState(false);
   const [driveStatus, setDriveStatus] = useState("");
+  const [driveBackups, setDriveBackups] = useState<Array<{id:string;name:string;modifiedTime:string;size?:string}>>([]);
   const [selectedBackup, setSelectedBackup] = useState<{
     name: string;
     backupText: string;
@@ -145,6 +146,38 @@ export default function BackupRestoreScreen() {
       Alert.alert("Google Drive backup complete", `Latest unencrypted backup was saved to ${googleAccount}'s Google Drive.`);
     } catch (error) {
       Alert.alert("Drive backup failed", error instanceof Error ? error.message : "Unable to back up to Google Drive.");
+    } finally {
+      setDriveLoading(false);
+      setDriveStatus("");
+    }
+  };
+
+  const handleLoadDriveBackups = async () => {
+    try {
+      setDriveLoading(true);
+      setDriveStatus("Finding monthly, yearly and all-time backups…");
+      const files = await listGoogleDriveBackups();
+      setDriveBackups(files);
+      if (!files.length) Alert.alert("No Drive backups", "No Ortho Logbook backup files were found in this Google account.");
+    } catch (error) {
+      Alert.alert("Could not list backups", error instanceof Error ? error.message : "Unable to list Google Drive backups.");
+    } finally {
+      setDriveLoading(false);
+      setDriveStatus("");
+    }
+  };
+
+  const handleChooseDriveBackup = async (file: {id:string;name:string;modifiedTime:string}) => {
+    try {
+      setDriveLoading(true);
+      setDriveStatus("Downloading selected backup…");
+      const result = await restoreGoogleDriveBackupById(file.id);
+      const info = getBackupInfo(result.backupText);
+      setSelectedBackup({ name: result.name, backupText: result.backupText, info });
+      setRestorePassword("");
+      Alert.alert("Backup selected", `${result.name}\nUpdated: ${new Date(result.modifiedTime).toLocaleString()}\nChoose Merge or Replace below.`);
+    } catch (error) {
+      Alert.alert("Selected backup failed", error instanceof Error ? error.message : "Unable to download this backup.");
     } finally {
       setDriveLoading(false);
       setDriveStatus("");
@@ -366,7 +399,7 @@ export default function BackupRestoreScreen() {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Google Drive Backup</Text>
           <Text style={styles.cardSub}>
-            Connect a Google account on this phone. Backup and restore run directly through Google Drive. Drive backups are unencrypted; phone/file backups remain encrypted.
+            Connect a Google account on this phone. Month, year, and all-time backups use separate Drive files; choose a saved file to restore that exact range. Drive backups are unencrypted; phone/file backups remain encrypted.
           </Text>
           {googleAccount ? (
             <>
@@ -394,6 +427,29 @@ export default function BackupRestoreScreen() {
                 <Ionicons name="cloud-download-outline" size={18} color={colors.onSurface} />
                 <Text style={styles.secondaryText}>Restore Latest from Google Drive</Text>
               </Pressable>
+              <Pressable
+                style={[styles.secondaryButton, driveLoading && styles.disabledButton, { marginTop: spacing.sm }]}
+                onPress={handleLoadDriveBackups}
+                disabled={driveLoading}
+              >
+                <Ionicons name="list-outline" size={18} color={colors.onSurface} />
+                <Text style={styles.secondaryText}>Browse Month / Year / All-Time Backups</Text>
+              </Pressable>
+              {driveBackups.map((file) => (
+                <Pressable
+                  key={file.id}
+                  style={[styles.selectedBox, { marginTop: spacing.xs }]}
+                  onPress={() => handleChooseDriveBackup(file)}
+                  disabled={driveLoading}
+                >
+                  <Text style={styles.selectedTitle}>{file.name}</Text>
+                  <Text style={styles.fileInfo}>
+                    {file.modifiedTime ? new Date(file.modifiedTime).toLocaleString() : "Drive backup"}
+                    {file.size ? " · " + (Number(file.size) / (1024 * 1024)).toFixed(1) + " MB" : ""}
+                  </Text>
+                  <Text style={styles.hint}>Tap to download and select this backup</Text>
+                </Pressable>
+              ))}
               <Pressable
                 style={[styles.secondaryButton, driveLoading && styles.disabledButton, { marginTop: spacing.sm }]}
                 onPress={handleDisconnectGoogle}
@@ -429,7 +485,7 @@ export default function BackupRestoreScreen() {
 
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Backup Range</Text>
-          <Text style={styles.cardSub}>Choose exactly which patient date records are included in this backup.</Text>
+          <Text style={styles.cardSub}>Choose the patient date range for manual Drive snapshots and encrypted phone backups. All Time, Month (YYYY-MM), and Year (YYYY) are saved as separate Drive files; automatic sync keeps the all-time baseline plus incremental updates.</Text>
           <Segmented
             options={["All", "Date", "Month", "Year"] as any}
             value={backupFilter.type === "all" ? "All" : backupFilter.type.charAt(0).toUpperCase() + backupFilter.type.slice(1)}
