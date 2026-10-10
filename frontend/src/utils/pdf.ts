@@ -191,6 +191,9 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
     ? branding.pdfPatientFields
     : ["date","mrNo","name","gender","age","diagnosis","procedure"];
   const labels: Record<string,string> = {date:"Date",mrNo:"MR No",name:"Patient",gender:"Gender",age:"Age",address:"Address",diagnosis:"Diagnosis",procedure:"Procedure",procedureII:String((branding as any).procedureSecondLabel||"Procedure 2"),implants:"Implants",fileName:"File Name",hcvPlus:"HCV+",hbaSg:"HbAsg",hiv:"HIV"};
+  // Custom field keys include a stable unique suffix (for example description_bcf286b5).
+  // Use a readable label in every PDF location instead of exposing the storage key.
+  const fieldLabel = (key: string) => labels[key] || key.replace(/_[a-f0-9]{6,}$/i, "").replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
   const savedHeadingMap:any = branding.pdfHeadingMap && typeof branding.pdfHeadingMap==="object" ? branding.pdfHeadingMap : {};
   const legacyGroups = Array.isArray(branding.pdfHeadingLevels) ? branding.pdfHeadingLevels : [];
   const legacyHeadingFields = legacyGroups
@@ -264,7 +267,7 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
         const cfg:any=headingMap[String(k)] || {};
         const headingKeys:string[]=Array.isArray(cfg.heading)?cfg.heading.map(String):[];
         const subKeys:string[]=Array.isArray(cfg.subHeading)?cfg.subHeading.map(String):[];
-        const headingLines=headingKeys.map(h=>"<div class='pdfHeadingLine pdfHierarchyText'><b>"+escapeHtml(labels[h]||h)+"</b> — "+escapeHtml(value(p,h)||"—")+"</div>").join("");
+        const headingLines=headingKeys.map(h=>"<div class='pdfHeadingLine pdfHierarchyText'><b>"+escapeHtml(fieldLabel(h))+"</b> — "+escapeHtml(value(p,h)||"—")+"</div>").join("");
         const subLines=subKeys.map(h=>"<div class='pdfSubHeadingLine pdfHierarchyText'><b>"+escapeHtml(labels[h]||h)+"</b> — "+escapeHtml(value(p,h)||"—")+"</div>").join("");
         // Main-entry fields always use the independent Main Entry typography.
         // Heading/Sub-heading typography is applied only to the nested fields
@@ -275,7 +278,7 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
       }).join("")+"</tr>";
     });
     if(!rows) rows='<tr><td colspan="'+(mainFields.length+1)+'"><div class="empty">No patients recorded.</div></td></tr>';
-    const heads=mainFields.map(k=>"<th>"+escapeHtml(labels[k]||k)+"</th>").join("");
+    const heads=mainFields.map(k=>"<th>"+escapeHtml(fieldLabel(k))+"</th>").join("");
     const pageHeader = start === 0 ? header(branding,'Patient List — '+patients.length+' record'+(patients.length===1?'':'s')+(fromDate||toDate?' — '+(fromDate||'Start')+' to '+(toDate||'End'):''), "patientList") : "";
     pageTables.push('<section class="listPage">'+pageHeader+'<table><thead><tr><th class="indexHead">#</th>'+heads+'</tr></thead><tbody>'+rows+'</tbody></table></section>');
   }
