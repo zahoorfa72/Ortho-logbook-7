@@ -793,7 +793,7 @@ export async function backupToGoogleDrive(
   let migrationComplete = true;
   let cleanupSafe = true;
   let migrationAttempted = false;
-  if (isMasterBackup && (await storage.secureGet(MASTER_MIGRATION_KEY, "")) !== "1") {
+  if (isMasterBackup && String((await storage.secureGet(MASTER_MIGRATION_KEY, "")) || "") !== "1") {
     migrationAttempted = true;
     options.onProgress?.("Merging existing Drive backups into the master…");
     const migration = await mergeLegacyDriveHistory(backupText, options.onProgress, options.preferDriveOnMigration === true);
@@ -823,7 +823,7 @@ export async function backupToGoogleDrive(
   const previousHash = await storage.secureGet(LAST_DRIVE_CONTENT_HASH_KEY + ":" + fileName, "");
   const previousSuccess = await getLastDriveBackupStatus();
   if (existing?.id && previousSuccess && options.skipIfUnchanged && previousHash === contentHash &&
-      (!isMasterBackup || (!migrationAttempted && (await storage.secureGet(MASTER_MIGRATION_KEY, "")) === "1"))) {
+      (!isMasterBackup || (!migrationAttempted && String((await storage.secureGet(MASTER_MIGRATION_KEY, "")) || "") === "1"))) {
     return { skipped: true, completedAt: previousSuccess, accountEmail: getConnectedGoogleAccount(), name: fileName };
   }
 
@@ -1168,7 +1168,7 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
     return rows > 0 || deleted > 0;
   });
 
-  const migrationNeeded = (await storage.secureGet(MASTER_MIGRATION_KEY, "")) !== "1";
+  const migrationNeeded = String((await storage.secureGet(MASTER_MIGRATION_KEY, "")) || "") !== "1";
   if (!hasActualChanges && !migrationNeeded) {
     await commitIncrementalSnapshotCache(baselineKey);
     return { skipped: true, completedAt: new Date().toISOString(), name: "No changes", accountEmail: getConnectedGoogleAccount() };
