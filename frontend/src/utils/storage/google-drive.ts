@@ -964,7 +964,11 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
       throw new Error("Could not safely merge the existing rolling Drive updates file: " + String(error?.message || error));
     }
   }
-  const mergedDelta = mergeIncrementalPayloads(existingDelta, delta);
+  // A manual/new full backup changes the baseline. Never carry row deltas
+  // or deletion tombstones from the previous baseline into the new one.
+  const mergedDelta = existingDelta && existingDelta.baselineKey === baselineKey
+    ? mergeIncrementalPayloads(existingDelta, delta)
+    : { ...delta, baselineKey };
   const mergedText = JSON.stringify(mergedDelta);
   onProgress?.("Uploading merged changes to Google Drive…");
   const result = await uploadContent(mergedText, existingDeltaId, onProgress, fileName);
