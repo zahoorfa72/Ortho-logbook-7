@@ -1329,6 +1329,9 @@ export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) 
     const localText = await exportUnencryptedBackup({ type: "all" });
     onProgress?.("Merging older backups into the master…");
     const migration = await mergeLegacyDriveHistory(localText, onProgress, true);
+    if (!migration.candidateCount) {
+      throw new Error("No complete Ortho Logbook backup was found in this Google Drive account. Your phone was not changed.");
+    }
     const merged = parseDownloadedBackup(migration.backupText);
     if (!merged || merged.app !== "Ortho Logbook" || !Array.isArray(merged.patients) || !Array.isArray(merged.inventory)) {
       throw new Error("Drive backup history could not be merged into a valid all-time backup. Your phone has not been changed.");
