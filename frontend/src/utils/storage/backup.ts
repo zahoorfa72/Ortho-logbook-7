@@ -102,6 +102,18 @@ async function embedPhoto(uri:string, cache?: Map<string,string>):Promise<string
   }
 }
 
+async function embedOptionalPhoto(uri: string, cache?: Map<string,string>): Promise<string> {
+  if (!uri) return uri;
+  try { return await embedPhoto(uri, cache); }
+  catch (error) {
+    // A bill attachment must not prevent the entire backup from succeeding.
+    // Valid local/data URIs are compressed and embedded; legacy unsupported
+    // attachment formats are retained as-is for backward compatibility.
+    console.warn("[backup] optional bill photo could not be compressed", error);
+    return uri;
+  }
+}
+
 async function embedPatientPhotos(row:any, cache?: Map<string,string>){
   const raw = row.photos_json;
   let photos:string[]=[];
@@ -228,13 +240,28 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
   inventory:include("inventory") ? db.getAllSync<any>("SELECT id,name,category_id,category,size,quantity,unit,minimum_stock,low_stock_triggered_at,low_stock_since FROM inventory ORDER BY COALESCE(category,''),name COLLATE NOCASE,COALESCE(size,'')") : [],
   patientImplants:include("patientImplants") ? db.getAllSync<any>("SELECT * FROM patient_implants ORDER BY created_at ASC") : [],
   patientCustomFields:include("patientCustomFields") ? db.getAllSync<any>("SELECT * FROM patient_custom_fields ORDER BY sort_order ASC,label COLLATE NOCASE") : [],
-  implantRecords:include("implantRecords") ? db.getAllSync<any>("SELECT * FROM implant_records ORDER BY created_at ASC") : [],
+  implantRecords:include("implantRecords") ? await Promise.all(db.getAllSync<any>("SELECT * FROM implant_records ORDER BY created_at ASC").map(async (row:any) => {
+    let billFiles = row.bill_files_json;
+    try {
+      const parsed = JSON.parse(String(row.bill_files_json || "[]"));
+      if (Array.isArray(parsed)) {
+        const compressed = [];
+        for (const file of parsed) {
+          if (typeof file === "string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(file)) {
+            try { compressed.push(await embedPhoto(file, compressedPhotoCache)); } catch { compressed.push(file); }
+          } else compressed.push(file);
+        }
+        billFiles = JSON.stringify(compressed);
+      }
+    } catch {}
+    return { ...row, bill_files_json: billFiles };
+  })) : [],
   expenses:include("expenses") ? (()=>{const f=whereForFilter(filter,"date");return db.getAllSync<any>(`SELECT * FROM expenses${f.sql} ORDER BY date DESC, created_at DESC`,f.args);})() : [],
   users:include("users") ? db.getAllSync<any>("SELECT * FROM users ORDER BY created_at ASC") : [],
   patientHistory:embeddedHistory,
   inventoryMovements:include("inventoryMovements") ? (()=>{if(filter.type==="all") return db.getAllSync<any>("SELECT * FROM inventory_movements ORDER BY created_at ASC"); const f=filter.type==="date" ? {sql:" WHERE date(created_at)=?",args:[filter.value||""]} : filter.type==="month" ? {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]} : {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]}; return db.getAllSync<any>(`SELECT * FROM inventory_movements${f.sql} ORDER BY created_at ASC`,f.args);})() : [],
-  inventoryPurchaseReceipts:include("inventoryPurchaseReceipts") ? (()=>{const f=whereForFilter(filter,"created_at");return db.getAllSync<any>(`SELECT * FROM inventory_purchase_receipts${f.sql} ORDER BY created_at ASC`,f.args);})() : [],
-  stockReceipts:include("stockReceipts") ? (()=>{const f=whereForFilter(filter,"created_at");return db.getAllSync<any>(`SELECT * FROM stock_receipts${f.sql} ORDER BY created_at ASC`,f.args);})() : [],
+  inventoryPurchaseReceipts:include("inventoryPurchaseReceipts") ? await (async()=>{const f=whereForFilter(filter,"created_at");const rows=db.getAllSync<any>(\`SELECT * FROM inventory_purchase_receipts\${f.sql} ORDER BY created_at ASC\`,f.args);return await Promise.all(rows.map(async (row:any)=>({ ...row, bill_image: typeof row.bill_image==="string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(row.bill_image) ? await embedOptionalPhoto(row.bill_image,compressedPhotoCache) : row.bill_image })));})() : [],
+  stockReceipts:include("stockReceipts") ? await (async()=>{const f=whereForFilter(filter,"created_at");const rows=db.getAllSync<any>(\`SELECT * FROM stock_receipts\${f.sql} ORDER BY created_at ASC\`,f.args);return await Promise.all(rows.map(async (row:any)=>({ ...row, bill_image: typeof row.bill_image==="string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(row.bill_image) ? await embedOptionalPhoto(row.bill_image,compressedPhotoCache) : row.bill_image })));})() : [],
   branding,
   appSettings,
  };
