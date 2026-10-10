@@ -15,9 +15,9 @@ import { useToast } from "@/src/components/toast";
 import { usesNativeTabs } from "@/src/navigation";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 import { hasAdminPin } from "@/src/utils/admin-pin";
-import { buildStatsHtml, generateAndSharePdf } from "@/src/utils/pdf";
+import { buildSecondProcedureStatsHtml, buildStatsHtml, generateAndSharePdf } from "@/src/utils/pdf";
 
-type Stats = { total_patients: number; procedures: { name: string; count: number }[] };
+type Stats = { total_patients: number; procedures: { name: string; count: number }[]; proceduresII?: { name: string; count: number }[] };
 
 const HERO = require("../../assets/images/icon.png");
 
@@ -40,6 +40,7 @@ export default function StatsScreen() {
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [pinPromptOpen, setPinPromptOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [exportSecondProcedure, setExportSecondProcedure] = useState(false);
 
   const isMonthly = scope === "Monthly";
 
@@ -52,14 +53,17 @@ export default function StatsScreen() {
   });
 
   const maxCount = Math.max(1, ...(data?.procedures || []).map((p) => p.count));
+  const maxSecondCount = Math.max(1, ...(data?.proceduresII || []).map((p) => p.count));
   const periodLabel = isMonthly ? `${MONTHS[month - 1]} ${year}` : `Year ${year}`;
 
-  const doExport = useCallback(async () => {
+  const doExport = useCallback(async (secondProcedure = false) => {
     if (!data) return;
     setExporting(true);
     try {
-      const html = buildStatsHtml(branding, data, periodLabel);
-      await generateAndSharePdf(html, `Statistics ${periodLabel}`);
+      const html = secondProcedure
+        ? buildSecondProcedureStatsHtml(branding, data, periodLabel)
+        : buildStatsHtml(branding, data, periodLabel);
+      await generateAndSharePdf(html, `${secondProcedure ? "Second Procedure Statistics" : "Statistics"} ${periodLabel}`);
     } catch (e: any) {
       toast(e?.message || "Could not create PDF.", "error");
     } finally {
@@ -67,9 +71,10 @@ export default function StatsScreen() {
     }
   }, [branding, data, periodLabel, toast]);
 
-  const requestExport = useCallback(async () => {
+  const requestExport = useCallback(async (secondProcedure = false) => {
+    setExportSecondProcedure(secondProcedure);
     if (await hasAdminPin()) setPinPromptOpen(true);
-    else doExport();
+    else doExport(secondProcedure);
   }, [doExport]);
 
   return (
@@ -101,6 +106,19 @@ export default function StatsScreen() {
                     <Ionicons name="download-outline" size={18} color="#FFF" />
                   )}
                   <Text style={styles.heroExportText}>Export PDF</Text>
+                </Pressable>
+                <Pressable
+                  testID="stats-export-second-procedure-pdf"
+                  onPress={() => requestExport(true)}
+                  style={styles.heroExport}
+                  disabled={exporting}
+                >
+                  {exporting ? (
+                    <ActivityIndicator size="small" color="#FFF" />
+                  ) : (
+                    <Ionicons name="download-outline" size={18} color="#FFF" />
+                  )}
+                  <Text style={styles.heroExportText}>2nd Proc PDF</Text>
                 </Pressable>
               ) : null}
             </View>
@@ -159,6 +177,25 @@ export default function StatsScreen() {
               </View>
             ))
           )}
+
+          <Text style={styles.section}>Second Procedure Breakdown</Text>
+          {isLoading ? (
+            <ActivityIndicator color={colors.brandPrimary} style={{ marginTop: spacing.xl }} />
+          ) : !(data?.proceduresII || []).length ? (
+            <EmptyState icon="stats-chart-outline" title="No second-procedure data yet" subtitle="Add a second procedure to a patient to see stats." />
+          ) : (
+            data!.proceduresII!.map((proc) => (
+              <View key={proc.name} style={styles.statRow} testID={`stat-row-second-${proc.name}`}>
+                <View style={styles.statTop}>
+                  <Text style={styles.statName} numberOfLines={1}>{proc.name}</Text>
+                  <Text style={styles.statCount}>{proc.count}</Text>
+                </View>
+                <View style={styles.barTrack}>
+                  <View style={[styles.barFill, { width: `${(proc.count / maxSecondCount) * 100}%` }]} />
+                </View>
+              </View>
+            ))
+          )}
         </View>
       </ScrollView>
 
@@ -168,7 +205,7 @@ export default function StatsScreen() {
         description="Enter admin PIN to export statistics."
         onSuccess={() => {
           setPinPromptOpen(false);
-          doExport();
+          doExport(exportSecondProcedure);
         }}
         onCancel={() => setPinPromptOpen(false)}
       />
