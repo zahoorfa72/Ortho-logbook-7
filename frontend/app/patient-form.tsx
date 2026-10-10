@@ -670,9 +670,15 @@ export default function PatientForm() {
           </View>
         </Modal>
         <Text style={styles.section}>Patient Details</Text>
-        {(Array.isArray(branding.patientFormFieldOrder) && branding.patientFormFieldOrder.length
-          ? [...branding.patientFormFieldOrder.filter((key:string)=>["mrNo","name","gender","age","address","diagnosis","procedure","fileName","date"].includes(key)), ...["mrNo","name","gender","age","address","diagnosis","procedure","fileName","date"].filter(key=>!branding.patientFormFieldOrder!.includes(key))]
-          : ["mrNo","name","gender","age","address","diagnosis","procedure","fileName","date"]).map((key:string) => {
+        {(() => {
+          const builtIn = ["mrNo","name","gender","age","address","diagnosis","procedure","fileName","date"];
+          const customKeys = customFields.filter((f:any)=>f?.key && f?.label).map((f:any)=>String(f.key));
+          const allowed = [...builtIn,...customKeys.filter((k:string)=>!builtIn.includes(k))];
+          const saved = Array.isArray(branding.patientFormFieldOrder) ? branding.patientFormFieldOrder : [];
+          const order = [...saved.filter((key:string)=>allowed.includes(key))];
+          allowed.forEach(key=>{if(!order.includes(key))order.push(key)});
+          const customByKey = new Map(customFields.filter((f:any)=>f?.key).map((f:any)=>[String(f.key),f]));
+          return order.map((key:string) => {
             switch (key) {
               case "mrNo": return <Field key={key} label="MRNo" testID="patient-mrno-input" value={p.mrNo} onChangeText={set("mrNo")} placeholder="e.g. 10234" />;
               case "name": return <Field key={key} label="Patient Name" testID="patient-name-input" value={p.name} onChangeText={set("name")} placeholder="Full name" autoCapitalize="words" />;
@@ -683,9 +689,16 @@ export default function PatientForm() {
               case "procedure": return <View key={key}><AutocompleteField label="Procedure" testID="patient-procedure-input" value={p.procedure} onChangeText={set("procedure")} placeholder="Type to search procedures" suggestions={procedureSuggestions} />{!!procedures?.length && <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.quickScroller} contentContainerStyle={styles.quickRow}>{procedures.map((x) => <Pressable key={x.id} style={styles.quickChip} onPress={() => set("procedure")(x.name)}><Text style={styles.quickChipText}>{x.name}</Text></Pressable>)}</ScrollView>}</View>;
               case "fileName": return <Field key={key} label="File / Reference" testID="patient-file-input" value={p.fileName} onChangeText={set("fileName")} placeholder="File reference" />;
               case "date": return <Field key={key} label="Date" testID="patient-date-input" value={p.date} onChangeText={set("date")} placeholder="YYYY-MM-DD" />;
-              default: return null;
+              default: {
+                const f:any = customByKey.get(key);
+                if (!f) return null;
+                const value=String((p.customData || {})[f.key] || "");
+                const update=(v:string)=>setP(prev=>({ ...prev, customData:{ ...(prev.customData || {}), [f.key]:v } }));
+                return <Field key={key} label={f.label} value={value} onChangeText={update} placeholder={f.type === "date" ? "YYYY-MM-DD" : f.label} keyboardType={f.type === "number" ? "numeric" : "default"} multiline={f.type === "multiline"} textAlignVertical={f.type === "multiline" ? "top" : "center"} style={f.type === "multiline" ? { minHeight: 100 } : undefined} testID={"patient-custom-field-" + f.id} />;
+              }
             }
-          })}
+          });
+        })()}
 
         <Text style={styles.section}>Infection Screening</Text>
         {([
@@ -760,29 +773,7 @@ export default function PatientForm() {
         ) : (
           <Text style={styles.hint}>Select one or more inventory items. Each category, item and size is kept separately.</Text>
         )}
-        {!!customFields.length && (
-          <>
-            <Text style={styles.section}>Additional Patient Fields</Text>
-            {customFields.map((f:any) => {
-              const value=String((p.customData || {})[f.key] || "");
-              const update=(v:string)=>setP(prev=>({ ...prev, customData:{ ...(prev.customData || {}), [f.key]:v } }));
-              return (
-                <Field
-                  key={f.id}
-                  label={f.label}
-                  value={value}
-                  onChangeText={update}
-                  placeholder={f.type === "date" ? "YYYY-MM-DD" : f.label}
-                  keyboardType={f.type === "number" ? "numeric" : "default"}
-                  multiline={f.type === "multiline"}
-                  textAlignVertical={f.type === "multiline" ? "top" : "center"}
-                  style={f.type === "multiline" ? { minHeight: 100 } : undefined}
-                  testID={"patient-custom-field-" + f.id}
-                />
-              );
-            })}
-          </>
-        )}
+
         {isEdit && (
           <Pressable style={styles.history} onPress={() => router.push({ pathname: "/patient-history", params: { id } })}>
             <Ionicons name="time-outline" size={20} color={colors.brandPrimary} />
