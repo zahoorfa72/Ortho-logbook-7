@@ -97,7 +97,7 @@ export default function StatsScreen() {
                 <View style={{ flexDirection: "row", gap: spacing.xs }}>
                 <Pressable
                   testID="stats-export-pdf"
-                  onPress={requestExport}
+                  onPress={() => requestExport(false)}
                   style={styles.heroExport}
                   disabled={exporting}
                 >
