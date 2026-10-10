@@ -1138,7 +1138,7 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
   if (migrationNeeded) {
     allTimeResult = await backupToGoogleDrive(undefined, { type: "all" }, {
       onProgress,
-      preferDriveOnMigration: !hasActualChanges,
+      preferDriveOnMigration: true,
       localChanges: hasActualChanges ? delta : undefined,
     });
   } else {
