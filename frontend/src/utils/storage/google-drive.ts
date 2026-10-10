@@ -616,9 +616,14 @@ function applyIncrementalToMaster(local: any, incoming: any, preserveCurrent = f
   for (const table of tables) {
     if (!changed.has(table) || !Array.isArray(incoming[table])) continue;
     if (incoming._rowDelta !== true || full.has(table)) {
-      // When there is no prior local row cache, merge full table contents by
-      // timestamps instead of replacing cloud rows with a possibly stale phone.
-      local[table] = mergeRowsByRecency(local[table] || [], incoming[table], table);
+      // When a journal began with a full-table baseline, merge by recency to
+      // protect newer records from other devices, then apply explicit tombstones
+      // accumulated by later edits. Re-added rows have their tombstones removed
+      // by mergeIncrementalPayloads, so this cannot erase a later recreation.
+      let mergedRows = mergeRowsByRecency(local[table] || [], incoming[table], table);
+      const deletedIds = new Set<string>(Array.isArray(incoming.deletedIds?.[table]) ? incoming.deletedIds[table].map(String) : []);
+      if (deletedIds.size) mergedRows = mergedRows.filter((row: any) => row?.id == null || !deletedIds.has(String(row.id)));
+      local[table] = mergedRows;
       continue;
     }
     const rows = new Map<string, any>();
