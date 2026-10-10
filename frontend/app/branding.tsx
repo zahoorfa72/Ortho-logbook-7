@@ -337,24 +337,28 @@ export default function BrandingScreen() {
           </View>;
         })}
         <Text style={[styles.label, { marginTop: spacing.md }]}>Patient Add/Edit Form — field order</Text>
-        <Text style={styles.hint}>Use the arrows to arrange MR No, Patient Name, Gender, Age, Address, Diagnosis, Procedure, File / Reference and Date in the order you prefer. This changes the entry form layout only, not saved patient data.</Text>
+        <Text style={styles.hint}>Use the arrows to arrange built-in fields and every custom field created by the administrator. New custom fields appear here automatically. This changes the entry form layout only, not saved patient data.</Text>
         {(() => {
-          const defaults = ["mrNo","name","gender","age","address","diagnosis","procedure","fileName","date"];
+          const builtIn = ["mrNo","name","gender","age","address","diagnosis","procedure","fileName","date"];
           const labels:Record<string,string> = {mrNo:"MR No",name:"Patient Name",gender:"Gender",age:"Age",address:"Address",diagnosis:"Diagnosis",procedure:"Procedure",fileName:"File / Reference",date:"Date"};
-          const order = [...(Array.isArray(draft.patientFormFieldOrder)?draft.patientFormFieldOrder.filter((k:string)=>defaults.includes(k)):defaults)];
-          defaults.forEach(k=>{if(!order.includes(k))order.push(k)});
+          const customKeys = customFields.filter((f:any)=>f?.key && f?.label).map((f:any)=>String(f.key));
+          const allowed = [...builtIn,...customKeys.filter((k:string)=>!builtIn.includes(k))];
+          const current = Array.isArray(draft.patientFormFieldOrder) ? draft.patientFormFieldOrder.filter((k:string)=>allowed.includes(k)) : [];
+          const order = [...current];
+          allowed.forEach(k=>{if(!order.includes(k))order.push(k)});
+          customFields.forEach((f:any)=>{if(f?.key && f?.label) labels[String(f.key)] = String(f.label)});
           const move=(key:string,delta:number)=>setDraft(d=>{
-            const current=[...(Array.isArray(d.patientFormFieldOrder)?d.patientFormFieldOrder.filter((k:string)=>defaults.includes(k)):defaults)];
-            defaults.forEach(k=>{if(!current.includes(k))current.push(k)});
-            const i=current.indexOf(key), j=i+delta;
-            if(j<0||j>=current.length)return d;
-            [current[i],current[j]]=[current[j],current[i]];
-            return {...d,patientFormFieldOrder:current};
+            const saved = Array.isArray(d.patientFormFieldOrder) ? d.patientFormFieldOrder.filter((k:string)=>allowed.includes(k)) : [];
+            allowed.forEach(k=>{if(!saved.includes(k))saved.push(k)});
+            const i=saved.indexOf(key), j=i+delta;
+            if(j<0||j>=saved.length)return d;
+            [saved[i],saved[j]]=[saved[j],saved[i]];
+            return {...d,patientFormFieldOrder:saved};
           });
           return order.map((key,i)=><View key={"form-order-"+key} style={{flexDirection:"row",alignItems:"center",gap:spacing.sm,marginBottom:spacing.xs}}>
-            <View style={{flex:1,padding:spacing.sm,borderWidth:1,borderColor:colors.border,borderRadius:radius.sm,backgroundColor:colors.surfaceSecondary}}><Text style={styles.fieldToggleText}>{i+1}. {labels[key]}</Text></View>
-            <Pressable accessibilityLabel={"Move "+labels[key]+" up"} disabled={i===0} style={[styles.sizeButton,{opacity:i===0?0.35:1}]} onPress={()=>move(key,-1)}><Ionicons name="chevron-up" size={18} color={colors.onSurface}/></Pressable>
-            <Pressable accessibilityLabel={"Move "+labels[key]+" down"} disabled={i===order.length-1} style={[styles.sizeButton,{opacity:i===order.length-1?0.35:1}]} onPress={()=>move(key,1)}><Ionicons name="chevron-down" size={18} color={colors.onSurface}/></Pressable>
+            <View style={{flex:1,padding:spacing.sm,borderWidth:1,borderColor:colors.border,borderRadius:radius.sm,backgroundColor:colors.surfaceSecondary}}><Text style={styles.fieldToggleText}>{i+1}. {labels[key] || key}</Text></View>
+            <Pressable accessibilityLabel={"Move "+(labels[key]||key)+" up"} disabled={i===0} style={[styles.sizeButton,{opacity:i===0?0.35:1}]} onPress={()=>move(key,-1)}><Ionicons name="chevron-up" size={18} color={colors.onSurface}/></Pressable>
+            <Pressable accessibilityLabel={"Move "+(labels[key]||key)+" down"} disabled={i===order.length-1} style={[styles.sizeButton,{opacity:i===order.length-1?0.35:1}]} onPress={()=>move(key,1)}><Ionicons name="chevron-down" size={18} color={colors.onSurface}/></Pressable>
           </View>);
         })()}
         <Text style={[styles.label, { marginTop: spacing.md }]}>Patient fields in PDF</Text>
