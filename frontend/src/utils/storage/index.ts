@@ -44,6 +44,11 @@ export class Storage extends StorageBase {
   ): Promise<boolean> {
     try {
       await AsyncStorage.setItem(key, JSON.stringify(value));
+      if (key === "ortho_branding") {
+        // Branding/PDF headers are KV settings rather than SQLite rows, so
+        // enqueue them explicitly after a real successful write.
+        void import("./drive-auto-backup").then((m) => m.triggerAutomaticDriveBackup("branding")).catch(() => undefined);
+      }
       return true;
     } catch (e) {
       this.warn("setItem", key, e);
@@ -82,6 +87,9 @@ export class Storage extends StorageBase {
   ): Promise<boolean> {
     try {
       await SecureStore.setItemAsync(key, JSON.stringify(value));
+      if (key === "ortho_google_drive_client_id" || key === "ortho_google_drive_cloud_project_id" || key === "ortho_drive_account_email") {
+        void import("./drive-auto-backup").then((m) => m.triggerAutomaticDriveBackup("appSettings")).catch(() => undefined);
+      }
       return true;
     } catch (e) {
       this.warn("secureSet", key, e);
