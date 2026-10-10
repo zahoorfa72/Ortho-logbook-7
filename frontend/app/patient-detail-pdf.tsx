@@ -50,7 +50,7 @@ export default function PatientDetailPdfScreen() {
   const {data:customFields=[]} = useQuery<any[]>({queryKey:["patient-custom-fields"],queryFn:()=>api.get("/patient-custom-fields"),enabled:user?.role==="admin"});
 
   const allFields = useMemo<Field[]>(()=>[
-    ...baseFields,
+    ...baseFields.map(f=>f.key==="procedureII"?{...f,label:branding.procedureSecondLabel?.trim() || "Procedure 2"}:f),
     ...customFields.filter((f:any)=>f?.key && f?.label && !baseFields.some(x=>x.key===String(f.key)))
       .map((f:any)=>({key:String(f.key),label:String(f.label)}))
   ],[customFields]);
@@ -63,7 +63,7 @@ export default function PatientDetailPdfScreen() {
   const filteredPatients=useMemo(()=>{
     const q=search.trim().toLowerCase();
     if(!q) return patients;
-    return patients.filter(p=>[p.name,p.mrNo,p.date,p.fileName,p.gender,p.age,p.address,p.diagnosis,p.procedure,p.implant,p.implantII,...(p.implants||[]).flatMap((x:any)=>[x.category,x.name,x.size]),...Object.values(p.customData||{})].some(v=>String(v||"").toLowerCase().includes(q)));
+    return patients.filter(p=>[p.name,p.mrNo,p.date,p.fileName,p.gender,p.age,p.address,p.diagnosis,p.procedure,(p as any).procedureII,p.implant,p.implantII,...(p.implants||[]).flatMap((x:any)=>[x.category,x.name,x.size]),...Object.values(p.customData||{})].some(v=>String(v||"").toLowerCase().includes(q)));
   },[patients,search]);
 
   const occurrenceById=useMemo(()=>{
