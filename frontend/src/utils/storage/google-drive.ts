@@ -1165,30 +1165,82 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
 
   const migrationNeeded = (await storage.secureGet(MASTER_MIGRATION_KEY, "")) !== "1";
   if (!hasActualChanges && !migrationNeeded) {
-    // Do not upload for duplicate/no-op SQLite events once the one-time master
-    // migration is complete. Scrolling/navigation must not create Drive traffic.
     await commitIncrementalSnapshotCache(baselineKey);
     return { skipped: true, completedAt: new Date().toISOString(), name: "No changes", accountEmail: getConnectedGoogleAccount() };
   }
 
-  // Update one complete master snapshot in place. If migration is already
-  // complete, merge only this phone's changed rows into the latest cloud master
-  // so stale unchanged rows from another device cannot overwrite newer records.
-  onProgress?.("Refreshing the complete all-time backup…");
-  let allTimeResult: any;
+  // The one-time legacy migration is the only normal sync path that needs a
+  // full snapshot immediately. Thereafter, keep the full master stable and
+  // update one compact rolling delta journal instead of re-uploading all photos
+  // and every patient row after each small edit.
   if (migrationNeeded) {
-    allTimeResult = await backupToGoogleDrive(undefined, { type: "all" }, {
+    onProgress?.("Completing one-time safe merge of older Drive backups…");
+    const migrated = await backupToGoogleDrive(undefined, { type: "all" }, {
       onProgress,
       preferDriveOnMigration: true,
       localChanges: hasActualChanges ? delta : undefined,
     });
-  } else {
+    const migratedBase = await findLatestBackup();
+    if (!migratedBase?.id) throw new Error("The complete backup was uploaded but could not be confirmed. Local data remains safe.");
+    const verified = await downloadDriveJsonValidated(String(migratedBase.id));
+    if (!verified || verified.app !== "Ortho Logbook" || !Array.isArray(verified.patients) || !Array.isArray(verified.inventory)) {
+      throw new Error("The complete backup could not be verified. The local change has not been marked as backed up.");
+    }
+    await commitIncrementalSnapshotCache(String(migratedBase.id) + ":" + String(migratedBase.modifiedTime || ""));
+    return { ...migrated, skipped: false, completedAt: new Date().toISOString(), name: "Ortho Logbook Backup - All Time.orbackup", accountEmail: getConnectedGoogleAccount(), snapshotFailures: [] };
+  }
+
+  const JOURNAL_NAME = "Ortho Logbook Incremental Journal.orbackup";
+  onProgress?.("Preparing the small change journal…");
+  let journalFile = await findBackupByName(JOURNAL_NAME);
+  let journal: any = null;
+  if (journalFile?.id) {
+    try {
+      const parsed = await downloadDriveJsonValidated(String(journalFile.id));
+      // Never mix changes that belong to a different master baseline. A manual
+      // full backup may have replaced the baseline since the journal was written.
+      if (parsed?.incremental === true && parsed?._baselineKey === baselineKey) journal = parsed;
+    } catch (error) {
+      // Keep the old journal file until a replacement has been verified. If it
+      // cannot be read, start a fresh delta based on the confirmed full master.
+      console.warn("[drive-backup] old delta journal unreadable; rebuilding from local diff", error);
+    }
+  }
+
+  const combined = journal ? mergeIncrementalPayloads(journal, delta) : delta;
+  combined.version = Math.max(Number(combined.version || 0), 8);
+  combined.app = "Ortho Logbook";
+  combined.createdAt = new Date().toISOString();
+  combined.filter = { type: "all" };
+  combined.incremental = true;
+  combined._baselineKey = baselineKey;
+  combined._updateCount = Math.max(0, Number(journal?._updateCount || 0)) + (hasActualChanges ? 1 : 0);
+  const journalText = JSON.stringify(combined);
+  const journalBytes = new TextEncoder().encode(journalText).length;
+  // Compact after a bounded number of edits or if photo changes make the
+  // journal large. Most small edits only upload this journal, not the master.
+  const shouldCompact = combined._updateCount >= 20 || journalBytes >= 8 * 1024 * 1024;
+
+  if (hasActualChanges) {
+    onProgress?.("Uploading only changed records to Google Drive…");
+    const uploaded = await uploadContent(journalText, journalFile?.id, onProgress, JOURNAL_NAME);
+    if (!uploaded?.id) throw new Error("Google Drive did not confirm the changed-record journal. Local data remains safe.");
+    const check = await downloadDriveJsonValidated(String(uploaded.id));
+    if (!check || check.app !== "Ortho Logbook" || check.incremental !== true ||
+        check._baselineKey !== baselineKey || !Array.isArray(check.changedTables)) {
+      throw new Error("The changed-record journal could not be verified. Local data remains safe; the sync will retry.");
+    }
+    journalFile = { ...uploaded, id: String(uploaded.id), name: JOURNAL_NAME };
+  }
+
+  if (shouldCompact && hasActualChanges) {
+    onProgress?.("Safely consolidating accumulated changes into the full backup…");
     const master = await downloadDriveJsonValidated(String(base.id));
     if (!master || master.app !== "Ortho Logbook" || !Array.isArray(master.patients) || !Array.isArray(master.inventory)) {
-      throw new Error("The current Google Drive master is not a complete backup. Local data was not uploaded over it.");
+      throw new Error("The current full backup could not be verified. The change journal is retained and local data is safe.");
     }
-    applyIncrementalToMaster(master, delta, delta._rowDelta !== true);
-    master.version = Math.max(Number(master.version || 0), 7);
+    applyIncrementalToMaster(master, combined, combined._rowDelta !== true);
+    master.version = Math.max(Number(master.version || 0), 8);
     master.createdAt = new Date().toISOString();
     master.filter = { type: "all" };
     delete master.incremental;
@@ -1196,28 +1248,48 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
     delete master._rowDelta;
     delete master.deletedIds;
     delete master.fullTables;
-    allTimeResult = await backupToGoogleDrive(undefined, { type: "all" }, {
+    delete master._baselineKey;
+    delete master._updateCount;
+    const masterResult = await backupToGoogleDrive(undefined, { type: "all" }, {
       onProgress,
       backupTextOverride: JSON.stringify(master),
     });
+    const refreshedBase = await findLatestBackup();
+    if (!refreshedBase?.id) throw new Error("The refreshed full backup could not be found. The delta journal is retained.");
+    const verifiedMaster = await downloadDriveJsonValidated(String(refreshedBase.id));
+    if (!verifiedMaster || verifiedMaster.app !== "Ortho Logbook" ||
+        !Array.isArray(verifiedMaster.patients) || !Array.isArray(verifiedMaster.inventory)) {
+      throw new Error("The refreshed full backup could not be verified. The delta journal is retained.");
+    }
+    // The full master now contains the journal. Delete the journal only after
+    // verification; if deletion fails, its timestamp is older than the master
+    // and restore will not apply it twice.
+    try {
+      await driveRequest(DRIVE_API + "/" + encodeURIComponent(String(journalFile?.id)) + "?supportsAllDrives=true", { method: "DELETE" });
+    } catch (error) {
+      console.warn("[drive-backup] consolidated journal cleanup deferred", error);
+    }
+    await commitIncrementalSnapshotCache(String(refreshedBase.id) + ":" + String(refreshedBase.modifiedTime || ""));
+    await markBackupTaken();
+    const completedAt = new Date().toISOString();
+    await storage.secureSet(LAST_DRIVE_BACKUP_KEY, completedAt);
+    return { ...masterResult, skipped: false, completedAt, name: "Ortho Logbook Backup - All Time.orbackup", accountEmail: getConnectedGoogleAccount(), snapshotFailures: [] };
   }
-  // Keep one rolling master backup. Month/year selection is handled during
-  // restore by filtering this complete snapshot, not by uploading duplicates.
 
-  const refreshedBase = await findLatestBackup();
-  if (!refreshedBase?.id) throw new Error("The all-time backup was uploaded but could not be found again to confirm it.");
-  const refreshedBaselineKey = String(refreshedBase.id) + ":" + String(refreshedBase.modifiedTime || "");
-  await commitIncrementalSnapshotCache(refreshedBaselineKey);
+  // If the Drive delta was confirmed, promote the local diff cache. If there
+  // were no actual changes, this only records that the checked rows match.
+  await commitIncrementalSnapshotCache(baselineKey);
   await markBackupTaken();
   const completedAt = new Date().toISOString();
   await storage.secureSet(LAST_DRIVE_BACKUP_KEY, completedAt);
   return {
-    ...allTimeResult,
-    skipped: false,
+    skipped: !hasActualChanges,
     completedAt,
-    name: "Ortho Logbook Backup - All Time.orbackup",
+    name: hasActualChanges ? JOURNAL_NAME : "No changes",
     accountEmail: getConnectedGoogleAccount(),
     snapshotFailures: [],
+    deltaJournal: hasActualChanges,
+    compacted: false,
   };
 }
 
