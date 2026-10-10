@@ -9,7 +9,7 @@ import { db, initializeDatabase, markInventoryResetDone, repairDatabaseData } fr
 import { storage } from "@/src/utils/storage";
 import type { BrandingConfig } from "@/src/theme";
 
-const BACKUP_VERSION = 7;
+const BACKUP_VERSION = 8;
 const BACKUP_APP = "Ortho Logbook";
 
 type BackupData = {
@@ -502,7 +502,7 @@ function restoreJsonArray(value:any){try{const parsed=JSON.parse(String(value ??
 
 export async function restoreBackup(backup:BackupData){
  initializeDatabase({ skipInventoryReset: true });
- if(!backup||![2,3,4,5,6,7].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
+ if(!backup||![2,3,4,5,6,7,8].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
  const patients=restoreArray((backup as any).patients);
  const procedures=restoreArray((backup as any).procedures);
  const inventoryCategories=restoreArray((backup as any).inventoryCategories);
@@ -526,7 +526,7 @@ export async function restoreBackup(backup:BackupData){
    if(p.id) patientIdMap.set(String(p.id),restoredPatientId);
    const patientDate=restoreText(p.date,new Date().toISOString().slice(0,10));
    const patientCreatedAt=restoreText(p.created_at,new Date().toISOString());
-   db.runSync("INSERT INTO patients (id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,implant_id,implant_ii_id,address,file_name,photo_uri,photos_json,custom_data_json,date,created_at,created_by,updated_at,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",[restoredPatientId,restoreText(p.mr_no),restoreText(p.name,"Unnamed patient"),restoreText(p.gender),restoreText(p.age),restoreText(p.diagnosis),restoreText(p.procedure),restoreText(p.implant),restoreText(p.implant_ii),restoreText(p.implant_id)||null,restoreText(p.implant_ii_id)||null,restoreText(p.address),restoreText(p.file_name),photos.photoUri,photos.photosJson,restoreJsonObject(p.custom_data_json),patientDate,patientCreatedAt,restoreText(p.created_by)||null,restoreText(p.updated_at)||null,restoreText(p.updated_by)||null]);
+   db.runSync("INSERT INTO patients (id,mr_no,name,gender,age,diagnosis,procedure,procedure_ii,implant,implant_ii,implant_id,implant_ii_id,address,file_name,photo_uri,photos_json,custom_data_json,date,created_at,created_by,updated_at,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",[restoredPatientId,restoreText(p.mr_no),restoreText(p.name,"Unnamed patient"),restoreText(p.gender),restoreText(p.age),restoreText(p.diagnosis),restoreText(p.procedure),restoreText(p.procedure_ii),restoreText(p.implant),restoreText(p.implant_ii),restoreText(p.implant_id)||null,restoreText(p.implant_ii_id)||null,restoreText(p.address),restoreText(p.file_name),photos.photoUri,photos.photosJson,restoreJsonObject(p.custom_data_json),patientDate,patientCreatedAt,restoreText(p.created_by)||null,restoreText(p.updated_at)||null,restoreText(p.updated_by)||null]);
   }
   const usedProcedureIds=new Set<string>();
   const usedProcedureNames=new Set<string>();
@@ -692,14 +692,14 @@ export async function restoreBackup(backup:BackupData){
 //   matching name + category + size and summing quantities.
 export async function mergeBackup(backup: BackupData) {
  initializeDatabase({ skipInventoryReset: true });
- if(!backup||![2,3,4,5,6,7].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
+ if(!backup||![2,3,4,5,6,7,8].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
  const stats = { patients: 0, procedures: 0, inventory: 0, inventoryCategories: 0, patientImplants: 0, expenses: 0, users: 0, patientHistory: 0, inventoryMovements: 0, stockReceipts: 0 };
  db.withTransactionSync(() => {
   const has = (table: string, id: string) => !!db.getFirstSync<any>(`SELECT id FROM ${table} WHERE id=?`, [id]);
   for (const p of backup.patients) {
    if (has("patients", p.id)) continue;
    const photos=restorePatientPhotos(p);
-   db.runSync("INSERT INTO patients (id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,implant_id,implant_ii_id,address,file_name,photo_uri,photos_json,custom_data_json,date,created_at,created_by,updated_at,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",[p.id,p.mr_no,p.name,p.gender||"",p.age||"",p.diagnosis||"",p.procedure||"",p.implant||"",p.implant_ii||"",p.implant_id||null,p.implant_ii_id||null,p.address||"",p.file_name||"",photos.photoUri,photos.photosJson,p.custom_data_json||"{}",p.date,p.created_at,p.created_by||null,p.updated_at||null,p.updated_by||null]);
+   db.runSync("INSERT INTO patients (id,mr_no,name,gender,age,diagnosis,procedure,procedure_ii,implant,implant_ii,implant_id,implant_ii_id,address,file_name,photo_uri,photos_json,custom_data_json,date,created_at,created_by,updated_at,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",[p.id,p.mr_no,p.name,p.gender||"",p.age||"",p.diagnosis||"",p.procedure||"",p.procedure_ii||"",p.implant||"",p.implant_ii||"",p.implant_id||null,p.implant_ii_id||null,p.address||"",p.file_name||"",photos.photoUri,photos.photosJson,p.custom_data_json||"{}",p.date,p.created_at,p.created_by||null,p.updated_at||null,p.updated_by||null]);
    stats.patients++;
   }
   for (const p of backup.procedures) {
