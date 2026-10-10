@@ -200,7 +200,7 @@ export default function BackupRestoreScreen() {
       setDriveStatus("Finding the single master backup…");
       const files = await listGoogleDriveBackups();
       setDriveBackups(files);
-      if (!files.length) Alert.alert("No Drive backups", "No Ortho Logbook backup files were found in this Google account.");
+      if (!files.length) Alert.alert("No master backup yet", "Tap Backup to Google Drive once to merge older month/year backups into one master file. Older files are kept unless every readable record is merged successfully.");
     } catch (error) {
       Alert.alert("Could not list backups", error instanceof Error ? error.message : "Unable to list Google Drive backups.");
     } finally {
