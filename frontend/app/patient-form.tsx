@@ -5,7 +5,7 @@ import * as ImageManipulator from "expo-image-manipulator";
 import { Asset, requestPermissionsAsync } from "expo-media-library";
 import * as FileSystem from "expo-file-system/legacy";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Image, InteractionManager, Modal, Pressable, ScrollView, Text, View } from "react-native";
+import { AppState, Image, InteractionManager, Modal, Pressable, ScrollView, Text, View } from "react-native";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -93,6 +93,8 @@ export default function PatientForm() {
   const [photoBusy, setPhotoBusy] = useState(false);
   const [imagePickerReady, setImagePickerReady] = useState(false);
   const imagePickerOpening = useRef(false);
+  const imagePickerReadyRef = useRef(false);
+  const appStateRef = useRef(AppState.currentState);
   const [cropScale, setCropScale] = useState(0.78);
   const [cropX, setCropX] = useState(0.5);
   const [cropY, setCropY] = useState(0.5);
@@ -162,37 +164,76 @@ export default function PatientForm() {
 
   const set = (key: keyof Patient) => (v: any) => setP((x) => ({ ...x, [key]: v }));
 
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (nextState) => {
+      appStateRef.current = nextState;
+      if (nextState !== "active") {
+        imagePickerReadyRef.current = false;
+        setImagePickerReady(false);
+        return;
+      }
+      // Wait until Android has resumed the host Activity before allowing a
+      // native picker launch after a permission dialog or app switch.
+      setTimeout(() => {
+        if (appStateRef.current === "active") {
+          imagePickerReadyRef.current = true;
+          setImagePickerReady(true);
+        }
+      }, 800);
+    });
+    return () => subscription.remove();
+  }, []);
+
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
+      imagePickerReadyRef.current = false;
       setImagePickerReady(false);
 
-      // expo-image-picker registers its native ActivityResult launcher only
-      // after the Android Activity is resumed. A screen can regain focus before
-      // that registration has completed (especially after the app has been
-      // backgrounded/recreated), so a fixed short delay is not sufficient.
-      const arm = () => {
-        if (!cancelled) setImagePickerReady(true);
-      };
-      const timer = setTimeout(arm, 650);
+      const timer = setTimeout(() => {
+        if (!cancelled && appStateRef.current === "active") {
+          imagePickerReadyRef.current = true;
+          setImagePickerReady(true);
+        }
+      }, 800);
       return () => {
         cancelled = true;
         clearTimeout(timer);
         imagePickerOpening.current = false;
+        imagePickerReadyRef.current = false;
         setImagePickerReady(false);
       };
     }, []),
   );
 
   async function waitForImagePickerActivity() {
-    // Give Android a resumed Activity before touching expo-image-picker.
-    // This prevents the native "unregistered ActivityResult Launcher" crash
-    // that can occur after Activity recreation/background restoration.
-    for (let attempt = 0; attempt < 8; attempt += 1) {
-      if (imagePickerReady) return true;
-      await new Promise<void>((resolve) => setTimeout(resolve, 125));
+    // Read refs, not React state captured by an old async closure. The old
+    // implementation could retry immediately or wait forever after a state
+    // update because it read a stale imagePickerReady value.
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (appStateRef.current === "active" && imagePickerReadyRef.current) return true;
+      await new Promise<void>((resolve) => setTimeout(resolve, 150));
     }
-    return imagePickerReady;
+    return false;
+  }
+
+  async function rearmImagePickerAfterLauncherError() {
+    imagePickerReadyRef.current = false;
+    setImagePickerReady(false);
+    // Let Android finish ActivityResultRegistry lifecycle restoration before
+    // retrying. Only re-arm when the app is genuinely active again.
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (appStateRef.current === "active") {
+        await new Promise<void>((resolve) => setTimeout(resolve, 900));
+        if (appStateRef.current === "active") {
+          imagePickerReadyRef.current = true;
+          setImagePickerReady(true);
+          return true;
+        }
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 150));
+    }
+    return false;
   }
 
   const isUnregisteredLauncherError = (error: any) => {
@@ -220,7 +261,13 @@ export default function PatientForm() {
       return false;
     }
     const req = await ImagePicker.requestCameraPermissionsAsync();
-    return req.granted;
+    if (req.granted) {
+      // Permission prompts can pause/recreate the Android Activity and leave
+      // the camera launcher unregistered for the remainder of that tap.
+      // Ask the user to tap Camera again after the permission flow has ended.
+      toast("Camera permission granted. Tap Camera again to take the photo.", "info");
+    }
+    return false;
   }
 
   // Keep a private, permanent copy inside the app. Gallery/camera URIs can
@@ -276,9 +323,7 @@ export default function PatientForm() {
         // unregistered. Re-arm the screen and retry once after the Activity
         // has had time to register the launcher again.
         if (!isUnregisteredLauncherError(firstError)) throw firstError;
-        setImagePickerReady(false);
-        await new Promise<void>((resolve) => setTimeout(resolve, 700));
-        if (!(await waitForImagePickerActivity())) {
+        if (!(await rearmImagePickerAfterLauncherError())) {
           throw firstError;
         }
         result = await ImagePicker.launchImageLibraryAsync({
@@ -311,9 +356,7 @@ export default function PatientForm() {
         });
       } catch (firstError: any) {
         if (!isUnregisteredLauncherError(firstError)) throw firstError;
-        setImagePickerReady(false);
-        await new Promise<void>((resolve) => setTimeout(resolve, 700));
-        if (!(await waitForImagePickerActivity())) throw firstError;
+        if (!(await rearmImagePickerAfterLauncherError())) throw firstError;
         result = await ImagePicker.launchCameraAsync({
           allowsEditing: false,
           quality: 0.9,
