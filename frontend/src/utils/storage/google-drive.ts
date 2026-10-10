@@ -954,8 +954,7 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
   const existingFile = await findBackupByName(fileName);
   if (existingFile?.id) {
     try {
-      const previousText = await downloadDriveJsonValidated(String(existingFile.id));
-      const previous = JSON.parse(previousText);
+      const previous = await downloadDriveJsonValidated(String(existingFile.id));
       if (previous?.app === "Ortho Logbook" && previous?.incremental === true && Array.isArray(previous.changedTables)) {
         existingDelta = previous;
         existingDeltaId = String(existingFile.id);
