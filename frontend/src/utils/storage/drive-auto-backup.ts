@@ -115,9 +115,12 @@ async function runBackup() {
         ? "Drive checked · no changed records"
         : "Changed data uploaded to Google Drive") +
       (completedAt ? " · " + completedAt : "") +
+      (Array.isArray((result as any).cleanupFailures) && (result as any).cleanupFailures.length
+        ? " · Old backup cleanup needs retry: " + (result as any).cleanupFailures.join("; ")
+        : "") +
       (Array.isArray((result as any).snapshotFailures) && (result as any).snapshotFailures.length
         ? " · Range snapshot pending: " + (result as any).snapshotFailures.join("; ")
-        : " · monthly, yearly and all-time backups checked");
+        : " · single master backup checked");
     if (pendingTables.size) {
       setDriveSyncState({ phase: "waiting", updates: pendingTables.size, message: "New changes detected · syncing again…" });
     } else {
