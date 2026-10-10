@@ -456,7 +456,7 @@ export default function BackupRestoreScreen() {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Google Drive Backup</Text>
           <Text style={styles.cardSub}>
-            Connect a Google account on this phone. Month, year, and all-time backups use separate Drive files; choose a saved file to restore that exact range. Drive backups are unencrypted; phone/file backups remain encrypted.
+            Connect a Google account on this phone. Google Drive keeps one rolling master backup with compressed patient and bill photos. Choose all-time, month, or year after downloading it. Drive backups are unencrypted; phone/file backups remain encrypted.
           </Text>
           {googleAccount ? (
             <>
