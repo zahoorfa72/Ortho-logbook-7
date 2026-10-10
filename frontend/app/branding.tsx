@@ -2,7 +2,8 @@ import { router } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system";
 import { Image } from "expo-image";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { useFocusEffect } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import Ionicons from "@react-native-vector-icons/ionicons";
@@ -70,7 +71,10 @@ export default function BrandingScreen() {
     setTitleSizeText(String(branding.pdfTitleSize));
     setPdfMarginText(String(branding.pdfMargin));
   }, [branding]);
-  const { data: customFields = [] } = useQuery<any[]>({ queryKey: ["patient-custom-fields"], queryFn: () => api.get("/patient-custom-fields"), enabled: user?.role === "admin", refetchOnMount: "always", refetchOnReconnect: true, staleTime: 0 });
+  const { data: customFields = [], refetch: refetchCustomFields } = useQuery<any[]>({ queryKey: ["patient-custom-fields"], queryFn: () => api.get("/patient-custom-fields"), enabled: user?.role === "admin", refetchOnMount: "always", refetchOnReconnect: true, staleTime: 0 });
+  // Branding can remain mounted while the admin opens Patient Fields. Refetch on
+  // returning so newly created custom fields immediately appear in the order list.
+  useFocusEffect(useCallback(() => { if (user?.role === "admin") void refetchCustomFields(); }, [user?.role, refetchCustomFields]));
   const patientPdfOptions = (() => {
     const base: [string,string][] = [["date","Date"],["mrNo","MR No"],["name","Patient Name"],["gender","Gender"],["age","Age"],["address","Address"],["diagnosis","Diagnosis"],["procedure","Procedure"],["procedureII",draft.procedureSecondLabel?.trim() || "Procedure 2"],["implants","Implants"],["fileName","File Name"],["hcvPlus","HCV+"],["hbaSg","HbAsg"],["hiv","HIV"]];
     const custom: [string,string][] = customFields.filter((f:any)=>f?.key && f?.label).map((f:any)=>[String(f.key),String(f.label)]);
