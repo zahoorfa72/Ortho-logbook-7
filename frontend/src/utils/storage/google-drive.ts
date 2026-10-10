@@ -1319,7 +1319,7 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
   };
 }
 
-export async function restoreLatestFromGoogleDrive() {
+export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) => void) {
   // A freshly reinstalled app has no local migration marker. Compose the
   // master in memory from all Drive history and deltas, then restore that result
   // directly. Do not upload a full snapshot before restoring: that can stall
@@ -1327,7 +1327,8 @@ export async function restoreLatestFromGoogleDrive() {
   const migrationDone = String((await storage.secureGet(MASTER_MIGRATION_KEY, "")) || "") === "1";
   if (!migrationDone) {
     const localText = await exportUnencryptedBackup({ type: "all" });
-    const migration = await mergeLegacyDriveHistory(localText, undefined, true);
+    onProgress?.("Merging older backups into the master…");
+    const migration = await mergeLegacyDriveHistory(localText, onProgress, true);
     const merged = parseDownloadedBackup(migration.backupText);
     if (!merged || merged.app !== "Ortho Logbook" || !Array.isArray(merged.patients) || !Array.isArray(merged.inventory)) {
       throw new Error("Drive backup history could not be merged into a valid all-time backup. Your phone has not been changed.");
@@ -1341,6 +1342,7 @@ export async function restoreLatestFromGoogleDrive() {
     };
   }
 
+  onProgress?.("Searching Google Drive for the all-time master…");
   const candidates = (await findLatestBackupCandidates()).filter((item:any) =>
     String(item.name || "") === "Ortho Logbook Backup - All Time.orbackup" ||
     String(item.name || "") === BACKUP_NAME
@@ -1358,7 +1360,9 @@ export async function restoreLatestFromGoogleDrive() {
   const rejectedFiles: string[] = [];
   // Prefer the newest valid full backup, but fall back to older full backups
   // if the newest matching file is damaged or is an unrelated similarly named file.
-  for (const candidate of candidates) {
+  for (let candidateIndex = 0; candidateIndex < candidates.length; candidateIndex++) {
+    const candidate = candidates[candidateIndex];
+    onProgress?.("Checking master backup " + (candidateIndex + 1) + " of " + candidates.length + "…");
     let parsed: any;
     try {
       parsed = await downloadDriveJsonValidated(candidate.id);
@@ -1392,7 +1396,9 @@ export async function restoreLatestFromGoogleDrive() {
     .sort((a: any, b: any) => Date.parse(String(a.modifiedTime)) - Date.parse(String(b.modifiedTime)));
   const recoveryWarnings: string[] = [];
   let appliedIncrementals = 0;
-  for (const deltaFile of deltas) {
+  for (let deltaIndex = 0; deltaIndex < deltas.length; deltaIndex++) {
+    const deltaFile = deltas[deltaIndex];
+    onProgress?.("Applying saved changes " + (deltaIndex + 1) + " of " + deltas.length + "…");
     let delta: any;
     try {
       const recovered = await downloadIncrementalWithRecovery(deltaFile.id, String(deltaFile.name || "An incremental backup"));
