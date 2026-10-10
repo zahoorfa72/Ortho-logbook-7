@@ -760,7 +760,7 @@ export async function backupToGoogleDrive(
     cleanupFailures = await trashDuplicateDriveBackups(String(result.id));
     await storage.secureSet(MASTER_MIGRATION_KEY, "1");
   }
-  return { ...result, skipped: false, completedAt, name: fileName, accountEmail: getConnectedGoogleAccount(), cleanupFailures };
+  return { ...result, skipped: false, completedAt, name: fileName, accountEmail: getConnectedGoogleAccount(), cleanupFailures, migrationPending: isMasterBackup && !migrationComplete };
 }
 
 async function listIncrementalFiles() {
