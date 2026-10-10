@@ -623,7 +623,7 @@ function applyIncrementalToMaster(local: any, incoming: any, preserveCurrent = f
   if (Object.prototype.hasOwnProperty.call(incoming, "appSettings")) local.appSettings = incoming.appSettings;
 }
 
-async function mergeLegacyDriveHistory(localText: string, onProgress?: (stage: string) => void) {
+async function mergeLegacyDriveHistory(localText: string, onProgress?: (stage: string) => void, preferDrive = false) {
   const local = parseDownloadedBackup(localText);
   const candidates = (await findLatestBackupCandidates()).filter((file: any) => {
     const name = String(file.name || "");
@@ -638,8 +638,11 @@ async function mergeLegacyDriveHistory(localText: string, onProgress?: (stage: s
   ];
   let complete = true;
   let mergedFiles = 0;
-  for (let index = 0; index < candidates.length; index++) {
-    const file = candidates[index];
+  const orderedCandidates = preferDrive
+    ? [...candidates].sort((a: any, b: any) => Date.parse(String(a.modifiedTime || "")) - Date.parse(String(b.modifiedTime || "")))
+    : candidates;
+  for (let index = 0; index < orderedCandidates.length; index++) {
+    const file = orderedCandidates[index];
     onProgress?.("Merging old backup history… " + (index + 1) + "/" + candidates.length);
     let old: any;
     try {
@@ -656,7 +659,9 @@ async function mergeLegacyDriveHistory(localText: string, onProgress?: (stage: s
     if (old.incremental === true) continue;
     for (const table of tables) {
       if (!Array.isArray(old[table]) || !Array.isArray(local[table])) continue;
-      local[table] = mergeRowsPreservingCurrent(local[table], old[table], table);
+      local[table] = preferDrive
+        ? mergeRowsPreservingCurrent(old[table], local[table], table)
+        : mergeRowsPreservingCurrent(local[table], old[table], table);
     }
     if (!Object.prototype.hasOwnProperty.call(local, "branding") && Object.prototype.hasOwnProperty.call(old, "branding")) local.branding = old.branding;
     if (!Object.prototype.hasOwnProperty.call(local, "appSettings") && Object.prototype.hasOwnProperty.call(old, "appSettings")) local.appSettings = old.appSettings;
@@ -732,7 +737,7 @@ async function deleteDuplicateDriveBackups(masterFileId: string): Promise<string
 export async function backupToGoogleDrive(
   _password?: string,
   filter: BackupFilter = { type: "all" },
-  options: { skipIfUnchanged?: boolean; onProgress?: (stage: string) => void } = {},
+  options: { skipIfUnchanged?: boolean; onProgress?: (stage: string) => void; preferDriveOnMigration?: boolean } = {},
 ) {
   // Google Drive backup is intentionally plain JSON at the user's request.
   // Local phone/file backups remain encrypted by exportBackup().
@@ -745,7 +750,7 @@ export async function backupToGoogleDrive(
   if (isMasterBackup && (await storage.secureGet(MASTER_MIGRATION_KEY, "")) !== "1") {
     migrationAttempted = true;
     options.onProgress?.("Merging existing Drive backups into the master…");
-    const migration = await mergeLegacyDriveHistory(backupText, options.onProgress);
+    const migration = await mergeLegacyDriveHistory(backupText, options.onProgress, options.preferDriveOnMigration === true);
     backupText = migration.backupText;
     migrationComplete = migration.complete;
     cleanupSafe = migration.cleanupSafe;
@@ -1107,9 +1112,10 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
     return rows > 0 || deleted > 0;
   });
 
-  if (!hasActualChanges) {
-    // Do not upload or rebuild range snapshots for duplicate/no-op SQLite events.
-    // Most importantly, scrolling/navigation must not create Drive traffic.
+  const migrationNeeded = (await storage.secureGet(MASTER_MIGRATION_KEY, "")) !== "1";
+  if (!hasActualChanges && !migrationNeeded) {
+    // Do not upload for duplicate/no-op SQLite events once the one-time master
+    // migration is complete. Scrolling/navigation must not create Drive traffic.
     await commitIncrementalSnapshotCache(baselineKey);
     return { skipped: true, completedAt: new Date().toISOString(), name: "No changes", accountEmail: getConnectedGoogleAccount() };
   }
@@ -1117,7 +1123,7 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
   // Update one complete master snapshot in place. Period-specific restore
   // filters this file locally instead of uploading duplicate month/year files.
   onProgress?.("Refreshing the complete all-time backup…");
-  const allTimeResult = await backupToGoogleDrive(undefined, { type: "all" }, { onProgress });
+  const allTimeResult = await backupToGoogleDrive(undefined, { type: "all" }, { onProgress, preferDriveOnMigration: !hasActualChanges });
   // Keep one rolling master backup. Month/year selection is handled during
   // restore by filtering this complete snapshot, not by uploading duplicates.
 
