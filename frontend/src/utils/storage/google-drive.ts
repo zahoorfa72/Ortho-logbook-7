@@ -918,16 +918,20 @@ function mergeIncrementalPayloads(previous: any, incoming: any): any {
   return merged;
 }
 
+export async function ensureGoogleDriveBaseline(onProgress?: (stage: string) => void) {
+  const existing = await findLatestBackup();
+  if (existing?.id) return { skipped: true, name: String(existing.name || "Ortho Logbook Backup - All Time.orbackup") };
+  onProgress?.("Creating the first complete all-time backup…");
+  const result = await backupToGoogleDrive(undefined, { type: "all" }, { onProgress });
+  const snapshotFailures = await ensureAutomaticRangeSnapshots(onProgress);
+  return { ...result, baselineCreated: true, snapshotFailures };
+}
+
 export async function backupIncrementalToGoogleDrive(changedTables: string[], onProgress?: (stage: string) => void) {
-  onProgress?.("Checking the full backup baseline…");
+  onProgress?.("Checking whether saved records changed…");
   const base = await findLatestBackup();
-  // An incremental cannot restore a phone on its own. Create one complete
-  // baseline once if this Drive account has never had a full backup.
-  if (!base?.id) {
-    const result = await backupToGoogleDrive(undefined, { type: "all" }, { onProgress });
-    const snapshotFailures = await ensureAutomaticRangeSnapshots(onProgress);
-    return { ...result, baselineCreated: true, snapshotFailures };
-  }
+  if (!base?.id) return ensureGoogleDriveBaseline(onProgress);
+
   const baselineKey = String(base.id) + ":" + String(base.modifiedTime || "");
   const backupText = await exportIncrementalBackup(changedTables, onProgress, baselineKey);
   const delta = JSON.parse(backupText);
@@ -938,47 +942,40 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
     const deleted = Array.isArray(delta.deletedIds?.[table]) ? delta.deletedIds[table].length : 0;
     return rows > 0 || deleted > 0;
   });
+
   if (!hasActualChanges) {
-    // SQLite can emit duplicate/no-op change events. Avoid a Drive upload when
-    // the table diff proves that no stored record actually changed.
-    await commitIncrementalSnapshotCache();
-    const snapshotFailures = await ensureAutomaticRangeSnapshots(onProgress);
-    return { skipped: true, completedAt: new Date().toISOString(), name: "No changes", accountEmail: getConnectedGoogleAccount(), snapshotFailures };
+    // Do not upload or rebuild range snapshots for duplicate/no-op SQLite events.
+    // Most importantly, scrolling/navigation must not create Drive traffic.
+    await commitIncrementalSnapshotCache(baselineKey);
+    return { skipped: true, completedAt: new Date().toISOString(), name: "No changes", accountEmail: getConnectedGoogleAccount() };
   }
-  // Keep a single rolling incremental file instead of creating a new Drive
-  // file for every edit/day. Merge this upload into the previous delta so the
-  // file remains restorable from the original all-time baseline.
-  const fileName = "Ortho Logbook Incremental.orbackup";
-  let existingDelta: any = null;
-  let existingDeltaId: string | undefined;
-  const existingFile = await findBackupByName(fileName);
-  if (existingFile?.id) {
-    try {
-      const previous = await downloadDriveJsonValidated(String(existingFile.id));
-      if (previous?.app !== "Ortho Logbook" || previous?.incremental !== true || !Array.isArray(previous.changedTables)) {
-        throw new Error("The existing rolling Drive updates file has an unexpected format and was not overwritten.");
-      }
-      existingDelta = previous;
-      existingDeltaId = String(existingFile.id);
-    } catch (error: any) {
-      throw new Error("Could not safely merge the existing rolling Drive updates file: " + String(error?.message || error));
-    }
+
+  // Each named Drive backup is a complete, rolling snapshot, not a partial
+  // day or a standalone delta. Refresh all-time first, then the current month
+  // and year from the full local database. Each upload updates the existing
+  // same-name Drive file rather than making a new daily file.
+  onProgress?.("Refreshing the complete all-time backup…");
+  const allTimeResult = await backupToGoogleDrive(undefined, { type: "all" }, { onProgress });
+  const snapshotFailures = await ensureAutomaticRangeSnapshots(onProgress);
+  if (snapshotFailures.length) {
+    throw new Error("The all-time backup was updated, but these range backups need retry: " + snapshotFailures.join("; "));
   }
-  // A manual/new full backup changes the baseline. Never carry row deltas
-  // or deletion tombstones from the previous baseline into the new one.
-  const mergedDelta = existingDelta && existingDelta.baselineKey === baselineKey
-    ? mergeIncrementalPayloads(existingDelta, delta)
-    : { ...delta, baselineKey };
-  const mergedText = JSON.stringify(mergedDelta);
-  onProgress?.("Uploading merged changes to Google Drive…");
-  const result = await uploadContent(mergedText, existingDeltaId, onProgress, fileName);
-  // Promote row snapshots only after Drive confirms the merged file is complete.
-  await commitIncrementalSnapshotCache();
+
+  const refreshedBase = await findLatestBackup();
+  if (!refreshedBase?.id) throw new Error("The all-time backup was uploaded but could not be found again to confirm it.");
+  const refreshedBaselineKey = String(refreshedBase.id) + ":" + String(refreshedBase.modifiedTime || "");
+  await commitIncrementalSnapshotCache(refreshedBaselineKey);
   await markBackupTaken();
   const completedAt = new Date().toISOString();
   await storage.secureSet(LAST_DRIVE_BACKUP_KEY, completedAt);
-  const snapshotFailures = await ensureAutomaticRangeSnapshots(onProgress);
-  return { ...result, skipped: false, completedAt, name: fileName, accountEmail: getConnectedGoogleAccount(), snapshotFailures };
+  return {
+    ...allTimeResult,
+    skipped: false,
+    completedAt,
+    name: "Ortho Logbook Backup - All Time.orbackup",
+    accountEmail: getConnectedGoogleAccount(),
+    snapshotFailures: [],
+  };
 }
 
 export async function restoreLatestFromGoogleDrive() {
