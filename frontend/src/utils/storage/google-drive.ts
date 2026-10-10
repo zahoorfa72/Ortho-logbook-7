@@ -737,12 +737,12 @@ async function deleteDuplicateDriveBackups(masterFileId: string): Promise<string
 export async function backupToGoogleDrive(
   _password?: string,
   filter: BackupFilter = { type: "all" },
-  options: { skipIfUnchanged?: boolean; onProgress?: (stage: string) => void; preferDriveOnMigration?: boolean } = {},
+  options: { skipIfUnchanged?: boolean; onProgress?: (stage: string) => void; preferDriveOnMigration?: boolean; backupTextOverride?: string; localChanges?: any } = {},
 ) {
   // Google Drive backup is intentionally plain JSON at the user's request.
   // Local phone/file backups remain encrypted by exportBackup().
   options.onProgress?.("Preparing backup data…");
-  let backupText = await exportUnencryptedBackup(filter, options.onProgress);
+  let backupText = options.backupTextOverride || await exportUnencryptedBackup(filter, options.onProgress);
   const isMasterBackup = filter.type === "all";
   let migrationComplete = true;
   let cleanupSafe = true;
@@ -751,7 +751,17 @@ export async function backupToGoogleDrive(
     migrationAttempted = true;
     options.onProgress?.("Merging existing Drive backups into the master…");
     const migration = await mergeLegacyDriveHistory(backupText, options.onProgress, options.preferDriveOnMigration === true);
-    backupText = migration.backupText;
+    const mergedMaster = parseDownloadedBackup(migration.backupText);
+    if (options.localChanges) applyIncrementalToMaster(mergedMaster, options.localChanges);
+    mergedMaster.version = Math.max(Number(mergedMaster.version || 0), 7);
+    mergedMaster.createdAt = new Date().toISOString();
+    mergedMaster.filter = { type: "all" };
+    delete mergedMaster.incremental;
+    delete mergedMaster.changedTables;
+    delete mergedMaster._rowDelta;
+    delete mergedMaster.deletedIds;
+    delete mergedMaster.fullTables;
+    backupText = JSON.stringify(mergedMaster);
     migrationComplete = migration.complete;
     cleanupSafe = migration.cleanupSafe;
   }
@@ -1120,10 +1130,36 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
     return { skipped: true, completedAt: new Date().toISOString(), name: "No changes", accountEmail: getConnectedGoogleAccount() };
   }
 
-  // Update one complete master snapshot in place. Period-specific restore
-  // filters this file locally instead of uploading duplicate month/year files.
+  // Update one complete master snapshot in place. If migration is already
+  // complete, merge only this phone's changed rows into the latest cloud master
+  // so stale unchanged rows from another device cannot overwrite newer records.
   onProgress?.("Refreshing the complete all-time backup…");
-  const allTimeResult = await backupToGoogleDrive(undefined, { type: "all" }, { onProgress, preferDriveOnMigration: !hasActualChanges });
+  let allTimeResult: any;
+  if (migrationNeeded) {
+    allTimeResult = await backupToGoogleDrive(undefined, { type: "all" }, {
+      onProgress,
+      preferDriveOnMigration: !hasActualChanges,
+      localChanges: hasActualChanges ? delta : undefined,
+    });
+  } else {
+    const master = await downloadDriveJsonValidated(String(base.id));
+    if (!master || master.app !== "Ortho Logbook" || !Array.isArray(master.patients) || !Array.isArray(master.inventory)) {
+      throw new Error("The current Google Drive master is not a complete backup. Local data was not uploaded over it.");
+    }
+    applyIncrementalToMaster(master, delta);
+    master.version = Math.max(Number(master.version || 0), 7);
+    master.createdAt = new Date().toISOString();
+    master.filter = { type: "all" };
+    delete master.incremental;
+    delete master.changedTables;
+    delete master._rowDelta;
+    delete master.deletedIds;
+    delete master.fullTables;
+    allTimeResult = await backupToGoogleDrive(undefined, { type: "all" }, {
+      onProgress,
+      backupTextOverride: JSON.stringify(master),
+    });
+  }
   // Keep one rolling master backup. Month/year selection is handled during
   // restore by filtering this complete snapshot, not by uploading duplicates.
 
