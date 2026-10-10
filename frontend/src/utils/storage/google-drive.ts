@@ -709,8 +709,23 @@ async function mergeLegacyDriveHistory(localText: string, onProgress?: (stage: s
         ? mergeRowsPreservingCurrent(old[table], local[table], table)
         : mergeRowsPreservingCurrent(local[table], old[table], table);
     }
-    if (!Object.prototype.hasOwnProperty.call(local, "branding") && Object.prototype.hasOwnProperty.call(old, "branding")) local.branding = old.branding;
-    if (!Object.prototype.hasOwnProperty.call(local, "appSettings") && Object.prototype.hasOwnProperty.call(old, "appSettings")) local.appSettings = old.appSettings;
+    // A new installation's empty branding/settings object must not hide the
+    // real values from Drive. Keep existing local values when present, but fill
+    // missing OAuth/project/account metadata from each historical backup.
+    if (Object.prototype.hasOwnProperty.call(old, "branding")) {
+      const localBranding = local.branding;
+      const localBrandingEmpty = !localBranding || (typeof localBranding === "object" && !Array.isArray(localBranding) && Object.keys(localBranding).length === 0);
+      if (!Object.prototype.hasOwnProperty.call(local, "branding") || (preferDrive && localBrandingEmpty)) local.branding = old.branding;
+    }
+    if (Object.prototype.hasOwnProperty.call(old, "appSettings")) {
+      local.appSettings = {
+        ...(old.appSettings && typeof old.appSettings === "object" ? old.appSettings : {}),
+        ...(local.appSettings && typeof local.appSettings === "object" ? local.appSettings : {}),
+      };
+      for (const key of ["googleOAuthClientId", "googleCloudProjectId", "googleAccountEmail"]) {
+        if (!local.appSettings[key] && old.appSettings?.[key]) local.appSettings[key] = old.appSettings[key];
+      }
+    }
     mergedFiles++;
   }
   // Merge legacy incremental rows before moving their timestamps behind the
@@ -1304,14 +1319,25 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
 }
 
 export async function restoreLatestFromGoogleDrive() {
-  // The login-screen restore must recover legacy dated backups too, not only
-  // whichever master file happens to exist. On a fresh install this phone has
-  // no migration marker, so first safely merge Drive history into the master.
-  // preferDriveOnMigration keeps the existing Drive records authoritative over
-  // an empty/new local database; old Drive files are retained for recovery.
+  // A freshly reinstalled app has no local migration marker. Compose the
+  // master in memory from all Drive history and deltas, then restore that result
+  // directly. Do not upload a full snapshot before restoring: that can stall
+  // the login screen at an upload percentage and can overwrite the source.
   const migrationDone = String((await storage.secureGet(MASTER_MIGRATION_KEY, "")) || "") === "1";
   if (!migrationDone) {
-    await backupToGoogleDrive(undefined, { type: "all" }, { preferDriveOnMigration: true });
+    const localText = await exportUnencryptedBackup({ type: "all" });
+    const migration = await mergeLegacyDriveHistory(localText, undefined, true);
+    const merged = parseDownloadedBackup(migration.backupText);
+    if (!merged || merged.app !== "Ortho Logbook" || !Array.isArray(merged.patients) || !Array.isArray(merged.inventory)) {
+      throw new Error("Drive backup history could not be merged into a valid all-time backup. Your phone has not been changed.");
+    }
+    return {
+      backupText: migration.backupText,
+      name: "Merged Ortho Logbook Master Backup",
+      modifiedTime: new Date().toISOString(),
+      appliedIncrementals: 0,
+      recoveryWarnings: migration.complete ? [] : ["Some older backup files could not be read. Original Drive backup files were retained."],
+    };
   }
 
   const candidates = (await findLatestBackupCandidates()).filter((item:any) =>
