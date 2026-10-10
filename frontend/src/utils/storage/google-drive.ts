@@ -573,8 +573,8 @@ async function backupContentHash(backupText: string, onProgress?: (stage: string
 function mergeRowsPreservingCurrent(currentRows: any[], oldRows: any[], table: string): any[] {
   const rows = new Map<string, any>();
   const keyFor = (row: any) => {
-    if (row?.id !== undefined && row?.id !== null && String(row.id) !== "") return "id:" + String(row.id);
     if (table === "inventory") return "item:" + [row?.name, row?.category, row?.size].map((v) => String(v || "").trim().toLowerCase()).join("|");
+    if (row?.id !== undefined && row?.id !== null && String(row.id) !== "") return "id:" + String(row.id);
     return "row:" + JSON.stringify(row);
   };
   for (const row of oldRows || []) rows.set(keyFor(row), row);
@@ -585,11 +585,9 @@ function mergeRowsPreservingCurrent(currentRows: any[], oldRows: any[], table: s
 
 function mergeRowsByRecency(currentRows: any[], incomingRows: any[], table: string): any[] {
   const rows = new Map<string, any>();
-  const keyFor = (row: any) => row?.id != null
-    ? "id:" + String(row.id)
-    : table === "inventory"
-      ? "item:" + [row?.name, row?.category, row?.size].map((v) => String(v || "").trim().toLowerCase()).join("|")
-      : "row:" + JSON.stringify(row);
+  const keyFor = (row: any) => table === "inventory"
+    ? "item:" + [row?.name, row?.category, row?.size].map((v) => String(v || "").trim().toLowerCase()).join("|")
+    : row?.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
   for (const row of currentRows || []) rows.set(keyFor(row), row);
   for (const row of incomingRows || []) {
     const key = keyFor(row);
@@ -624,13 +622,19 @@ function applyIncrementalToMaster(local: any, incoming: any, preserveCurrent = f
       continue;
     }
     const rows = new Map<string, any>();
-    for (const row of Array.isArray(local[table]) ? local[table] : []) {
-      const key = row?.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
-      rows.set(key, row);
+    const keyForRow = (row: any) => table === "inventory"
+      ? "item:" + [row?.name, row?.category, row?.size].map((v) => String(v || "").trim().toLowerCase()).join("|")
+      : row?.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+    for (const row of Array.isArray(local[table]) ? local[table] : []) rows.set(keyForRow(row), row);
+    if (!preserveCurrent) {
+      for (const id of Array.isArray(incoming.deletedIds?.[table]) ? incoming.deletedIds[table] : []) {
+        if (table === "inventory") {
+          for (const [key, row] of rows.entries()) if (String(row?.id ?? "") === String(id)) rows.delete(key);
+        } else rows.delete("id:" + String(id));
+      }
     }
-    if (!preserveCurrent) for (const id of Array.isArray(incoming.deletedIds?.[table]) ? incoming.deletedIds[table] : []) rows.delete("id:" + String(id));
     for (const row of incoming[table]) {
-      const key = row?.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+      const key = keyForRow(row);
       const old = rows.get(key);
       if (preserveCurrent && old) {
         const oldTime = Date.parse(String(old.updated_at || old.created_at || old.date || ""));
