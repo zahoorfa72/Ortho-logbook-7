@@ -7,7 +7,7 @@ import { storage } from "@/src/utils/storage";
 
 const LAST_DRIVE_BACKUP_KEY = "ortho_drive_last_successful_backup";
 const LAST_DRIVE_CONTENT_HASH_KEY = "ortho_drive_last_uploaded_content_hash";
-const MASTER_MIGRATION_KEY = "ortho_drive_master_migration_v1";
+const MASTER_MIGRATION_KEY = "ortho_drive_master_migration_v2";
 const DRIVE_SCOPE_VERSION_KEY = "ortho_drive_scope_version";
 const DRIVE_SCOPE_VERSION = "full-drive-v1";
 export async function getLastDriveBackupStatus(): Promise<string | null> {
@@ -835,10 +835,15 @@ export async function backupToGoogleDrive(
   await storage.secureSet(LAST_DRIVE_CONTENT_HASH_KEY + ":" + fileName, contentHash);
   let cleanupFailures: string[] = [];
   if (isMasterBackup && migrationAttempted && migrationComplete && cleanupSafe && result?.id) {
-    // Permanently remove redundant full/range/delta files only after the master
-    // upload was verified and a complete full baseline was available to merge.
-    cleanupFailures = await deleteDuplicateDriveBackups(String(result.id));
-    if (!cleanupFailures.length) await storage.secureSet(MASTER_MIGRATION_KEY, "1");
+    // Verify the newly merged master before recording migration as complete.
+    // Keep every legacy backup in Drive: users may need them for recovery, and
+    // cleanup must never risk deleting the only copy of older patient records.
+    const verifiedMaster = await downloadDriveJsonValidated(String(result.id));
+    if (!verifiedMaster || verifiedMaster.app !== "Ortho Logbook" ||
+        !Array.isArray(verifiedMaster.patients) || !Array.isArray(verifiedMaster.inventory)) {
+      throw new Error("The merged all-time backup could not be verified. Older Drive backups were kept; retry backup after checking the connection.");
+    }
+    await storage.secureSet(MASTER_MIGRATION_KEY, "1");
   }
   return {
     ...result, skipped: false, completedAt, name: fileName, accountEmail: getConnectedGoogleAccount(),
