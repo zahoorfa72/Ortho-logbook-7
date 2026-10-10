@@ -583,6 +583,30 @@ function mergeRowsPreservingCurrent(currentRows: any[], oldRows: any[], table: s
 }
 
 
+function mergeRowsByRecency(currentRows: any[], incomingRows: any[], table: string): any[] {
+  const rows = new Map<string, any>();
+  const keyFor = (row: any) => row?.id != null
+    ? "id:" + String(row.id)
+    : table === "inventory"
+      ? "item:" + [row?.name, row?.category, row?.size].map((v) => String(v || "").trim().toLowerCase()).join("|")
+      : "row:" + JSON.stringify(row);
+  for (const row of currentRows || []) rows.set(keyFor(row), row);
+  for (const row of incomingRows || []) {
+    const key = keyFor(row);
+    const current = rows.get(key);
+    if (!current) {
+      rows.set(key, row);
+      continue;
+    }
+    const currentTime = Date.parse(String(current.updated_at || current.created_at || current.date || ""));
+    const incomingTime = Date.parse(String(row.updated_at || row.created_at || row.date || ""));
+    if (Number.isFinite(incomingTime) && (!Number.isFinite(currentTime) || incomingTime > currentTime)) {
+      rows.set(key, row);
+    }
+  }
+  return Array.from(rows.values());
+}
+
 function applyIncrementalToMaster(local: any, incoming: any, preserveCurrent = false) {
   const tables = [
     "patients", "procedures", "inventoryCategories", "inventory", "patientImplants",
@@ -594,9 +618,9 @@ function applyIncrementalToMaster(local: any, incoming: any, preserveCurrent = f
   for (const table of tables) {
     if (!changed.has(table) || !Array.isArray(incoming[table])) continue;
     if (incoming._rowDelta !== true || full.has(table)) {
-      local[table] = preserveCurrent
-        ? mergeRowsPreservingCurrent(local[table] || [], incoming[table], table)
-        : incoming[table];
+      // When there is no prior local row cache, merge full table contents by
+      // timestamps instead of replacing cloud rows with a possibly stale phone.
+      local[table] = mergeRowsByRecency(local[table] || [], incoming[table], table);
       continue;
     }
     const rows = new Map<string, any>();
@@ -752,7 +776,7 @@ export async function backupToGoogleDrive(
     options.onProgress?.("Merging existing Drive backups into the master…");
     const migration = await mergeLegacyDriveHistory(backupText, options.onProgress, options.preferDriveOnMigration === true);
     const mergedMaster = parseDownloadedBackup(migration.backupText);
-    if (options.localChanges) applyIncrementalToMaster(mergedMaster, options.localChanges);
+    if (options.localChanges) applyIncrementalToMaster(mergedMaster, options.localChanges, options.localChanges._rowDelta !== true);
     mergedMaster.version = Math.max(Number(mergedMaster.version || 0), 7);
     mergedMaster.createdAt = new Date().toISOString();
     mergedMaster.filter = { type: "all" };
@@ -1146,7 +1170,7 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
     if (!master || master.app !== "Ortho Logbook" || !Array.isArray(master.patients) || !Array.isArray(master.inventory)) {
       throw new Error("The current Google Drive master is not a complete backup. Local data was not uploaded over it.");
     }
-    applyIncrementalToMaster(master, delta);
+    applyIncrementalToMaster(master, delta, delta._rowDelta !== true);
     master.version = Math.max(Number(master.version || 0), 7);
     master.createdAt = new Date().toISOString();
     master.filter = { type: "all" };
