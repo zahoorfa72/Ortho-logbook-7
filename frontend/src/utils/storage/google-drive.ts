@@ -481,11 +481,13 @@ async function uploadContent(backupText: string, existingId?: string, onProgress
       // The Android foreground service owns the file transfer. It continues
       // sending 512 KiB Drive chunks while the app is backgrounded or the
       // screen is locked, and reconciles progress with Drive after interruptions.
-      const nativeResult = await uploadNativeBackground(sessionUrl, token, stagedFileUri, totalBytes, onProgress);\n      return await verifyUploadedFile(nativeResult, fileName, totalBytes, existingId);
+      const nativeResult = await uploadNativeBackground(sessionUrl, token, stagedFileUri, totalBytes, onProgress);
+      return await verifyUploadedFile(nativeResult, fileName, totalBytes, existingId);
     }
 
     try {
-      return await uploadResumable(sessionUrl, token, bytes as Uint8Array, onProgress);
+      const uploaded = await uploadResumable(sessionUrl, token, bytes as Uint8Array, onProgress);
+      return await verifyUploadedFile(uploaded, fileName, totalBytes, existingId);
     } catch (error: any) {
       const originalMessage = String(error?.message || "Google Drive resumable upload failed.");
       if (originalMessage.includes("stopped after 5 minutes")) throw error;
