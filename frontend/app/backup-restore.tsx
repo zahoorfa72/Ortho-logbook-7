@@ -174,10 +174,15 @@ export default function BackupRestoreScreen() {
       // Drive uses one complete master snapshot; range selection is for local/file backups only.
       const result = await backupToGoogleDrive(undefined, { type: "all" }, { onProgress: setDriveStatus });
       const cleanupFailures = Array.isArray((result as any).cleanupFailures) ? (result as any).cleanupFailures : [];
+      const migrationPending = (result as any).migrationPending === true;
       Alert.alert(
-        "Google Drive backup complete",
+        migrationPending ? "Master backup saved — older files kept" : "Google Drive backup complete",
         "The single master backup was saved to " + googleAccount + "'s Google Drive." +
-          (cleanupFailures.length ? "\nOld duplicate backups could not all be moved to trash: " + cleanupFailures.join("; ") : "\nOld duplicate full/month/year backup files were cleaned up after verification.")
+          (migrationPending
+            ? "\nSome older backup files could not be fully merged, so they were kept for safety. Retry after checking those files."
+            : cleanupFailures.length
+              ? "\nOld duplicate backups could not all be moved to trash: " + cleanupFailures.join("; ")
+              : "\nOld duplicate full/month/year backup files were cleaned up after verification.")
       );
     } catch (error) {
       Alert.alert("Drive backup failed", error instanceof Error ? error.message : "Unable to back up to Google Drive.");
