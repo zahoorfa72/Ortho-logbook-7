@@ -109,11 +109,13 @@ async function runBackup() {
     const completedAt = result.completedAt
       ? new Date(result.completedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
       : "";
-    const successMessage = (result.baselineCreated
-      ? "All-time backup uploaded and confirmed"
-      : result.skipped
-        ? "Drive checked · no changed records"
-        : "Changed data uploaded to Google Drive") +
+    const successMessage = ((result as any).migrationPending
+      ? "Master backup uploaded · older backup merge needs retry"
+      : result.baselineCreated
+        ? "Master backup uploaded and confirmed"
+        : result.skipped
+          ? "Drive checked · no changed records"
+          : "Changed data uploaded to Google Drive") +
       (completedAt ? " · " + completedAt : "") +
       (Array.isArray((result as any).cleanupFailures) && (result as any).cleanupFailures.length
         ? " · Old backup cleanup needs retry: " + (result as any).cleanupFailures.join("; ")
