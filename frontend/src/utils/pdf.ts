@@ -190,7 +190,7 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
   const fields = Array.isArray(branding.pdfPatientFields) && branding.pdfPatientFields.length
     ? branding.pdfPatientFields
     : ["date","mrNo","name","gender","age","diagnosis","procedure"];
-  const labels: Record<string,string> = {date:"Date",mrNo:"MR No",name:"Patient",gender:"Gender",age:"Age",address:"Address",diagnosis:"Diagnosis",procedure:"Procedure",implants:"Implants",fileName:"File Name",hcvPlus:"HCV+",hbaSg:"HbAsg",hiv:"HIV"};
+  const labels: Record<string,string> = {date:"Date",mrNo:"MR No",name:"Patient",gender:"Gender",age:"Age",address:"Address",diagnosis:"Diagnosis",procedure:"Procedure",procedureII:String((branding as any).procedureSecondLabel||"Procedure 2"),implants:"Implants",fileName:"File Name",hcvPlus:"HCV+",hbaSg:"HbAsg",hiv:"HIV"};
   const savedHeadingMap:any = branding.pdfHeadingMap && typeof branding.pdfHeadingMap==="object" ? branding.pdfHeadingMap : {};
   const legacyGroups = Array.isArray(branding.pdfHeadingLevels) ? branding.pdfHeadingLevels : [];
   const legacyHeadingFields = legacyGroups
@@ -227,6 +227,7 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
     if(key === "name") return p.name || "";
     if(key === "diagnosis") return p.diagnosis || "";
     if(key === "procedure") return p.procedure || "";
+    if(key === "procedureII") return (p as any).procedureII || "";
     if(key === "hcvPlus") return (p as any).hcvPlus || String((p.customData||{}).hcvPlus||"").toLowerCase()==="true" ? "Yes" : "No";
     if(key === "hbaSg") return (p as any).hbaSg || String((p.customData||{}).hbaSg||"").toLowerCase()==="true" ? "Yes" : "No";
     if(key === "hiv") return (p as any).hiv || String((p.customData||{}).hiv||"").toLowerCase()==="true" ? "Yes" : "No";
@@ -381,6 +382,7 @@ export async function buildPatientDetailHtml(
       else if(key==="address") value=p.address||"";
       else if(key==="diagnosis") value=p.diagnosis;
       else if(key==="procedure") value=p.procedure || "";
+      else if(key==="procedureII") value=(p as any).procedureII || "";
       else if(key==="hcvPlus") value=(p as any).hcvPlus || String((p.customData||{}).hcvPlus||"").toLowerCase()==="true" ? "Yes" : "No";
       else if(key==="hbaSg") value=(p as any).hbaSg || String((p.customData||{}).hbaSg||"").toLowerCase()==="true" ? "Yes" : "No";
       else if(key==="hiv") value=(p as any).hiv || String((p.customData||{}).hiv||"").toLowerCase()==="true" ? "Yes" : "No";
