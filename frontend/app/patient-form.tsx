@@ -98,6 +98,7 @@ export default function PatientForm() {
   const [cameraReady, setCameraReady] = useState(false);
   const [cameraTaking, setCameraTaking] = useState(false);
   const cameraRef = useRef<any>(null);
+  const [cameraPermission, requestCameraPermission] = CameraPermissions.useCameraPermissions();
   const imagePickerOpening = useRef(false);
   const imagePickerReadyRef = useRef(false);
   const appStateRef = useRef(AppState.currentState);
@@ -260,15 +261,16 @@ export default function PatientForm() {
   }
 
   async function ensureCameraPermission() {
-    const perm = await CameraPermissions.getCameraPermissionsAsync();
-    if (perm.granted) return true;
-    if (!perm.canAskAgain) {
-      toast("Camera permission is blocked. Enable it from Settings.", "error");
-      return false;
+    let perm = cameraPermission;
+    if (!perm?.granted) {
+      if (perm && !perm.canAskAgain) {
+        toast("Camera permission is blocked. Enable it from Settings.", "error");
+        return false;
+      }
+      perm = await requestCameraPermission();
     }
-    const req = await CameraPermissions.requestCameraPermissionsAsync();
-    if (!req.granted) toast("Camera permission is required to take a patient photo.", "error");
-    return req.granted;
+    if (!perm.granted) toast("Camera permission is required to take a patient photo.", "error");
+    return !!perm.granted;
   }
 
   // Keep a private, permanent copy inside the app. Gallery/camera URIs can
