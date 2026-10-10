@@ -134,6 +134,7 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
   addColumn("inventory", "added_date", "TEXT");
   addColumn("inventory", "bill_image", "TEXT");
   addColumn("inventory", "low_stock_since", "TEXT");
+  addColumn("patients", "procedure_ii", "TEXT");
   addColumn("patients", "photos_json", "TEXT");
   addColumn("patients", "custom_data_json", "TEXT");
   addColumn("patients", "created_by", "TEXT");
