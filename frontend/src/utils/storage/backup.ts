@@ -173,7 +173,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
    googleOAuthClientId: (await SecureStore.getItemAsync("ortho_google_drive_client_id").catch(() => null)) || undefined,
    googleCloudProjectId: (await SecureStore.getItemAsync("ortho_google_drive_cloud_project_id").catch(() => null)) || undefined,
    // Recovery metadata only; Google credentials must be re-authorized after reinstall.
-   googleAccountEmail: (await SecureStore.getItemAsync("ortho_drive_account_email").catch(() => null)) || undefined,
+   googleAccountEmail: (await storage.secureGet("ortho_drive_account_email", "")) || undefined,
  } : undefined;
  const pf=whereForFilter(filter, "date");
  const patients=include("patients") ? db.getAllSync<any>(`SELECT * FROM patients${pf.sql} ORDER BY date DESC, created_at DESC`, pf.args) : [];
@@ -683,7 +683,7 @@ export async function restoreBackup(backup:BackupData){
      await SecureStore.setItemAsync("ortho_google_drive_cloud_project_id", settings.googleCloudProjectId).catch(() => undefined);
    }
    if (typeof settings.googleAccountEmail === "string" && settings.googleAccountEmail) {
-     await SecureStore.setItemAsync("ortho_drive_account_email", settings.googleAccountEmail).catch(() => undefined);
+     await storage.secureSet("ortho_drive_account_email", settings.googleAccountEmail);
    }
  }
  markInventoryResetDone();
