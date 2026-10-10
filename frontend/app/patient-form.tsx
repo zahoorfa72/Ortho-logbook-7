@@ -708,15 +708,6 @@ export default function PatientForm() {
           </Pressable>
         ))}
 
-        {!!procedures?.length && (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.quickScroller} contentContainerStyle={styles.quickRow}>
-            {procedures.map((x) => (
-              <Pressable key={x.id} style={styles.quickChip} onPress={() => set("procedure")(x.name)}>
-                <Text style={styles.quickChipText}>{x.name}</Text>
-              </Pressable>
-            ))}
-          </ScrollView>
-        )}
         <Text style={styles.section}>Inventory Items Used</Text>
         <Field
           label="Search inventory"
