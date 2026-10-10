@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
+import * as CameraPermissions from "expo-camera";
+import { CameraView } from "expo-camera";
 import * as ImageManipulator from "expo-image-manipulator";
 import { Asset, requestPermissionsAsync } from "expo-media-library";
 import * as FileSystem from "expo-file-system/legacy";
@@ -92,6 +94,10 @@ export default function PatientForm() {
   const [editingPhotoUri, setEditingPhotoUri] = useState<string | null>(null);
   const [photoBusy, setPhotoBusy] = useState(false);
   const [imagePickerReady, setImagePickerReady] = useState(false);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraReady, setCameraReady] = useState(false);
+  const [cameraTaking, setCameraTaking] = useState(false);
+  const cameraRef = useRef<any>(null);
   const imagePickerOpening = useRef(false);
   const imagePickerReadyRef = useRef(false);
   const appStateRef = useRef(AppState.currentState);
@@ -254,20 +260,15 @@ export default function PatientForm() {
   }
 
   async function ensureCameraPermission() {
-    const perm = await ImagePicker.getCameraPermissionsAsync();
+    const perm = await CameraPermissions.getCameraPermissionsAsync();
     if (perm.granted) return true;
     if (!perm.canAskAgain) {
       toast("Camera permission is blocked. Enable it from Settings.", "error");
       return false;
     }
-    const req = await ImagePicker.requestCameraPermissionsAsync();
-    if (req.granted) {
-      // Permission prompts can pause/recreate the Android Activity and leave
-      // the camera launcher unregistered for the remainder of that tap.
-      // Ask the user to tap Camera again after the permission flow has ended.
-      toast("Camera permission granted. Tap Camera again to take the photo.", "info");
-    }
-    return false;
+    const req = await CameraPermissions.requestCameraPermissionsAsync();
+    if (!req.granted) toast("Camera permission is required to take a patient photo.", "error");
+    return req.granted;
   }
 
   // Keep a private, permanent copy inside the app. Gallery/camera URIs can
@@ -340,38 +341,35 @@ export default function PatientForm() {
   };
 
   const addFromCamera = async () => {
-    if (!imagePickerReady || imagePickerOpening.current) return;
-    if (!(await ensureCameraPermission())) return;
+    // Use an in-app CameraView rather than launching an external camera Activity.
+    // This avoids Android's ActivityResultLauncher registration failure.
+    if (photoBusy || cameraOpen || imagePickerOpening.current) return;
     imagePickerOpening.current = true;
     try {
-      if (!(await waitForImagePickerActivity())) {
-        toast("Camera is still starting. Please try again in a moment.", "error");
-        return;
-      }
-      let result: ImagePicker.ImagePickerResult;
-      try {
-        result = await ImagePicker.launchCameraAsync({
-          allowsEditing: false,
-          quality: 0.9,
-        });
-      } catch (firstError: any) {
-        if (!isUnregisteredLauncherError(firstError)) throw firstError;
-        if (!(await rearmImagePickerAfterLauncherError())) throw firstError;
-        result = await ImagePicker.launchCameraAsync({
-          allowsEditing: false,
-          quality: 0.9,
-        });
-      }
-      if (result.canceled) return;
-      const uri = result.assets[0]?.uri;
-      if (uri) {
-        const permanentUri = await persistPhoto(uri);
-        setP((x) => ({ ...x, photos: [...x.photos, permanentUri] }));
-      }
+      if (!(await ensureCameraPermission())) return;
+      setCameraReady(false);
+      setCameraOpen(true);
+    } catch (e: any) {
+      toast(e?.message || "Could not open the camera.", "error");
+    } finally {
+      imagePickerOpening.current = false;
+    }
+  };
+
+  const capturePatientPhoto = async () => {
+    if (!cameraRef.current || !cameraReady || cameraTaking) return;
+    setCameraTaking(true);
+    try {
+      const result = await cameraRef.current.takePictureAsync({ quality: 0.9 });
+      if (!result?.uri) throw new Error("The camera did not return a photo.");
+      const permanentUri = await persistPhoto(result.uri);
+      setP((x) => ({ ...x, photos: [...x.photos, permanentUri] }));
+      setCameraOpen(false);
+      setCameraReady(false);
     } catch (e: any) {
       toast(e?.message || "Could not save the camera photo.", "error");
     } finally {
-      imagePickerOpening.current = false;
+      setCameraTaking(false);
     }
   };
 
@@ -570,7 +568,7 @@ export default function PatientForm() {
         <Text style={styles.section}>Patient photos</Text>
         <View style={styles.photoActions}>
           <PrimaryButton title={`Add from Gallery${p.photos.length ? " (+)" : ""}`} onPress={addFromLibrary} disabled={!imagePickerReady || photoBusy} testID="add-photo-library-button" />
-          <Pressable style={[styles.secondary, (!imagePickerReady || photoBusy) && { opacity: 0.5 }]} onPress={addFromCamera} disabled={!imagePickerReady || photoBusy} testID="add-photo-camera-button">
+          <Pressable style={[styles.secondary, (!imagePickerReady || photoBusy) && { opacity: 0.5 }]} onPress={addFromCamera} disabled={photoBusy || cameraOpen} testID="add-photo-camera-button">
             <Ionicons name="camera" size={18} color={colors.onSurface} />
             <Text style={styles.secondaryText}> Take Photo</Text>
           </Pressable>
@@ -797,6 +795,56 @@ export default function PatientForm() {
         )}
       </KeyboardAwareScrollView>
 
+      <Modal
+        visible={cameraOpen}
+        animationType="slide"
+        presentationStyle="fullScreen"
+        onRequestClose={() => { setCameraOpen(false); setCameraReady(false); }}
+      >
+        <View style={styles.cameraScreen}>
+          <View style={[styles.cameraHeader, { paddingTop: insets.top + spacing.sm }]}>
+            <Pressable
+              onPress={() => { setCameraOpen(false); setCameraReady(false); }}
+              style={styles.photoEditIconButton}
+              disabled={cameraTaking}
+              accessibilityLabel="Close camera"
+            >
+              <Ionicons name="close" size={24} color="#FFFFFF" />
+            </Pressable>
+            <Text style={styles.cameraTitle}>Take Patient Photo</Text>
+            <View style={{ width: 40 }} />
+          </View>
+          <View style={styles.cameraPreviewWrap}>
+            {cameraOpen ? (
+              <CameraView
+                ref={cameraRef}
+                style={styles.cameraPreview}
+                facing="back"
+                mode="picture"
+                onCameraReady={() => setCameraReady(true)}
+              />
+            ) : null}
+            {!cameraReady ? (
+              <View style={styles.cameraLoading}>
+                <Text style={styles.cameraLoadingText}>Starting camera…</Text>
+              </View>
+            ) : null}
+          </View>
+          <View style={[styles.cameraControls, { paddingBottom: insets.bottom + spacing.lg }]}>
+            <Text style={styles.cameraHint}>Photos are saved privately inside Ortho Logbook.</Text>
+            <Pressable
+              style={[styles.cameraShutter, (!cameraReady || cameraTaking) && { opacity: 0.5 }]}
+              onPress={capturePatientPhoto}
+              disabled={!cameraReady || cameraTaking}
+              accessibilityLabel="Capture patient photo"
+            >
+              <View style={styles.cameraShutterInner} />
+            </Pressable>
+            <Text style={styles.cameraLoadingText}>{cameraTaking ? "Saving photo…" : cameraReady ? "Tap to capture" : "Please wait"}</Text>
+          </View>
+        </View>
+      </Modal>
+
       <Modal visible={!!selectedPhoto} transparent animationType="fade" onRequestClose={() => setSelectedPhoto(null)}>
         <View style={styles.photoViewer}>
           <Pressable style={styles.photoViewerClose} onPress={() => setSelectedPhoto(null)} hitSlop={10}>
@@ -863,6 +911,17 @@ const useStyles = makeStyles((colors) => ({
   cropMiddle: { flexDirection: "row", alignItems: "center", gap: spacing.lg },
   cropArrow: { width: 38, height: 38, borderRadius: 19, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" },
   cropCenter: { width: 44, height: 44, borderRadius: 10, borderWidth: 1, borderColor: colors.border, alignItems: "center", justifyContent: "center", backgroundColor: colors.surface },
+  cameraScreen: { flex: 1, backgroundColor: "#080808" },
+  cameraHeader: { minHeight: 64, paddingHorizontal: spacing.md, paddingBottom: spacing.sm, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  cameraTitle: { fontFamily: fontFamily.bold, fontSize: fontSize.base, color: "#FFFFFF" },
+  cameraPreviewWrap: { flex: 1, overflow: "hidden", backgroundColor: "#000000" },
+  cameraPreview: { flex: 1 },
+  cameraLoading: { position: "absolute", left: 0, right: 0, top: 0, bottom: 0, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(0,0,0,0.35)" },
+  cameraLoadingText: { fontFamily: fontFamily.medium, fontSize: fontSize.sm, color: "#FFFFFF", textAlign: "center" },
+  cameraControls: { minHeight: 150, alignItems: "center", justifyContent: "center", gap: spacing.sm, paddingTop: spacing.md, backgroundColor: "#080808" },
+  cameraHint: { fontFamily: fontFamily.regular, fontSize: fontSize.xs, color: "#D1D5DB", textAlign: "center" },
+  cameraShutter: { width: 76, height: 76, borderRadius: 38, borderWidth: 4, borderColor: "#FFFFFF", alignItems: "center", justifyContent: "center" },
+  cameraShutterInner: { width: 58, height: 58, borderRadius: 29, backgroundColor: "#FFFFFF" },
   photoViewerToolbar: { position: "absolute", bottom: 32, left: 20, right: 20, flexDirection: "row", justifyContent: "center", gap: spacing.sm },
   photoViewerAction: { minWidth: 120, height: 46, borderRadius: 23, paddingHorizontal: spacing.md, backgroundColor: "rgba(0,0,0,0.68)", borderWidth: 1, borderColor: "rgba(255,255,255,0.25)", flexDirection: "row", alignItems: "center", justifyContent: "center", gap: spacing.xs },
   photoViewerActionText: { fontFamily: fontFamily.semibold, color: "#FFFFFF", fontSize: fontSize.sm },
