@@ -612,13 +612,17 @@ export const api = {
         ? db.getAllSync<any>(`SELECT * FROM patients WHERE date LIKE ?${scope}`, [`${year}-%`, ...scopeArgs])
         : await listPatients();
       const counts: Record<string, number> = {};
+      const countsII: Record<string, number> = {};
       (rows as any[]).forEach((r) => {
         const n = String(r.procedure || "").trim();
+        const nII = String(r.procedure_ii || "").trim();
         if (n) counts[n] = (counts[n] || 0) + 1;
+        if (nII) countsII[nII] = (countsII[nII] || 0) + 1;
       });
       return {
         total_patients: rows.length,
         procedures: Object.entries(counts).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),
+        proceduresII: Object.entries(countsII).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),
       } as any;
     }
     throw new Error(`Offline API endpoint not implemented: ${path}`);
