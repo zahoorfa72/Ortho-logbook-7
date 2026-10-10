@@ -70,9 +70,9 @@ export default function BrandingScreen() {
     setTitleSizeText(String(branding.pdfTitleSize));
     setPdfMarginText(String(branding.pdfMargin));
   }, [branding]);
-  const { data: customFields = [] } = useQuery<any[]>({ queryKey: ["patient-custom-fields"], queryFn: () => api.get("/patient-custom-fields"), enabled: user?.role === "admin" });
+  const { data: customFields = [] } = useQuery<any[]>({ queryKey: ["patient-custom-fields"], queryFn: () => api.get("/patient-custom-fields"), enabled: user?.role === "admin", refetchOnMount: "always", refetchOnReconnect: true, staleTime: 0 });
   const patientPdfOptions = (() => {
-    const base: [string,string][] = [["date","Date"],["mrNo","MR No"],["name","Patient Name"],["gender","Gender"],["age","Age"],["address","Address"],["diagnosis","Diagnosis"],["procedure","Procedure"],["implants","Implants"],["fileName","File Name"],["hcvPlus","HCV+"],["hbaSg","HbAsg"],["hiv","HIV"]];
+    const base: [string,string][] = [["date","Date"],["mrNo","MR No"],["name","Patient Name"],["gender","Gender"],["age","Age"],["address","Address"],["diagnosis","Diagnosis"],["procedure","Procedure"],["procedureII",draft.procedureSecondLabel?.trim() || "Procedure 2"],["implants","Implants"],["fileName","File Name"],["hcvPlus","HCV+"],["hbaSg","HbAsg"],["hiv","HIV"]];
     const custom: [string,string][] = customFields.filter((f:any)=>f?.key && f?.label).map((f:any)=>[String(f.key),String(f.label)]);
     const savedKeys = [
       ...(Array.isArray(draft.pdfPatientFields) ? draft.pdfPatientFields : []),
@@ -336,11 +336,14 @@ export default function BrandingScreen() {
             <View style={styles.sizeRow}><Text style={styles.colorLabel}>Line size</Text><View style={styles.sizeControls}><Pressable style={styles.sizeButton} onPress={()=>updateLine({size:Math.max(8,Number(line.size||12)-1)})}><Ionicons name="remove" size={18} color={colors.onSurface}/></Pressable><TextInput keyboardType="number-pad" value={String(line.size||12)} onChangeText={v=>updateLine({size:Math.max(8,Math.min(48,Number(v.replace(/[^0-9]/g,""))||12))})} style={styles.smallSizeInput}/><Pressable style={styles.sizeButton} onPress={()=>updateLine({size:Math.min(48,Number(line.size||12)+1)})}><Ionicons name="add" size={18} color={colors.onSurface}/></Pressable></View></View>
           </View>;
         })}
+        <Text style={[styles.label, { marginTop: spacing.md }]}>Second procedure field name</Text>
+        <Text style={styles.hint}>Change the label shown above the second independent procedure search field. Its value is saved separately from the first procedure.</Text>
+        <TextInput value={draft.procedureSecondLabel ?? "Procedure 2"} onChangeText={v=>setDraft(d=>({...d,procedureSecondLabel:v}))} placeholder="Procedure 2" placeholderTextColor={colors.muted} style={styles.input}/>
         <Text style={[styles.label, { marginTop: spacing.md }]}>Patient Add/Edit Form — field order</Text>
         <Text style={styles.hint}>Use the arrows to arrange built-in fields and every custom field created by the administrator. New custom fields appear here automatically. This changes the entry form layout only, not saved patient data.</Text>
         {(() => {
-          const builtIn = ["mrNo","name","gender","age","address","diagnosis","procedure","fileName","date"];
-          const labels:Record<string,string> = {mrNo:"MR No",name:"Patient Name",gender:"Gender",age:"Age",address:"Address",diagnosis:"Diagnosis",procedure:"Procedure",fileName:"File / Reference",date:"Date"};
+          const builtIn = ["mrNo","name","gender","age","address","diagnosis","procedure","procedureII","fileName","date"];
+          const labels:Record<string,string> = {mrNo:"MR No",name:"Patient Name",gender:"Gender",age:"Age",address:"Address",diagnosis:"Diagnosis",procedure:"Procedure",procedureII:draft.procedureSecondLabel?.trim() || "Procedure 2",fileName:"File / Reference",date:"Date"};
           const customKeys = customFields.filter((f:any)=>f?.key && f?.label).map((f:any)=>String(f.key));
           const allowed = [...builtIn,...customKeys.filter((k:string)=>!builtIn.includes(k))];
           const current = Array.isArray(draft.patientFormFieldOrder) ? draft.patientFormFieldOrder.filter((k:string)=>allowed.includes(k)) : [];
