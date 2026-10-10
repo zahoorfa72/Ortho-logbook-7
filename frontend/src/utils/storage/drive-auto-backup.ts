@@ -7,7 +7,8 @@ import {
 import { setDriveSyncState } from "@/src/utils/storage/drive-sync-status";
 import { storage } from "@/src/utils/storage";
 
-const DEBOUNCE_MS = 1000;
+// Batch rapid edits into one sync; this avoids repeated uploads while typing/saving related fields.
+const DEBOUNCE_MS = 7000;
 // Re-scan every syncable table on app launch/foreground. SQLite change events can be
 // missed while Android suspends/recreates the app; the incremental exporter compares
 // local rows with its last confirmed snapshot, so unchanged data is not re-uploaded.
