@@ -25,7 +25,7 @@ async function requireAdmin() {
 
 export type Patient = {
   id: string; mrNo: string; name: string; gender: string; age: string;
-  diagnosis: string; procedure: string; implant: string; implantII: string; implantId?: string; implantIIId?: string;
+  diagnosis: string; procedure: string; procedureII?: string; implant: string; implantII: string; implantId?: string; implantIIId?: string;
   address: string; fileName: string; photoUri: string; photos: string[]; date: string;
   createdAt?: string; createdBy?: string; updatedAt?: string; updatedBy?: string;
   operationCount?: number; // Nth-time operated (1 = first, 2 = 2nd time, ...)
