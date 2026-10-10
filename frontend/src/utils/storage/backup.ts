@@ -50,10 +50,14 @@ async function embedPhoto(uri:string):Promise<string>{
   try{
     // Backup copies are deliberately made small: resize to max 1280px and
     // use strong JPEG compression. This does not change the patient's stored photo.
+    // Keep portable backups small enough for mid-range Android phones. A large
+    // all-time backup previously caused a 150–200 MB allocation and crashed at
+    // the Android app heap limit. Limit the longest edge (portrait and landscape)
+    // and compress only the backup copy; original local photos are untouched.
     const result=await ImageManipulator.manipulateAsync(
       uri,
-      [{resize:{width:1280}}],
-      {compress:0.25,format:ImageManipulator.SaveFormat.JPEG,base64:true}
+      [{resize:{width:720}}],
+      {compress:0.2,format:ImageManipulator.SaveFormat.JPEG,base64:true}
     );
     if(!result.base64)throw new Error("Empty compressed photo.");
     return `data:image/jpeg;base64,${result.base64}`;
@@ -76,7 +80,10 @@ async function embedPatientPhotos(row:any){
   for(const uri of photos)embedded.push(await embedPhoto(uri));
   return {
     ...row,
-    photo_uri: embedded[0] || "",
+    // The first photo is already present in photos_json. Duplicating its
+    // base64 payload in photo_uri almost doubles backup size and memory use.
+    // restorePatientPhotos() and the app's photo reader use photos_json first.
+    photo_uri: "",
     photos_json: JSON.stringify(embedded),
   };
 }
