@@ -767,7 +767,7 @@ export async function backupToGoogleDrive(
   await storage.secureSet(LAST_DRIVE_BACKUP_KEY, completedAt);
   await storage.secureSet(LAST_DRIVE_CONTENT_HASH_KEY + ":" + fileName, contentHash);
   let cleanupFailures: string[] = [];
-  if (isMasterBackup && migrationComplete && cleanupSafe && result?.id) {
+  if (isMasterBackup && migrationAttempted && migrationComplete && cleanupSafe && result?.id) {
     // Permanently remove redundant full/range/delta files only after the master
     // upload was verified and a complete full baseline was available to merge.
     cleanupFailures = await deleteDuplicateDriveBackups(String(result.id));
