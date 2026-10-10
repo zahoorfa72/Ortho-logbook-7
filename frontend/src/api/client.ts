@@ -60,7 +60,7 @@ const fromPatient = (r: any): Patient => {
   return {
     id: safeText(r.id), mrNo: safeText(r.mr_no), name: safeText(r.name),
     gender: safeText(r.gender), age: safeText(r.age), diagnosis: safeText(r.diagnosis),
-    procedure: safeText(r.procedure), implant: safeText(r.implant), implantII: safeText(r.implant_ii),
+    procedure: safeText(r.procedure), procedureII: safeText(r.procedure_ii), implant: safeText(r.implant), implantII: safeText(r.implant_ii),
     implantId: safeText(r.implant_id), implantIIId: safeText(r.implant_ii_id),
     address: safeText(r.address), fileName: safeText(r.file_name),
     photoUri: photos[0] || "", photos,
@@ -324,8 +324,8 @@ async function savePatient(p: Patient, editing: boolean) {
       restoreStock(hydratePatientImplants(patientId, fromPatient(old)), uid);
       validateImplants(p);
       db.runSync(
-        "UPDATE patients SET mr_no=?,name=?,gender=?,age=?,diagnosis=?,procedure=?,implant=?,implant_ii=?,implant_id=?,implant_ii_id=?,address=?,file_name=?,photo_uri=?,photos_json=?,custom_data_json=?,date=?,updated_at=?,updated_by=? WHERE id=?",
-        [p.mrNo, p.name, p.gender, p.age, p.diagnosis, p.procedure, p.implant, p.implantII, p.implantId || null, p.implantIIId || null, p.address, p.fileName, primaryPhoto, photosJson, JSON.stringify((p as any).customData || {}), p.date, now, uid, patientId],
+        "UPDATE patients SET mr_no=?,name=?,gender=?,age=?,diagnosis=?,procedure=?,procedure_ii=?,implant=?,implant_ii=?,implant_id=?,implant_ii_id=?,address=?,file_name=?,photo_uri=?,photos_json=?,custom_data_json=?,date=?,updated_at=?,updated_by=? WHERE id=?",
+        [p.mrNo, p.name, p.gender, p.age, p.diagnosis, p.procedure, p.procedureII || "", p.implant, p.implantII, p.implantId || null, p.implantIIId || null, p.address, p.fileName, primaryPhoto, photosJson, JSON.stringify((p as any).customData || {}), p.date, now, uid, patientId],
       );
       db.runSync(
         "INSERT INTO patient_history (id,patient_id,user_id,action,snapshot_json,created_at) VALUES (?,?,?,?,?,?)",
@@ -339,8 +339,8 @@ async function savePatient(p: Patient, editing: boolean) {
 
   validateImplants(p);
   db.runSync(
-    "INSERT INTO patients (id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,implant_id,implant_ii_id,address,file_name,photo_uri,photos_json,custom_data_json,date,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-    [patientId, p.mrNo, p.name, p.gender, p.age, p.diagnosis, p.procedure, p.implant, p.implantII, p.implantId || null, p.implantIIId || null, p.address, p.fileName, primaryPhoto, photosJson, JSON.stringify((p as any).customData || {}), p.date, now, uid],
+    "INSERT INTO patients (id,mr_no,name,gender,age,diagnosis,procedure,procedure_ii,implant,implant_ii,implant_id,implant_ii_id,address,file_name,photo_uri,photos_json,custom_data_json,date,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    [patientId, p.mrNo, p.name, p.gender, p.age, p.diagnosis, p.procedure, p.procedureII || "", p.implant, p.implantII, p.implantId || null, p.implantIIId || null, p.address, p.fileName, primaryPhoto, photosJson, JSON.stringify((p as any).customData || {}), p.date, now, uid],
   );
   db.runSync(
     "INSERT INTO patient_history (id,patient_id,user_id,action,snapshot_json,created_at) VALUES (?,?,?,?,?,?)",
@@ -358,7 +358,7 @@ async function listPatients(options?: { includePhotos?: boolean; date?: string }
   const date = String(options?.date || "").trim();
   const dateWhere = date ? " AND date=?" : "";
   const dateArgs = date ? [date] : [];
-  const baseColumns = "id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,implant_id,implant_ii_id,address,file_name,date,created_at,created_by,updated_at,updated_by,custom_data_json";
+  const baseColumns = "id,mr_no,name,gender,age,diagnosis,procedure,procedure_ii,implant,implant_ii,implant_id,implant_ii_id,address,file_name,date,created_at,created_by,updated_at,updated_by,custom_data_json";
   const photoColumns = includePhotos ? ",photo_uri,photos_json" : "";
   const rows = me.role === "admin"
     ? db.getAllSync<any>(`SELECT ${baseColumns}${photoColumns} FROM patients WHERE 1=1${dateWhere} ORDER BY date DESC, created_at DESC`, dateArgs)
@@ -455,7 +455,7 @@ export const api = {
       const pid = decodeURIComponent(normalizedPath.slice("/patients/".length));
       const me = await currentUserRow();
       if (!me || !pid) return null as any;
-      const baseColumns = "id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,implant_id,implant_ii_id,address,file_name,photo_uri,photos_json,date,created_at,created_by,updated_at,updated_by,custom_data_json";
+      const baseColumns = "id,mr_no,name,gender,age,diagnosis,procedure,procedure_ii,implant,implant_ii,implant_id,implant_ii_id,address,file_name,photo_uri,photos_json,date,created_at,created_by,updated_at,updated_by,custom_data_json";
       const row = me.role === "admin"
         ? db.getFirstSync<any>(`SELECT ${baseColumns} FROM patients WHERE id=? LIMIT 1`, [pid])
         : db.getFirstSync<any>(`SELECT ${baseColumns} FROM patients WHERE id=? AND created_by=? LIMIT 1`, [pid, me.id]);
