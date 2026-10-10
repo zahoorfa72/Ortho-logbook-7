@@ -23,13 +23,15 @@ import { triggerAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-back
    const valid = type === "month" ? /^\d{4}-\d{2}$/.test(prefix) : /^\d{4}$/.test(prefix);
    if (!valid) throw new Error(type === "month" ? "Enter the month as YYYY-MM." : "Enter the year as YYYY.");
    const inPeriod = (row: any, ...fields: string[]) => fields.some((field) => String(row?.[field] ?? "").startsWith(prefix));
-   const patients = (backup.patients || []).filter((row: any) => inPeriod(row, "date"));
+   const periodHistory = (backup.patientHistory || []).filter((row: any) => inPeriod(row, "created_at"));
+   const historyPatientIds = new Set(periodHistory.map((row: any) => String(row.patient_id)));
+   const patients = (backup.patients || []).filter((row: any) => inPeriod(row, "date") || historyPatientIds.has(String(row.id)));
    const patientIds = new Set(patients.map((row: any) => String(row.id)));
    return {
      ...backup,
      patients,
      patientImplants: (backup.patientImplants || []).filter((row: any) => patientIds.has(String(row.patient_id))),
-     patientHistory: (backup.patientHistory || []).filter((row: any) => patientIds.has(String(row.patient_id)) && inPeriod(row, "created_at")),
+     patientHistory: periodHistory.filter((row: any) => patientIds.has(String(row.patient_id))),
      expenses: (backup.expenses || []).filter((row: any) => inPeriod(row, "date", "created_at")),
      implantRecords: (backup.implantRecords || []).filter((row: any) => inPeriod(row, "created_at", "updated_at")),
      inventoryMovements: (backup.inventoryMovements || []).filter((row: any) => inPeriod(row, "created_at")),
