@@ -1304,6 +1304,16 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
 }
 
 export async function restoreLatestFromGoogleDrive() {
+  // The login-screen restore must recover legacy dated backups too, not only
+  // whichever master file happens to exist. On a fresh install this phone has
+  // no migration marker, so first safely merge Drive history into the master.
+  // preferDriveOnMigration keeps the existing Drive records authoritative over
+  // an empty/new local database; old Drive files are retained for recovery.
+  const migrationDone = String((await storage.secureGet(MASTER_MIGRATION_KEY, "")) || "") === "1";
+  if (!migrationDone) {
+    await backupToGoogleDrive(undefined, { type: "all" }, { preferDriveOnMigration: true });
+  }
+
   const candidates = (await findLatestBackupCandidates()).filter((item:any) =>
     String(item.name || "") === "Ortho Logbook Backup - All Time.orbackup" ||
     String(item.name || "") === BACKUP_NAME
