@@ -632,7 +632,20 @@ function applyIncrementalToMaster(local: any, incoming: any, preserveCurrent = f
     for (const row of incoming[table]) {
       const key = row?.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
       const old = rows.get(key);
-      if (preserveCurrent && old) continue;
+      if (preserveCurrent && old) {
+        const oldTime = Date.parse(String(old.updated_at || old.created_at || old.date || ""));
+        const newTime = Date.parse(String(row.updated_at || row.created_at || row.date || ""));
+        if (Number.isFinite(newTime) && (!Number.isFinite(oldTime) || newTime > oldTime)) {
+          if (table === "patients" &&
+              !Object.prototype.hasOwnProperty.call(row, "photo_uri") &&
+              !Object.prototype.hasOwnProperty.call(row, "photos_json")) {
+            rows.set(key, { ...old, ...row });
+          } else {
+            rows.set(key, row);
+          }
+        }
+        continue;
+      }
       if (table === "patients" && old &&
           !Object.prototype.hasOwnProperty.call(row, "photo_uri") &&
           !Object.prototype.hasOwnProperty.call(row, "photos_json")) {
@@ -794,7 +807,7 @@ export async function backupToGoogleDrive(
   const fileName = driveBackupName(filter);
   // Find only this exact scope so a month/year backup can never overwrite the
   // all-time backup or another month.
-  options.onProgress?.("Finding this range's Drive backup…");
+  options.onProgress?.("Finding the master Drive backup…");
   let existing = await findBackupByName(fileName);
   // Upgrade path: reuse the legacy full backup only for an all-time request.
   if (!existing && filter.type === "all") existing = await findBackupByName(BACKUP_NAME);
