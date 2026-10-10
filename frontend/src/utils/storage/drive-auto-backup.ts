@@ -1,6 +1,7 @@
 import * as SQLite from "expo-sqlite";
 import {
   backupIncrementalToGoogleDrive,
+  ensureGoogleDriveBaseline,
   getConnectedGoogleAccount,
   restoreGoogleAccountSilently,
 } from "@/src/utils/storage/google-drive";
@@ -154,28 +155,39 @@ export function triggerAutomaticDriveBackup(tableName: "branding" | "appSettings
 
 export function startAutomaticDriveBackup() {
   disposed = false;
-  void loadPendingTables().then(() => {
-    // Full integrity pass catches records/photos changed while the app was paused,
-    // and also repairs a stale/missing pending-table queue after an app update.
-    ALL_SYNC_TABLES.forEach((name) => pendingTables.add(name));
-    scheduleBackup();
+  void loadPendingTables().then(async () => {
+    // Do not mark every table dirty on launch: doing so made ordinary app
+    // opens/navigation look like a request to back up. Only create a first
+    // baseline when this Drive account has no all-time backup yet.
+    if (pendingTables.size) {
+      scheduleBackup();
+      return;
+    }
+    try {
+      if (!getConnectedGoogleAccount()) await restoreGoogleAccountSilently();
+      if (getConnectedGoogleAccount()) {
+        await ensureGoogleDriveBaseline((message) => {
+          setDriveSyncState({ phase: "uploading", updates: 0, message });
+        });
+      }
+    } catch (error) {
+      console.warn("[drive-auto-backup] initial baseline check failed:", error);
+    }
   });
   const subscription = SQLite.addDatabaseChangeListener((event: any) => {
     const changedTable = tableMap[String(event?.tableName || "")];
-    // Ignore navigation, SQLite metadata, and unrelated internal tables.
+    // Only actual writes to syncable tables enqueue a comparison. The diff is
+    // checked before any upload, so no-op SQLite events cannot upload backups.
     if (changedTable) scheduleBackup(changedTable);
   });
 
-  // Returning to the foreground performs a lightweight row-diff integrity pass.
-  // It catches missed SQLite events without re-uploading unchanged records/photos.
+  // On foreground, retry only edits that were already pending/failed. Never
+  // mark every table dirty merely because the user returned to the app.
   let appStateSubscription: { remove: () => void } | null = null;
   try {
     const { AppState } = require("react-native");
     appStateSubscription = AppState.addEventListener("change", (state: string) => {
-      if (state === "active") {
-        ALL_SYNC_TABLES.forEach((name) => pendingTables.add(name));
-        scheduleBackup();
-      }
+      if (state === "active" && pendingTables.size) scheduleBackup();
     });
   } catch {}
 
