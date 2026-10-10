@@ -856,6 +856,13 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
 
 export async function restoreLatestFromGoogleDrive() {
   const candidates = await findLatestBackupCandidates();
+  // Scoped month/year files must not accidentally become the default full restore.
+  // Prefer the all-time snapshot, then the original legacy full-backup filename.
+  candidates.sort((a:any,b:any) => {
+    const rank = (name:string) => /all time/i.test(name) ? 0 : name === BACKUP_NAME ? 1 : /month|year|date/i.test(name) ? 3 : 2;
+    return rank(String(a.name || "")) - rank(String(b.name || "")) ||
+      Date.parse(String(b.modifiedTime || "")) - Date.parse(String(a.modifiedTime || ""));
+  });
   if (!candidates.length) throw new Error("No Ortho Logbook backup file was found in this Google Drive account. Backup folders are searched recursively; only actual backup files can be restored.");
   let file: any = null;
   let composed: any = null;
