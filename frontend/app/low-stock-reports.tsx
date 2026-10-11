@@ -8,7 +8,7 @@ import { useToast } from "@/src/components/toast";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 import { attemptDueLowStockReport, getLowStockReportState, loadLowStockReportConfig, saveLowStockReportConfig, shareLowStockPdfViaWhatsApp, type LowStockReportConfig, type LowStockSchedule } from "@/src/utils/low-stock-auto-report";
 
-const blank = (): LowStockReportConfig => ({ schedule: "weekly", fixedDate: "", autoEmailEnabled: false, emails: "", resendApiKey: "", senderEmail: "", whatsappNumbers: "", whatsappToken: "", whatsappPhoneNumberId: "", whatsappGraphVersion: "v23.0", whatsappMode: "manual", savedAt: "" });
+const blank = (): LowStockReportConfig => ({ schedule: "weekly", fixedDate: "", autoEmailEnabled: false, emailEnabled: false, emails: "", resendApiKey: "", senderEmail: "", whatsappNumbers: "", whatsappToken: "", whatsappPhoneNumberId: "", whatsappGraphVersion: "v23.0", whatsappMode: "manual", savedAt: "" });
 export default function LowStockReportsScreen() {
   const { user } = useAuth();
   const { colors } = useTheme();
@@ -49,6 +49,7 @@ export default function LowStockReportsScreen() {
       {config.schedule === "fixedDate" && field("Trigger date (YYYY-MM-DD)", config.fixedDate || "", v => update({ fixedDate: v }), "2026-12-01")}
       <Text style={styles.help}>Automatic checks run when the app starts/opens. Android may delay background work; this version cannot guarantee a send at an exact time while the app is closed.</Text>
       <Text style={styles.section}>Email delivery</Text>
+      {toggle("Send PDF by email automatically", !!config.emailEnabled, () => update({ emailEnabled: !config.emailEnabled }))}
       {field("Recipient email(s)", config.emails, v => update({ emails: v }), "recipient@gmail.com; another@gmail.com")}
       {field("Sender email (must be verified with Resend)", config.senderEmail, v => update({ senderEmail: v }), "reports@your-verified-domain.com")}
       {field("Resend API key", config.resendApiKey, v => update({ resendApiKey: v }), "re_…", true)}
