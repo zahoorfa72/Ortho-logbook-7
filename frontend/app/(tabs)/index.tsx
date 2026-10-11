@@ -145,7 +145,7 @@ export default function Logbook() {
     }
     Alert.alert(
       "Delete patients?",
-      `Delete ${selectedIds.length} selected patient record(s)? Used implants will be returned to inventory. This cannot be undone.`,
+      `Move ${selectedIds.length} selected patient record(s) to Trash for 30 days? Used implants will be returned to inventory. You can restore these records from Settings → Trash before they expire.`,
       [
         { text: "Cancel", style: "cancel" },
         {
