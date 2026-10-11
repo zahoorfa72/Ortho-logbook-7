@@ -15,6 +15,7 @@ import { queryClient } from "@/src/query-client";
 import { initializeDatabase, repairDatabaseData } from "@/src/db/database";
 import { ThemeProvider } from "@/src/theme";
 import { startAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-backup";
+import { attemptDueLowStockReport } from "@/src/utils/low-stock-auto-report";
 import { DriveSyncIndicator } from "@/src/utils/storage/drive-sync-status";
 
 LogBox.ignoreAllLogs(true);
@@ -38,7 +39,11 @@ function DatabaseBootstrap({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!ready) return;
-    return startAutomaticDriveBackup();
+    const stopBackup = startAutomaticDriveBackup();
+    // Evaluate the admin-configured low-stock schedule whenever the app starts.
+    // Delivery is idempotent per reporting period in low-stock-auto-report.ts.
+    void attemptDueLowStockReport().catch(() => {});
+    return stopBackup;
   }, [ready]);
 
   if (error) {
