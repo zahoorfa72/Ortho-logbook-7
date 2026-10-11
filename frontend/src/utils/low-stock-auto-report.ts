@@ -10,6 +10,7 @@ import { buildInventoryHtml } from "@/src/utils/pdf";
 export type LowStockSchedule = "weekly" | "15days" | "monthly";
 export type LowStockReportConfig = {
   schedule: LowStockSchedule;
+  autoEmailEnabled?: boolean;
   emails: string;
   resendApiKey: string;
   senderEmail: string;
@@ -145,7 +146,7 @@ export async function attemptDueLowStockReport(): Promise<string> {
   const state = await getLowStockReportState();
   const now = Date.now();
   const due = (last?: string) => !last || now - new Date(last).getTime() >= dueMs(config.schedule);
-  const emailDue = parseList(config.emails).length > 0 && Boolean(config.resendApiKey && config.senderEmail) && due(state.emailLastSentAt);
+  const emailDue = config.autoEmailEnabled !== false && parseList(config.emails).length > 0 && Boolean(config.resendApiKey && config.senderEmail) && due(state.emailLastSentAt);
   const whatsappDue = config.whatsappMode !== "manual" && parseList(config.whatsappNumbers).length > 0 && Boolean(config.whatsappToken && config.whatsappPhoneNumberId) && due(state.whatsappLastSentAt);
   if (!emailDue && !whatsappDue) return "No scheduled low-stock report is due.";
   try {
