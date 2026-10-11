@@ -246,7 +246,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
    for (const table of ["inventory", "inventory_purchase_receipts", "stock_receipts"]) {
      if (!Array.isArray(payload[table])) continue;
      for (const row of payload[table]) {
-       if (typeof row.bill_image === "string" && /^(data:image\\/|file:\\/\\/|content:\\/\\/)/i.test(row.bill_image)) {
+       if (typeof row.bill_image === "string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(row.bill_image)) {
          row.bill_image = await embedOptionalPhoto(row.bill_image, compressedPhotoCache);
        }
      }
@@ -256,7 +256,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
        const files = JSON.parse(String(row.bill_files_json || "[]"));
        if (Array.isArray(files)) {
          const compressed = [];
-         for (const file of files) compressed.push(typeof file === "string" && /^(data:image\\/|file:\\/\\/|content:\\/\\/)/i.test(file) ? await embedOptionalPhoto(file, compressedPhotoCache) : file);
+         for (const file of files) compressed.push(typeof file === "string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(file) ? await embedOptionalPhoto(file, compressedPhotoCache) : file);
          row.bill_files_json = JSON.stringify(compressed);
        }
      } catch {}
