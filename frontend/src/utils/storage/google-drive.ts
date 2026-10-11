@@ -9,7 +9,7 @@ const LAST_DRIVE_BACKUP_KEY = "ortho_drive_last_successful_backup";
 const LAST_DRIVE_CONTENT_HASH_KEY = "ortho_drive_last_uploaded_content_hash";
 const MASTER_MIGRATION_KEY = "ortho_drive_master_migration_v2";
 const DRIVE_SCOPE_VERSION_KEY = "ortho_drive_scope_version";
-const DRIVE_SCOPE_VERSION = "full-drive-v1";
+const DRIVE_SCOPE_VERSION = "full-drive-gmail-v1";
 export async function getLastDriveBackupStatus(): Promise<string | null> {
   return (await storage.secureGet(LAST_DRIVE_BACKUP_KEY, "")) || null;
 }
@@ -25,7 +25,7 @@ let accessTokenInFlight: Promise<string> | null = null;
 
 function configure() {
   if (configured) return;
-  GoogleSignin.configure({ scopes: [GOOGLE_DRIVE_SCOPE] });
+  GoogleSignin.configure({ scopes: [GOOGLE_DRIVE_SCOPE, "https://www.googleapis.com/auth/gmail.send"] });
   configured = true;
 }
 
@@ -74,6 +74,28 @@ export async function restoreGoogleAccountSilently(): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+export async function connectGoogleGmailAccount(): Promise<string> {
+  // Uses the same Google account as Drive backup and requests Gmail send permission.
+  const email = await connectGoogleAccount();
+  const tokens = await GoogleSignin.getTokens();
+  if (!tokens.accessToken) throw new Error("Google did not return an access token for Gmail.");
+  return email;
+}
+
+export async function getGoogleGmailAccessToken(): Promise<string> {
+  configure();
+  let current = GoogleSignin.getCurrentUser();
+  const scopeVersion = String((await storage.secureGet(DRIVE_SCOPE_VERSION_KEY, "")) || "");
+  if (!current || scopeVersion !== DRIVE_SCOPE_VERSION) {
+    await connectGoogleAccount();
+    current = GoogleSignin.getCurrentUser();
+  }
+  if (!current) throw new Error("Connect your Google account before sending email.");
+  const tokens = await GoogleSignin.getTokens();
+  if (!tokens.accessToken) throw new Error("Google did not return an access token for Gmail.");
+  return tokens.accessToken;
 }
 
 async function resolveAccessToken(): Promise<string> {
