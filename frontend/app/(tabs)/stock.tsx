@@ -35,19 +35,36 @@ function parseInvoiceOcr(text:string,categories:any[],inventory:any[]){
  const knownSizes=[...new Set((Array.isArray(inventory)?inventory:[]).map((x:any)=>String(x?.size||"").trim()).filter(Boolean))].sort((a,b)=>b.length-a.length);
  const categoryNames=(Array.isArray(categories)?categories:[]).map((x:any)=>String(x?.name||"").trim()).filter(Boolean);
  const lines=String(text||"").split(/\r?\n/).map(x=>x.replace(/[|]/g," ").replace(/\s+/g," ").trim()).filter(x=>x.length>=3);
- const out:StockRow[]=[];const seen=new Set<string>();
+ const out:StockRow[]=[];const seen=new Set<string>();let qtyColumnActive=false;
  for(const line of lines){
+   // Quantities are only accepted after an explicit QTY/QUANTITY column heading,
+   // or when the row itself explicitly labels a value as QTY/QUANTITY.
+   if(/\b(?:QTY|QUANTITY)\b/i.test(line)&&/\b(?:ITEM|DESCRIPTION|PRODUCT|SIZE|QTY|QUANTITY)\b/i.test(line)){qtyColumnActive=true;continue;}
    if(/^(invoice|bill|date|total|subtotal|tax|gst|phone|address|customer|supplier|amount|discount|qty|quantity|description|item|product|price|rate|page)\b/i.test(line))continue;
    const matchedCategory=bestOcrMatch(line,categoryNames);let category=matchedCategory.score>=.42?matchedCategory.value:"";
    let sizes=knownSizes.filter(size=>normalizeOcr(line).includes(normalizeOcr(size)));
+   // Orthopaedic size notation such as 4/5 and 5/5 is a size, never a quantity.
+   const slashSize=line.match(/\b\d{1,2}\s*\/\s*\d{1,2}\b/);
+   if(!sizes.length&&slashSize)sizes=[slashSize[0].replace(/\s/g,"")];
    const holeMatch=line.match(/\b(\d{1,2}(?:\s*[,/;]\s*\d{1,2})+)\s*(?:holes?|h)\b/i);
    if(holeMatch){sizes=holeMatch[1].split(/\s*[,/;]\s*/).map(n=>n.trim()).map(n=>knownSizes.find(s=>normalizeOcr(s)===normalizeOcr(n)||normalizeOcr(s).includes(n+" hole"))||n);}
    if(!sizes.length){const hm=line.match(/\b(\d{1,2})\s*(?:holes?|h)\b/i);if(hm)sizes=[knownSizes.find(s=>normalizeOcr(s)===normalizeOcr(hm[1])||normalizeOcr(s).includes(hm[1]+" hole"))||hm[1]];}
    if(!sizes.length){const sizeMatch=bestOcrMatch(line,knownSizes);if(sizeMatch.score>=.55)sizes=[sizeMatch.value];}
    const multiSizes=sizes.length>1;
-   const nums=[...line.matchAll(/\b\d+(?:\.\d+)?\b/g)].map(m=>({value:m[0],index:m.index||0}));
    let quantity="";
-   if(!multiSizes&&nums.length){const last=nums[nums.length-1];const tail=line.slice(last.index+last.value.length);if(!/(?:mm|cm|inch|inches|hole|holes|size)/i.test(tail)&&Number(last.value)>0)quantity=last.value;}
+   if(!multiSizes){
+     const labeledQty=line.match(/\b(?:QTY|QUANTITY)\s*[:=#-]?\s*(\d+(?:\.\d+)?)\b/i);
+     if(labeledQty&&Number(labeledQty[1])>0)quantity=labeledQty[1];
+     else if(qtyColumnActive&&sizes.length){
+       const sizeText=String(sizes[0]||"");
+       const sizeAt=line.toLowerCase().indexOf(sizeText.toLowerCase());
+       if(sizeAt>=0){
+         const afterSize=line.slice(sizeAt+sizeText.length);
+         const nextNumber=afterSize.match(/\b(\d+(?:\.\d+)?)\b/);
+         if(nextNumber&&Number(nextNumber[1])>0)quantity=nextNumber[1];
+       }
+     }
+   }
    if(!category){const m=bestOcrMatch(line,(Array.isArray(inventory)?inventory:[]).map((x:any)=>String(x?.category||x?.name||"")).filter(Boolean));if(m.score>=.52)category=m.value;}
    if(!category&&!sizes.length)continue;
    if(!sizes.length)sizes=[""];
