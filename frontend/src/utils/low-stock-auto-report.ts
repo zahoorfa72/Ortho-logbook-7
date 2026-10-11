@@ -33,7 +33,7 @@ export type LowStockReportConfig = {
   lowStockWhatsAppTemplateLanguage?: string;
   savedAt: string;
 };
-type ReportState = { lastGeneratedAt?: string; lastSentAt?: string; lastPeriodKey?: string; lastStatus?: string; activeLowStockIds?: string[]; lastImmediateAlertAt?: string };
+type ReportState = { lastGeneratedAt?: string; lastSentAt?: string; lastPeriodKey?: string; lastStatus?: string; activeLowStockIds?: string[]; activeLowStockGmailIds?: string[]; activeLowStockWhatsAppIds?: string[]; lastImmediateAlertAt?: string };
 type PdfResult = { uri: string; count: number; periodStart: string; periodEnd: string; periodKey: string };
 const CONFIG_KEY = "ortho_low_stock_report_config";
 const STATE_KEY = "ortho_low_stock_report_state";
@@ -248,43 +248,54 @@ export async function checkAndSendImmediateLowStockAlerts(): Promise<string> {
     return !!item?.id && Number.isFinite(qty) && Number.isFinite(min) && qty <= min;
   });
   const state = await getLowStockReportState();
-  const active = new Set((state.activeLowStockIds || []).map(String));
-  const newlyLow = low.filter((item: any) => !active.has(String(item.id)));
   const currentIds = low.map((item: any) => String(item.id));
-  if (!newlyLow.length) {
-    await saveState({ ...state, activeLowStockIds: currentIds });
-    return "No newly low-stock items.";
-  }
-  const lines = newlyLow.map((item: any) => {
-    const name = String(item.name || item.category || "Implant");
-    const category = String(item.category || "");
-    const size = String(item.size || "");
-    const qty = Number(item.quantity);
-    const min = Number(item.minimumStock ?? item.minimum_stock);
-    return "- " + name + (category && category.toLowerCase() !== name.toLowerCase() ? " (" + category + ")" : "") +
-      (size ? ", size " + size : "") + ": remaining " + qty + " " + String(item.unit || "pcs") + ", minimum " + min;
-  });
-  const message = "ORTHO LOGBOOK — LOW STOCK ALERT\n" + newlyLow.length + " implant/item(s) just reached or fell below minimum stock:\n" + lines.join("\n") +
-    "\n\nPlease arrange replenishment. Alert time: " + new Date().toLocaleString();
+  const gmailActive = new Set((state.activeLowStockGmailIds || []).map(String));
+  const whatsappActive = new Set((state.activeLowStockWhatsAppIds || []).map(String));
+  const gmailNew = gmailOn ? low.filter((item: any) => !gmailActive.has(String(item.id))) : [];
+  const whatsappNew = whatsappOn ? low.filter((item: any) => !whatsappActive.has(String(item.id))) : [];
+  const formatMessage = (items: any[]) => "ORTHO LOGBOOK — LOW STOCK ALERT\n" + items.length +
+    " implant/item(s) just reached or fell below minimum stock:\n" +
+    items.map((item: any) => {
+      const name = String(item.name || item.category || "Implant");
+      const category = String(item.category || "");
+      const size = String(item.size || "");
+      const qty = Number(item.quantity);
+      const min = Number(item.minimumStock ?? item.minimum_stock);
+      return "- " + name + (category && category.toLowerCase() !== name.toLowerCase() ? " (" + category + ")" : "") +
+        (size ? ", size " + size : "") + ": remaining " + qty + " " + String(item.unit || "pcs") + ", minimum " + min;
+    }).join("\n") + "\n\nPlease arrange replenishment. Alert time: " + new Date().toLocaleString();
   const results: string[] = [];
-  let gmailSucceeded = !gmailOn;
-  let whatsappSucceeded = !whatsappOn;
+  let gmailActiveIds = [...(state.activeLowStockGmailIds || [])];
+  let whatsappActiveIds = [...(state.activeLowStockWhatsAppIds || [])];
   if (gmailOn) {
-    try { await sendLowStockAlertEmail("URGENT: Implant low-stock alert (" + newlyLow.length + " item(s))", message, config); gmailSucceeded = true; results.push("Gmail sent"); }
-    catch (e: any) { results.push("Gmail FAILED: " + String(e?.message || e)); }
+    if (!gmailNew.length) gmailActiveIds = currentIds;
+    else {
+      try {
+        await sendLowStockAlertEmail("URGENT: Implant low-stock alert (" + gmailNew.length + " item(s))", formatMessage(gmailNew), config);
+        gmailActiveIds = currentIds;
+        results.push("Gmail text alert sent");
+      } catch (e: any) { results.push("Gmail FAILED: " + String(e?.message || e)); }
+    }
   }
   if (whatsappOn) {
-    try { await sendLowStockAlertWhatsApp(message, config); whatsappSucceeded = true; results.push("WhatsApp sent"); }
-    catch (e: any) { results.push("WhatsApp FAILED: " + String(e?.message || e)); }
+    if (!whatsappNew.length) whatsappActiveIds = currentIds;
+    else {
+      try {
+        await sendLowStockAlertWhatsApp(formatMessage(whatsappNew), config);
+        whatsappActiveIds = currentIds;
+        results.push("WhatsApp text alert sent");
+      } catch (e: any) { results.push("WhatsApp FAILED: " + String(e?.message || e)); }
+    }
   }
-  // Do not mark an item as alerted unless all enabled channels succeeded; a later check retries it.
-  if (gmailSucceeded && whatsappSucceeded) {
-    await saveState({ ...state, activeLowStockIds: currentIds, lastImmediateAlertAt: new Date().toISOString(),
-      lastStatus: "Immediate low-stock text alert: " + results.join("; ") + " for " + newlyLow.length + " item(s)." });
-  } else {
-    await saveState({ ...state, lastStatus: "Immediate low-stock alert delivery issue: " + results.join("; ") });
-  }
-  return results.join("; ");
+  await saveState({
+    ...state,
+    ...(gmailOn ? { activeLowStockGmailIds: gmailActiveIds } : {}),
+    ...(whatsappOn ? { activeLowStockWhatsAppIds: whatsappActiveIds } : {}),
+    activeLowStockIds: currentIds,
+    ...(results.length ? { lastImmediateAlertAt: new Date().toISOString() } : {}),
+    ...(results.length ? { lastStatus: "Immediate low-stock text alert: " + results.join("; ") } : {}),
+  });
+  return results.length ? results.join("; ") : "No newly low-stock items.";
 }
 
 export async function shareLowStockPdfViaWhatsApp(): Promise<void> {
