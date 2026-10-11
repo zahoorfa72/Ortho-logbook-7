@@ -63,6 +63,12 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
       can_edit_patients INTEGER NOT NULL DEFAULT 1, disabled INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS deleted_records (
+      id TEXT PRIMARY KEY NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL,
+      payload_json TEXT NOT NULL, deleted_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+      deleted_by TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_deleted_records_expiry ON deleted_records(expires_at);
     CREATE TABLE IF NOT EXISTS patient_history (
       id TEXT PRIMARY KEY NOT NULL, patient_id TEXT NOT NULL, user_id TEXT,
       action TEXT NOT NULL, snapshot_json TEXT NOT NULL, created_at TEXT NOT NULL
@@ -203,6 +209,9 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
     db.runSync("DELETE FROM implant_records");
     db.runSync("INSERT OR REPLACE INTO app_meta (key,value) VALUES (?,?)",[IMPLANT_PORTAL_CLEANUP_MARKER,"done"]);
   }
+  // Expired Trash entries are permanently purged after their original 30-day deadline.
+  // The expiry timestamp is backed up, so restoring a backup never resets the clock.
+  db.runSync("DELETE FROM deleted_records WHERE expires_at <= ?", [new Date().toISOString()]);
   if (!options?.skipInventoryReset) applyHoldInventoryResetOnce();
 }
 
