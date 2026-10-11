@@ -754,7 +754,7 @@ async function mergeLegacyDriveHistory(localText: string, onProgress?: (stage: s
       const delta = recovered.data;
       if (delta?.incremental === true) {
         const deltaBaseline = String(delta._baselineKey || "");
-        const matchesBaseline = hasFullBaseline && deltaBaseline.startsWith(String(fullBaseline.id) + ":");
+        const matchesBaseline = hasFullBaseline && deltaBaseline.startsWith(String(fullBaseline?.id || "") + ":");
         const isLegacyDeltaAfterBaseline = !deltaBaseline && (!hasFullBaseline ||
           Date.parse(String(deltaFile.modifiedTime || "")) > baselineTime);
         // A keyed journal belongs to this master file even if the master's
