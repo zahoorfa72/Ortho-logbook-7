@@ -346,8 +346,8 @@ export default function BrandingScreen() {
         <Text style={[styles.label, { marginTop: spacing.md }]}>Patient Add/Edit Form — field order</Text>
         <Text style={styles.hint}>Use the arrows to arrange built-in fields and every custom field created by the administrator. New custom fields appear here automatically. This changes the entry form layout only, not saved patient data.</Text>
         {(() => {
-          const builtIn = ["mrNo","name","gender","age","address","diagnosis","procedure","procedureII","fileName","date"];
-          const labels:Record<string,string> = {mrNo:"MR No",name:"Patient Name",gender:"Gender",age:"Age",address:"Address",diagnosis:"Diagnosis",procedure:"Procedure",procedureII:draft.procedureSecondLabel?.trim() || "Procedure 2",fileName:"File / Reference",date:"Date"};
+          const builtIn = ["mrNo","name","gender","age","address","diagnosis","procedure","procedureII","implants","fileName","date"];
+          const labels:Record<string,string> = {mrNo:"MR No",name:"Patient Name",gender:"Gender",age:"Age",address:"Address",diagnosis:"Diagnosis",procedure:"Procedure",procedureII:draft.procedureSecondLabel?.trim() || "Procedure 2",implants:"Implants",fileName:"File / Reference",date:"Date"};
           const customKeys = customFields.filter((f:any)=>f?.key && f?.label).map((f:any)=>String(f.key));
           const allowed = [...builtIn,...customKeys.filter((k:string)=>!builtIn.includes(k))];
           const current = Array.isArray(draft.patientFormFieldOrder) ? draft.patientFormFieldOrder.filter((k:string)=>allowed.includes(k)) : [];
