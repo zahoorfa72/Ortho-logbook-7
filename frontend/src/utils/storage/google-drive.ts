@@ -217,7 +217,137 @@ export async function restoreGoogleDriveBackupById(fileId: string) {
   if (!parsed || parsed.app !== "Ortho Logbook" || !Array.isArray(parsed.patients) || !Array.isArray(parsed.inventory)) {
     throw new Error("The selected file is not a complete Ortho Logbook backup.");
   }
-  return {name:String(metadata.name || "Ortho Logbook Backup"),modifiedTime:String(metadata.modifiedTime || ""),backupText:JSON.stringify(parsed)};
+
+  // The master is intentionally stable between compactions. Automatic edits,
+  // including patient deletion tombstones and Trash records, live in the
+  // incremental journal. A selected-master restore must compose that journal
+  // too; downloading the master alone silently restores stale patient rows.
+  const composed = parsed;
+  const baseTime = Date.parse(String(metadata.modifiedTime || ""));
+  const deltas = (await listIncrementalFiles())
+    .filter((item: any) => item?.id)
+    .sort((a: any, b: any) => Date.parse(String(a.modifiedTime || "")) - Date.parse(String(b.modifiedTime || "")));
+  const recoveryWarnings: string[] = [];
+  let appliedIncrementals = 0;
+
+  for (let deltaIndex = 0; deltaIndex < deltas.length; deltaIndex++) {
+    const deltaFile = deltas[deltaIndex];
+    let delta: any;
+    try {
+      const recovered = await downloadIncrementalWithRecovery(String(deltaFile.id), String(deltaFile.name || "An incremental backup"));
+      delta = recovered.data;
+      if (recovered.warning) recoveryWarnings.push(recovered.warning);
+    } catch (error: any) {
+      recoveryWarnings.push(String(error?.message || (String(deltaFile.name || "An incremental backup") + " could not be recovered.")));
+      continue;
+    }
+    if (!delta || delta.app !== "Ortho Logbook" || delta.incremental !== true || !Array.isArray(delta.changedTables)) {
+      recoveryWarnings.push(String(deltaFile.name || "An incremental backup") + " has an invalid format and was skipped.");
+      continue;
+    }
+
+    const deltaBaseline = String(delta._baselineKey || "");
+    const belongsToSelectedBaseline = deltaBaseline
+      ? deltaBaseline.startsWith(String(metadata.id) + ":")
+      : Number.isFinite(baseTime) && Date.parse(String(deltaFile.modifiedTime || "")) > baseTime;
+    if (!belongsToSelectedBaseline) continue;
+
+    let appliedAnyTable = false;
+    for (const table of delta.changedTables) {
+      if (table === "branding" || table === "appSettings") {
+        if (Object.prototype.hasOwnProperty.call(delta, table)) {
+          (composed as any)[table] = (delta as any)[table];
+          appliedAnyTable = true;
+        } else {
+          recoveryWarnings.push(String(deltaFile.name || "An incremental backup") + " is missing its " + table + " data.");
+        }
+        continue;
+      }
+
+      const syncTables = ["patients","procedures","inventoryCategories","inventory","patientImplants","patientCustomFields","implantRecords","expenses","users","patientHistory","inventoryMovements","inventoryPurchaseReceipts","stockReceipts","trash"];
+      if (!syncTables.includes(table)) continue;
+      if (!Array.isArray(delta[table])) {
+        recoveryWarnings.push(String(deltaFile.name || "An incremental backup") + " is missing table data for " + table + ".");
+        continue;
+      }
+
+      if (delta._recoveredFromDamage === true) {
+        // A salvaged/truncated journal cannot prove that absent rows were deleted.
+        // Merge its readable rows conservatively instead of replacing a full table.
+        const merged = new Map<string, any>();
+        for (const row of Array.isArray(composed[table]) ? composed[table] : []) {
+          const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+          merged.set(key, row);
+        }
+        for (const row of delta[table]) {
+          const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+          const existing = merged.get(key);
+          if (table === "patients" && existing &&
+              !Object.prototype.hasOwnProperty.call(row, "photo_uri") &&
+              !Object.prototype.hasOwnProperty.call(row, "photos_json")) {
+            merged.set(key, { ...existing, ...row });
+          } else {
+            merged.set(key, row);
+          }
+        }
+        composed[table] = Array.from(merged.values());
+      } else if (delta._rowDelta === true && !(Array.isArray(delta.fullTables) && delta.fullTables.includes(table))) {
+        const merged = new Map<string, any>();
+        for (const row of Array.isArray(composed[table]) ? composed[table] : []) {
+          const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+          merged.set(key, row);
+        }
+        for (const deletedId of Array.isArray(delta.deletedIds?.[table]) ? delta.deletedIds[table] : []) {
+          merged.delete("id:" + String(deletedId));
+        }
+        for (const row of delta[table]) {
+          const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+          const existing = merged.get(key);
+          if (table === "patients" && existing &&
+              !Object.prototype.hasOwnProperty.call(row, "photo_uri") &&
+              !Object.prototype.hasOwnProperty.call(row, "photos_json")) {
+            merged.set(key, { ...existing, ...row });
+          } else {
+            merged.set(key, row);
+          }
+        }
+        composed[table] = Array.from(merged.values());
+      } else {
+        // Full-table journal snapshots contain the complete table as of that
+        // journal generation; apply the explicit deletion IDs after the snapshot.
+        const merged = new Map<string, any>();
+        for (const row of delta[table]) {
+          const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+          merged.set(key, row);
+        }
+        for (const deletedId of Array.isArray(delta.deletedIds?.[table]) ? delta.deletedIds[table] : []) {
+          merged.delete("id:" + String(deletedId));
+        }
+        composed[table] = Array.from(merged.values());
+      }
+      appliedAnyTable = true;
+    }
+    if (appliedAnyTable) {
+      appliedIncrementals++;
+      composed.createdAt = delta.createdAt || composed.createdAt;
+    }
+  }
+
+  composed.incremental = false;
+  delete composed.changedTables;
+  delete composed._rowDelta;
+  delete composed.deletedIds;
+  delete composed.fullTables;
+  delete composed._baselineKey;
+  delete composed._updateCount;
+  composed.filter = { type: "all" };
+  return {
+    name: String(metadata.name || "Ortho Logbook Backup"),
+    modifiedTime: String(metadata.modifiedTime || ""),
+    backupText: JSON.stringify(composed),
+    appliedIncrementals,
+    recoveryWarnings,
+  };
 }
 
 async function findLatestBackup() {
