@@ -6,9 +6,9 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "@/src/auth/AuthContext";
 import { useToast } from "@/src/components/toast";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
-import { getLowStockReportState, loadLowStockReportConfig, saveLowStockReportConfig, shareLowStockPdfViaWhatsApp, type LowStockReportConfig, type LowStockSchedule } from "@/src/utils/low-stock-auto-report";
+import { attemptDueLowStockReport, getLowStockReportState, loadLowStockReportConfig, saveLowStockReportConfig, shareLowStockPdfViaWhatsApp, type LowStockReportConfig, type LowStockSchedule } from "@/src/utils/low-stock-auto-report";
 
-const blank = (): LowStockReportConfig => ({ schedule: "weekly", fixedDate: "", autoEmailEnabled: false, emails: "", resendApiKey: "", senderEmail: "", whatsappNumbers: "", whatsappToken: "", whatsappPhoneNumberId: "", whatsappGraphVersion: "", whatsappMode: "manual", savedAt: "" });
+const blank = (): LowStockReportConfig => ({ schedule: "weekly", fixedDate: "", autoEmailEnabled: false, emails: "", resendApiKey: "", senderEmail: "", whatsappNumbers: "", whatsappToken: "", whatsappPhoneNumberId: "", whatsappGraphVersion: "v23.0", whatsappMode: "manual", savedAt: "" });
 export default function LowStockReportsScreen() {
   const { user } = useAuth();
   const { colors } = useTheme();
@@ -19,30 +19,54 @@ export default function LowStockReportsScreen() {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
   const [lastGenerated, setLastGenerated] = useState("");
-  useEffect(() => { (async () => { const c = await loadLowStockReportConfig(); if (c) setConfig({ ...blank(), ...c, autoEmailEnabled: false, whatsappMode: "manual" }); const s = await getLowStockReportState(); setStatus(s.lastStatus || ""); setLastGenerated(s.lastGeneratedAt ? new Date(s.lastGeneratedAt).toLocaleString() : ""); })(); }, []);
+  useEffect(() => { (async () => {
+    const c = await loadLowStockReportConfig();
+    if (c) setConfig({ ...blank(), ...c });
+    const s = await getLowStockReportState();
+    setStatus(s.lastStatus || "");
+    setLastGenerated(s.lastGeneratedAt ? new Date(s.lastGeneratedAt).toLocaleString() : "");
+  })(); }, []);
   const update = (patch: Partial<LowStockReportConfig>) => setConfig(c => ({ ...c, ...patch }));
   const save = async () => {
     if (config.schedule === "fixedDate" && !/^\d{4}-\d{2}-\d{2}$/.test(String(config.fixedDate || "").trim())) { toast("Enter the date as YYYY-MM-DD.", "error"); return false; }
-    try { const next = { ...config, autoEmailEnabled: false, resendApiKey: "", senderEmail: "", emails: "", whatsappNumbers: "", whatsappToken: "", whatsappPhoneNumberId: "", whatsappMode: "manual" as const, savedAt: new Date().toISOString() }; await saveLowStockReportConfig(next); setConfig(next); toast("Offline report settings saved on this device.", "success"); return true; }
+    if (config.autoEmailEnabled && !config.emails.trim() && !(config.whatsappMode === "meta" && config.whatsappNumbers.trim())) { toast("Add at least one email or WhatsApp recipient before enabling automatic sending.", "error"); return false; }
+    try { const next = { ...config, savedAt: new Date().toISOString() }; await saveLowStockReportConfig(next); setConfig(next); toast("Low-stock delivery settings saved securely on this device.", "success"); return true; }
     catch { toast("Could not save settings on this device.", "error"); return false; }
   };
-  const generate = async () => { setBusy(true); try { await save(); await shareLowStockPdfViaWhatsApp(); const s = await getLowStockReportState(); setStatus(s.lastStatus || "Report generated."); setLastGenerated(s.lastGeneratedAt ? new Date(s.lastGeneratedAt).toLocaleString() : ""); toast("PDF created locally. Choose an app from the share sheet if you want to send it.", "success"); } catch (e: any) { Alert.alert("Could not create report", String(e?.message || e)); } finally { setBusy(false); } };
+  const generate = async () => { setBusy(true); try { await save(); await shareLowStockPdfViaWhatsApp(); const s = await getLowStockReportState(); setStatus(s.lastStatus || "Report generated."); setLastGenerated(s.lastGeneratedAt ? new Date(s.lastGeneratedAt).toLocaleString() : ""); toast("Period-filtered PDF created. Choose an app to share it.", "success"); } catch (e: any) { Alert.alert("Could not create report", String(e?.message || e)); } finally { setBusy(false); } };
+  const testAutomatic = async () => { setBusy(true); try { if (!(await save())) return; const result = await attemptDueLowStockReport(); setStatus(result); toast(result, result.toLowerCase().includes("sent") ? "success" : "info"); } catch (e:any) { const message = String(e?.message || e); setStatus("Automatic delivery failed: " + message); Alert.alert("Automatic delivery failed", message); } finally { setBusy(false); } };
   if (user?.role !== "admin") return <View style={[styles.container, { paddingTop: insets.top, justifyContent: "center", alignItems: "center" }]}><Text style={styles.title}>Administrator only</Text></View>;
-  const field = (label: string, value: string, onChangeText: (v: string) => void, placeholder: string) => <View style={styles.field}><Text style={styles.label}>{label}</Text><TextInput value={value} onChangeText={onChangeText} placeholder={placeholder} placeholderTextColor={colors.muted} autoCapitalize="none" autoCorrect={false} style={styles.input} /></View>;
-  const schedules: { value: LowStockSchedule; label: string }[] = [{ value: "weekly", label: "Weekly" }, { value: "15days", label: "Every 15 days" }, { value: "monthly", label: "Monthly" }, { value: "onOpen", label: "Check on app open" }, { value: "fixedDate", label: "Fixed date" }];
+  const field = (label: string, value: string, onChangeText: (v: string) => void, placeholder: string, secret = false) => <View style={styles.field}><Text style={styles.label}>{label}</Text><TextInput value={value} onChangeText={onChangeText} placeholder={placeholder} placeholderTextColor={colors.muted} autoCapitalize="none" autoCorrect={false} secureTextEntry={secret} style={styles.input} /></View>;
+  const toggle = (label: string, active: boolean, onPress: () => void) => <Pressable onPress={onPress} style={[styles.toggle, active && { borderColor: colors.brandPrimary, backgroundColor: colors.brandTertiary }]}><View style={[styles.check, active && { backgroundColor: colors.brandPrimary }]}>{active ? <Ionicons name="checkmark" size={15} color={colors.onBrandPrimary} /> : null}</View><Text style={styles.scheduleText}>{label}</Text></Pressable>;
+  const schedules: { value: LowStockSchedule; label: string }[] = [{ value: "weekly", label: "Weekly (last 7 days)" }, { value: "15days", label: "Every 15 days" }, { value: "monthly", label: "Monthly (last 30 days)" }, { value: "onOpen", label: "Once per day when opened" }, { value: "fixedDate", label: "Fixed date" }];
   return <View style={styles.container}>
-    <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}><Pressable onPress={() => router.back()} style={styles.back}><Ionicons name="arrow-back" size={22} color={colors.onSurface}/></Pressable><Text style={styles.title}>Offline Low Stock Reports</Text><View style={styles.back}/></View>
+    <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}><Pressable onPress={() => router.back()} style={styles.back}><Ionicons name="arrow-back" size={22} color={colors.onSurface}/></Pressable><Text style={styles.title}>Automatic Low Stock Reports</Text><View style={styles.back}/></View>
     <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xxl }}>
-      <Text style={styles.help}>This page works locally using the stock data saved on this phone. It does not need Resend, Meta WhatsApp API, OCR.space, an API key, or an online backend. PDFs are generated on this device.</Text>
-      <Text style={styles.section}>Local report reminder preference</Text>
+      <Text style={styles.help}>This is separate from invoice scanning and stock receiving. Reports only read inventory and stock-movement history; they never change stock quantities. Weekly, 15-day and monthly reports include low-stock movement records from that period, not the lifetime list.</Text>
+      <Text style={styles.section}>Automatic trigger</Text>
+      {toggle("Enable automatic report delivery", !!config.autoEmailEnabled, () => update({ autoEmailEnabled: !config.autoEmailEnabled }))}
       <View style={styles.scheduleRow}>{schedules.map(s => <Pressable key={s.value} onPress={() => update({ schedule: s.value })} style={[styles.schedule, config.schedule === s.value && { borderColor: colors.brandPrimary, backgroundColor: colors.brandTertiary }]}><Text style={[styles.scheduleText, config.schedule === s.value && { color: colors.brandPrimary }]}>{s.label}</Text></Pressable>)}</View>
-      {config.schedule === "fixedDate" && field("Reminder date (YYYY-MM-DD)", config.fixedDate || "", v => update({ fixedDate: v }), "2026-12-01")}
-      <Text style={styles.help}>The schedule is saved locally as a reminder preference only. This offline version does not silently email or send WhatsApp messages. Generate the report when needed, then choose an installed sharing app. Sending through email or WhatsApp requires internet at the time you send.</Text>
-      <Pressable disabled={busy} onPress={generate} style={[styles.primary, busy && { opacity: .55 }]}><Text style={styles.primaryText}>{busy ? "Generating PDF…" : "Generate low-stock PDF and share"}</Text></Pressable>
-      <Pressable disabled={busy} onPress={async () => { if (await save()) toast("Settings saved locally.", "success"); }} style={styles.action}><Text style={styles.actionText}>Save offline settings</Text></Pressable>
+      {config.schedule === "fixedDate" && field("Trigger date (YYYY-MM-DD)", config.fixedDate || "", v => update({ fixedDate: v }), "2026-12-01")}
+      <Text style={styles.help}>Automatic checks run when the app starts/opens. Android may delay background work; this version cannot guarantee a send at an exact time while the app is closed.</Text>
+      <Text style={styles.section}>Email delivery</Text>
+      {toggle("Send PDF by email", !!config.emails.trim(), () => update({ emails: config.emails ? "" : "recipient@gmail.com" }))}
+      {field("Recipient email(s)", config.emails, v => update({ emails: v }), "recipient@gmail.com; another@gmail.com")}
+      {field("Sender email (must be verified with Resend)", config.senderEmail, v => update({ senderEmail: v }), "reports@your-verified-domain.com")}
+      {field("Resend API key", config.resendApiKey, v => update({ resendApiKey: v }), "re_…", true)}
+      <Text style={styles.help}>Email is sent through Resend, not by opening Gmail. The recipient can be a Gmail address. The sender address/domain must be verified with Resend.</Text>
+      <Text style={styles.section}>WhatsApp delivery</Text>
+      {toggle("Use official WhatsApp Business Cloud API", config.whatsappMode === "meta", () => update({ whatsappMode: config.whatsappMode === "meta" ? "manual" : "meta" }))}
+      {field("Recipient WhatsApp number(s)", config.whatsappNumbers, v => update({ whatsappNumbers: v }), "923001234567; 923331234567")}
+      {field("WhatsApp Business Phone Number ID", config.whatsappPhoneNumberId, v => update({ whatsappPhoneNumberId: v }), "Phone Number ID")}
+      {field("WhatsApp Cloud API access token", config.whatsappToken, v => update({ whatsappToken: v }), "Access token", true)}
+      {field("Graph API version", config.whatsappGraphVersion || "v23.0", v => update({ whatsappGraphVersion: v }), "v23.0")}
+      <Text style={styles.help}>This requires Meta WhatsApp Business Cloud API setup and permission to send documents. Normal WhatsApp app permission alone cannot silently send scheduled PDFs.</Text>
+      <Pressable disabled={busy} onPress={async () => { if (await save()) toast("Settings saved.", "success"); }} style={styles.action}><Text style={styles.actionText}>Save delivery settings</Text></Pressable>
+      <Pressable disabled={busy} onPress={testAutomatic} style={[styles.primary, busy && { opacity: .55 }]}><Text style={styles.primaryText}>{busy ? "Working…" : "Check schedule and send if due"}</Text></Pressable>
+      <Pressable disabled={busy} onPress={generate} style={styles.action}><Text style={styles.actionText}>{busy ? "Please wait…" : "Generate period PDF and share manually"}</Text></Pressable>
       {!!status && <View style={styles.status}><Text style={styles.label}>Latest result</Text><Text style={styles.help}>{status}</Text></View>}
-      {!!lastGenerated && <View style={styles.status}><Text style={styles.label}>Last generated locally</Text><Text style={styles.help}>{lastGenerated}</Text></View>}
-      <Text style={styles.note}>Invoice scanning: the OCR.space online service is no longer used. Attach an invoice image and enter its stock items manually so invoice processing does not send your document to an external OCR provider.</Text>
+      {!!lastGenerated && <View style={styles.status}><Text style={styles.label}>Last generated/sent</Text><Text style={styles.help}>{lastGenerated}</Text></View>}
+      <Text style={styles.note}>Security note: provider credentials are stored in Android SecureStore on this device, but any secret used directly by an app can be exposed by a compromised device or app build. For stronger protection, a small serverless delivery function is safer.</Text>
     </ScrollView>
   </View>;
 }
@@ -59,6 +83,8 @@ const useStyles = makeStyles(colors => ({
   scheduleRow: { flexDirection: "row", gap: spacing.xs, flexWrap: "wrap", marginBottom: spacing.md },
   schedule: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, paddingHorizontal: spacing.md, paddingVertical: spacing.md, backgroundColor: colors.surface },
   scheduleText: { color: colors.onSurface, fontFamily: fontFamily.semibold, fontSize: fontSize.sm },
+  toggle: { flexDirection: "row", alignItems: "center", gap: spacing.sm, padding: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, backgroundColor: colors.surface, marginBottom: spacing.md },
+  check: { width: 20, height: 20, borderRadius: 5, borderWidth: 1, borderColor: colors.brandPrimary, alignItems: "center", justifyContent: "center" },
   action: { alignItems: "center", padding: spacing.md, borderWidth: 1, borderColor: colors.brandPrimary, borderRadius: radius.md, marginTop: spacing.md },
   actionText: { color: colors.brandPrimary, fontFamily: fontFamily.semibold, fontSize: fontSize.base },
   primary: { alignItems: "center", padding: spacing.md, backgroundColor: colors.brandPrimary, borderRadius: radius.md, marginTop: spacing.lg },
