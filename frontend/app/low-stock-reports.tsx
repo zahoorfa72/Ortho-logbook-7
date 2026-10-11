@@ -9,7 +9,7 @@ import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/s
 import { getLowStockReportState, loadLowStockReportConfig, saveLowStockReportConfig, shareLowStockPdfViaWhatsApp, testLowStockReportDeliveryNow, type LowStockReportConfig, type LowStockSchedule } from "@/src/utils/low-stock-auto-report";
 import { connectGoogleGmailAccount, getConnectedGoogleAccount } from "@/src/utils/storage/google-drive";
 
-const blank = (): LowStockReportConfig => ({ schedule: "weekly", fixedDate: "", reportFromDate: "", reportToDate: "", autoEmailEnabled: false, emailEnabled: false, emails: "", resendApiKey: "", senderEmail: "", whatsappNumbers: "", whatsappToken: "", whatsappPhoneNumberId: "", whatsappGraphVersion: "v23.0", whatsappMode: "manual", savedAt: "" });
+const blank = (): LowStockReportConfig => ({ schedule: "weekly", fixedDate: "", reportFromDate: "", reportToDate: "", autoEmailEnabled: false, emailEnabled: false, emails: "", resendApiKey: "", senderEmail: "", whatsappNumbers: "", whatsappToken: "", whatsappPhoneNumberId: "", whatsappGraphVersion: "v23.0", whatsappMode: "manual", instantLowStockGmailEnabled: false, instantLowStockWhatsAppEnabled: false, lowStockWhatsAppTemplateName: "", lowStockWhatsAppTemplateLanguage: "en_US", savedAt: "" });
 export default function LowStockReportsScreen() {
   const { user } = useAuth();
   const { colors } = useTheme();
@@ -46,7 +46,7 @@ export default function LowStockReportsScreen() {
   return <View style={styles.container}>
     <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}><Pressable onPress={() => router.back()} style={styles.back}><Ionicons name="arrow-back" size={22} color={colors.onSurface}/></Pressable><Text style={styles.title}>Automatic Low Stock Reports</Text><View style={styles.back}/></View>
     <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xxl }}>
-      <Text style={styles.help}>This is separate from invoice scanning and stock receiving. Reports only read inventory and stock-movement history; they never change stock quantities. Weekly, 15-day and monthly reports include low-stock movement records from that period, not the lifetime list.</Text>
+      <Text style={styles.help}>This is separate from invoice scanning and stock receiving. Reports only read inventory and stock-movement history; they never change stock quantities. Weekly, 15-day and monthly reports include low-stock movement records from that period, not the lifetime list. Immediate alerts are independent of this schedule: each item is alerted when its quantity first reaches or falls below its configured minimum, and it is not repeatedly sent while it stays low.</Text>
       <Text style={styles.section}>Automatic trigger</Text>
       {toggle("Enable automatic report delivery", !!config.autoEmailEnabled, () => update({ autoEmailEnabled: !config.autoEmailEnabled }))}
       <View style={styles.scheduleRow}>{schedules.map(s => <Pressable key={s.value} onPress={() => update({ schedule: s.value })} style={[styles.schedule, config.schedule === s.value && { borderColor: colors.brandPrimary, backgroundColor: colors.brandTertiary }]}><Text style={[styles.scheduleText, config.schedule === s.value && { color: colors.brandPrimary }]}>{s.label}</Text></Pressable>)}</View>
@@ -56,10 +56,13 @@ export default function LowStockReportsScreen() {
       <Text style={styles.help}>{gmailAccount ? `Connected Google account: ${gmailAccount}` : "Connect your Google account to send report PDFs directly from Gmail. No Resend API key or custom domain is needed."}</Text>
       <Pressable disabled={busy} onPress={async () => { setBusy(true); try { const email = await connectGoogleGmailAccount(); setGmailAccount(email); toast(`Gmail connected: ${email}`, "success"); } catch (e:any) { Alert.alert("Gmail connection failed", String(e?.message || e)); } finally { setBusy(false); } }} style={styles.action}><Text style={styles.actionText}>{gmailAccount ? "Reconnect Gmail / approve sending" : "Connect Gmail"}</Text></Pressable>
       {toggle("Send PDF by Gmail automatically", !!config.emailEnabled, () => update({ emailEnabled: !config.emailEnabled }))}
+      {toggle("Send immediate low-stock text alerts by Gmail", !!config.instantLowStockGmailEnabled, () => update({ instantLowStockGmailEnabled: !config.instantLowStockGmailEnabled }))}
+      <Text style={styles.help}>When an implant newly reaches or drops below its Minimum Stock, Gmail sends a short text email immediately. This is separate from scheduled PDF reports and does not wait for a report schedule.</Text>
       {field("Recipient email(s)", config.emails, v => update({ emails: v }), "recipient@gmail.com; another@gmail.com")}
       <Text style={styles.help}>The Google account you connect is the sender. Google may require the Gmail API to be enabled and the OAuth consent screen configured for your app.</Text>
       <Text style={styles.section}>WhatsApp delivery (manual and automatic)</Text>
       {toggle("Enable automatic WhatsApp PDF delivery (Meta Cloud API)", config.whatsappMode === "meta", () => update({ whatsappMode: config.whatsappMode === "meta" ? "manual" : "meta" }))}
+      {toggle("Send immediate low-stock text alerts by WhatsApp", !!config.instantLowStockWhatsAppEnabled, () => update({ instantLowStockWhatsAppEnabled: !config.instantLowStockWhatsAppEnabled }))}
       {field("Recipient WhatsApp number(s)", config.whatsappNumbers, v => update({ whatsappNumbers: v }), "923001234567; 923331234567")}
       {config.whatsappMode === "meta" && <>
         {field("Meta WhatsApp Cloud API access token", config.whatsappToken, v => update({ whatsappToken: v }), "Paste access token", true)}
@@ -67,7 +70,9 @@ export default function LowStockReportsScreen() {
         {field("Graph API version", config.whatsappGraphVersion || "v23.0", v => update({ whatsappGraphVersion: v }), "v23.0")}
         {field("Approved WhatsApp document template name (optional)", config.whatsappTemplateName || "", v => update({ whatsappTemplateName: v }), "low_stock_report")}
         {field("Template language code", config.whatsappTemplateLanguage || "en_US", v => update({ whatsappTemplateLanguage: v }), "en_US")}
-        <Text style={styles.help}>Automatic sending uses Meta's official Cloud API and requires a Meta business portfolio, WhatsApp Business Account, registered business phone number, and token with whatsapp_business_messaging permission. The token is saved in this phone's secure storage, but a token stored in a mobile app can still be extracted; a server-side secret is safer. API delivery needs internet access. For scheduled messages outside WhatsApp's 24-hour customer-service window, configure an approved document-header template above; otherwise Meta may reject the send.</Text>
+        {field("Approved low-stock TEXT template name (optional)", config.lowStockWhatsAppTemplateName || "", v => update({ lowStockWhatsAppTemplateName: v }), "low_stock_alert")}
+        {field("Low-stock text template language", config.lowStockWhatsAppTemplateLanguage || "en_US", v => update({ lowStockWhatsAppTemplateLanguage: v }), "en_US")}
+        <Text style={styles.help}>Automatic sending uses Meta's official Cloud API and requires a Meta business portfolio, WhatsApp Business Account, registered business phone number, and token with whatsapp_business_messaging permission. The token is saved in this phone's secure storage, but a token stored in a mobile app can still be extracted; a server-side secret is safer. API delivery needs internet access. For scheduled PDF messages outside WhatsApp's 24-hour customer-service window, configure an approved document-header template. For immediate plain-text alerts outside that window, configure an approved TEXT template with one body placeholder ({{1}}); otherwise Meta may reject the free-form text.</Text>
       </>}
       <Text style={styles.help}>Manual sharing is always available from the Share PDF button below. It opens Android's share menu; select WhatsApp, choose the recipient, and press Send. Automatic sending works when Cloud API mode is selected and credentials are configured.</Text>
       <Pressable disabled={busy} onPress={async () => { if (await save()) toast("Settings saved.", "success"); }} style={styles.action}><Text style={styles.actionText}>Save delivery settings</Text></Pressable>
