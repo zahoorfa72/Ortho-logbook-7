@@ -197,7 +197,7 @@ function insertTrashRows(table: string, rows: any[]) {
   }
 }
 
-function restoreTrashEntry(trashId: string) {
+function restoreTrashEntry(trashId: string, options?: { patientDate?: string }) {
   const entry = db.getFirstSync<any>("SELECT * FROM deleted_records WHERE id=? LIMIT 1", [trashId]);
   if (!entry) throw new Error("Trash item not found. It may have expired.");
   if (Date.parse(String(entry.expires_at || "")) <= Date.now()) {
@@ -207,6 +207,11 @@ function restoreTrashEntry(trashId: string) {
   let payload: TrashPayload;
   try { payload = JSON.parse(String(entry.payload_json || "{}")); }
   catch { throw new Error("This Trash item is damaged and cannot be restored."); }
+  if (options?.patientDate && Array.isArray(payload.patients)) {
+    // Only the special patient-form recovery flow changes the visit date; all
+    // other deleted patient fields and related rows remain exactly as stored.
+    payload.patients = payload.patients.map((row:any) => ({ ...row, date: options.patientDate }));
+  }
   db.withTransactionSync(() => {
     const stockAdjustment = payload._stockAdjustment;
     // Deleting a patient returns its implants to inventory. Restoring that patient
@@ -549,6 +554,33 @@ export const api = {
       db.runSync("DELETE FROM deleted_records WHERE expires_at <= ?", [nowIso()]);
       return db.getAllSync<any>("SELECT id,kind,title,deleted_at,expires_at,deleted_by FROM deleted_records ORDER BY deleted_at DESC") as any;
     }
+    if (normalizedPath === "/trash/patient-match") {
+      await requireAdmin();
+      db.runSync("DELETE FROM deleted_records WHERE expires_at <= ?", [nowIso()]);
+      const params = new URLSearchParams(path.split("?")[1] || "");
+      const mrNo = String(params.get("mrNo") || "").trim().toLocaleLowerCase();
+      const name = String(params.get("name") || "").trim().toLocaleLowerCase();
+      if (!mrNo || !name) return null as any;
+      const entries = db.getAllSync<any>(
+        "SELECT id,kind,title,deleted_at,expires_at,payload_json FROM deleted_records WHERE kind='patients' AND expires_at>? ORDER BY deleted_at DESC",
+        [nowIso()],
+      );
+      for (const entry of entries) {
+        try {
+          const payload = JSON.parse(String(entry.payload_json || "{}"));
+          const match = (Array.isArray(payload.patients) ? payload.patients : []).find((row:any) =>
+            String(row?.mr_no ?? "").trim().toLocaleLowerCase() === mrNo &&
+            String(row?.name ?? "").trim().toLocaleLowerCase() === name
+          );
+          if (match) return {
+            id: String(entry.id), kind: String(entry.kind), title: String(entry.title || "Deleted patient"),
+            deleted_at: String(entry.deleted_at || ""), expires_at: String(entry.expires_at || ""),
+            patient: { mrNo: String(match.mr_no || ""), name: String(match.name || "") },
+          } as any;
+        } catch {}
+      }
+      return null as any;
+    }
     if (normalizedPath === "/me") {
       const me = await currentUserRow();
       return (me ? { id: me.id, role: me.role, canEditPatients: Number(me.can_edit_patients) === 1 } : null) as any;
@@ -749,6 +781,13 @@ export const api = {
       const trashId = String(body?.id || "");
       if (!trashId) throw new Error("Choose a Trash item to restore.");
       restoreTrashEntry(trashId);
+      return { success: true } as any;
+    }
+    if (normalizedPath === "/trash/restore-patient") {
+      await requireAdmin();
+      const trashId = String(body?.id || "");
+      if (!trashId) throw new Error("Choose a deleted patient to restore.");
+      restoreTrashEntry(trashId, { patientDate: String(body?.patientDate || nowIso().slice(0, 10)) });
       return { success: true } as any;
     }
 
@@ -1212,6 +1251,14 @@ syncLowStockState(targetId, quantity, minimumStock);
   async del<T = any>(path: string): Promise<T> {
     initializeDatabase();
     const normalizedPath = normalizeRoute(path);
+    const trashMatch = normalizedPath.match(/^\/trash\/(.+)$/);
+    if (trashMatch) {
+      await requireAdmin();
+      const trashId = decodeURIComponent(trashMatch[1]);
+      const existing = db.getFirstSync<any>("SELECT id FROM deleted_records WHERE id=? LIMIT 1", [trashId]);
+      if (existing) db.runSync("DELETE FROM deleted_records WHERE id=?", [trashId]);
+      return { success: true, deleted: !!existing } as any;
+    }
     const pm = normalizedPath.match(/^\/patients\/(.+)$/);
     if (pm) {
       if (!(await canEdit())) throw new Error("You do not have permission to delete patient records.");
