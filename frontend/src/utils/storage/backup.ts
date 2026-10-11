@@ -236,6 +236,54 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
    }
  }
 
+ const trashRows = include("trash") ? await Promise.all(db.getAllSync<any>("SELECT * FROM deleted_records ORDER BY deleted_at DESC").map(async (entry:any) => {
+   let payload:any = {};
+   try { payload = JSON.parse(String(entry.payload_json || "{}")); } catch { payload = {}; }
+   for (const patient of Array.isArray(payload.patients) ? payload.patients : []) {
+     const embedded = await embedPatientPhotos(patient, compressedPhotoCache);
+     Object.assign(patient, embedded);
+   }
+   for (const table of ["inventory", "inventory_purchase_receipts", "stock_receipts"]) {
+     if (!Array.isArray(payload[table])) continue;
+     for (const row of payload[table]) {
+       if (typeof row.bill_image === "string" && /^(data:image\\/|file:\\/\\/|content:\\/\\/)/i.test(row.bill_image)) {
+         row.bill_image = await embedOptionalPhoto(row.bill_image, compressedPhotoCache);
+       }
+     }
+   }
+   for (const row of Array.isArray(payload.implant_records) ? payload.implant_records : []) {
+     try {
+       const files = JSON.parse(String(row.bill_files_json || "[]"));
+       if (Array.isArray(files)) {
+         const compressed = [];
+         for (const file of files) compressed.push(typeof file === "string" && /^(data:image\\/|file:\\/\\/|content:\\/\\/)/i.test(file) ? await embedOptionalPhoto(file, compressedPhotoCache) : file);
+         row.bill_files_json = JSON.stringify(compressed);
+       }
+     } catch {}
+   }
+   for (const history of Array.isArray(payload.patient_history) ? payload.patient_history : []) {
+     try {
+       const snap = JSON.parse(String(history.snapshot_json || "{}"));
+       let photos:string[] = Array.isArray(snap.photos) ? snap.photos.filter((x:any) => typeof x === "string" && x.length > 0) : [];
+       if (!photos.length && typeof snap.photos_json === "string") {
+         try { const parsed = JSON.parse(snap.photos_json); if (Array.isArray(parsed)) photos = parsed.filter((x:any) => typeof x === "string" && x.length > 0); } catch {}
+       }
+       const single = typeof snap.photoUri === "string" ? snap.photoUri : typeof snap.photo_uri === "string" ? snap.photo_uri : "";
+       if (!photos.length && single) photos = [single];
+       if (photos.length) {
+         const embeddedPhotos:string[] = [];
+         for (const photo of photos) embeddedPhotos.push(await embedPhoto(photo, compressedPhotoCache));
+         if (Array.isArray(snap.photos)) snap.photos = embeddedPhotos;
+         else if (typeof snap.photos_json === "string") snap.photos_json = JSON.stringify(embeddedPhotos);
+         else snap.photos = embeddedPhotos;
+         snap.photoUri = ""; snap.photo_uri = "";
+       }
+       history.snapshot_json = JSON.stringify(snap);
+     } catch {}
+   }
+   return { ...entry, payload_json: JSON.stringify(payload) };
+ })) : [];
+
  return {
   version:BACKUP_VERSION,app:BACKUP_APP,createdAt:new Date().toISOString(),
   patients:embeddedPatients,
@@ -266,7 +314,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
   inventoryMovements:include("inventoryMovements") ? (()=>{if(filter.type==="all") return db.getAllSync<any>("SELECT * FROM inventory_movements ORDER BY created_at ASC"); const f=filter.type==="date" ? {sql:" WHERE date(created_at)=?",args:[filter.value||""]} : filter.type==="month" ? {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]} : {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]}; return db.getAllSync<any>(`SELECT * FROM inventory_movements${f.sql} ORDER BY created_at ASC`,f.args);})() : [],
   inventoryPurchaseReceipts:include("inventoryPurchaseReceipts") ? await (async()=>{const f=whereForFilter(filter,"created_at");const rows=db.getAllSync<any>(`SELECT * FROM inventory_purchase_receipts${f.sql} ORDER BY created_at ASC`,f.args);return await Promise.all(rows.map(async (row:any)=>({ ...row, bill_image: typeof row.bill_image==="string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(row.bill_image) ? await embedOptionalPhoto(row.bill_image,compressedPhotoCache) : row.bill_image })));})() : [],
   stockReceipts:include("stockReceipts") ? await (async()=>{const f=whereForFilter(filter,"created_at");const rows=db.getAllSync<any>(`SELECT * FROM stock_receipts${f.sql} ORDER BY created_at ASC`,f.args);return await Promise.all(rows.map(async (row:any)=>({ ...row, bill_image: typeof row.bill_image==="string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(row.bill_image) ? await embedOptionalPhoto(row.bill_image,compressedPhotoCache) : row.bill_image })));})() : [],
-  trash:include("trash") ? db.getAllSync<any>("SELECT * FROM deleted_records ORDER BY deleted_at DESC") : [],
+  trash:trashRows,
   branding,
   appSettings,
  };
