@@ -59,8 +59,7 @@ export default function LowStockReportsScreen() {
       {field("Recipient email(s)", config.emails, v => update({ emails: v }), "recipient@gmail.com; another@gmail.com")}
       <Text style={styles.help}>The Google account you connect is the sender. Google may require the Gmail API to be enabled and the OAuth consent screen configured for your app.</Text>
       <Text style={styles.section}>WhatsApp delivery (manual and automatic)</Text>
-      {toggle("Manual WhatsApp sharing (choose recipient and press Send)", config.whatsappMode !== "meta", () => update({ whatsappMode: "manual" }))}
-      {toggle("Automatic WhatsApp PDF delivery (Meta Cloud API)", config.whatsappMode === "meta", () => update({ whatsappMode: "meta" }))}
+      {toggle("Enable automatic WhatsApp PDF delivery (Meta Cloud API)", config.whatsappMode === "meta", () => update({ whatsappMode: config.whatsappMode === "meta" ? "manual" : "meta" }))}
       {field("Recipient WhatsApp number(s)", config.whatsappNumbers, v => update({ whatsappNumbers: v }), "923001234567; 923331234567")}
       {config.whatsappMode === "meta" && <>
         {field("Meta WhatsApp Cloud API access token", config.whatsappToken, v => update({ whatsappToken: v }), "Paste access token", true)}
