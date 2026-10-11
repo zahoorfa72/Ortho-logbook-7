@@ -16,6 +16,8 @@ export type LowStockReportConfig = {
   whatsappToken: string;
   whatsappPhoneNumberId: string;
   whatsappGraphVersion: string;
+  whatsappTemplateName?: string;
+  whatsappTemplateLanguage?: string;
   savedAt: string;
 };
 type ReportState = { emailLastSentAt?: string; whatsappLastSentAt?: string; lastError?: string; lastStatus?: string };
@@ -120,7 +122,10 @@ async function sendWhatsAppPdf(config: LowStockReportConfig, uri: string, count:
     const response = await fetch(root + config.whatsappPhoneNumberId.trim() + "/messages", {
       method: "POST",
       headers: { Authorization: "Bearer " + config.whatsappToken.trim(), "Content-Type": "application/json" },
-      body: JSON.stringify({ messaging_product: "whatsapp", recipient_type: "individual", to, type: "document", document: { id: media.id, filename: "ortho-logbook-low-stock.pdf", caption: "Scheduled low-stock report — " + count + " items" } })
+      body: JSON.stringify(config.whatsappTemplateName?.trim() ? {
+        messaging_product: "whatsapp", recipient_type: "individual", to, type: "template",
+        template: { name: config.whatsappTemplateName.trim(), language: { code: (config.whatsappTemplateLanguage || "en_US").trim() || "en_US" }, components: [{ type: "header", parameters: [{ type: "document", document: { id: media.id, filename: "ortho-logbook-low-stock.pdf" } }] }] }
+      } : { messaging_product: "whatsapp", recipient_type: "individual", to, type: "document", document: { id: media.id, filename: "ortho-logbook-low-stock.pdf", caption: "Scheduled low-stock report — " + count + " items" } })
     });
     const body = await response.json().catch(() => ({}));
     assertOk(response, body, "WhatsApp document delivery");

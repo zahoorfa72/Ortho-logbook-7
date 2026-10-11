@@ -9,7 +9,7 @@ import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/s
 import { attemptDueLowStockReport, getLowStockReportState, loadLowStockReportConfig, saveLowStockReportConfig, sendLowStockTestEmail, sendLowStockTestWhatsApp, type LowStockReportConfig, type LowStockSchedule } from "@/src/utils/low-stock-auto-report";
 import { storage } from "@/src/utils/storage";
 
-const blank = (): LowStockReportConfig => ({ schedule: "weekly", emails: "", resendApiKey: "", senderEmail: "", whatsappNumbers: "", whatsappToken: "", whatsappPhoneNumberId: "", whatsappGraphVersion: "v23.0", savedAt: "" });
+const blank = (): LowStockReportConfig => ({ schedule: "weekly", emails: "", resendApiKey: "", senderEmail: "", whatsappNumbers: "", whatsappToken: "", whatsappPhoneNumberId: "", whatsappGraphVersion: "v23.0", whatsappTemplateName: "", whatsappTemplateLanguage: "en_US", savedAt: "" });
 export default function LowStockReportsScreen() {
   const { user } = useAuth();
   const { colors } = useTheme();
@@ -60,13 +60,15 @@ export default function LowStockReportsScreen() {
       {field("WhatsApp Business access token", config.whatsappToken, v => update({ whatsappToken: v }), "Meta system-user access token", true)}
       {field("Phone-number ID", config.whatsappPhoneNumberId, v => update({ whatsappPhoneNumberId: v }), "Meta WhatsApp phone-number ID")}
       {field("Graph API version", config.whatsappGraphVersion, v => update({ whatsappGraphVersion: v }), "v23.0")}
+      {field("Approved WhatsApp template name (required outside the 24-hour service window)", config.whatsappTemplateName || "", v => update({ whatsappTemplateName: v }), "approved_template_with_document_header")}
+      {field("Template language code", config.whatsappTemplateLanguage || "en_US", v => update({ whatsappTemplateLanguage: v }), "en_US")}
       {field("Recipient numbers (with country code)", config.whatsappNumbers, v => update({ whatsappNumbers: v }), "923001234567, 923009876543", false, true)}
       <Pressable disabled={busy} onPress={() => test("whatsapp")} style={[styles.action, busy && { opacity: .55 }]}><Text style={styles.actionText}>Save and send test WhatsApp</Text></Pressable>
       <Pressable disabled={busy} onPress={runNow} style={[styles.primary, busy && { opacity: .55 }]}><Text style={styles.primaryText}>{busy ? "Working…" : "Save settings and check report now"}</Text></Pressable>
       <Pressable onPress={async () => { await saveLowStockReportConfig(blank()); await storage.secureRemove("ortho_stock_ocr_space_api_key"); setOcrApiKey(""); setConfig(blank()); toast("Report and OCR credentials removed from this device.", "success"); }} style={styles.remove}><Text style={styles.removeText}>Remove saved credentials</Text></Pressable>
       {!!status && <View style={styles.status}><Text style={styles.label}>Latest result</Text><Text style={styles.help}>{status}</Text></View>}
       {!!lastSent && <View style={styles.status}><Text style={styles.label}>Last successful sends</Text><Text style={styles.help}>{lastSent}</Text></View>}
-      <Text style={styles.note}>Important: email sending requires a Resend account and verified sender domain. WhatsApp sending requires a Meta WhatsApp Business account, active token and registered phone number. Meta may reject business-initiated documents outside its customer-service window unless your setup complies with its template rules. A successful API response confirms acceptance, not that a recipient has read the report.</Text>
+      <Text style={styles.note}>Important: email sending requires a Resend account and verified sender domain. WhatsApp sending requires a Meta WhatsApp Business account, active token and registered phone number. Scheduled WhatsApp PDFs outside the 24-hour customer-service window need an approved template with a document header; enter its exact name and language above. Without that template, Meta may reject delivery. A successful API response confirms acceptance, not that a recipient has read the report.</Text>
     </ScrollView>
   </View>;
 }
