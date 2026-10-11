@@ -190,6 +190,9 @@ function insertTrashRows(table: string, rows: any[]) {
     if (!columns.length) continue;
     const insertMode = table === "patient_implants" ? "INSERT OR REPLACE" : "INSERT OR IGNORE";
     db.runSync(`${insertMode} INTO ${table} (${columns.join(",")}) VALUES (${columns.map(() => "?").join(",")})`, columns.map((column) => row[column] ?? null));
+    if (row.id != null && !db.getFirstSync<any>(`SELECT id FROM ${table} WHERE id=? LIMIT 1`, [String(row.id)])) {
+      throw new Error("Could not restore this Trash item because an active record conflicts with its original data.");
+    }
   }
 }
 
@@ -224,6 +227,7 @@ function restoreTrashEntry(trashId: string) {
       const next = Number(inventory.quantity || 0) + Math.max(0, Number(stockAdjustment.quantity) || 0);
       db.runSync("UPDATE inventory SET quantity=? WHERE id=?", [next, inventory.id]);
       syncLowStockState(inventory.id, next, Number(inventory.minimum_stock || 0));
+      movement(inventory.id, "purchase_restore", Math.max(0, Number(stockAdjustment.quantity) || 0), next, "Received stock restored from Trash", entry.deleted_by || null);
     }
     for (const table of TRASH_TABLE_ORDER) {
       if (table === "stock_receipts" && stockAdjustment) continue;
