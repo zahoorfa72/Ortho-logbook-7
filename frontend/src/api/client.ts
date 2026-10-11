@@ -217,8 +217,17 @@ function restoreTrashEntry(trashId: string) {
           .filter((x:any) => String(x.patient_id) === String(row.id))
           .map((x:any) => ({ id:x.id, inventoryId:x.inventory_id || "", name:x.name, category:x.category || "", size:x.size || "", quantity:Number(x.quantity || 1) }));
         if (implants.length) p.implants = implants;
-        validateImplants(p);
-        deduct(p, entry.deleted_by || null);
+        const linkedImplants = selectedImplants(p).filter((x:any) => {
+          const linked = x.inventoryId
+            ? db.getFirstSync<any>("SELECT id FROM inventory WHERE id=? LIMIT 1", [x.inventoryId])
+            : db.getFirstSync<any>("SELECT id FROM inventory WHERE LOWER(name)=LOWER(?) LIMIT 1", [x.name]);
+          return !!linked;
+        });
+        if (linkedImplants.length) {
+          p.implants = linkedImplants;
+          validateImplants(p);
+          deduct(p, entry.deleted_by || null);
+        }
       }
     }
     if (stockAdjustment) {
