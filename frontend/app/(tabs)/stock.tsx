@@ -181,87 +181,24 @@ export default function StockScreen(){
 
   const scanInvoice=async()=>{
     if(ocrBusy)return;
-    const apiKey=String(await storage.secureGet("ortho_stock_ocr_space_api_key","")||"").trim();
-    if(!apiKey){
-      Alert.alert("OCR setup required","Ask the administrator to add an OCR.space API key in Settings → Automatic Low Stock Reports. Scanned invoices are reviewed before stock is saved.");
-      return;
-    }
     try{
       const picked=await DocumentPicker.getDocumentAsync({
-        type:["image/*","application/pdf"],
+        type:["image/*"],
         copyToCacheDirectory:true,
         multiple:false,
       });
       if(picked.canceled||!picked.assets?.length)return;
       const asset=picked.assets[0];
-      if(!asset?.uri){toast("Could not open the selected invoice file.","error");return;}
-      setOcrBusy(true);
-      const form=new FormData();
-      form.append("apikey",apiKey);
-      form.append("language","eng");
-      form.append("isOverlayRequired","false");
-      form.append("OCREngine","2");
-      form.append("scale","true");
-      form.append("detectOrientation","true");
-      form.append("file",{uri:asset.uri,name:asset.name||"stock-invoice",type:asset.mimeType||(asset.name?.toLowerCase().endsWith(".pdf")?"application/pdf":"image/jpeg")} as any);
-      const response=await fetch("https://api.ocr.space/parse/image",{method:"POST",body:form});
-      const body:any=await response.json().catch(()=>({}));
-      if(!response.ok||body?.IsErroredOnProcessing||!Array.isArray(body?.ParsedResults)||!body.ParsedResults.length){
-        const message=Array.isArray(body?.ErrorMessage)?body.ErrorMessage.join(" "):body?.ErrorMessage||body?.ErrorDetails||"OCR could not read this invoice.";
-        throw new Error(String(message));
-      }
-      const text=body.ParsedResults.map((r:any)=>String(r?.ParsedText||"")).filter(Boolean).join("\n");
-      if(!text.trim())throw new Error("No readable text was found. Try a clearer photo or PDF.");
-      const categories=(Array.isArray(stockCategories)?stockCategories:[]).map((c:any)=>({id:String(c?.id||""),name:String(c?.name||"").trim()})).filter(c=>c.name);
-      const knownSizes=[...new Set((Array.isArray(stockInventory)?stockInventory:[]).map((i:any)=>String(i?.size||"").trim()).filter(Boolean))].sort((a,b)=>b.length-a.length);
-      const norm=(v:string)=>v.toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
-      const closestCategory=(line:string)=>{
-        const n=norm(line);
-        const exact=categories.slice().sort((a,b)=>b.name.length-a.name.length).find(c=>n.includes(norm(c.name)));
-        if(exact)return exact;
-        const stripped=line.replace(/\b(?:qty|quantity|pcs|pieces|units|nos|holes?|mm|cm|size|item|amount|total)\b/ig," ").replace(/\d+(?:\.\d+)?/g," ").replace(/[,:;|x*()\-]+/g," ").replace(/\s+/g," ").trim();
-        const guess=stripped.split(" ").filter(Boolean).slice(0,5).join(" ").trim();
-        if(!guess)return {id:"",name:""};
-        const g=norm(guess);
-        const fuzzy=categories.map(c=>({ ...c, score: g.includes(norm(c.name))||norm(c.name).includes(g)?Math.abs(g.length-norm(c.name).length):999 })).sort((a,b)=>a.score-b.score)[0];
-        return fuzzy&&fuzzy.score<=4?{id:fuzzy.id,name:fuzzy.name}:{id:"",name:guess};
-      };
-      const parsed:StockRow[]=[];
-      for(const rawLine of text.split(/\r?\n/).map((v:string)=>v.replace(/[•▪]/g," ").trim()).filter(Boolean)){
-        const line=rawLine.replace(/\s+/g," ");
-        const explicitQty=line.match(/\b(?:qty|quantity|pcs|pieces|units|nos|count)\s*[:=x-]?\s*(\d+(?:\.\d+)?)\b/i)
-          || line.match(/\bx\s*(\d+(?:\.\d+)?)\b/i);
-        const multi=line.match(/\b(\d+(?:\s*[,/]\s*\d+){1,})\s*(?:holes?|h)\b/i);
-        let sizes:string[]=[];
-        if(multi) sizes=multi[1].split(/[,/]/).map((v:string)=>v.trim()+" hole");
-        if(!sizes.length){
-          for(const known of knownSizes){if(norm(line).includes(norm(known))){sizes=[known];break;}}
-        }
-        if(!sizes.length){
-          const single=line.match(/\b(\d+(?:\.\d+)?)\s*(mm|cm|holes?|h)\b/i);
-          if(single)sizes=[single[1]+" "+(single[2].toLowerCase()==="h"?"hole":single[2].toLowerCase())];
-        }
-        if(!sizes.length)continue;
-        const cat=closestCategory(line);
-        let qty=explicitQty?explicitQty[1]:"";
-        const nums=[...line.matchAll(/\d+(?:\.\d+)?/g)].map((m:any)=>String(m[0]));
-        if(!qty&&sizes.length===1&&nums.length>=2)qty=nums[nums.length-1];
-        for(const size of sizes){
-          parsed.push({id:Math.random().toString(36).slice(2),categoryId:cat.id,category:cat.name,size,quantity:qty,minimumStock:"1",billImage:""});
-        }
-      }
-      if(!parsed.length){
-        setDescription(v=>(v?v+"\n":"")+"Invoice OCR text:\n"+text.slice(0,1800));
-        Alert.alert("Invoice text extracted","I could not confidently split the text into stock rows. The extracted text was added to Description. Add each item manually and verify quantities.");
-        return;
-      }
-      setStockRows(parsed);
+      if(!asset?.uri){toast("Could not open the selected invoice image.","error");return;}
+      // Offline mode: keep the invoice image on-device and let the admin enter rows manually.
+      // No invoice image or patient/business data is uploaded to a third-party OCR service.
+      setStockRows([{...newRow(),billImage:asset.uri}]);
       setEditingReceipt(null);
-      setDescription(v=>v||("Scanned invoice: "+(asset.name||"stock invoice")));
+      setDescription(v=>v||("Invoice attached for manual entry: "+(asset.name||"stock invoice")));
       setStockModal(true);
-      toast("Invoice scanned. Review every item, size and quantity before saving.","success");
+      toast("Invoice attached locally. Enter each category, size and quantity manually.","info");
     }catch(e:any){
-      toast("Invoice scan failed: "+String(e?.message||e||"Unknown OCR error"),"error");
+      toast("Could not attach invoice: "+String(e?.message||e||"Unknown error"),"error");
     }finally{setOcrBusy(false);}
   };
 
