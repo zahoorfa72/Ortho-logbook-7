@@ -681,7 +681,7 @@ async function mergeLegacyDriveHistory(localText: string, onProgress?: (stage: s
   const tables = [
     "patients", "procedures", "inventoryCategories", "inventory", "patientImplants",
     "patientCustomFields", "implantRecords", "expenses", "users", "patientHistory",
-    "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts",
+    "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts", "trash",
   ];
   let complete = true;
   let mergedFiles = 0;
@@ -1445,7 +1445,7 @@ export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) 
         } else {
           recoveryWarnings.push(String(deltaFile.name || "An incremental backup") + " is missing its " + table + " data.");
         }
-      } else if (["patients","procedures","inventoryCategories","inventory","patientImplants","patientCustomFields","implantRecords","expenses","users","patientHistory","inventoryMovements","inventoryPurchaseReceipts","stockReceipts"].includes(table)) {
+      } else if (["patients","procedures","inventoryCategories","inventory","patientImplants","patientCustomFields","implantRecords","expenses","users","patientHistory","inventoryMovements","inventoryPurchaseReceipts","stockReceipts","trash"].includes(table)) {
         if (Array.isArray(delta[table])) {
           if (delta._recoveredFromDamage !== true && delta._rowDelta === true && !(Array.isArray(delta.fullTables) && delta.fullTables.includes(table))) {
             // Apply only changed records and explicit deletion tombstones.
