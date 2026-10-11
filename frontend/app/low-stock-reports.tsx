@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Alert, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { Alert, Linking, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { router } from "expo-router";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -7,6 +7,7 @@ import { useAuth } from "@/src/auth/AuthContext";
 import { useToast } from "@/src/components/toast";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 import { attemptDueLowStockReport, getLowStockReportState, loadLowStockReportConfig, saveLowStockReportConfig, shareLowStockPdfViaWhatsApp, type LowStockReportConfig, type LowStockSchedule } from "@/src/utils/low-stock-auto-report";
+import { connectGoogleGmailAccount, getConnectedGoogleAccount } from "@/src/utils/storage/google-drive";
 
 const blank = (): LowStockReportConfig => ({ schedule: "weekly", fixedDate: "", autoEmailEnabled: false, emailEnabled: false, emails: "", resendApiKey: "", senderEmail: "", whatsappNumbers: "", whatsappToken: "", whatsappPhoneNumberId: "", whatsappGraphVersion: "v23.0", whatsappMode: "manual", savedAt: "" });
 export default function LowStockReportsScreen() {
@@ -19,7 +20,9 @@ export default function LowStockReportsScreen() {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
   const [lastGenerated, setLastGenerated] = useState("");
+  const [gmailAccount, setGmailAccount] = useState<string | null>(null);
   useEffect(() => { (async () => {
+    setGmailAccount(getConnectedGoogleAccount());
     const c = await loadLowStockReportConfig();
     if (c) setConfig({ ...blank(), ...c });
     const s = await getLowStockReportState();
@@ -48,19 +51,20 @@ export default function LowStockReportsScreen() {
       <View style={styles.scheduleRow}>{schedules.map(s => <Pressable key={s.value} onPress={() => update({ schedule: s.value })} style={[styles.schedule, config.schedule === s.value && { borderColor: colors.brandPrimary, backgroundColor: colors.brandTertiary }]}><Text style={[styles.scheduleText, config.schedule === s.value && { color: colors.brandPrimary }]}>{s.label}</Text></Pressable>)}</View>
       {config.schedule === "fixedDate" && field("Trigger date (YYYY-MM-DD)", config.fixedDate || "", v => update({ fixedDate: v }), "2026-12-01")}
       <Text style={styles.help}>Automatic checks run when the app starts/opens. Android may delay background work; this version cannot guarantee a send at an exact time while the app is closed.</Text>
-      <Text style={styles.section}>Email delivery</Text>
-      {toggle("Send PDF by email automatically", !!config.emailEnabled, () => update({ emailEnabled: !config.emailEnabled }))}
+      <Text style={styles.section}>Gmail connection</Text>
+      <Text style={styles.help}>{gmailAccount ? `Connected Google account: ${gmailAccount}` : "Connect your Google account to send report PDFs directly from Gmail. No Resend API key or custom domain is needed."}</Text>
+      <Pressable disabled={busy} onPress={async () => { setBusy(true); try { const email = await connectGoogleGmailAccount(); setGmailAccount(email); toast(`Gmail connected: ${email}`, "success"); } catch (e:any) { Alert.alert("Gmail connection failed", String(e?.message || e)); } finally { setBusy(false); } }} style={styles.action}><Text style={styles.actionText}>{gmailAccount ? "Reconnect Gmail / approve sending" : "Connect Gmail"}</Text></Pressable>
+      {toggle("Send PDF by Gmail automatically", !!config.emailEnabled, () => update({ emailEnabled: !config.emailEnabled }))}
       {field("Recipient email(s)", config.emails, v => update({ emails: v }), "recipient@gmail.com; another@gmail.com")}
-      {field("Sender email (must be verified with Resend)", config.senderEmail, v => update({ senderEmail: v }), "reports@your-verified-domain.com")}
-      {field("Resend API key", config.resendApiKey, v => update({ resendApiKey: v }), "re_…", true)}
-      <Text style={styles.help}>Email is sent through Resend, not by opening Gmail. The recipient can be a Gmail address. The sender address/domain must be verified with Resend.</Text>
+      <Text style={styles.help}>The Google account you connect is the sender. Google may require the Gmail API to be enabled and the OAuth consent screen configured for your app.</Text>
       <Text style={styles.section}>WhatsApp delivery</Text>
       {toggle("Use official WhatsApp Business Cloud API", config.whatsappMode === "meta", () => update({ whatsappMode: config.whatsappMode === "meta" ? "manual" : "meta" }))}
+      <Pressable disabled={busy} onPress={() => { void Linking.openURL("https://business.facebook.com/wa/manage/phone-numbers/").catch(() => Alert.alert("Could not open Meta", "Open Meta Business Suite and choose WhatsApp accounts / phone numbers.")); }} style={styles.action}><Text style={styles.actionText}>Set up WhatsApp Business</Text></Pressable>
       {field("Recipient WhatsApp number(s)", config.whatsappNumbers, v => update({ whatsappNumbers: v }), "923001234567; 923331234567")}
       {field("WhatsApp Business Phone Number ID", config.whatsappPhoneNumberId, v => update({ whatsappPhoneNumberId: v }), "Phone Number ID")}
       {field("WhatsApp Cloud API access token", config.whatsappToken, v => update({ whatsappToken: v }), "Access token", true)}
       {field("Graph API version", config.whatsappGraphVersion || "v23.0", v => update({ whatsappGraphVersion: v }), "v23.0")}
-      <Text style={styles.help}>This requires Meta WhatsApp Business Cloud API setup and permission to send documents. Normal WhatsApp app permission alone cannot silently send scheduled PDFs.</Text>
+      <Text style={styles.help}>WhatsApp still requires a Meta Business account, phone-number ID and authorized Cloud API token. This button opens Meta setup; it does not sign in to WhatsApp or fetch a token automatically. A secure in-app Meta OAuth/token exchange requires a Meta app and a server-side token exchange, which are not configured in this repository.</Text>
       <Pressable disabled={busy} onPress={async () => { if (await save()) toast("Settings saved.", "success"); }} style={styles.action}><Text style={styles.actionText}>Save delivery settings</Text></Pressable>
       <Pressable disabled={busy} onPress={testAutomatic} style={[styles.primary, busy && { opacity: .55 }]}><Text style={styles.primaryText}>{busy ? "Working…" : "Check schedule and send if due"}</Text></Pressable>
       <Pressable disabled={busy} onPress={generate} style={styles.action}><Text style={styles.actionText}>{busy ? "Please wait…" : "Generate period PDF and share manually"}</Text></Pressable>
