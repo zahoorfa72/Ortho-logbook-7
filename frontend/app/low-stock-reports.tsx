@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Alert, Linking, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { Alert, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { router } from "expo-router";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -57,20 +57,16 @@ export default function LowStockReportsScreen() {
       {toggle("Send PDF by Gmail automatically", !!config.emailEnabled, () => update({ emailEnabled: !config.emailEnabled }))}
       {field("Recipient email(s)", config.emails, v => update({ emails: v }), "recipient@gmail.com; another@gmail.com")}
       <Text style={styles.help}>The Google account you connect is the sender. Google may require the Gmail API to be enabled and the OAuth consent screen configured for your app.</Text>
-      <Text style={styles.section}>WhatsApp delivery</Text>
-      {toggle("Use official WhatsApp Business Cloud API", config.whatsappMode === "meta", () => update({ whatsappMode: config.whatsappMode === "meta" ? "manual" : "meta" }))}
-      <Pressable disabled={busy} onPress={() => { void Linking.openURL("https://business.facebook.com/wa/manage/phone-numbers/").catch(() => Alert.alert("Could not open Meta", "Open Meta Business Suite and choose WhatsApp accounts / phone numbers.")); }} style={styles.action}><Text style={styles.actionText}>Set up WhatsApp Business</Text></Pressable>
-      {field("Recipient WhatsApp number(s)", config.whatsappNumbers, v => update({ whatsappNumbers: v }), "923001234567; 923331234567")}
-      {field("WhatsApp Business Phone Number ID", config.whatsappPhoneNumberId, v => update({ whatsappPhoneNumberId: v }), "Phone Number ID")}
-      {field("WhatsApp Cloud API access token", config.whatsappToken, v => update({ whatsappToken: v }), "Access token", true)}
-      {field("Graph API version", config.whatsappGraphVersion || "v23.0", v => update({ whatsappGraphVersion: v }), "v23.0")}
-      <Text style={styles.help}>WhatsApp still requires a Meta Business account, phone-number ID and authorized Cloud API token. This button opens Meta setup; it does not sign in to WhatsApp or fetch a token automatically. A secure in-app Meta OAuth/token exchange requires a Meta app and a server-side token exchange, which are not configured in this repository.</Text>
+      <Text style={styles.section}>WhatsApp connection</Text>
+      <Text style={styles.help}>Use the WhatsApp account already signed in on this phone. No WhatsApp Business account, API token, phone-number ID, or custom domain is required for manual sharing.</Text>
+      {field("Recipient WhatsApp number(s) (for your records)", config.whatsappNumbers, v => update({ whatsappNumbers: v }), "923001234567; 923331234567")}
+      <Text style={styles.help}>For privacy and WhatsApp policy reasons, the normal WhatsApp app does not expose an official in-app login that allows an app to silently send messages or PDFs. The app can prepare the report and open the Android share menu; choose WhatsApp and confirm Send there. Automatic scheduled WhatsApp sending is not available in this no-server mode.</Text>
       <Pressable disabled={busy} onPress={async () => { if (await save()) toast("Settings saved.", "success"); }} style={styles.action}><Text style={styles.actionText}>Save delivery settings</Text></Pressable>
       <Pressable disabled={busy} onPress={testAutomatic} style={[styles.primary, busy && { opacity: .55 }]}><Text style={styles.primaryText}>{busy ? "Working…" : "Check schedule and send if due"}</Text></Pressable>
-      <Pressable disabled={busy} onPress={generate} style={styles.action}><Text style={styles.actionText}>{busy ? "Please wait…" : "Generate period PDF and share manually"}</Text></Pressable>
+      <Pressable disabled={busy} onPress={generate} style={styles.action}><Text style={styles.actionText}>{busy ? "Please wait…" : "Share report using WhatsApp or another app"}</Text></Pressable>
       {!!status && <View style={styles.status}><Text style={styles.label}>Latest result</Text><Text style={styles.help}>{status}</Text></View>}
       {!!lastGenerated && <View style={styles.status}><Text style={styles.label}>Last generated/sent</Text><Text style={styles.help}>{lastGenerated}</Text></View>}
-      <Text style={styles.note}>Security note: provider credentials are stored in Android SecureStore on this device, but any secret used directly by an app can be exposed by a compromised device or app build. For stronger protection, a small serverless delivery function is safer.</Text>
+      <Text style={styles.note}>WhatsApp sharing uses the WhatsApp app installed on this phone and requires you to confirm sending. Gmail automatic delivery uses the Google account you connect above. Scheduled sends only run when the app opens; Android cannot guarantee delivery while the app is closed in this server-free setup.</Text>
     </ScrollView>
   </View>;
 }
