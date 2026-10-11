@@ -13,6 +13,8 @@ export type LowStockSchedule = "weekly" | "15days" | "monthly" | "onOpen" | "fix
 export type LowStockReportConfig = {
   schedule: LowStockSchedule;
   fixedDate?: string;
+  reportFromDate?: string;
+  reportToDate?: string;
   autoEmailEnabled?: boolean;
   emailEnabled?: boolean;
   emails: string;
@@ -47,20 +49,33 @@ export async function getLowStockReportState(): Promise<ReportState> {
 }
 async function saveState(state: ReportState) { await SecureStore.setItemAsync(STATE_KEY, JSON.stringify(state)); }
 
-function getPeriod(schedule: LowStockSchedule, now = new Date()) {
+function getPeriod(schedule: LowStockSchedule, now = new Date(), fromDate?: string, toDate?: string) {
+  if (schedule === "fixedDate") {
+    const from = String(fromDate || "").trim();
+    const to = String(toDate || "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      throw new Error("For a fixed-date report, enter both From date and To date as YYYY-MM-DD.");
+    }
+    const start = new Date(from + "T00:00:00");
+    const end = new Date(to + "T23:59:59.999");
+    if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || start > end) {
+      throw new Error("Report From date must be on or before the To date.");
+    }
+    return { start, end, key: "fixedDate:" + from + ":" + to };
+  }
   const end = new Date(now);
   const start = new Date(now);
   if (schedule === "weekly") start.setDate(start.getDate() - 7);
   else if (schedule === "15days") start.setDate(start.getDate() - 15);
   else if (schedule === "monthly") start.setDate(start.getDate() - 30);
   else start.setDate(start.getDate() - 7);
-  return { start, end, key: `${schedule}:${start.toISOString().slice(0,10)}:${end.toISOString().slice(0,10)}` };
+  return { start, end, key: schedule + ":" + start.toISOString().slice(0,10) + ":" + end.toISOString().slice(0,10) };
 }
 function iso(v: Date) { return v.toISOString(); }
 
-async function makePdf(schedule: LowStockSchedule = "weekly"): Promise<PdfResult> {
+async function makePdf(schedule: LowStockSchedule = "weekly", fromDate?: string, toDate?: string): Promise<PdfResult> {
   const now = new Date();
-  const period = getPeriod(schedule, now);
+  const period = getPeriod(schedule, now, fromDate, toDate);
   const inventory = await api.get<any[]>("/inventory");
   const all = Array.isArray(inventory) ? inventory : [];
   const rows = db.getAllSync<any>(
@@ -102,6 +117,8 @@ async function sendEmail(pdf: PdfResult, config: LowStockReportConfig) {
   const content = await readPdfBase64(pdf.uri);
   const recipients = config.emails.split(/[;,\n]/).map(x => x.trim()).filter(Boolean);
   if (!recipients.length) throw new Error("Enter at least one recipient email address.");
+  const invalid = recipients.filter(address => !/^[^\\s<>(),;:\\[\\]@]+@[^\\s<>(),;:\\[\\]@]+\\.[^\\s<>(),;:\\[\\]@]+$/.test(address));
+  if (invalid.length) throw new Error("Invalid recipient email address(es): " + invalid.join(", ") + ". Use plain email addresses separated by commas or semicolons.");
   const boundary = "ortho_logbook_" + Date.now().toString(36);
   const subject = `Low Stock Report - ${pdf.periodStart.slice(0,10)} to ${pdf.periodEnd.slice(0,10)}`;
   const pdfLines = content.match(/.{1,76}/g)?.join("\\r\\n") || content;
@@ -149,7 +166,8 @@ async function sendWhatsApp(pdf: PdfResult, config: LowStockReportConfig) {
   const upload = await fetch(`${base}/media`, { method: "POST", headers: { Authorization: `Bearer ${config.whatsappToken.trim()}` }, body: form });
   const media = await upload.json().catch(() => ({}));
   if (!upload.ok || !(media as any).id) throw new Error(String((media as any)?.error?.message || `WhatsApp PDF upload failed (HTTP ${upload.status})`));
-  const recipients = config.whatsappNumbers.split(/[;,\n]/).map(x => x.replace(/[^0-9]/g, "")).filter(Boolean);
+  const recipients = [...new Set(config.whatsappNumbers.split(/[;,\\n]/).map(x => x.trim().replace(/^\\+/, "").replace(/[\\s().-]/g, "")).filter(Boolean))];
+  if (!recipients.length || recipients.some(x => !/^\\d{8,15}$/.test(x))) throw new Error("Enter WhatsApp recipient numbers with country code, digits only (for example 923001234567).");
   for (const to of recipients) {
     const response = await fetch(`${base}/messages`, {
       method: "POST",
@@ -166,7 +184,7 @@ export async function shareLowStockPdfViaWhatsApp(): Promise<void> {
     schedule: "weekly" as const, emails: "", resendApiKey: "", senderEmail: "",
     whatsappNumbers: "", whatsappToken: "", whatsappPhoneNumberId: "", whatsappGraphVersion: "v23.0", savedAt: "",
   };
-  const pdf = await makePdf(config.schedule);
+  const pdf = await makePdf(config.schedule, config.reportFromDate, config.reportToDate);
   const available = await Sharing.isAvailableAsync();
   if (!available) throw new Error("File sharing is not available on this device.");
   await Sharing.shareAsync(pdf.uri, { mimeType: "application/pdf", dialogTitle: "Share low-stock PDF", UTI: "com.adobe.pdf" });
@@ -178,7 +196,9 @@ function dueNow(config: LowStockReportConfig, state: ReportState, now = new Date
   if (!config.autoEmailEnabled) return false;
   if (config.schedule === "fixedDate") {
     const date = String(config.fixedDate || "").trim();
-    return /^\d{4}-\d{2}-\d{2}$/.test(date) && now.toISOString().slice(0,10) >= date && state.lastPeriodKey !== `fixedDate:${date}`;
+    const today = String(now.getFullYear()) + "-" + String(now.getMonth()+1).padStart(2,"0") + "-" + String(now.getDate()).padStart(2,"0");
+    const from = String(config.reportFromDate || "").trim(); const to = String(config.reportToDate || "").trim();
+    return /^\d{4}-\d{2}-\d{2}$/.test(date) && /^\d{4}-\d{2}-\d{2}$/.test(from) && /^\d{4}-\d{2}-\d{2}$/.test(to) && from <= to && today >= date && state.lastPeriodKey !== ("fixedDate:" + date + ":" + from + ":" + to);
   }
   if (config.schedule === "onOpen") return !state.lastSentAt || new Date(state.lastSentAt).toDateString() !== now.toDateString();
   if (!state.lastSentAt) return true;
@@ -197,15 +217,40 @@ export async function attemptDueLowStockReport(): Promise<string> {
     config.whatsappMode === "meta" && config.whatsappNumbers?.trim() ? "WhatsApp" : "",
   ].filter(Boolean);
   if (!channels.length) return "Automatic report is enabled, but no delivery channel and recipient are configured.";
-  const pdf = await makePdf(config.schedule);
+  const pdf = await makePdf(config.schedule, config.reportFromDate, config.reportToDate);
   if (state.lastPeriodKey === pdf.periodKey) return "This reporting period has already been sent.";
   if (channels.includes("email")) await sendEmail(pdf, config);
   if (channels.includes("WhatsApp")) await sendWhatsApp(pdf, config);
   const nextState = {
     ...state, lastGeneratedAt: new Date().toISOString(), lastSentAt: new Date().toISOString(),
-    lastPeriodKey: config.schedule === "fixedDate" ? `fixedDate:${String(config.fixedDate || "")}` : pdf.periodKey,
+    lastPeriodKey: config.schedule === "fixedDate" ? "fixedDate:" + String(config.fixedDate || "") + ":" + String(config.reportFromDate || "") + ":" + String(config.reportToDate || "") : pdf.periodKey,
     lastStatus: `Automatically sent ${pdf.count} low-stock item(s) for ${pdf.periodStart.slice(0,10)} to ${pdf.periodEnd.slice(0,10)} via ${channels.join(" and ")}.`,
   };
   await saveState(nextState);
   return nextState.lastStatus!;
+}
+
+
+/** Force a real delivery attempt now, without waiting for the configured schedule. */
+export async function testLowStockReportDeliveryNow(): Promise<string> {
+  const config = await loadLowStockReportConfig();
+  if (!config) throw new Error("Save the low-stock report settings first.");
+  const emailEnabled = !!config.emailEnabled;
+  const whatsappEnabled = config.whatsappMode === "meta";
+  if (!emailEnabled && !whatsappEnabled) throw new Error("Enable Gmail and/or WhatsApp Cloud API automatic sending before testing.");
+  const pdf = await makePdf(config.schedule, config.reportFromDate, config.reportToDate);
+  const outcomes: string[] = [];
+  if (emailEnabled) {
+    try { await sendEmail(pdf, config); outcomes.push("Gmail: sent successfully"); }
+    catch (e: any) { outcomes.push("Gmail: FAILED — " + String(e?.message || e)); }
+  }
+  if (whatsappEnabled) {
+    try { await sendWhatsApp(pdf, config); outcomes.push("WhatsApp Cloud API: accepted successfully"); }
+    catch (e: any) { outcomes.push("WhatsApp Cloud API: FAILED — " + String(e?.message || e)); }
+  }
+  const state = await getLowStockReportState();
+  const result = "Manual delivery test (" + pdf.count + " low-stock item(s), " + pdf.periodStart.slice(0,10) + " to " + pdf.periodEnd.slice(0,10) + "): " + outcomes.join("; ");
+  await saveState({ ...state, lastGeneratedAt: new Date().toISOString(), lastStatus: result });
+  if (outcomes.some(x => x.includes("FAILED"))) throw new Error(result);
+  return result;
 }
