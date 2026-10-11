@@ -103,6 +103,7 @@ export default function RootLayout() {
                       options={{ headerShown: false }}
                     />
                     <Stack.Screen name="settings" />
+                    <Stack.Screen name="trash" options={{ headerShown: false }} />
                     <Stack.Screen name="branding" />
                     <Stack.Screen name="admin-pin" />
                     <Stack.Screen name="inventory-usage" options={{ headerShown: false }} />
