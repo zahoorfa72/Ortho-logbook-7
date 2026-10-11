@@ -565,21 +565,47 @@ export const api = {
         "SELECT id,kind,title,deleted_at,expires_at,payload_json FROM deleted_records WHERE kind='patients' AND expires_at>? ORDER BY deleted_at DESC",
         [nowIso()],
       );
+      // MR number must match exactly. Permit only a small name typo so a user
+      // can recover the correct deleted record without accidentally matching
+      // a different patient. Prefer exact names over fuzzy matches.
+      const normalizePatientName = (value: unknown) =>
+        String(value ?? "").trim().toLocaleLowerCase().replace(/\\s+/g, " ");
+      const editDistance = (a: string, b: string) => {
+        const prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+        for (let i = 1; i <= a.length; i++) {
+          let diagonal = prev[0];
+          prev[0] = i;
+          for (let j = 1; j <= b.length; j++) {
+            const above = prev[j];
+            prev[j] = Math.min(prev[j] + 1, prev[j - 1] + 1, diagonal + (a[i - 1] === b[j - 1] ? 0 : 1));
+            diagonal = above;
+          }
+        }
+        return prev[b.length];
+      };
+      const candidates: Array<{ entry: any; patient: any; distance: number }> = [];
       for (const entry of entries) {
         try {
           const payload = JSON.parse(String(entry.payload_json || "{}"));
-          const match = (Array.isArray(payload.patients) ? payload.patients : []).find((row:any) =>
-            String(row?.mr_no ?? "").trim().toLocaleLowerCase() === mrNo &&
-            String(row?.name ?? "").trim().toLocaleLowerCase() === name
-          );
-          if (match) return {
-            id: String(entry.id), kind: String(entry.kind), title: String(entry.title || "Deleted patient"),
-            deleted_at: String(entry.deleted_at || ""), expires_at: String(entry.expires_at || ""),
-            patient: { mrNo: String(match.mr_no || ""), name: String(match.name || "") },
-          } as any;
+          for (const row of (Array.isArray(payload.patients) ? payload.patients : [])) {
+            if (String(row?.mr_no ?? "").trim().toLocaleLowerCase() !== mrNo) continue;
+            const storedName = normalizePatientName(row?.name);
+            if (!storedName) continue;
+            const distance = editDistance(name, storedName);
+            const allowedTypos = storedName.length < 6 ? 1 : 2;
+            if (distance <= allowedTypos) candidates.push({ entry, patient: row, distance });
+          }
         } catch {}
       }
-      return null as any;
+      candidates.sort((a, b) => a.distance - b.distance);
+      const best = candidates[0];
+      if (!best) return null as any;
+      const { entry, patient: match } = best;
+      return {
+        id: String(entry.id), kind: String(entry.kind), title: String(entry.title || "Deleted patient"),
+        deleted_at: String(entry.deleted_at || ""), expires_at: String(entry.expires_at || ""),
+        patient: { mrNo: String(match.mr_no || ""), name: String(match.name || "") },
+      } as any;
     }
     if (normalizedPath === "/me") {
       const me = await currentUserRow();
