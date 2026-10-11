@@ -17,7 +17,7 @@ type BackupData = {
   patients:any[]; procedures:any[]; inventoryCategories:any[]; inventory:any[]; patientImplants:any[]; patientCustomFields:any[]; implantRecords:any[]; expenses:any[]; users:any[];
   patientHistory:any[]; inventoryMovements:any[]; inventoryPurchaseReceipts:any[]; stockReceipts:any[]; trash?:any[];
   branding?: BrandingConfig | null;
-  appSettings?: { googleOAuthClientId?: string; googleCloudProjectId?: string; googleAccountEmail?: string };
+  appSettings?: { googleOAuthClientId: string | null; googleCloudProjectId: string | null; googleAccountEmail: string | null };
   filter?: BackupFilter;
   incremental?: boolean;
   changedTables?: string[];
@@ -748,23 +748,32 @@ export async function restoreBackup(backup:BackupData){
   }
  });
  repairDatabaseData();
- // Await settings writes so restore cannot report success before branding,
- // logos, PDF styling and Drive configuration have been persisted.
+ // Verify persisted settings before restore is reported as complete.
  if (backup.version >= 6 && backup.branding === null) {
-   await storage.removeItem("ortho_branding");
+   if (!(await storage.removeItem("ortho_branding"))) throw new Error("Could not clear saved branding during restore.");
  } else if (backup.version >= 6 && backup.branding && typeof backup.branding === "object") {
-   await storage.setItem("ortho_branding", JSON.stringify(backup.branding));
+   if (!(await storage.setItem("ortho_branding", JSON.stringify(backup.branding)))) throw new Error("Could not save branding during restore.");
+   const saved = await storage.getItem<any>("ortho_branding", "");
+   let parsed: any = saved;
+   if (typeof parsed === "string") { try { parsed = JSON.parse(parsed); } catch {} }
+   if (!parsed || typeof parsed !== "object" || JSON.stringify(parsed) !== JSON.stringify(backup.branding)) throw new Error("Branding was not verified after restore. Please retry.");
  }
  if (backup.appSettings && typeof backup.appSettings === "object") {
    const settings = backup.appSettings;
-   if (typeof settings.googleOAuthClientId === "string" && settings.googleOAuthClientId) {
-     await SecureStore.setItemAsync("ortho_google_drive_client_id", settings.googleOAuthClientId).catch(() => undefined);
+   if (typeof settings.googleOAuthClientId === "string" && settings.googleOAuthClientId.trim()) {
+     await SecureStore.setItemAsync("ortho_google_drive_client_id", settings.googleOAuthClientId);
+   } else {
+     await SecureStore.deleteItemAsync("ortho_google_drive_client_id");
    }
-   if (typeof settings.googleCloudProjectId === "string" && settings.googleCloudProjectId) {
-     await SecureStore.setItemAsync("ortho_google_drive_cloud_project_id", settings.googleCloudProjectId).catch(() => undefined);
+   if (typeof settings.googleCloudProjectId === "string" && settings.googleCloudProjectId.trim()) {
+     await SecureStore.setItemAsync("ortho_google_drive_cloud_project_id", settings.googleCloudProjectId);
+   } else {
+     await SecureStore.deleteItemAsync("ortho_google_drive_cloud_project_id");
    }
-   if (typeof settings.googleAccountEmail === "string" && settings.googleAccountEmail) {
-     await storage.secureSet("ortho_drive_account_email", settings.googleAccountEmail);
+   if (typeof settings.googleAccountEmail === "string" && settings.googleAccountEmail.trim()) {
+     if (!(await storage.secureSet("ortho_drive_account_email", settings.googleAccountEmail))) throw new Error("Could not save Google account recovery email.");
+   } else {
+     await storage.secureRemove("ortho_drive_account_email");
    }
  }
  markInventoryResetDone();
@@ -886,23 +895,32 @@ export async function mergeBackup(backup: BackupData) {
    stats.inventoryMovements++;
   }
  });
- // Await settings writes so restore cannot report success before branding,
- // logos, PDF styling and Drive configuration have been persisted.
+ // Verify persisted settings before restore is reported as complete.
  if (backup.version >= 6 && backup.branding === null) {
-   await storage.removeItem("ortho_branding");
+   if (!(await storage.removeItem("ortho_branding"))) throw new Error("Could not clear saved branding during restore.");
  } else if (backup.version >= 6 && backup.branding && typeof backup.branding === "object") {
-   await storage.setItem("ortho_branding", JSON.stringify(backup.branding));
+   if (!(await storage.setItem("ortho_branding", JSON.stringify(backup.branding)))) throw new Error("Could not save branding during restore.");
+   const saved = await storage.getItem<any>("ortho_branding", "");
+   let parsed: any = saved;
+   if (typeof parsed === "string") { try { parsed = JSON.parse(parsed); } catch {} }
+   if (!parsed || typeof parsed !== "object" || JSON.stringify(parsed) !== JSON.stringify(backup.branding)) throw new Error("Branding was not verified after restore. Please retry.");
  }
  if (backup.appSettings && typeof backup.appSettings === "object") {
    const settings = backup.appSettings;
-   if (typeof settings.googleOAuthClientId === "string" && settings.googleOAuthClientId) {
-     await SecureStore.setItemAsync("ortho_google_drive_client_id", settings.googleOAuthClientId).catch(() => undefined);
+   if (typeof settings.googleOAuthClientId === "string" && settings.googleOAuthClientId.trim()) {
+     await SecureStore.setItemAsync("ortho_google_drive_client_id", settings.googleOAuthClientId);
+   } else {
+     await SecureStore.deleteItemAsync("ortho_google_drive_client_id");
    }
-   if (typeof settings.googleCloudProjectId === "string" && settings.googleCloudProjectId) {
-     await SecureStore.setItemAsync("ortho_google_drive_cloud_project_id", settings.googleCloudProjectId).catch(() => undefined);
+   if (typeof settings.googleCloudProjectId === "string" && settings.googleCloudProjectId.trim()) {
+     await SecureStore.setItemAsync("ortho_google_drive_cloud_project_id", settings.googleCloudProjectId);
+   } else {
+     await SecureStore.deleteItemAsync("ortho_google_drive_cloud_project_id");
    }
-   if (typeof settings.googleAccountEmail === "string" && settings.googleAccountEmail) {
-     await SecureStore.setItemAsync("ortho_drive_account_email", settings.googleAccountEmail).catch(() => undefined);
+   if (typeof settings.googleAccountEmail === "string" && settings.googleAccountEmail.trim()) {
+     if (!(await storage.secureSet("ortho_drive_account_email", settings.googleAccountEmail))) throw new Error("Could not save Google account recovery email.");
+   } else {
+     await storage.secureRemove("ortho_drive_account_email");
    }
  }
  markInventoryResetDone();
