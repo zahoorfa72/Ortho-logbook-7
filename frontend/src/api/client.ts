@@ -188,7 +188,8 @@ function insertTrashRows(table: string, rows: any[]) {
     if (!row || typeof row !== "object" || Array.isArray(row)) continue;
     const columns = Object.keys(row).filter((key) => /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key));
     if (!columns.length) continue;
-    db.runSync(`INSERT OR IGNORE INTO ${table} (${columns.join(",")}) VALUES (${columns.map(() => "?").join(",")})`, columns.map((column) => row[column] ?? null));
+    const insertMode = table === "patient_implants" ? "INSERT OR REPLACE" : "INSERT OR IGNORE";
+    db.runSync(`${insertMode} INTO ${table} (${columns.join(",")}) VALUES (${columns.map(() => "?").join(",")})`, columns.map((column) => row[column] ?? null));
   }
 }
 
@@ -318,6 +319,10 @@ function deleteInventoryRows(ids: string[]) {
     );
     db.runSync(
       `DELETE FROM stock_receipts WHERE inventory_id IN (${placeholders})`,
+      cleanIds,
+    );
+    db.runSync(
+      `DELETE FROM inventory_purchase_receipts WHERE inventory_id IN (${placeholders})`,
       cleanIds,
     );
     db.runSync(
