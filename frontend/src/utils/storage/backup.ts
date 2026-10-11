@@ -9,13 +9,13 @@ import { db, initializeDatabase, markInventoryResetDone, repairDatabaseData } fr
 import { storage } from "@/src/utils/storage";
 import type { BrandingConfig } from "@/src/theme";
 
-const BACKUP_VERSION = 8;
+const BACKUP_VERSION = 9;
 const BACKUP_APP = "Ortho Logbook";
 
 type BackupData = {
   version:number; app:string; createdAt:string;
   patients:any[]; procedures:any[]; inventoryCategories:any[]; inventory:any[]; patientImplants:any[]; patientCustomFields:any[]; implantRecords:any[]; expenses:any[]; users:any[];
-  patientHistory:any[]; inventoryMovements:any[]; inventoryPurchaseReceipts:any[]; stockReceipts:any[];
+  patientHistory:any[]; inventoryMovements:any[]; inventoryPurchaseReceipts:any[]; stockReceipts:any[]; trash?:any[];
   branding?: BrandingConfig | null;
   appSettings?: { googleOAuthClientId?: string; googleCloudProjectId?: string; googleAccountEmail?: string };
   filter?: BackupFilter;
@@ -266,6 +266,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
   inventoryMovements:include("inventoryMovements") ? (()=>{if(filter.type==="all") return db.getAllSync<any>("SELECT * FROM inventory_movements ORDER BY created_at ASC"); const f=filter.type==="date" ? {sql:" WHERE date(created_at)=?",args:[filter.value||""]} : filter.type==="month" ? {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]} : {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]}; return db.getAllSync<any>(`SELECT * FROM inventory_movements${f.sql} ORDER BY created_at ASC`,f.args);})() : [],
   inventoryPurchaseReceipts:include("inventoryPurchaseReceipts") ? await (async()=>{const f=whereForFilter(filter,"created_at");const rows=db.getAllSync<any>(`SELECT * FROM inventory_purchase_receipts${f.sql} ORDER BY created_at ASC`,f.args);return await Promise.all(rows.map(async (row:any)=>({ ...row, bill_image: typeof row.bill_image==="string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(row.bill_image) ? await embedOptionalPhoto(row.bill_image,compressedPhotoCache) : row.bill_image })));})() : [],
   stockReceipts:include("stockReceipts") ? await (async()=>{const f=whereForFilter(filter,"created_at");const rows=db.getAllSync<any>(`SELECT * FROM stock_receipts${f.sql} ORDER BY created_at ASC`,f.args);return await Promise.all(rows.map(async (row:any)=>({ ...row, bill_image: typeof row.bill_image==="string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(row.bill_image) ? await embedOptionalPhoto(row.bill_image,compressedPhotoCache) : row.bill_image })));})() : [],
+  trash:include("trash") ? db.getAllSync<any>("SELECT * FROM deleted_records ORDER BY deleted_at DESC") : [],
   branding,
   appSettings,
  };
@@ -354,7 +355,7 @@ export async function exportIncrementalBackup(changedTables: string[], onProgres
  const allowed = new Set([
   "patients","procedures","inventoryCategories","inventory","patientImplants",
   "patientCustomFields","implantRecords","expenses","users","patientHistory",
-  "inventoryMovements","inventoryPurchaseReceipts","stockReceipts","branding","appSettings"
+  "inventoryMovements","inventoryPurchaseReceipts","stockReceipts","trash","branding","appSettings"
  ]);
  const tables = Array.from(new Set(changedTables)).filter((name) => allowed.has(name));
  if (!tables.length) throw new Error("There are no changed data tables to sync.");
@@ -443,7 +444,7 @@ export async function exportIncrementalBackup(changedTables: string[], onProgres
 
 function parseHeader(text:string):any{
  let b:any;try{b=JSON.parse(text);}catch{throw new Error("The selected backup file is not valid.");}
- if(!b||![2,3,4,5,6,7,8].includes(b.version)||b.app!==BACKUP_APP)throw new Error("Invalid or unsupported Ortho Logbook backup.");
+ if(!b||![2,3,4,5,6,7,8,9].includes(b.version)||b.app!==BACKUP_APP)throw new Error("Invalid or unsupported Ortho Logbook backup.");
  if(b.encrypted===true){
   if(b.algorithm!=="XSalsa20-Poly1305"||b.kdf!=="SHA-256"||!b.createdAt||!b.salt||!b.nonce||!b.ciphertext)throw new Error("The backup file is incomplete or damaged.");
  } else if(!Array.isArray(b.patients)||!Array.isArray(b.inventory)||!Array.isArray(b.users)){
@@ -466,6 +467,7 @@ export async function decryptBackup(text:string,password:string):Promise<BackupD
   data.inventoryPurchaseReceipts=Array.isArray((data as any).inventoryPurchaseReceipts)?data.inventoryPurchaseReceipts:[];
   data.patientCustomFields=Array.isArray((data as any).patientCustomFields)?data.patientCustomFields:[];
   data.implantRecords=Array.isArray((data as any).implantRecords)?data.implantRecords:[];
+  data.trash=Array.isArray((data as any).trash)?data.trash:[];
   return data;
  }
  try{
@@ -474,7 +476,7 @@ export async function decryptBackup(text:string,password:string):Promise<BackupD
   const plain=nacl.secretbox.open(cipherBytes,hexToBytes(b.nonce),key);
   if(!plain)throw new Error("Incorrect backup password or damaged backup.");
   const data=JSON.parse(bytesToString(plain)) as BackupData;
-  if(!data||![2,3,4,5,6,7,8].includes(data.version)||data.app!==BACKUP_APP)throw new Error("The decrypted backup is invalid.");
+  if(!data||![2,3,4,5,6,7,8,9].includes(data.version)||data.app!==BACKUP_APP)throw new Error("The decrypted backup is invalid.");
   for(const keyName of ["patients","procedures","inventory","expenses","users","patientHistory","inventoryMovements"]){
     if(!Array.isArray((data as any)[keyName]))throw new Error("The backup is incomplete or damaged.");
   }
@@ -482,6 +484,7 @@ export async function decryptBackup(text:string,password:string):Promise<BackupD
   data.inventoryCategories=Array.isArray((data as any).inventoryCategories) ? (data as any).inventoryCategories : [];
   data.patientImplants=Array.isArray((data as any).patientImplants) ? (data as any).patientImplants : [];
   data.stockReceipts=Array.isArray((data as any).stockReceipts) ? (data as any).stockReceipts : [];
+  data.trash=Array.isArray((data as any).trash) ? (data as any).trash : [];
   return data;
  }catch(e){if(e instanceof Error&&e.message.includes("Incorrect backup password"))throw e;throw new Error("Unable to decrypt backup. Check the password and backup file.");}
 }
@@ -532,8 +535,9 @@ export async function restoreBackup(backup:BackupData){
  const inventoryMovements=restoreArray((backup as any).inventoryMovements);
  const inventoryPurchaseReceipts=restoreArray((backup as any).inventoryPurchaseReceipts);
  const stockReceipts=restoreArray((backup as any).stockReceipts);
+ const trash=restoreArray((backup as any).trash);
  db.withTransactionSync(()=>{
-  db.runSync("DELETE FROM inventory_movements"); db.runSync("DELETE FROM inventory_purchase_receipts"); db.runSync("DELETE FROM stock_receipts"); db.runSync("DELETE FROM patient_implants"); db.runSync("DELETE FROM patient_history"); db.runSync("DELETE FROM expenses"); db.runSync("DELETE FROM patients"); db.runSync("DELETE FROM patient_custom_fields"); db.runSync("DELETE FROM implant_records"); db.runSync("DELETE FROM procedures"); db.runSync("DELETE FROM inventory"); db.runSync("DELETE FROM inventory_categories"); db.runSync("DELETE FROM users");
+  db.runSync("DELETE FROM inventory_movements"); db.runSync("DELETE FROM inventory_purchase_receipts"); db.runSync("DELETE FROM stock_receipts"); db.runSync("DELETE FROM patient_implants"); db.runSync("DELETE FROM patient_history"); db.runSync("DELETE FROM expenses"); db.runSync("DELETE FROM patients"); db.runSync("DELETE FROM patient_custom_fields"); db.runSync("DELETE FROM implant_records"); db.runSync("DELETE FROM procedures"); db.runSync("DELETE FROM inventory"); db.runSync("DELETE FROM inventory_categories"); db.runSync("DELETE FROM users"); db.runSync("DELETE FROM deleted_records");
   const usedPatientIds=new Set<string>();
   const patientIdMap=new Map<string,string>();
   for(const p of patients){
@@ -678,6 +682,16 @@ export async function restoreBackup(backup:BackupData){
     const inventoryId=inventoryIdMap.get(String(m.inventory_id||""));
     if(!inventoryId) continue;
     db.runSync("INSERT INTO inventory_movements (id,inventory_id,user_id,type,amount,quantity_after,note,created_at) VALUES (?,?,?,?,?,?,?,?)",[restoreRowId(m.id,"movement",usedMovementIds),inventoryId,userIdMap.get(String(m.user_id||""))||null,restoreText(m.type,"adjust"),restoreReal(m.amount,0),restoreReal(m.quantity_after,0,0),restoreText(m.note)||null,restoreText(m.created_at,new Date().toISOString())]);
+  }
+  const usedTrashIds=new Set<string>();
+  for(const t of trash){
+    const deletedAt=restoreText(t.deleted_at,new Date().toISOString());
+    const expiresAt=restoreText(t.expires_at,new Date(Date.parse(deletedAt)+30*24*60*60*1000).toISOString());
+    if(Date.parse(expiresAt)<=Date.now()) continue;
+    db.runSync("INSERT OR IGNORE INTO deleted_records (id,kind,title,payload_json,deleted_at,expires_at,deleted_by) VALUES (?,?,?,?,?,?,?)",[
+      restoreRowId(t.id,"trash",usedTrashIds),restoreText(t.kind,"deleted-record"),restoreText(t.title,"Deleted item"),
+      restoreText(t.payload_json,"{}"),deletedAt,expiresAt,restoreText(t.deleted_by)||null
+    ]);
   }
  });
  repairDatabaseData();
