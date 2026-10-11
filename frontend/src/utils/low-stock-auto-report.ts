@@ -27,6 +27,7 @@ export type LowStockReportConfig = {
   whatsappTemplateName?: string;
   whatsappTemplateLanguage?: string;
   whatsappMode?: "manual" | "meta";
+  instantLowStockAlertsEnabled?: boolean;
   instantLowStockGmailEnabled?: boolean;
   instantLowStockWhatsAppEnabled?: boolean;
   lowStockWhatsAppTemplateName?: string;
@@ -238,8 +239,9 @@ async function sendLowStockAlertWhatsApp(message: string, config: LowStockReport
 export async function checkAndSendImmediateLowStockAlerts(): Promise<string> {
   const config = await loadLowStockReportConfig();
   if (!config) return "Immediate low-stock alerts are not configured.";
-  const gmailOn = !!config.instantLowStockGmailEnabled;
-  const whatsappOn = !!config.instantLowStockWhatsAppEnabled;
+  const masterOn = config.instantLowStockAlertsEnabled !== false;
+  const gmailOn = masterOn && !!config.instantLowStockGmailEnabled;
+  const whatsappOn = masterOn && !!config.instantLowStockWhatsAppEnabled;
   if (!gmailOn && !whatsappOn) return "Immediate low-stock alerts are disabled.";
   const inventory = await api.get<any[]>("/inventory");
   const low = (Array.isArray(inventory) ? inventory : []).filter((item: any) => {
