@@ -6,10 +6,10 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "@/src/auth/AuthContext";
 import { useToast } from "@/src/components/toast";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
-import { attemptDueLowStockReport, getLowStockReportState, loadLowStockReportConfig, saveLowStockReportConfig, sendLowStockTestEmail, sendLowStockTestWhatsApp, type LowStockReportConfig, type LowStockSchedule } from "@/src/utils/low-stock-auto-report";
+import { attemptDueLowStockReport, getLowStockReportState, loadLowStockReportConfig, saveLowStockReportConfig, sendLowStockTestEmail, sendLowStockTestWhatsApp, shareLowStockPdfViaWhatsApp, type LowStockReportConfig, type LowStockSchedule } from "@/src/utils/low-stock-auto-report";
 import { storage } from "@/src/utils/storage";
 
-const blank = (): LowStockReportConfig => ({ schedule: "weekly", emails: "", resendApiKey: "", senderEmail: "", whatsappNumbers: "", whatsappToken: "", whatsappPhoneNumberId: "", whatsappGraphVersion: "v23.0", whatsappTemplateName: "", whatsappTemplateLanguage: "en_US", savedAt: "" });
+const blank = (): LowStockReportConfig => ({ schedule: "weekly", emails: "", resendApiKey: "", senderEmail: "", whatsappNumbers: "", whatsappToken: "", whatsappPhoneNumberId: "", whatsappGraphVersion: "v23.0", whatsappTemplateName: "", whatsappTemplateLanguage: "en_US", whatsappMode: "manual", savedAt: "" });
 export default function LowStockReportsScreen() {
   const { user } = useAuth();
   const { colors } = useTheme();
@@ -26,7 +26,7 @@ export default function LowStockReportsScreen() {
   const save = async () => {
     if (!config.emails.trim() && !config.whatsappNumbers.trim()) { toast("Enter at least one email or WhatsApp recipient.", "error"); return false; }
     if (config.emails.trim() && (!config.resendApiKey.trim() || !config.senderEmail.trim())) { toast("Email recipients require a Resend API key and verified sender email.", "error"); return false; }
-    if (config.whatsappNumbers.trim() && (!config.whatsappToken.trim() || !config.whatsappPhoneNumberId.trim())) { toast("WhatsApp recipients require a Business access token and phone-number ID.", "error"); return false; }
+    if (config.whatsappMode !== "manual" && config.whatsappNumbers.trim() && (!config.whatsappToken.trim() || !config.whatsappPhoneNumberId.trim())) { toast("Meta API delivery requires a Business access token and phone-number ID.", "error"); return false; }
     const next = { ...config, savedAt: new Date().toISOString() };
     try { await saveLowStockReportConfig(next); await storage.secureSet("ortho_stock_ocr_space_api_key", ocrApiKey.trim()); setConfig(next); toast("Report settings and invoice OCR key saved securely on this device.", "success"); return true; }
     catch { toast("Could not save credentials securely. Check device security settings.", "error"); return false; }
@@ -56,19 +56,27 @@ export default function LowStockReportsScreen() {
       {field("Verified sender email", config.senderEmail, v => update({ senderEmail: v }), "reports@your-verified-domain.com")}
       {field("Recipient email addresses", config.emails, v => update({ emails: v }), "one@example.com, two@example.com", false, true)}
       <Pressable disabled={busy} onPress={() => test("email")} style={[styles.action, busy && { opacity: .55 }]}><Text style={styles.actionText}>Save and send test email</Text></Pressable>
-      <Text style={styles.section}>WhatsApp Business delivery</Text>
-      {field("WhatsApp Business access token", config.whatsappToken, v => update({ whatsappToken: v }), "Meta system-user access token", true)}
-      {field("Phone-number ID", config.whatsappPhoneNumberId, v => update({ whatsappPhoneNumberId: v }), "Meta WhatsApp phone-number ID")}
-      {field("Graph API version", config.whatsappGraphVersion, v => update({ whatsappGraphVersion: v }), "v23.0")}
-      {field("Approved WhatsApp template name (required outside the 24-hour service window)", config.whatsappTemplateName || "", v => update({ whatsappTemplateName: v }), "approved_template_with_document_header")}
-      {field("Template language code", config.whatsappTemplateLanguage || "en_US", v => update({ whatsappTemplateLanguage: v }), "en_US")}
+      <Text style={styles.section}>WhatsApp delivery options</Text>
+      <Text style={styles.help}>Choose no-server sharing through the installed WhatsApp app, or Meta API automation. Normal WhatsApp and the WhatsApp Business app both work through the Android/iOS share sheet; you select the recipient and tap Send.</Text>
+      <View style={styles.scheduleRow}>
+        <Pressable onPress={() => update({ whatsappMode: "manual" })} style={[styles.schedule, (config.whatsappMode || "meta") === "manual" && { borderColor: colors.brandPrimary, backgroundColor: colors.brandTertiary }]}><Text style={[styles.scheduleText, (config.whatsappMode || "meta") === "manual" && { color: colors.brandPrimary }]}>No-server WhatsApp share</Text></Pressable>
+        <Pressable onPress={() => update({ whatsappMode: "meta" })} style={[styles.schedule, config.whatsappMode === "meta" && { borderColor: colors.brandPrimary, backgroundColor: colors.brandTertiary }]}><Text style={[styles.scheduleText, config.whatsappMode === "meta" && { color: colors.brandPrimary }]}>Meta API auto-send</Text></Pressable>
+      </View>
+      <Pressable disabled={busy} onPress={async () => { setBusy(true); try { await shareLowStockPdfViaWhatsApp(); toast("Choose WhatsApp or WhatsApp Business, select the recipient, and tap Send.", "info"); } catch (e: any) { Alert.alert("Could not share PDF", String(e?.message || e)); } finally { setBusy(false); } }} style={[styles.action, busy && { opacity: .55 }]}><Text style={styles.actionText}>Generate PDF and share with WhatsApp / WhatsApp Business</Text></Pressable>
+      <Text style={styles.help}>No-server mode never sends a WhatsApp message silently: the app opens the share sheet for you to choose WhatsApp or WhatsApp Business and confirm Send. Scheduled email delivery continues automatically.</Text>
+      <Text style={styles.section}>Meta WhatsApp Business Platform credentials (only for API auto-send)</Text>
+      {config.whatsappMode !== "manual" && field("WhatsApp Business access token", config.whatsappToken, v => update({ whatsappToken: v }), "Meta system-user access token", true)}
+      {config.whatsappMode !== "manual" && field("Phone-number ID", config.whatsappPhoneNumberId, v => update({ whatsappPhoneNumberId: v }), "Meta WhatsApp phone-number ID")}
+      {config.whatsappMode !== "manual" && field("Graph API version", config.whatsappGraphVersion, v => update({ whatsappGraphVersion: v }), "v23.0")}
+      {config.whatsappMode !== "manual" && field("Approved WhatsApp template name (required outside the 24-hour service window)", config.whatsappTemplateName || "", v => update({ whatsappTemplateName: v }), "approved_template_with_document_header")}
+      {config.whatsappMode !== "manual" && field("Template language code", config.whatsappTemplateLanguage || "en_US", v => update({ whatsappTemplateLanguage: v }), "en_US")}
       {field("Recipient numbers (with country code)", config.whatsappNumbers, v => update({ whatsappNumbers: v }), "923001234567, 923009876543", false, true)}
-      <Pressable disabled={busy} onPress={() => test("whatsapp")} style={[styles.action, busy && { opacity: .55 }]}><Text style={styles.actionText}>Save and send test WhatsApp</Text></Pressable>
+      {config.whatsappMode !== "manual" && <Pressable disabled={busy} onPress={() => test("whatsapp")} style={[styles.action, busy && { opacity: .55 }]}><Text style={styles.actionText}>Save and send test WhatsApp API message</Text></Pressable>}
       <Pressable disabled={busy} onPress={runNow} style={[styles.primary, busy && { opacity: .55 }]}><Text style={styles.primaryText}>{busy ? "Working…" : "Save settings and check report now"}</Text></Pressable>
       <Pressable onPress={async () => { await saveLowStockReportConfig(blank()); await storage.secureRemove("ortho_stock_ocr_space_api_key"); setOcrApiKey(""); setConfig(blank()); toast("Report and OCR credentials removed from this device.", "success"); }} style={styles.remove}><Text style={styles.removeText}>Remove saved credentials</Text></Pressable>
       {!!status && <View style={styles.status}><Text style={styles.label}>Latest result</Text><Text style={styles.help}>{status}</Text></View>}
       {!!lastSent && <View style={styles.status}><Text style={styles.label}>Last successful sends</Text><Text style={styles.help}>{lastSent}</Text></View>}
-      <Text style={styles.note}>Important: email sending requires a Resend account and verified sender domain. WhatsApp sending requires a Meta WhatsApp Business account, active token and registered phone number. Scheduled WhatsApp PDFs outside the 24-hour customer-service window need an approved template with a document header; enter its exact name and language above. Without that template, Meta may reject delivery. A successful API response confirms acceptance, not that a recipient has read the report.</Text>
+      <Text style={styles.note}>Important: email sending requires a Resend account and verified sender domain. No-server WhatsApp sharing opens the phone share sheet; you must choose normal WhatsApp or WhatsApp Business, select the contact and tap Send. Meta API auto-send requires a Meta WhatsApp Business account, active token, registered phone number and, outside the 24-hour customer-service window, an approved document template. Email reports are sent automatically on schedule while the app is open and online; no-server mode cannot send while the app is closed.</Text>
     </ScrollView>
   </View>;
 }
