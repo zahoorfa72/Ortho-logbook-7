@@ -4,6 +4,7 @@ import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
+import { recognizeText } from "expo-ocr-kit";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -24,6 +25,35 @@ const newRow=():StockRow=>({
   id:Math.random().toString(36).slice(2),
   categoryId:"",category:"",size:"",quantity:"",minimumStock:"1",billImage:""
 });
+
+
+const normalizeOcr=(v:string)=>String(v||"").toLowerCase().replace(/[^a-z0-9.]+/g," ").trim().replace(/\s+/g," ");
+function editDistance(a:string,b:string){const x=normalizeOcr(a),y=normalizeOcr(b);const dp=Array.from({length:x.length+1},(_,i)=>Array.from({length:y.length+1},(_,j)=>i===0?j:j===0?i:0));for(let i=1;i<=x.length;i++)for(let j=1;j<=y.length;j++)dp[i][j]=Math.min(dp[i-1][j]+1,dp[i][j-1]+1,dp[i-1][j-1]+(x[i-1]===y[j-1]?0:1));return dp[x.length][y.length];}
+function bestOcrMatch(text:string, options:string[]){const hay=normalizeOcr(text);let best={value:"",score:0};for(const value of options){const n=normalizeOcr(value);if(!n)continue;let score=hay.includes(n)?1:n.includes(hay)&&hay.length>2?.85:Math.max(0,1-editDistance(hay,n)/Math.max(hay.length,n.length,1));const tokens=n.split(" ").filter(t=>t.length>2);if(tokens.length&&tokens.every(t=>hay.includes(t)))score=Math.max(score,.82);if(score>best.score)best={value,score};}return best;}
+function parseInvoiceOcr(text:string,categories:any[],inventory:any[]){
+ const knownSizes=[...new Set((Array.isArray(inventory)?inventory:[]).map((x:any)=>String(x?.size||"").trim()).filter(Boolean))].sort((a,b)=>b.length-a.length);
+ const categoryNames=(Array.isArray(categories)?categories:[]).map((x:any)=>String(x?.name||"").trim()).filter(Boolean);
+ const lines=String(text||"").split(/\r?\n/).map(x=>x.replace(/[|]/g," ").replace(/\s+/g," ").trim()).filter(x=>x.length>=3);
+ const out:StockRow[]=[];const seen=new Set<string>();
+ for(const line of lines){
+   if(/^(invoice|bill|date|total|subtotal|tax|gst|phone|address|customer|supplier|amount|discount|qty|quantity|description|item|product|price|rate|page)\b/i.test(line))continue;
+   const matchedCategory=bestOcrMatch(line,categoryNames);let category=matchedCategory.score>=.42?matchedCategory.value:"";
+   let sizes=knownSizes.filter(size=>normalizeOcr(line).includes(normalizeOcr(size)));
+   const holeMatch=line.match(/\b(\d{1,2}(?:\s*[,/;]\s*\d{1,2})+)\s*(?:holes?|h)\b/i);
+   if(holeMatch){sizes=holeMatch[1].split(/\s*[,/;]\s*/).map(n=>n.trim()).map(n=>knownSizes.find(s=>normalizeOcr(s)===normalizeOcr(n)||normalizeOcr(s).includes(n+" hole"))||n);}
+   if(!sizes.length){const hm=line.match(/\b(\d{1,2})\s*(?:holes?|h)\b/i);if(hm)sizes=[knownSizes.find(s=>normalizeOcr(s)===normalizeOcr(hm[1])||normalizeOcr(s).includes(hm[1]+" hole"))||hm[1]];}
+   if(!sizes.length){const sizeMatch=bestOcrMatch(line,knownSizes);if(sizeMatch.score>=.55)sizes=[sizeMatch.value];}
+   const multiSizes=sizes.length>1;
+   const nums=[...line.matchAll(/\b\d+(?:\.\d+)?\b/g)].map(m=>({value:m[0],index:m.index||0}));
+   let quantity="";
+   if(!multiSizes&&nums.length){const last=nums[nums.length-1];const tail=line.slice(last.index+last.value.length);if(!/(?:mm|cm|inch|inches|hole|holes|size)/i.test(tail)&&Number(last.value)>0)quantity=last.value;}
+   if(!category){const m=bestOcrMatch(line,(Array.isArray(inventory)?inventory:[]).map((x:any)=>String(x?.category||x?.name||"")).filter(Boolean));if(m.score>=.52)category=m.value;}
+   if(!category&&!sizes.length)continue;
+   if(!sizes.length)sizes=[""];
+   for(const size of sizes){const key=normalizeOcr(category+"|"+size+"|"+line);if(seen.has(key))continue;seen.add(key);const cat=(Array.isArray(categories)?categories:[]).find((x:any)=>normalizeOcr(x?.name)===normalizeOcr(category));out.push({...newRow(),category,categoryId:String(cat?.id||""),size,quantity:multiSizes?"":quantity,minimumStock:"1"});}
+ }
+ return out;
+}
 
 export default function StockScreen(){
   const styles=useStyles();
@@ -179,27 +209,32 @@ export default function StockScreen(){
   };
 
 
+
   const scanInvoice=async()=>{
     if(ocrBusy)return;
+    setOcrBusy(true);
     try{
-      const picked=await DocumentPicker.getDocumentAsync({
-        type:["image/*"],
-        copyToCacheDirectory:true,
-        multiple:false,
-      });
+      const picked=await DocumentPicker.getDocumentAsync({type:["image/*","application/pdf"],copyToCacheDirectory:true,multiple:false});
       if(picked.canceled||!picked.assets?.length)return;
       const asset=picked.assets[0];
-      if(!asset?.uri){toast("Could not open the selected invoice image.","error");return;}
-      // Offline mode: keep the invoice image on-device and let the admin enter rows manually.
-      // No invoice image or patient/business data is uploaded to a third-party OCR service.
-      setStockRows([{...newRow(),billImage:asset.uri}]);
+      if(!asset?.uri){toast("Could not open the selected invoice.","error");return;}
+      const isPdf=String(asset.mimeType||"").toLowerCase().includes("pdf")||String(asset.name||"").toLowerCase().endsWith(".pdf");
+      if(isPdf){toast("This offline OCR engine currently reads images only. Please choose a clear invoice photo or screenshot; PDF page-to-image OCR still needs to be added.","error");return;}
+      const result=await recognizeText(asset.uri);
+      const extracted=String(result?.text||"").trim();
+      if(extracted.length<5){toast("No readable invoice text found. Try a sharper, brighter photo with the full bill visible.","error");return;}
+      const suggestions=parseInvoiceOcr(extracted,stockCategories,stockInventory);
+      const compressed=await ImageManipulator.manipulateAsync(asset.uri,[{resize:{width:1600}}],{compress:0.5,format:ImageManipulator.SaveFormat.JPEG,base64:true}).catch(()=>null as any);
+      const billImage=compressed?.base64?"data:image/jpeg;base64,"+compressed.base64:asset.uri;
+      setStockRows(suggestions.length?suggestions.map(r=>({...r,billImage})):[{...newRow(),billImage}]);
       setEditingReceipt(null);
-      setDescription(v=>v||("Invoice attached for manual entry: "+(asset.name||"stock invoice")));
+      setDescription("OCR invoice: "+(asset.name||"stock invoice")+"\n\nExtracted text:\n"+extracted);
+      setStockDate(new Date().toISOString().slice(0,10));
       setStockModal(true);
-      toast("Invoice attached locally. Enter each category, size and quantity manually.","info");
-    }catch(e:any){
-      toast("Could not attach invoice: "+String(e?.message||e||"Unknown error"),"error");
-    }finally{setOcrBusy(false);}
+      if(suggestions.length)toast("OCR read the invoice and prepared "+suggestions.length+" editable stock suggestion(s). Check every category, size and quantity before saving.","success");
+      else toast("Text was extracted, but no confident stock rows were found. Add rows manually and review extracted text in Description.","info");
+    }catch(e:any){toast("OCR scan failed: "+String(e?.message||e||"Unknown error"),"error");}
+    finally{setOcrBusy(false);}
   };
 
   const pickerValues=stockPicker==="category"
@@ -282,9 +317,9 @@ export default function StockScreen(){
 
           <Pressable disabled={ocrBusy||saveStock.isPending} style={[styles.attachBtn,(ocrBusy||saveStock.isPending)&&{opacity:0.6}]} onPress={()=>{void scanInvoice();}}>
             {ocrBusy?<ActivityIndicator size="small" color={colors.brandPrimary}/>:<Ionicons name="document-text-outline" size={19} color={colors.brandPrimary}/>}
-            <Text style={styles.attachText}>{ocrBusy?"Scanning invoice…":"Scan invoice image or PDF (OCR)"}</Text>
+            <Text style={styles.attachText}>{ocrBusy?"Scanning invoice…":"Scan invoice image (on-device OCR)"}</Text>
           </Pressable>
-          <Text style={[styles.stockHint,{marginTop:spacing.xs,marginBottom:spacing.sm}]}>OCR creates editable suggestions only. Confirm item names, sizes and each quantity before saving.</Text>
+          <Text style={[styles.stockHint,{marginTop:spacing.xs,marginBottom:spacing.sm}]}>On-device OCR runs without an OCR API key. Review spelling, size and quantity suggestions; scanned PDFs are not yet supported by this local OCR engine.</Text>
           {stockRows.map((row,i)=><View key={row.id} style={styles.stockCard}>
             <View style={styles.stockCardHead}>
               <Text style={styles.stockCardTitle}>Stock item {i+1}</Text>
