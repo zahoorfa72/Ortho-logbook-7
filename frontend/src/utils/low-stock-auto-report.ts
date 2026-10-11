@@ -298,6 +298,30 @@ export async function checkAndSendImmediateLowStockAlerts(): Promise<string> {
   return results.length ? results.join("; ") : "No newly low-stock items.";
 }
 
+
+export async function testImmediateLowStockAlertDeliveryNow(): Promise<string> {
+  const config = await loadLowStockReportConfig();
+  if (!config) throw new Error("Save the low-stock report settings first.");
+  const gmailOn = !!config.instantLowStockGmailEnabled;
+  const whatsappOn = !!config.instantLowStockWhatsAppEnabled;
+  if (!gmailOn && !whatsappOn) throw new Error("Turn on immediate Gmail and/or WhatsApp text alerts first.");
+  const message = "ORTHO LOGBOOK — LOW STOCK ALERT TEST\nThis is a test text message. When an implant reaches or falls below its configured minimum stock, its name, size, remaining quantity, and minimum quantity will be sent here.\nTest time: " + new Date().toLocaleString();
+  const results: string[] = [];
+  if (gmailOn) {
+    try { await sendLowStockAlertEmail("Ortho Logbook — Low-stock alert test", message, config); results.push("Gmail: sent successfully"); }
+    catch (e: any) { results.push("Gmail: FAILED — " + String(e?.message || e)); }
+  }
+  if (whatsappOn) {
+    try { await sendLowStockAlertWhatsApp(message, config); results.push("WhatsApp: API accepted successfully"); }
+    catch (e: any) { results.push("WhatsApp: FAILED — " + String(e?.message || e)); }
+  }
+  const result = results.join("; ");
+  const state = await getLowStockReportState();
+  await saveState({ ...state, lastStatus: "Immediate alert test: " + result });
+  if (results.some(x => x.includes("FAILED"))) throw new Error(result);
+  return result;
+}
+
 export async function shareLowStockPdfViaWhatsApp(): Promise<void> {
   const config = (await loadLowStockReportConfig()) || {
     schedule: "weekly" as const, emails: "", resendApiKey: "", senderEmail: "",
