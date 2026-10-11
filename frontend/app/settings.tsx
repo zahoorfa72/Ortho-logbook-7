@@ -47,6 +47,7 @@ export default function SettingsScreen() {
     { icon: "list-outline", label: "Procedures", sub: "Add, edit or remove procedure names", to: "/procedures", testID: "settings-procedures" },
     { icon: "options-outline", label: "Patient Fields", sub: "Create extra fields for the patient form", to: "/patient-fields", testID: "settings-patient-fields" },
     { icon: "keypad-outline", label: pinSet ? "Change Admin PIN" : "Set Admin PIN", sub: "Protect exports & settings", to: "/admin-pin", testID: "settings-pin" },
+    { icon: "trash-outline", label: "Trash", sub: "Restore deleted app data within 30 days", to: "/trash", testID: "settings-trash" },
     { icon: "sync-outline", label: "Sync & Backup", sub: "Share data between phones (offline)", to: "/backup-restore", testID: "settings-sync" },
     { icon: "people-outline", label: "User Management", sub: "Add or restrict doctors & staff", to: "/user-management", testID: "settings-users" },
   ];
