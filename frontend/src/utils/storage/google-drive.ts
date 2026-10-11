@@ -1227,7 +1227,11 @@ async function downloadIncrementalWithRecovery(fileId: string, fileName: string)
     if (branding !== undefined) recovered.branding = branding;
     const appSettings = extractCompleteJsonProperty(raw, "appSettings");
     if (appSettings !== undefined && appSettings && typeof appSettings === "object") recovered.appSettings = appSettings;
-    if (!recovered.changedTables.length) recovered.changedTables = knownTables.filter(table => Array.isArray(recovered[table]));
+    if (!recovered.changedTables.length) recovered.changedTables = [
+      ...knownTables.filter(table => Array.isArray(recovered[table])),
+      ...(Object.prototype.hasOwnProperty.call(recovered, "branding") ? ["branding"] : []),
+      ...(Object.prototype.hasOwnProperty.call(recovered, "appSettings") ? ["appSettings"] : []),
+    ];
     if (!recovered.changedTables.some((table: string) => Array.isArray(recovered[table]) || (table === "branding" && Object.prototype.hasOwnProperty.call(recovered, "branding")) || (table === "appSettings" && Object.prototype.hasOwnProperty.call(recovered, "appSettings")))) {
       throw new Error("Incremental backup " + fileName + " is damaged and contains no recoverable complete table. The full backup and other readable updates can still be restored.");
     }
