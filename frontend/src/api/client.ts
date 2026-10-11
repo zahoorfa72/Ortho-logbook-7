@@ -1,6 +1,7 @@
 import * as Crypto from "expo-crypto";
 import { db, initializeDatabase } from "@/src/db/database";
 import { storage } from "@/src/utils/storage";
+import { triggerAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-backup";
 
 const id = () => Crypto.randomUUID();
 const nowIso = () => new Date().toISOString();
@@ -296,6 +297,14 @@ function deletePatientRows(ids: string[], me: any) {
     deletedCount = allowed.length;
   });
 
+  // Explicitly enqueue the related tables after the transaction commits. The
+  // SQLite listener remains a fallback, but this guarantees a patient deletion
+  // cannot depend solely on native change-event delivery on Android.
+  if (deletedCount > 0) {
+    for (const table of ["patients", "trash", "patientImplants", "patientHistory", "inventory", "inventoryMovements"] as const) {
+      triggerAutomaticDriveBackup(table);
+    }
+  }
   return deletedCount;
 }
 
