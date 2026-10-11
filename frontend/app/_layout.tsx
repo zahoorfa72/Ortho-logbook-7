@@ -16,6 +16,7 @@ import { initializeDatabase, repairDatabaseData } from "@/src/db/database";
 import { ThemeProvider } from "@/src/theme";
 import { startAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-backup";
 import { DriveSyncIndicator } from "@/src/utils/storage/drive-sync-status";
+import { LowStockReportRunner } from "@/src/components/LowStockReportRunner";
 
 LogBox.ignoreAllLogs(true);
 
@@ -83,6 +84,7 @@ export default function RootLayout() {
                   <ToastProvider>
                     <StatusBar style="dark" />
                     <DriveSyncIndicator />
+                    <LowStockReportRunner />
 
                   <Stack screenOptions={{ headerShown: false }}>
                     <Stack.Screen name="index" />
@@ -103,6 +105,7 @@ export default function RootLayout() {
                       options={{ headerShown: false }}
                     />
                     <Stack.Screen name="settings" />
+                    <Stack.Screen name="low-stock-reports" />
                     <Stack.Screen name="trash" options={{ headerShown: false }} />
                     <Stack.Screen name="branding" />
                     <Stack.Screen name="admin-pin" />
