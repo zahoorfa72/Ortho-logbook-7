@@ -59,6 +59,9 @@ export class Storage extends StorageBase {
   async removeItem(key: string): Promise<boolean> {
     try {
       await AsyncStorage.removeItem(key);
+      if (key === "ortho_branding") {
+        void import("./drive-auto-backup").then((m) => m.triggerAutomaticDriveBackup("branding")).catch(() => undefined);
+      }
       return true;
     } catch (e) {
       this.warn("removeItem", key, e);
@@ -100,6 +103,9 @@ export class Storage extends StorageBase {
   async secureRemove(key: string): Promise<boolean> {
     try {
       await SecureStore.deleteItemAsync(key);
+      if (key === "ortho_google_drive_client_id" || key === "ortho_google_drive_cloud_project_id" || key === "ortho_drive_account_email") {
+        void import("./drive-auto-backup").then((m) => m.triggerAutomaticDriveBackup("appSettings")).catch(() => undefined);
+      }
       return true;
     } catch (e) {
       this.warn("secureRemove", key, e);
