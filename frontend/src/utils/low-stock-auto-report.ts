@@ -27,7 +27,16 @@ type ReportState = { lastGeneratedAt?: string; lastStatus?: string };
 const CONFIG_KEY = "ortho_low_stock_report_config";
 const STATE_KEY = "ortho_low_stock_report_state";
 export async function loadLowStockReportConfig(): Promise<LowStockReportConfig | null> {
-  try { const raw = await SecureStore.getItemAsync(CONFIG_KEY); return raw ? JSON.parse(raw) as LowStockReportConfig : null; } catch { return null; }
+  try {
+    const raw = await SecureStore.getItemAsync(CONFIG_KEY);
+    if (!raw) return null;
+    const old = JSON.parse(raw) as LowStockReportConfig;
+    const clean: LowStockReportConfig = { ...old, autoEmailEnabled: false, emails: "", resendApiKey: "", senderEmail: "", whatsappNumbers: "", whatsappToken: "", whatsappPhoneNumberId: "", whatsappGraphVersion: "", whatsappTemplateName: "", whatsappTemplateLanguage: "", whatsappMode: "manual" };
+    // Remove legacy online-provider credentials from this device.
+    await SecureStore.setItemAsync(CONFIG_KEY, JSON.stringify(clean));
+    await storage.secureRemove("ortho_stock_ocr_space_api_key").catch(() => {});
+    return clean;
+  } catch { return null; }
 }
 export async function saveLowStockReportConfig(config: LowStockReportConfig): Promise<void> {
   const localOnly = { ...config, autoEmailEnabled: false, resendApiKey: "", senderEmail: "", whatsappToken: "", whatsappPhoneNumberId: "", whatsappNumbers: "", whatsappMode: "manual" as const };
