@@ -597,8 +597,8 @@ function mergeRowsByRecency(currentRows: any[], incomingRows: any[], table: stri
       rows.set(key, row);
       continue;
     }
-    const currentTime = Date.parse(String(current.updated_at || current.created_at || current.date || ""));
-    const incomingTime = Date.parse(String(row.updated_at || row.created_at || row.date || ""));
+    const currentTime = Date.parse(String(current.updated_at || current.created_at || current.deleted_at || current.date || ""));
+    const incomingTime = Date.parse(String(row.updated_at || row.created_at || row.deleted_at || row.date || ""));
     if (Number.isFinite(incomingTime) && (!Number.isFinite(currentTime) || incomingTime > currentTime)) {
       rows.set(key, row);
     }
@@ -643,8 +643,8 @@ function applyIncrementalToMaster(local: any, incoming: any, preserveCurrent = f
       const key = keyForRow(row);
       const old = rows.get(key);
       if (preserveCurrent && old) {
-        const oldTime = Date.parse(String(old.updated_at || old.created_at || old.date || ""));
-        const newTime = Date.parse(String(row.updated_at || row.created_at || row.date || ""));
+        const oldTime = Date.parse(String(old.updated_at || old.created_at || old.deleted_at || old.date || ""));
+        const newTime = Date.parse(String(row.updated_at || row.created_at || row.deleted_at || row.date || ""));
         if (Number.isFinite(newTime) && (!Number.isFinite(oldTime) || newTime > oldTime)) {
           if (table === "patients" &&
               !Object.prototype.hasOwnProperty.call(row, "photo_uri") &&
