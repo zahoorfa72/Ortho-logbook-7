@@ -158,8 +158,8 @@ async function runBackup() {
   }
 }
 
-export function triggerAutomaticDriveBackup(tableName: "branding" | "appSettings" = "branding") {
-  // Explicit callers use this for non-SQLite metadata such as branding and OAuth client configuration.
+export function triggerAutomaticDriveBackup(tableName: typeof ALL_SYNC_TABLES[number] | "branding" | "appSettings" = "branding") {
+  // Explicit callers can enqueue known SQLite tables after critical mutations, or non-SQLite metadata such as branding and OAuth client configuration.
   scheduleBackup(tableName);
 }
 
