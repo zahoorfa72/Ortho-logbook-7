@@ -169,6 +169,57 @@ function restoreStock(p: Patient, userId: string | null) {
   }
 }
 
+type TrashPayload = Record<string, any[]> & { _stockAdjustment?: { inventoryId: string; quantity: number } };
+
+function addTrashEntry(kind: string, title: string, payload: TrashPayload, deletedBy?: string | null) {
+  const deletedAt = nowIso();
+  const expiresAt = new Date(Date.parse(deletedAt) + 30 * 24 * 60 * 60 * 1000).toISOString();
+  db.runSync("INSERT INTO deleted_records (id,kind,title,payload_json,deleted_at,expires_at,deleted_by) VALUES (?,?,?,?,?,?,?)",
+    [id(), kind, title, JSON.stringify(payload), deletedAt, expiresAt, deletedBy || null]);
+}
+
+const TRASH_TABLE_ORDER = ["inventory_categories", "inventory", "patients", "procedures", "patient_custom_fields",
+  "implant_records", "users", "patient_implants", "patient_history", "expenses", "inventory_movements",
+  "inventory_purchase_receipts", "stock_receipts"] as const;
+
+function insertTrashRows(table: string, rows: any[]) {
+  if (!(TRASH_TABLE_ORDER as readonly string[]).includes(table) || !Array.isArray(rows)) return;
+  for (const row of rows) {
+    if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+    const columns = Object.keys(row).filter((key) => /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key));
+    if (!columns.length) continue;
+    db.runSync(`INSERT OR IGNORE INTO ${table} (${columns.join(",")}) VALUES (${columns.map(() => "?").join(",")})`, columns.map((column) => row[column] ?? null));
+  }
+}
+
+function restoreTrashEntry(trashId: string) {
+  const entry = db.getFirstSync<any>("SELECT * FROM deleted_records WHERE id=? LIMIT 1", [trashId]);
+  if (!entry) throw new Error("Trash item not found. It may have expired.");
+  if (Date.parse(String(entry.expires_at || "")) <= Date.now()) {
+    db.runSync("DELETE FROM deleted_records WHERE id=?", [trashId]);
+    throw new Error("This item has expired and was permanently removed.");
+  }
+  let payload: TrashPayload;
+  try { payload = JSON.parse(String(entry.payload_json || "{}")); }
+  catch { throw new Error("This Trash item is damaged and cannot be restored."); }
+  db.withTransactionSync(() => {
+    const stockAdjustment = payload._stockAdjustment;
+    if (stockAdjustment) {
+      const inventory = db.getFirstSync<any>("SELECT id,quantity,minimum_stock FROM inventory WHERE id=? LIMIT 1", [stockAdjustment.inventoryId]);
+      if (!inventory) throw new Error("The original inventory item no longer exists. Restore that inventory item first.");
+      const next = Number(inventory.quantity || 0) + Math.max(0, Number(stockAdjustment.quantity) || 0);
+      db.runSync("UPDATE inventory SET quantity=? WHERE id=?", [next, inventory.id]);
+      syncLowStockState(inventory.id, next, Number(inventory.minimum_stock || 0));
+    }
+    for (const table of TRASH_TABLE_ORDER) {
+      if (table === "stock_receipts" && stockAdjustment) continue;
+      insertTrashRows(table, payload[table] || []);
+    }
+    if (stockAdjustment && Array.isArray(payload.stock_receipts)) insertTrashRows("stock_receipts", payload.stock_receipts);
+    db.runSync("DELETE FROM deleted_records WHERE id=?", [trashId]);
+  });
+}
+
 function deletePatientRows(ids: string[], me: any) {
   const cleanIds = [...new Set(ids.map(String).filter(Boolean))];
   if (!cleanIds.length) return 0;
@@ -194,16 +245,19 @@ function deletePatientRows(ids: string[], me: any) {
     if (!allowedIds.length) return;
 
     const allowedPlaceholders = allowedIds.map(() => "?").join(",");
+    const patientRows = db.getAllSync<any>(`SELECT * FROM patients WHERE id IN (${allowedPlaceholders})`, allowedIds);
+    const implantRows = db.getAllSync<any>(`SELECT * FROM patient_implants WHERE patient_id IN (${allowedPlaceholders})`, allowedIds);
+    const historyRows = db.getAllSync<any>(`SELECT * FROM patient_history WHERE patient_id IN (${allowedPlaceholders})`, allowedIds);
+    addTrashEntry("patients", patientRows.length === 1 ? "Patient: " + (patientRows[0].name || patientRows[0].mr_no || patientRows[0].id) : patientRows.length + " patients",
+      { patients: patientRows, patient_implants: implantRows, patient_history: historyRows }, me.id || null);
     // A hard delete must remove the relational inventory selections as well.
     // Otherwise deleted patients can still appear in inventory usage/backup data.
     db.runSync(
       `DELETE FROM patient_implants WHERE patient_id IN (${allowedPlaceholders})`,
       allowedIds,
     );
-    db.runSync(
-      `DELETE FROM patients WHERE id IN (${allowedPlaceholders})`,
-      allowedIds,
-    );
+    db.runSync(`DELETE FROM patients WHERE id IN (${allowedPlaceholders})`, allowedIds);
+    db.runSync(`DELETE FROM patient_history WHERE patient_id IN (${allowedPlaceholders})`, allowedIds);
 
     const remaining = Number(
       db.getFirstSync<any>(
@@ -230,6 +284,14 @@ function deleteInventoryRows(ids: string[]) {
       cleanIds,
     );
     if (!rows.length) return;
+
+    const inventoryRows = db.getAllSync<any>(`SELECT * FROM inventory WHERE id IN (${placeholders})`, cleanIds);
+    const movementRows = db.getAllSync<any>(`SELECT * FROM inventory_movements WHERE inventory_id IN (${placeholders})`, cleanIds);
+    const stockReceiptRows = db.getAllSync<any>(`SELECT * FROM stock_receipts WHERE inventory_id IN (${placeholders})`, cleanIds);
+    const legacyReceiptRows = db.getAllSync<any>(`SELECT * FROM inventory_purchase_receipts WHERE inventory_id IN (${placeholders})`, cleanIds);
+    const implantRows = db.getAllSync<any>(`SELECT * FROM patient_implants WHERE inventory_id IN (${placeholders})`, cleanIds);
+    addTrashEntry("inventory", inventoryRows.length === 1 ? "Inventory: " + inventoryRows[0].name : inventoryRows.length + " inventory items",
+      { inventory: inventoryRows, inventory_movements: movementRows, stock_receipts: stockReceiptRows, inventory_purchase_receipts: legacyReceiptRows, patient_implants: implantRows });
 
     // Detach patient selections first so deleted inventory IDs can never
     // resurrect through relational/backup data.
@@ -442,6 +504,11 @@ export const api = {
     // Normalize offline API paths so trailing slashes/query strings cannot
     // accidentally bypass the local SQLite endpoint handlers.
     const normalizedPath = normalizeRoute(path);
+    if (normalizedPath === "/trash") {
+      await requireAdmin();
+      db.runSync("DELETE FROM deleted_records WHERE expires_at <= ?", [nowIso()]);
+      return db.getAllSync<any>("SELECT id,kind,title,deleted_at,expires_at,deleted_by FROM deleted_records ORDER BY deleted_at DESC") as any;
+    }
     if (normalizedPath === "/me") {
       const me = await currentUserRow();
       return (me ? { id: me.id, role: me.role, canEditPatients: Number(me.can_edit_patients) === 1 } : null) as any;
@@ -637,6 +704,13 @@ export const api = {
   async post<T = any>(path: string, body?: any): Promise<T> {
     initializeDatabase();
     const normalizedPath = normalizeRoute(path);
+    if (normalizedPath === "/trash/restore") {
+      await requireAdmin();
+      const trashId = String(body?.id || "");
+      if (!trashId) throw new Error("Choose a Trash item to restore.");
+      restoreTrashEntry(trashId);
+      return { success: true } as any;
+    }
 
     const receiptDelete=normalizedPath.match(/^\/stock-receipts\/([^/]+)\/delete$/);
     if(receiptDelete){
@@ -652,6 +726,9 @@ export const api = {
       const next=current-qty;
       const uid=await currentUser();
       db.withTransactionSync(()=>{
+        const trashReceipt = db.getFirstSync<any>("SELECT * FROM stock_receipts WHERE id=? LIMIT 1",[rid]);
+        if (trashReceipt) addTrashEntry("stock-receipt", "Received stock: " + (trashReceipt.category || trashReceipt.name || trashReceipt.size || rid),
+          { stock_receipts: [trashReceipt], _stockAdjustment: { inventoryId: String(trashReceipt.inventory_id), quantity: qty } }, uid);
         db.runSync("DELETE FROM stock_receipts WHERE id=?",[rid]);
         db.runSync("UPDATE inventory SET quantity=? WHERE id=?",[next,inventory.id]);
         const aggregateMin=Number(db.getFirstSync<any>(
@@ -793,7 +870,8 @@ export const api = {
       const ids: string[] = Array.isArray(body?.ids) ? Array.from(new Set<string>((body.ids as unknown[]).map((value) => String(value)).filter((value) => value.length > 0))) : [];
       if(!ids.length) return {success:true,deleted:0} as any;
       const placeholders=ids.map(()=>"?").join(",");
-      const rows=db.getAllSync<any>(`SELECT id FROM implant_records WHERE id IN (${placeholders})`,ids);
+      const rows=db.getAllSync<any>(`SELECT * FROM implant_records WHERE id IN (${placeholders})`,ids);
+      if (rows.length) addTrashEntry("implant-records", rows.length === 1 ? "Implant record: " + rows[0].name : rows.length + " implant records", { implant_records: rows });
       db.runSync(`DELETE FROM implant_records WHERE id IN (${placeholders})`,ids);
       return {success:true,deleted:rows.length} as any;
     }
@@ -874,6 +952,13 @@ export const api = {
   async put<T = any>(path: string, body?: any): Promise<T> {
     initializeDatabase();
     const normalizedPath = normalizeRoute(path);
+    const trashMatch = normalizedPath.match(/^\/trash\/(.+)$/);
+    if (trashMatch) {
+      await requireAdmin();
+      const trashId = decodeURIComponent(trashMatch[1]);
+      db.runSync("DELETE FROM deleted_records WHERE id=?", [trashId]);
+      return { success: true } as any;
+    }
     const pm = normalizedPath.match(/^\/patients\/(.+)$/);
     if (pm) {
       const existing = db.getFirstSync<any>("SELECT created_by FROM patients WHERE id=?", [pm[1]]);
@@ -1100,20 +1185,36 @@ syncLowStockState(targetId, quantity, minimumStock);
       return { success: true } as any;
     }
     const pcf=normalizedPath.match(/^\/patient-custom-fields\/(.+)$/);
-    if(pcf){ await requireAdmin(); db.runSync("DELETE FROM patient_custom_fields WHERE id=?",[pcf[1]]); return {success:true} as any; }
+    if(pcf){
+      await requireAdmin();
+      const row=db.getFirstSync<any>("SELECT * FROM patient_custom_fields WHERE id=?",[pcf[1]]);
+      if(row) addTrashEntry("patient-field","Patient field: "+row.label,{patient_custom_fields:[row]});
+      db.runSync("DELETE FROM patient_custom_fields WHERE id=?",[pcf[1]]);
+      return {success:true} as any;
+    }
     const ir=normalizedPath.match(/^\/implant-records\/(.+)$/);
-    if(ir){ await requireAdmin(); db.runSync("DELETE FROM implant_records WHERE id=?",[ir[1]]); return {success:true} as any; }
+    if(ir){
+      await requireAdmin();
+      const row=db.getFirstSync<any>("SELECT * FROM implant_records WHERE id=?",[ir[1]]);
+      if(row) addTrashEntry("implant-record","Implant record: "+row.name,{implant_records:[row]});
+      db.runSync("DELETE FROM implant_records WHERE id=?",[ir[1]]);
+      return {success:true} as any;
+    }
     const cat = normalizedPath.match(/^\/inventory-categories\/(.+)$/);
     if (cat) {
       await requireAdmin();
       const count = db.getFirstSync<any>("SELECT COUNT(*) AS n FROM inventory WHERE category_id=?",[cat[1]]);
       if (Number(count?.n) > 0) throw new Error("Cannot delete a category that still contains items. Move or delete its items first.");
+      const row=db.getFirstSync<any>("SELECT * FROM inventory_categories WHERE id=?",[cat[1]]);
+      if(row) addTrashEntry("inventory-category","Inventory category: "+row.name,{inventory_categories:[row]});
       db.runSync("DELETE FROM inventory_categories WHERE id=?",[cat[1]]);
       return {success:true} as any;
     }
     const proc = normalizedPath.match(/^\/procedures\/(.+)$/);
     if (proc) {
       await requireAdmin();
+      const row=db.getFirstSync<any>("SELECT * FROM procedures WHERE id=?", [proc[1]]);
+      if(row) addTrashEntry("procedure","Procedure: "+row.name,{procedures:[row]});
       db.runSync("DELETE FROM procedures WHERE id=?", [proc[1]]);
       return { success: true } as any;
     }
