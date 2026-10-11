@@ -53,6 +53,15 @@ export default function PatientForm() {
   const [implantSearch, setImplantSearch] = useState("");
 
   const { data: patients } = useQuery<Patient[]>({ queryKey: ["patients"], queryFn: () => api.get("/patients") });
+  const { data: trashedPatientMatch, isFetching: checkingTrashMatch } = useQuery<{
+    id: string; title: string; deleted_at: string; expires_at: string; patient: { mrNo: string; name: string };
+  } | null>({
+    queryKey: ["trash-patient-match", p.mrNo.trim().toLocaleLowerCase(), p.name.trim().toLocaleLowerCase()],
+    queryFn: () => api.get("/trash/patient-match?mrNo=" + encodeURIComponent(p.mrNo.trim()) + "&name=" + encodeURIComponent(p.name.trim())),
+    enabled: !isEdit && user?.role === "admin" && !!p.mrNo.trim() && !!p.name.trim(),
+    staleTime: 0,
+    retry: false,
+  });
   const { data: procedures } = useQuery<Procedure[]>({ queryKey: ["procedures"], queryFn: () => api.get("/procedures") });
   const { data: customFields = [] } = useQuery<any[]>({
     queryKey: ["patient-custom-fields"],
@@ -516,6 +525,24 @@ export default function PatientForm() {
     onError: (e: any) => toast(e?.message || "Could not save record.", "error"),
   });
 
+  const restoreDeletedPatient = useMutation({
+    mutationFn: () => {
+      if (!trashedPatientMatch?.id) throw new Error("No matching deleted patient was found.");
+      return api.post("/trash/restore-patient", { id: trashedPatientMatch.id, patientDate: today() });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["patients"] });
+      qc.invalidateQueries({ queryKey: ["trash"] });
+      qc.invalidateQueries({ queryKey: ["inventory"] });
+      qc.invalidateQueries({ queryKey: ["stats"] });
+      qc.invalidateQueries({ queryKey: ["patient-history"] });
+      qc.invalidateQueries({ queryKey: ["trash-patient-match"] });
+      toast("Deleted patient restored with today's date and all saved details.", "success");
+      router.back();
+    },
+    onError: (e: any) => toast(e?.message || "Could not restore the deleted patient.", "error"),
+  });
+
   const del = useMutation({
     mutationFn: () => api.del("/patients/" + id),
     onSuccess: () => {
@@ -559,6 +586,29 @@ export default function PatientForm() {
         bottomOffset={100}
         keyboardShouldPersistTaps="handled"
       >
+        {!isEdit && trashedPatientMatch?.id ? (
+          <View style={styles.restorePatientBanner} testID="matching-trash-patient-banner">
+            <View style={styles.restorePatientCopy}>
+              <Text style={styles.restorePatientTitle}>Matching patient found in Trash</Text>
+              <Text style={styles.restorePatientText}>
+                MR {trashedPatientMatch.patient.mrNo} · {trashedPatientMatch.patient.name}
+              </Text>
+              <Text style={styles.restorePatientText}>
+                Restore the original patient with all saved details and photos. Only the patient date will be changed to today.
+              </Text>
+            </View>
+            <PrimaryButton
+              title={restoreDeletedPatient.isPending ? "Restoring…" : "Restore patient"}
+              onPress={() => Alert.alert(
+                "Restore deleted patient?",
+                "All saved patient details, photos, procedures and linked records will be restored. The patient date will be set to today.",
+                [{ text: "Cancel", style: "cancel" }, { text: "Restore", onPress: () => restoreDeletedPatient.mutate() }],
+              )}
+              disabled={restoreDeletedPatient.isPending}
+              testID="restore-matching-trash-patient"
+            />
+          </View>
+        ) : null}
         {duplicate ? (
           <View style={styles.duplicateBanner} testID="duplicate-banner">
             <Ionicons name="repeat" size={20} color={colors.onWarning} />
@@ -977,6 +1027,18 @@ const useStyles = makeStyles((colors) => ({
   quickChipText: { fontFamily: fontFamily.medium, fontSize: fontSize.sm, color: colors.onSurfaceTertiary },
   history: { flexDirection: "row", alignItems: "center", gap: spacing.sm, padding: spacing.lg, backgroundColor: colors.surfaceTertiary, borderRadius: radius.md, marginTop: spacing.md },
   historyText: { fontFamily: fontFamily.semibold, color: colors.brandPrimary },
+  restorePatientBanner: {
+    gap: spacing.md,
+    backgroundColor: colors.surfaceSecondary,
+    borderWidth: 1,
+    borderColor: colors.brandPrimary,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  restorePatientCopy: { gap: spacing.xs },
+  restorePatientTitle: { fontFamily: fontFamily.bold, fontSize: fontSize.base, color: colors.brandPrimary },
+  restorePatientText: { fontFamily: fontFamily.regular, fontSize: fontSize.sm, color: colors.onSurface, lineHeight: 20 },
   duplicateBanner: {
     flexDirection: "row",
     alignItems: "flex-start",
