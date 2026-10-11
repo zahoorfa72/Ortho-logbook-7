@@ -117,11 +117,11 @@ async function sendEmail(pdf: PdfResult, config: LowStockReportConfig) {
   const content = await readPdfBase64(pdf.uri);
   const recipients = config.emails.split(/[;,\n]/).map(x => x.trim()).filter(Boolean);
   if (!recipients.length) throw new Error("Enter at least one recipient email address.");
-  const invalid = recipients.filter(address => !/^[^\\s<>(),;:\\[\\]@]+@[^\\s<>(),;:\\[\\]@]+\\.[^\\s<>(),;:\\[\\]@]+$/.test(address));
+  const invalid = recipients.filter(address => !/^[^\s<>(),;:[\]@]+@[^\s<>(),;:[\]@]+\.[^\s<>(),;:[\]@]+$/.test(address));
   if (invalid.length) throw new Error("Invalid recipient email address(es): " + invalid.join(", ") + ". Use plain email addresses separated by commas or semicolons.");
   const boundary = "ortho_logbook_" + Date.now().toString(36);
   const subject = `Low Stock Report - ${pdf.periodStart.slice(0,10)} to ${pdf.periodEnd.slice(0,10)}`;
-  const pdfLines = content.match(/.{1,76}/g)?.join("\\r\\n") || content;
+  const pdfLines = content.match(/.{1,76}/g)?.join("\r\n") || content;
   const rawMessage = [
     `To: ${recipients.join(", ")}`,
     `Subject: ${subject}`,
@@ -141,7 +141,7 @@ async function sendEmail(pdf: PdfResult, config: LowStockReportConfig) {
     pdfLines,
     `--${boundary}--`,
     "",
-  ].join("\\r\\n");
+  ].join("\r\n");
   let encoded: string;
   try { encoded = btoa(rawMessage).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
   catch { throw new Error("Could not encode the Gmail message on this device."); }
@@ -166,8 +166,8 @@ async function sendWhatsApp(pdf: PdfResult, config: LowStockReportConfig) {
   const upload = await fetch(`${base}/media`, { method: "POST", headers: { Authorization: `Bearer ${config.whatsappToken.trim()}` }, body: form });
   const media = await upload.json().catch(() => ({}));
   if (!upload.ok || !(media as any).id) throw new Error(String((media as any)?.error?.message || `WhatsApp PDF upload failed (HTTP ${upload.status})`));
-  const recipients = [...new Set(config.whatsappNumbers.split(/[;,\\n]/).map(x => x.trim().replace(/^\\+/, "").replace(/[\\s().-]/g, "")).filter(Boolean))];
-  if (!recipients.length || recipients.some(x => !/^\\d{8,15}$/.test(x))) throw new Error("Enter WhatsApp recipient numbers with country code, digits only (for example 923001234567).");
+  const recipients = [...new Set(config.whatsappNumbers.split(/[;,\n]/).map(x => x.trim().replace(/^\+/, "").replace(/[\s().-]/g, "")).filter(Boolean))];
+  if (!recipients.length || recipients.some(x => !/^\d{8,15}$/.test(x))) throw new Error("Enter WhatsApp recipient numbers with country code, digits only (for example 923001234567).");
   for (const to of recipients) {
     const response = await fetch(`${base}/messages`, {
       method: "POST",
