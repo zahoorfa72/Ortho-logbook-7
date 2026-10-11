@@ -290,6 +290,11 @@ export async function restoreGoogleDriveBackupById(fileId: string) {
             merged.set(key, row);
           }
         }
+        // Apply only explicitly parsed deletion tombstones from a damaged journal;
+        // missing rows in a truncated array alone are not proof of deletion.
+        for (const deletedId of (Array.isArray(delta.deletedIds?.[table]) ? delta.deletedIds[table] : [])) {
+          merged.delete("id:" + String(deletedId));
+        }
         composed[table] = Array.from(merged.values());
       } else if (delta._rowDelta === true && !(Array.isArray(delta.fullTables) && delta.fullTables.includes(table))) {
         const merged = new Map<string, any>();
@@ -1613,6 +1618,11 @@ export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) 
               } else {
                 merged.set(key, row);
               }
+            }
+            // Apply explicit tombstones recovered as a complete JSON property.
+            // A missing row in a damaged/truncated array is not itself a tombstone.
+            for (const deletedId of (Array.isArray(delta.deletedIds?.[table]) ? delta.deletedIds[table] : [])) {
+              merged.delete("id:" + String(deletedId));
             }
             composed[table] = Array.from(merged.values());
           } else {
