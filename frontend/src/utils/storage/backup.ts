@@ -521,7 +521,7 @@ function restoreJsonArray(value:any){try{const parsed=JSON.parse(String(value ??
 
 export async function restoreBackup(backup:BackupData){
  initializeDatabase({ skipInventoryReset: true });
- if(!backup||![2,3,4,5,6,7,8].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
+ if(!backup||![2,3,4,5,6,7,8,9].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
  const patients=restoreArray((backup as any).patients);
  const procedures=restoreArray((backup as any).procedures);
  const inventoryCategories=restoreArray((backup as any).inventoryCategories);
@@ -725,7 +725,7 @@ export async function restoreBackup(backup:BackupData){
 //   matching name + category + size and summing quantities.
 export async function mergeBackup(backup: BackupData) {
  initializeDatabase({ skipInventoryReset: true });
- if(!backup||![2,3,4,5,6,7,8].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
+ if(!backup||![2,3,4,5,6,7,8,9].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
  const stats = { patients: 0, procedures: 0, inventory: 0, inventoryCategories: 0, patientImplants: 0, expenses: 0, users: 0, patientHistory: 0, inventoryMovements: 0, stockReceipts: 0 };
  db.withTransactionSync(() => {
   const has = (table: string, id: string) => !!db.getFirstSync<any>(`SELECT id FROM ${table} WHERE id=?`, [id]);
