@@ -5,6 +5,7 @@ import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import { recognizeText } from "expo-ocr-kit";
+import { convertPage, getPdfInfo } from "@uzimandias/react-native-pdf-to-image";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -219,13 +220,35 @@ export default function StockScreen(){
       const asset=picked.assets[0];
       if(!asset?.uri){toast("Could not open the selected invoice.","error");return;}
       const isPdf=String(asset.mimeType||"").toLowerCase().includes("pdf")||String(asset.name||"").toLowerCase().endsWith(".pdf");
-      if(isPdf){toast("This offline OCR engine currently reads images only. Please choose a clear invoice photo or screenshot; PDF page-to-image OCR still needs to be added.","error");return;}
-      const result=await recognizeText(asset.uri);
-      const extracted=String(result?.text||"").trim();
-      if(extracted.length<5){toast("No readable invoice text found. Try a sharper, brighter photo with the full bill visible.","error");return;}
+      let extracted="";
+      let billImage=asset.uri;
+      if(isPdf){
+        const info=await getPdfInfo(asset.uri);
+        const pageCount=Math.max(0,Number(info?.pageCount)||0);
+        if(!pageCount){toast("The selected PDF has no readable pages or is password protected.","error");return;}
+        const pagesToScan=Math.min(pageCount,8);
+        const pageText:string[]=[];
+        for(let page=0;page<pagesToScan;page++){
+          const rendered=await convertPage(asset.uri,page,{format:"jpeg",scale:1.6});
+          const pageUri=String((rendered as any)?.uri||"");
+          if(!pageUri)continue;
+          const result=await recognizeText(pageUri);
+          const text=String(result?.text||"").trim();
+          if(text)pageText.push("Page "+(page+1)+":\n"+text);
+          if(page===0){
+            try{const base64=await FileSystem.readAsStringAsync(pageUri,{encoding:FileSystem.EncodingType.Base64});billImage="data:image/jpeg;base64,"+base64;}catch{billImage=pageUri;}
+          }
+        }
+        extracted=pageText.join("\n\n");
+        if(pageCount>pagesToScan)toast("Scanned the first 8 pages of this PDF. Check the suggestions before saving.","info");
+      }else{
+        const result=await recognizeText(asset.uri);
+        extracted=String(result?.text||"").trim();
+        const compressed=await ImageManipulator.manipulateAsync(asset.uri,[{resize:{width:1600}}],{compress:0.5,format:ImageManipulator.SaveFormat.JPEG,base64:true}).catch(()=>null as any);
+        billImage=compressed?.base64?"data:image/jpeg;base64,"+compressed.base64:asset.uri;
+      }
+      if(extracted.length<5){toast("No readable invoice text found. Try a clearer, brighter photo/PDF with the full invoice visible.","error");return;}
       const suggestions=parseInvoiceOcr(extracted,stockCategories,stockInventory);
-      const compressed=await ImageManipulator.manipulateAsync(asset.uri,[{resize:{width:1600}}],{compress:0.5,format:ImageManipulator.SaveFormat.JPEG,base64:true}).catch(()=>null as any);
-      const billImage=compressed?.base64?"data:image/jpeg;base64,"+compressed.base64:asset.uri;
       setStockRows(suggestions.length?suggestions.map(r=>({...r,billImage})):[{...newRow(),billImage}]);
       setEditingReceipt(null);
       setDescription("OCR invoice: "+(asset.name||"stock invoice")+"\n\nExtracted text:\n"+extracted);
@@ -317,9 +340,9 @@ export default function StockScreen(){
 
           <Pressable disabled={ocrBusy||saveStock.isPending} style={[styles.attachBtn,(ocrBusy||saveStock.isPending)&&{opacity:0.6}]} onPress={()=>{void scanInvoice();}}>
             {ocrBusy?<ActivityIndicator size="small" color={colors.brandPrimary}/>:<Ionicons name="document-text-outline" size={19} color={colors.brandPrimary}/>}
-            <Text style={styles.attachText}>{ocrBusy?"Scanning invoice…":"Scan invoice image (on-device OCR)"}</Text>
+            <Text style={styles.attachText}>{ocrBusy?"Scanning invoice…":"Scan invoice image or PDF (on-device OCR)"}</Text>
           </Pressable>
-          <Text style={[styles.stockHint,{marginTop:spacing.xs,marginBottom:spacing.sm}]}>On-device OCR runs without an OCR API key. Review spelling, size and quantity suggestions; scanned PDFs are not yet supported by this local OCR engine.</Text>
+          <Text style={[styles.stockHint,{marginTop:spacing.xs,marginBottom:spacing.sm}]}>On-device OCR runs without an OCR API key. Images and up to 8 PDF pages are scanned locally. Review spelling, size and quantity suggestions before saving.</Text>
           {stockRows.map((row,i)=><View key={row.id} style={styles.stockCard}>
             <View style={styles.stockCardHead}>
               <Text style={styles.stockCardTitle}>Stock item {i+1}</Text>
