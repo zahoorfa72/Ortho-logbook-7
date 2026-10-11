@@ -610,7 +610,7 @@ function applyIncrementalToMaster(local: any, incoming: any, preserveCurrent = f
   const tables = [
     "patients", "procedures", "inventoryCategories", "inventory", "patientImplants",
     "patientCustomFields", "implantRecords", "expenses", "users", "patientHistory",
-    "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts",
+    "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts", "trash",
   ];
   const changed = new Set<string>(Array.isArray(incoming.changedTables) ? incoming.changedTables : []);
   const full = new Set<string>(Array.isArray(incoming.fullTables) ? incoming.fullTables : []);
@@ -1086,7 +1086,7 @@ async function downloadIncrementalWithRecovery(fileId: string, fileName: string)
     if (app !== "Ortho Logbook") {
       throw new Error("Incremental backup " + fileName + " could not be recovered. Its contents are unavailable or corrupted.");
     }
-    const knownTables = ["patients","procedures","inventoryCategories","inventory","patientImplants","patientCustomFields","implantRecords","expenses","users","patientHistory","inventoryMovements","inventoryPurchaseReceipts","stockReceipts"];
+    const knownTables = ["patients","procedures","inventoryCategories","inventory","patientImplants","patientCustomFields","implantRecords","expenses","users","patientHistory","inventoryMovements","inventoryPurchaseReceipts","stockReceipts","trash"];
     const recovered: any = { app, incremental: true, _recoveredFromDamage: true, changedTables: Array.isArray(changedTables) ? changedTables : [], _rowDelta: rowDelta, deletedIds: deletedIds && typeof deletedIds === "object" ? deletedIds : {}, fullTables: Array.isArray(fullTables) ? fullTables : [] };
     for (const table of knownTables) {
       const value = extractCompleteJsonProperty(raw, table);
