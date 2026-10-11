@@ -100,7 +100,7 @@ async function sendEmail(pdf: PdfResult, config: LowStockReportConfig) {
   if (!config.emails?.trim()) throw new Error("Connect Gmail and enter at least one recipient email address.");
   const token = await getGoogleGmailAccessToken();
   const content = await readPdfBase64(pdf.uri);
-  const recipients = config.emails.split(/[;,\\n]/).map(x => x.trim()).filter(Boolean);
+  const recipients = config.emails.split(/[;,\n]/).map(x => x.trim()).filter(Boolean);
   if (!recipients.length) throw new Error("Enter at least one recipient email address.");
   const boundary = "ortho_logbook_" + Date.now().toString(36);
   const subject = `Low Stock Report - ${pdf.periodStart.slice(0,10)} to ${pdf.periodEnd.slice(0,10)}`;
