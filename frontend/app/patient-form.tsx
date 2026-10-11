@@ -13,6 +13,7 @@ import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api } from "@/src/api/client";
+import { checkAndSendImmediateLowStockAlerts } from "@/src/utils/low-stock-auto-report";
 import { useAuth } from "@/src/auth/AuthContext";
 import { AutocompleteField, type Suggestion } from "@/src/components/AutocompleteField";
 import { Field } from "@/src/components/Field";
@@ -518,6 +519,7 @@ export default function PatientForm() {
       return isEdit ? api.put("/patients/" + id, payload) : api.post("/patients", payload);
     },
     onSuccess: () => {
+      void checkAndSendImmediateLowStockAlerts().catch(() => {});
       qc.invalidateQueries({ queryKey: ["patients"] });
       qc.invalidateQueries({ queryKey: ["inventory"] });
       qc.invalidateQueries({ queryKey: ["stats"] });
