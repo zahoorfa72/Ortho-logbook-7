@@ -117,7 +117,7 @@ async function sendEmail(pdf: PdfResult, config: LowStockReportConfig) {
   const content = await readPdfBase64(pdf.uri);
   const recipients = config.emails.split(/[;,\n]/).map(x => x.trim()).filter(Boolean);
   if (!recipients.length) throw new Error("Enter at least one recipient email address.");
-  const invalid = recipients.filter(address => !/^[^\s<>(),;:[\]@]+@[^\s<>(),;:[\]@]+\.[^\s<>(),;:[\]@]+$/.test(address));
+  const invalid = recipients.filter(address => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address));
   if (invalid.length) throw new Error("Invalid recipient email address(es): " + invalid.join(", ") + ". Use plain email addresses separated by commas or semicolons.");
   const boundary = "ortho_logbook_" + Date.now().toString(36);
   const subject = `Low Stock Report - ${pdf.periodStart.slice(0,10)} to ${pdf.periodEnd.slice(0,10)}`;
