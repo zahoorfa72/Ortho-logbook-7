@@ -7,9 +7,10 @@ import { defaultBranding } from "@/src/theme";
 import { storage } from "@/src/utils/storage";
 import { buildInventoryHtml } from "@/src/utils/pdf";
 
-export type LowStockSchedule = "weekly" | "15days" | "monthly";
+export type LowStockSchedule = "weekly" | "15days" | "monthly" | "onOpen" | "fixedDate";
 export type LowStockReportConfig = {
   schedule: LowStockSchedule;
+  fixedDate?: string;
   autoEmailEnabled?: boolean;
   emails: string;
   resendApiKey: string;
@@ -145,7 +146,16 @@ export async function attemptDueLowStockReport(): Promise<string> {
   if (!config) return "Report delivery is not configured.";
   const state = await getLowStockReportState();
   const now = Date.now();
-  const due = (last?: string) => !last || now - new Date(last).getTime() >= dueMs(config.schedule);
+  const due = (last?: string) => {
+    if (config.schedule === "onOpen") return true;
+    if (config.schedule === "fixedDate") {
+      const target = String(config.fixedDate || "").trim();
+      if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(target)) return false;
+      const targetTime = new Date(target + "T00:00:00").getTime();
+      return Number.isFinite(targetTime) && now >= targetTime && (!last || new Date(last).getTime() < targetTime);
+    }
+    return !last || now - new Date(last).getTime() >= dueMs(config.schedule);
+  };
   const emailDue = config.autoEmailEnabled !== false && parseList(config.emails).length > 0 && Boolean(config.resendApiKey && config.senderEmail) && due(state.emailLastSentAt);
   const whatsappDue = config.whatsappMode !== "manual" && parseList(config.whatsappNumbers).length > 0 && Boolean(config.whatsappToken && config.whatsappPhoneNumberId) && due(state.whatsappLastSentAt);
   if (!emailDue && !whatsappDue) return "No scheduled low-stock report is due.";
