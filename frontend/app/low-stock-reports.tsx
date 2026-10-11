@@ -6,10 +6,10 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "@/src/auth/AuthContext";
 import { useToast } from "@/src/components/toast";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
-import { attemptDueLowStockReport, getLowStockReportState, loadLowStockReportConfig, saveLowStockReportConfig, shareLowStockPdfViaWhatsApp, type LowStockReportConfig, type LowStockSchedule } from "@/src/utils/low-stock-auto-report";
+import { getLowStockReportState, loadLowStockReportConfig, saveLowStockReportConfig, shareLowStockPdfViaWhatsApp, testLowStockReportDeliveryNow, type LowStockReportConfig, type LowStockSchedule } from "@/src/utils/low-stock-auto-report";
 import { connectGoogleGmailAccount, getConnectedGoogleAccount } from "@/src/utils/storage/google-drive";
 
-const blank = (): LowStockReportConfig => ({ schedule: "weekly", fixedDate: "", autoEmailEnabled: false, emailEnabled: false, emails: "", resendApiKey: "", senderEmail: "", whatsappNumbers: "", whatsappToken: "", whatsappPhoneNumberId: "", whatsappGraphVersion: "v23.0", whatsappMode: "manual", savedAt: "" });
+const blank = (): LowStockReportConfig => ({ schedule: "weekly", fixedDate: "", reportFromDate: "", reportToDate: "", autoEmailEnabled: false, emailEnabled: false, emails: "", resendApiKey: "", senderEmail: "", whatsappNumbers: "", whatsappToken: "", whatsappPhoneNumberId: "", whatsappGraphVersion: "v23.0", whatsappMode: "manual", savedAt: "" });
 export default function LowStockReportsScreen() {
   const { user } = useAuth();
   const { colors } = useTheme();
@@ -31,13 +31,14 @@ export default function LowStockReportsScreen() {
   })(); }, []);
   const update = (patch: Partial<LowStockReportConfig>) => setConfig(c => ({ ...c, ...patch }));
   const save = async () => {
-    if (config.schedule === "fixedDate" && !/^\d{4}-\d{2}-\d{2}$/.test(String(config.fixedDate || "").trim())) { toast("Enter the date as YYYY-MM-DD.", "error"); return false; }
+    if (config.schedule === "fixedDate" && !/^\d{4}-\d{2}-\d{2}$/.test(String(config.fixedDate || "").trim())) { toast("Enter the trigger date as YYYY-MM-DD.", "error"); return false; }
+    if (config.schedule === "fixedDate") { const from = String(config.reportFromDate || "").trim(); const to = String(config.reportToDate || "").trim(); if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) { toast("Enter both report From date and To date as YYYY-MM-DD.", "error"); return false; } if (from > to) { toast("Report From date must be on or before To date.", "error"); return false; } }
     if (config.autoEmailEnabled && !config.emails.trim() && !(config.whatsappMode === "meta" && config.whatsappNumbers.trim())) { toast("Add at least one email or WhatsApp recipient before enabling automatic sending.", "error"); return false; }
     try { const next = { ...config, savedAt: new Date().toISOString() }; await saveLowStockReportConfig(next); setConfig(next); toast("Low-stock delivery settings saved securely on this device.", "success"); return true; }
     catch { toast("Could not save settings on this device.", "error"); return false; }
   };
   const generate = async () => { setBusy(true); try { await save(); await shareLowStockPdfViaWhatsApp(); const s = await getLowStockReportState(); setStatus(s.lastStatus || "Report generated."); setLastGenerated(s.lastGeneratedAt ? new Date(s.lastGeneratedAt).toLocaleString() : ""); toast("Period-filtered PDF created. Choose an app to share it.", "success"); } catch (e: any) { Alert.alert("Could not create report", String(e?.message || e)); } finally { setBusy(false); } };
-  const testAutomatic = async () => { setBusy(true); try { if (!(await save())) return; const result = await attemptDueLowStockReport(); setStatus(result); toast(result, result.toLowerCase().includes("sent") ? "success" : "info"); } catch (e:any) { const message = String(e?.message || e); setStatus("Automatic delivery failed: " + message); Alert.alert("Automatic delivery failed", message); } finally { setBusy(false); } };
+  const testAutomatic = async () => { setBusy(true); try { if (!(await save())) return; const result = await testLowStockReportDeliveryNow(); setStatus(result); toast(result, "success"); } catch (e:any) { const message = String(e?.message || e); setStatus(message); Alert.alert("Delivery test result", message); } finally { setBusy(false); } };
   if (user?.role !== "admin") return <View style={[styles.container, { paddingTop: insets.top, justifyContent: "center", alignItems: "center" }]}><Text style={styles.title}>Administrator only</Text></View>;
   const field = (label: string, value: string, onChangeText: (v: string) => void, placeholder: string, secret = false) => <View style={styles.field}><Text style={styles.label}>{label}</Text><TextInput value={value} onChangeText={onChangeText} placeholder={placeholder} placeholderTextColor={colors.muted} autoCapitalize="none" autoCorrect={false} secureTextEntry={secret} style={styles.input} /></View>;
   const toggle = (label: string, active: boolean, onPress: () => void) => <Pressable onPress={onPress} style={[styles.toggle, active && { borderColor: colors.brandPrimary, backgroundColor: colors.brandTertiary }]}><View style={[styles.check, active && { backgroundColor: colors.brandPrimary }]}>{active ? <Ionicons name="checkmark" size={15} color={colors.onBrandPrimary} /> : null}</View><Text style={styles.scheduleText}>{label}</Text></Pressable>;
@@ -49,7 +50,7 @@ export default function LowStockReportsScreen() {
       <Text style={styles.section}>Automatic trigger</Text>
       {toggle("Enable automatic report delivery", !!config.autoEmailEnabled, () => update({ autoEmailEnabled: !config.autoEmailEnabled }))}
       <View style={styles.scheduleRow}>{schedules.map(s => <Pressable key={s.value} onPress={() => update({ schedule: s.value })} style={[styles.schedule, config.schedule === s.value && { borderColor: colors.brandPrimary, backgroundColor: colors.brandTertiary }]}><Text style={[styles.scheduleText, config.schedule === s.value && { color: colors.brandPrimary }]}>{s.label}</Text></Pressable>)}</View>
-      {config.schedule === "fixedDate" && field("Trigger date (YYYY-MM-DD)", config.fixedDate || "", v => update({ fixedDate: v }), "2026-12-01")}
+      {config.schedule === "fixedDate" && <><Text style={styles.help}>The trigger date decides when the report is sent. The From/To dates decide which stock-movement dates are included in its PDF.</Text>{field("Automatic trigger date (YYYY-MM-DD)", config.fixedDate || "", v => update({ fixedDate: v }), "2026-12-01")}{field("Report From date (YYYY-MM-DD)", config.reportFromDate || "", v => update({ reportFromDate: v }), "2026-10-01")}{field("Report To date (YYYY-MM-DD)", config.reportToDate || "", v => update({ reportToDate: v }), "2026-10-12")}</>}
       <Text style={styles.help}>Automatic checks run when the app starts/opens. Android may delay background work; this version cannot guarantee a send at an exact time while the app is closed.</Text>
       <Text style={styles.section}>Gmail connection</Text>
       <Text style={styles.help}>{gmailAccount ? `Connected Google account: ${gmailAccount}` : "Connect your Google account to send report PDFs directly from Gmail. No Resend API key or custom domain is needed."}</Text>
@@ -57,16 +58,23 @@ export default function LowStockReportsScreen() {
       {toggle("Send PDF by Gmail automatically", !!config.emailEnabled, () => update({ emailEnabled: !config.emailEnabled }))}
       {field("Recipient email(s)", config.emails, v => update({ emails: v }), "recipient@gmail.com; another@gmail.com")}
       <Text style={styles.help}>The Google account you connect is the sender. Google may require the Gmail API to be enabled and the OAuth consent screen configured for your app.</Text>
-      <Text style={styles.section}>WhatsApp connection</Text>
-      <Text style={styles.help}>Use the WhatsApp account already signed in on this phone. No WhatsApp Business account, API token, phone-number ID, or custom domain is required for manual sharing.</Text>
-      {field("Recipient WhatsApp number(s) (for your records)", config.whatsappNumbers, v => update({ whatsappNumbers: v }), "923001234567; 923331234567")}
-      <Text style={styles.help}>For privacy and WhatsApp policy reasons, the normal WhatsApp app does not expose an official in-app login that allows an app to silently send messages or PDFs. The app can prepare the report and open the Android share menu; choose WhatsApp and confirm Send there. Automatic scheduled WhatsApp sending is not available in this no-server mode.</Text>
+      <Text style={styles.section}>WhatsApp delivery (manual and automatic)</Text>
+      {toggle("Manual WhatsApp sharing (choose recipient and press Send)", config.whatsappMode !== "meta", () => update({ whatsappMode: "manual" }))}
+      {toggle("Automatic WhatsApp PDF delivery (Meta Cloud API)", config.whatsappMode === "meta", () => update({ whatsappMode: "meta" }))}
+      {field("Recipient WhatsApp number(s)", config.whatsappNumbers, v => update({ whatsappNumbers: v }), "923001234567; 923331234567")}
+      {config.whatsappMode === "meta" && <>
+        {field("Meta WhatsApp Cloud API access token", config.whatsappToken, v => update({ whatsappToken: v }), "Paste access token", true)}
+        {field("WhatsApp Phone Number ID", config.whatsappPhoneNumberId, v => update({ whatsappPhoneNumberId: v }), "Phone Number ID")}
+        {field("Graph API version", config.whatsappGraphVersion || "v23.0", v => update({ whatsappGraphVersion: v }), "v23.0")}
+        <Text style={styles.help}>Automatic sending uses Meta's official Cloud API and requires a Meta business portfolio, WhatsApp Business Account, registered business phone number, and token with whatsapp_business_messaging permission. The token is saved in this phone's secure storage, but a token stored in a mobile app can still be extracted; a server-side secret is safer. API delivery needs internet access.</Text>
+      </>}
+      <Text style={styles.help}>Manual sharing is always available from the Share PDF button below. It opens Android's share menu; select WhatsApp, choose the recipient, and press Send. Automatic sending works when Cloud API mode is selected and credentials are configured.</Text>
       <Pressable disabled={busy} onPress={async () => { if (await save()) toast("Settings saved.", "success"); }} style={styles.action}><Text style={styles.actionText}>Save delivery settings</Text></Pressable>
-      <Pressable disabled={busy} onPress={testAutomatic} style={[styles.primary, busy && { opacity: .55 }]}><Text style={styles.primaryText}>{busy ? "Working…" : "Check schedule and send if due"}</Text></Pressable>
+      <Pressable disabled={busy} onPress={testAutomatic} style={[styles.primary, busy && { opacity: .55 }]}><Text style={styles.primaryText}>{busy ? "Working…" : "Test automatic delivery now"}</Text></Pressable>
       <Pressable disabled={busy} onPress={generate} style={styles.action}><Text style={styles.actionText}>{busy ? "Please wait…" : "Share report using WhatsApp or another app"}</Text></Pressable>
       {!!status && <View style={styles.status}><Text style={styles.label}>Latest result</Text><Text style={styles.help}>{status}</Text></View>}
       {!!lastGenerated && <View style={styles.status}><Text style={styles.label}>Last generated/sent</Text><Text style={styles.help}>{lastGenerated}</Text></View>}
-      <Text style={styles.note}>WhatsApp sharing uses the WhatsApp app installed on this phone and requires you to confirm sending. Gmail automatic delivery uses the Google account you connect above. Scheduled sends only run when the app opens; Android cannot guarantee delivery while the app is closed in this server-free setup.</Text>
+      <Text style={styles.note}>Automatic schedule checks run when the app opens; Android may delay background work while the app is closed. The test button sends immediately through enabled Gmail and/or WhatsApp Cloud API channels, regardless of whether the scheduled date is due. Manual WhatsApp sharing still requires selecting the recipient and confirming Send.</Text>
     </ScrollView>
   </View>;
 }
