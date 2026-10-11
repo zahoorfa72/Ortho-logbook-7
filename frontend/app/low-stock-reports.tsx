@@ -22,7 +22,7 @@ export default function LowStockReportsScreen() {
   useEffect(() => { (async () => { const c = await loadLowStockReportConfig(); if (c) setConfig({ ...blank(), ...c, autoEmailEnabled: false, whatsappMode: "manual" }); const s = await getLowStockReportState(); setStatus(s.lastStatus || ""); setLastGenerated(s.lastGeneratedAt ? new Date(s.lastGeneratedAt).toLocaleString() : ""); })(); }, []);
   const update = (patch: Partial<LowStockReportConfig>) => setConfig(c => ({ ...c, ...patch }));
   const save = async () => {
-    if (config.schedule === "fixedDate" && !/^\\d{4}-\\d{2}-\\d{2}$/.test(String(config.fixedDate || "").trim())) { toast("Enter the date as YYYY-MM-DD.", "error"); return false; }
+    if (config.schedule === "fixedDate" && !/^\d{4}-\d{2}-\d{2}$/.test(String(config.fixedDate || "").trim())) { toast("Enter the date as YYYY-MM-DD.", "error"); return false; }
     try { const next = { ...config, autoEmailEnabled: false, resendApiKey: "", senderEmail: "", emails: "", whatsappNumbers: "", whatsappToken: "", whatsappPhoneNumberId: "", whatsappMode: "manual" as const, savedAt: new Date().toISOString() }; await saveLowStockReportConfig(next); setConfig(next); toast("Offline report settings saved on this device.", "success"); return true; }
     catch { toast("Could not save settings on this device.", "error"); return false; }
   };
