@@ -204,6 +204,19 @@ function restoreTrashEntry(trashId: string) {
   catch { throw new Error("This Trash item is damaged and cannot be restored."); }
   db.withTransactionSync(() => {
     const stockAdjustment = payload._stockAdjustment;
+    // Deleting a patient returns its implants to inventory. Restoring that patient
+    // must consume the same quantities again so inventory totals remain correct.
+    if (Array.isArray(payload.patients) && payload.patients.length) {
+      for (const row of payload.patients) {
+        const p = fromPatient(row) as any;
+        const implants = (Array.isArray(payload.patient_implants) ? payload.patient_implants : [])
+          .filter((x:any) => String(x.patient_id) === String(row.id))
+          .map((x:any) => ({ id:x.id, inventoryId:x.inventory_id || "", name:x.name, category:x.category || "", size:x.size || "", quantity:Number(x.quantity || 1) }));
+        if (implants.length) p.implants = implants;
+        validateImplants(p);
+        deduct(p, entry.deleted_by || null);
+      }
+    }
     if (stockAdjustment) {
       const inventory = db.getFirstSync<any>("SELECT id,quantity,minimum_stock FROM inventory WHERE id=? LIMIT 1", [stockAdjustment.inventoryId]);
       if (!inventory) throw new Error("The original inventory item no longer exists. Restore that inventory item first.");
