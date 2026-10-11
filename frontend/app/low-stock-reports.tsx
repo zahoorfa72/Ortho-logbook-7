@@ -9,7 +9,7 @@ import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/s
 import { getLowStockReportState, loadLowStockReportConfig, saveLowStockReportConfig, shareLowStockPdfViaWhatsApp, testLowStockReportDeliveryNow, testImmediateLowStockAlertDeliveryNow, sendManualLowStockTextAlertNow, type LowStockReportConfig, type LowStockSchedule } from "@/src/utils/low-stock-auto-report";
 import { connectGoogleGmailAccount, getConnectedGoogleAccount } from "@/src/utils/storage/google-drive";
 
-const blank = (): LowStockReportConfig => ({ schedule: "weekly", fixedDate: "", reportFromDate: "", reportToDate: "", autoEmailEnabled: false, emailEnabled: false, emails: "", resendApiKey: "", senderEmail: "", whatsappNumbers: "", whatsappToken: "", whatsappPhoneNumberId: "", whatsappGraphVersion: "v23.0", whatsappMode: "manual", instantLowStockGmailEnabled: false, instantLowStockWhatsAppEnabled: false, lowStockWhatsAppTemplateName: "", lowStockWhatsAppTemplateLanguage: "en_US", savedAt: "" });
+const blank = (): LowStockReportConfig => ({ schedule: "weekly", fixedDate: "", reportFromDate: "", reportToDate: "", autoEmailEnabled: false, emailEnabled: false, emails: "", resendApiKey: "", senderEmail: "", whatsappNumbers: "", whatsappToken: "", whatsappPhoneNumberId: "", whatsappGraphVersion: "v23.0", whatsappMode: "manual", instantLowStockAlertsEnabled: false, instantLowStockGmailEnabled: false, instantLowStockWhatsAppEnabled: false, lowStockWhatsAppTemplateName: "", lowStockWhatsAppTemplateLanguage: "en_US", savedAt: "" });
 export default function LowStockReportsScreen() {
   const { user } = useAuth();
   const { colors } = useTheme();
@@ -24,7 +24,7 @@ export default function LowStockReportsScreen() {
   useEffect(() => { (async () => {
     setGmailAccount(getConnectedGoogleAccount());
     const c = await loadLowStockReportConfig();
-    if (c) setConfig({ ...blank(), ...c });
+    if (c) setConfig({ ...blank(), ...c, instantLowStockAlertsEnabled: c.instantLowStockAlertsEnabled ?? (!!c.instantLowStockGmailEnabled || !!c.instantLowStockWhatsAppEnabled) });
     const s = await getLowStockReportState();
     setStatus(s.lastStatus || "");
     setLastGenerated(s.lastGeneratedAt ? new Date(s.lastGeneratedAt).toLocaleString() : "");
@@ -56,7 +56,7 @@ export default function LowStockReportsScreen() {
       <View style={styles.scheduleRow}>{schedules.map(s => <Pressable key={s.value} onPress={() => update({ schedule: s.value })} style={[styles.schedule, config.schedule === s.value && { borderColor: colors.brandPrimary, backgroundColor: colors.brandTertiary }]}><Text style={[styles.scheduleText, config.schedule === s.value && { color: colors.brandPrimary }]}>{s.label}</Text></Pressable>)}</View>
       {config.schedule === "fixedDate" && <><Text style={styles.help}>The trigger date decides when the report is sent. The From/To dates decide which stock-movement dates are included in its PDF.</Text>{field("Automatic trigger date (YYYY-MM-DD)", config.fixedDate || "", v => update({ fixedDate: v }), "2026-12-01")}{field("Report From date (YYYY-MM-DD)", config.reportFromDate || "", v => update({ reportFromDate: v }), "2026-10-01")}{field("Report To date (YYYY-MM-DD)", config.reportToDate || "", v => update({ reportToDate: v }), "2026-10-12")}</>}
       <Text style={styles.help}>Automatic checks run when the app starts/opens. Android may delay background work; this version cannot guarantee a send at an exact time while the app is closed.</Text>
-      <Text style={styles.section}>Gmail connection</Text>
+      <Text style={styles.section}>Immediate low-stock alert controls</Text>\n      {toggle("Enable automatic low-stock alerts", !!config.instantLowStockAlertsEnabled, () => update({ instantLowStockAlertsEnabled: !config.instantLowStockAlertsEnabled }))}\n      <Text style={styles.help}>Turn this master switch OFF to stop all automatic immediate low-stock alerts. Gmail and WhatsApp also have their own channel switches below. The manual “Send low-stock text alert now” button remains available when automatic alerts are OFF.</Text>\n      <Text style={styles.section}>Gmail connection</Text>
       <Text style={styles.help}>{gmailAccount ? `Connected Google account: ${gmailAccount}` : "Connect your Google account to send report PDFs directly from Gmail. No Resend API key or custom domain is needed."}</Text>
       <Pressable disabled={busy} onPress={async () => { setBusy(true); try { const email = await connectGoogleGmailAccount(); setGmailAccount(email); toast(`Gmail connected: ${email}`, "success"); } catch (e:any) { Alert.alert("Gmail connection failed", String(e?.message || e)); } finally { setBusy(false); } }} style={styles.action}><Text style={styles.actionText}>{gmailAccount ? "Reconnect Gmail / approve sending" : "Connect Gmail"}</Text></Pressable>
       {toggle("Send PDF by Gmail automatically", !!config.emailEnabled, () => update({ emailEnabled: !config.emailEnabled }))}
