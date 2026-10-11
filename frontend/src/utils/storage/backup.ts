@@ -289,7 +289,12 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
   patients:embeddedPatients,
   procedures:include("procedures") ? db.getAllSync<any>("SELECT * FROM procedures ORDER BY name COLLATE NOCASE") : [],
   inventoryCategories:include("inventoryCategories") ? db.getAllSync<any>("SELECT * FROM inventory_categories ORDER BY name COLLATE NOCASE") : [],
-  inventory:include("inventory") ? db.getAllSync<any>("SELECT id,name,category_id,category,size,quantity,unit,minimum_stock,low_stock_triggered_at,low_stock_since FROM inventory ORDER BY COALESCE(category,''),name COLLATE NOCASE,COALESCE(size,'')") : [],
+  inventory:include("inventory") ? await Promise.all(db.getAllSync<any>("SELECT id,name,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,low_stock_triggered_at,low_stock_since FROM inventory ORDER BY COALESCE(category,''),name COLLATE NOCASE,COALESCE(size,'')").map(async (row:any) => ({
+    ...row,
+    bill_image: typeof row.bill_image === "string" && /^(data:image\\/|file:\\/\\/|content:\\/\\/)/i.test(row.bill_image)
+      ? await embedOptionalPhoto(row.bill_image, compressedPhotoCache)
+      : row.bill_image,
+  }))) : [],
   patientImplants:include("patientImplants") ? db.getAllSync<any>("SELECT * FROM patient_implants ORDER BY created_at ASC") : [],
   patientCustomFields:include("patientCustomFields") ? db.getAllSync<any>("SELECT * FROM patient_custom_fields ORDER BY sort_order ASC,label COLLATE NOCASE") : [],
   implantRecords:include("implantRecords") ? await Promise.all(db.getAllSync<any>("SELECT * FROM implant_records ORDER BY created_at ASC").map(async (row:any) => {
@@ -644,7 +649,7 @@ export async function restoreBackup(backup:BackupData){
     const itemName=restoreText(i.name,"Unnamed item");
     const itemCategory=restoreText(i.category);
     const itemSize=restoreText(i.size);
-    db.runSync("INSERT INTO inventory (id,name,category_id,category,size,quantity,unit,minimum_stock,low_stock_triggered_at,low_stock_since) VALUES (?,?,?,?,?,?,?,?,?,?)",[restoredInventoryId,itemName,cid,itemCategory,itemSize,restoreReal(i.quantity,0,0),restoreText(i.unit,"pcs"),restoreReal(i.minimum_stock,0,0),restoreText(i.low_stock_triggered_at)||null,restoreText(i.low_stock_since)||null]);
+    db.runSync("INSERT INTO inventory (id,name,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,low_stock_triggered_at,low_stock_since) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",[restoredInventoryId,itemName,cid,itemCategory,itemSize,restoreReal(i.quantity,0,0),restoreText(i.unit,"pcs"),restoreReal(i.minimum_stock,0,0),restoreText(i.added_date)||null,restoreText(i.bill_image)||null,restoreText(i.low_stock_triggered_at)||null,restoreText(i.low_stock_since)||null]);
   }
   // Restore patient inventory selections without creating duplicate rows.
   // Older backups/restore versions could contain the same patient + implant more
