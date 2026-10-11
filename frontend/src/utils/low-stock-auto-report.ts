@@ -312,8 +312,8 @@ export async function sendManualLowStockTextAlertNow(): Promise<string> {
     return !!item?.id && Number.isFinite(qty) && Number.isFinite(min) && qty <= min;
   });
   if (!low.length) throw new Error("There are no items currently at or below minimum stock.");
-  const message = "ORTHO LOGBOOK — LOW STOCK ALERT (MANUAL)\\n" + low.length +
-    " item(s) currently at or below minimum stock:\\n" +
+  const message = "ORTHO LOGBOOK — LOW STOCK ALERT (MANUAL)\n" + low.length +
+    " item(s) currently at or below minimum stock:\n" +
     low.map((item: any) => {
       const name = String(item.name || item.category || "Implant");
       const category = String(item.category || "");
@@ -322,7 +322,7 @@ export async function sendManualLowStockTextAlertNow(): Promise<string> {
       const min = Number(item.minimumStock ?? item.minimum_stock);
       return "- " + name + (category && category.toLowerCase() !== name.toLowerCase() ? " (" + category + ")" : "") +
         (size ? ", size " + size : "") + ": remaining " + qty + " " + String(item.unit || "pcs") + ", minimum " + min;
-    }).join("\\n") + "\\n\\nAlert time: " + new Date().toLocaleString();
+    }).join("\n") + "\n\nAlert time: " + new Date().toLocaleString();
   const outcomes: string[] = [];
   // Manual delivery is based on configured credentials, not the automatic ON/OFF switches.
   if (config.emails?.trim()) {
