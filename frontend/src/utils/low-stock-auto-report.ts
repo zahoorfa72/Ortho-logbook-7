@@ -299,6 +299,48 @@ export async function checkAndSendImmediateLowStockAlerts(): Promise<string> {
 }
 
 
+/** Manually send a plain-text alert for every item currently at/below minimum stock.
+ * This intentionally ignores the automatic-channel switches; manual sending remains available when automation is off.
+ */
+export async function sendManualLowStockTextAlertNow(): Promise<string> {
+  const config = await loadLowStockReportConfig();
+  if (!config) throw new Error("Save low-stock delivery settings first.");
+  const inventory = await api.get<any[]>("/inventory");
+  const low = (Array.isArray(inventory) ? inventory : []).filter((item: any) => {
+    const qty = Number(item?.quantity);
+    const min = Number(item?.minimumStock ?? item?.minimum_stock);
+    return !!item?.id && Number.isFinite(qty) && Number.isFinite(min) && qty <= min;
+  });
+  if (!low.length) throw new Error("There are no items currently at or below minimum stock.");
+  const message = "ORTHO LOGBOOK — LOW STOCK ALERT (MANUAL)\\n" + low.length +
+    " item(s) currently at or below minimum stock:\\n" +
+    low.map((item: any) => {
+      const name = String(item.name || item.category || "Implant");
+      const category = String(item.category || "");
+      const size = String(item.size || "");
+      const qty = Number(item.quantity);
+      const min = Number(item.minimumStock ?? item.minimum_stock);
+      return "- " + name + (category && category.toLowerCase() !== name.toLowerCase() ? " (" + category + ")" : "") +
+        (size ? ", size " + size : "") + ": remaining " + qty + " " + String(item.unit || "pcs") + ", minimum " + min;
+    }).join("\\n") + "\\n\\nAlert time: " + new Date().toLocaleString();
+  const outcomes: string[] = [];
+  // Manual delivery is based on configured credentials, not the automatic ON/OFF switches.
+  if (config.emails?.trim()) {
+    try { await sendLowStockAlertEmail("Ortho Logbook — low-stock alert (manual)", message, config); outcomes.push("Gmail: sent successfully"); }
+    catch (e: any) { outcomes.push("Gmail: FAILED — " + String(e?.message || e)); }
+  }
+  if (config.whatsappNumbers?.trim() && config.whatsappToken?.trim() && config.whatsappPhoneNumberId?.trim()) {
+    try { await sendLowStockAlertWhatsApp(message, config); outcomes.push("WhatsApp: API accepted successfully"); }
+    catch (e: any) { outcomes.push("WhatsApp: FAILED — " + String(e?.message || e)); }
+  }
+  if (!outcomes.length) throw new Error("Configure recipient email(s) and/or WhatsApp recipient number(s) with Cloud API credentials first.");
+  const result = "Manual low-stock text alert (" + low.length + " item(s)): " + outcomes.join("; ");
+  const state = await getLowStockReportState();
+  await saveState({ ...state, lastImmediateAlertAt: new Date().toISOString(), lastStatus: result });
+  if (outcomes.some(x => x.includes("FAILED"))) throw new Error(result);
+  return result;
+}
+
 export async function testImmediateLowStockAlertDeliveryNow(): Promise<string> {
   const config = await loadLowStockReportConfig();
   if (!config) throw new Error("Save the low-stock report settings first.");
