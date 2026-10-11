@@ -15,7 +15,7 @@ import { queryClient } from "@/src/query-client";
 import { initializeDatabase, repairDatabaseData } from "@/src/db/database";
 import { ThemeProvider } from "@/src/theme";
 import { startAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-backup";
-import { attemptDueLowStockReport } from "@/src/utils/low-stock-auto-report";
+import { attemptDueLowStockReport, checkAndSendImmediateLowStockAlerts } from "@/src/utils/low-stock-auto-report";
 import { DriveSyncIndicator } from "@/src/utils/storage/drive-sync-status";
 
 LogBox.ignoreAllLogs(true);
@@ -43,6 +43,8 @@ function DatabaseBootstrap({ children }: { children: React.ReactNode }) {
     // Evaluate the admin-configured low-stock schedule whenever the app starts.
     // Delivery is idempotent per reporting period in low-stock-auto-report.ts.
     void attemptDueLowStockReport().catch(() => {});
+    // Catch any newly low-stock items in case a prior inventory change happened while delivery was offline.
+    void checkAndSendImmediateLowStockAlerts().catch(() => {});
     return stopBackup;
   }, [ready]);
 
