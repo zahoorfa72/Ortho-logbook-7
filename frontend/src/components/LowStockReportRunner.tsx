@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { AppState } from "react-native";
 import { useAuth } from "@/src/auth/AuthContext";
-import { attemptDueLowStockReport } from "@/src/utils/low-stock-auto-report";
+import { attemptDueLowStockReport, loadLowStockReportConfig } from "@/src/utils/low-stock-auto-report";
 
 export function LowStockReportRunner() {
   const { user } = useAuth();
