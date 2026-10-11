@@ -30,6 +30,7 @@ import { usesNativeTabs } from "@/src/navigation";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 import { hasAdminPin } from "@/src/utils/admin-pin";
 import { buildInventoryHtml, generateAndSharePdf } from "@/src/utils/pdf";
+import { checkAndSendImmediateLowStockAlerts } from "@/src/utils/low-stock-auto-report";
 
 type InventoryItem = {
   id: string;
@@ -89,6 +90,7 @@ export default function Inventory() {
       }),
     onSuccess: () => {
       invalidate();
+      void checkAndSendImmediateLowStockAlerts().catch(() => {});
       toast("Item updated.", "success");
       setEditItem(null);
     },
@@ -115,7 +117,7 @@ export default function Inventory() {
         unit: item.unit,
         minimumStock: item.minimumStock,
       }),
-    onSuccess: invalidate,
+    onSuccess: () => { invalidate(); void checkAndSendImmediateLowStockAlerts().catch(() => {}); },
     onError: (e: any) => toast(e?.message || "Update failed.", "error"),
   });
 
