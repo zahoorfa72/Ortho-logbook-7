@@ -49,7 +49,6 @@ export default function SettingsScreen() {
     { icon: "keypad-outline", label: pinSet ? "Change Admin PIN" : "Set Admin PIN", sub: "Protect exports & settings", to: "/admin-pin", testID: "settings-pin" },
     { icon: "trash-outline", label: "Trash", sub: "Restore deleted app data within 30 days", to: "/trash", testID: "settings-trash" },
     { icon: "sync-outline", label: "Sync & Backup", sub: "Share data between phones (offline)", to: "/backup-restore", testID: "settings-sync" },
-    { icon: "mail-outline", label: "Low-stock Reports", sub: "Schedule PDF delivery by email and WhatsApp", to: "/low-stock-reports", testID: "settings-low-stock-reports" },
     { icon: "mail-outline", label: "Automatic Low Stock Reports", sub: "Scheduled PDF delivery by email and WhatsApp", to: "/low-stock-reports", testID: "settings-low-stock-reports" },
     { icon: "people-outline", label: "User Management", sub: "Add or restrict doctors & staff", to: "/user-management", testID: "settings-users" },
   ];
