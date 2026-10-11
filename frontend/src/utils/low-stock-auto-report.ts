@@ -13,6 +13,7 @@ export type LowStockReportConfig = {
   schedule: LowStockSchedule;
   fixedDate?: string;
   autoEmailEnabled?: boolean;
+  emailEnabled?: boolean;
   emails: string;
   resendApiKey: string;
   senderEmail: string;
@@ -170,7 +171,7 @@ export async function attemptDueLowStockReport(): Promise<string> {
   const state = await getLowStockReportState();
   if (!dueNow(config, state)) return "Automatic report is not due yet.";
   const channels = [
-    config.emails?.trim() ? "email" : "",
+    config.emailEnabled && config.emails?.trim() ? "email" : "",
     config.whatsappMode === "meta" && config.whatsappNumbers?.trim() ? "WhatsApp" : "",
   ].filter(Boolean);
   if (!channels.length) return "Automatic report is enabled, but no delivery channel and recipient are configured.";
