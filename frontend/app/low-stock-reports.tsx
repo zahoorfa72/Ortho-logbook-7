@@ -24,6 +24,7 @@ export default function LowStockReportsScreen() {
   useEffect(() => { (async () => { const c = await loadLowStockReportConfig(); if (c) setConfig({ ...c, autoEmailEnabled: c.autoEmailEnabled ?? true, whatsappMode: c.whatsappMode || "manual" }); const s = await getLowStockReportState(); setStatus(s.lastStatus || ""); setLastSent([s.emailLastSentAt ? "Email: " + new Date(s.emailLastSentAt).toLocaleString() : "", s.whatsappLastSentAt ? "WhatsApp: " + new Date(s.whatsappLastSentAt).toLocaleString() : ""].filter(Boolean).join("\n")); setOcrApiKey(String(await storage.secureGet("ortho_stock_ocr_space_api_key", "") || "")); })(); }, []);
   const update = (patch: Partial<LowStockReportConfig>) => setConfig(c => ({ ...c, ...patch }));
   const save = async () => {
+    if (config.schedule === "fixedDate" && !/^\d{4}-\d{2}-\d{2}$/.test(String(config.fixedDate || "").trim())) { toast("Enter the fixed date as YYYY-MM-DD.", "error"); return false; }
     if (!config.emails.trim() && !config.whatsappNumbers.trim()) { toast("Enter at least one email or WhatsApp recipient.", "error"); return false; }
     if (config.emails.trim() && (!config.resendApiKey.trim() || !config.senderEmail.trim())) { toast("Email recipients require a Resend API key and verified sender email.", "error"); return false; }
     if (config.whatsappMode !== "manual" && config.whatsappNumbers.trim() && (!config.whatsappToken.trim() || !config.whatsappPhoneNumberId.trim())) { toast("Meta API delivery requires a Business access token and phone-number ID.", "error"); return false; }
