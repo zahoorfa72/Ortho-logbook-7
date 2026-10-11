@@ -15,7 +15,7 @@ const DEBOUNCE_MS = 7000;
 const ALL_SYNC_TABLES = [
   "patients", "procedures", "inventoryCategories", "inventory", "patientImplants",
   "patientCustomFields", "implantRecords", "expenses", "users", "patientHistory",
-  "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts", "branding", "appSettings",
+  "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts", "trash", "branding", "appSettings",
 ] as const;
 const DIRTY_TABLES_KEY = "ortho_drive_pending_tables_v1";
 let timer: ReturnType<typeof setTimeout> | null = null;
@@ -39,6 +39,7 @@ const tableMap: Record<string, string> = {
   inventory_movements: "inventoryMovements",
   inventory_purchase_receipts: "inventoryPurchaseReceipts",
   stock_receipts: "stockReceipts",
+  deleted_records: "trash",
 };
 
 async function persistPendingTables() {
@@ -56,7 +57,7 @@ async function loadPendingTables() {
     const raw = await storage.getItem<string>(DIRTY_TABLES_KEY, "");
     const parsed = typeof raw === "string" ? JSON.parse(raw) : [];
     if (Array.isArray(parsed)) parsed.forEach((name) => {
-      if (typeof name === "string" && (Object.values(tableMap).includes(name) || name === "branding" || name === "appSettings")) {
+      if (typeof name === "string" && (Object.values(tableMap).includes(name) || name === "branding" || name === "appSettings" || name === "trash")) {
         pendingTables.add(name);
       }
     });
