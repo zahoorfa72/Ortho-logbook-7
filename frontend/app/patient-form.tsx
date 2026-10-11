@@ -7,7 +7,7 @@ import * as ImageManipulator from "expo-image-manipulator";
 import { Asset, requestPermissionsAsync } from "expo-media-library";
 import * as FileSystem from "expo-file-system/legacy";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AppState, Image, InteractionManager, Modal, Pressable, ScrollView, Text, View } from "react-native";
+import { Alert, AppState, Image, InteractionManager, Modal, Pressable, ScrollView, Text, View } from "react-native";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -542,7 +542,11 @@ export default function PatientForm() {
         </Pressable>
         <Text style={styles.headerTitle}>{isEdit ? "Edit Patient" : "New Patient"}</Text>
         {isEdit && canEdit ? (
-          <Pressable testID="delete-patient-button" onPress={() => del.mutate()} style={styles.headerBtn}>
+          <Pressable testID="delete-patient-button" onPress={() => Alert.alert(
+            "Move patient to Trash?",
+            "This patient and its saved details will be moved to Trash for 30 days. You can restore it from Settings → Trash before it expires.",
+            [{ text: "Cancel", style: "cancel" }, { text: "Move to Trash", style: "destructive", onPress: () => del.mutate() }],
+          )} style={styles.headerBtn}>
             <Ionicons name="trash-outline" size={22} color={colors.error} />
           </Pressable>
         ) : (
