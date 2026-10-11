@@ -169,7 +169,7 @@ function restoreStock(p: Patient, userId: string | null) {
   }
 }
 
-type TrashPayload = Record<string, any[]> & { _stockAdjustment?: { inventoryId: string; quantity: number } };
+type TrashPayload = { [key: string]: any; _stockAdjustment?: { inventoryId: string; quantity: number } };
 
 function addTrashEntry(kind: string, title: string, payload: TrashPayload, deletedBy?: string | null) {
   const deletedAt = nowIso();
