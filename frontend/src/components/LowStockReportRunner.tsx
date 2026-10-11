@@ -8,15 +8,19 @@ export function LowStockReportRunner() {
   useEffect(() => {
     if (!user || user.role !== "admin") return;
     let running = false;
-    const run = async () => {
+    const run = async (fromOpenEvent = false) => {
       if (running || AppState.currentState !== "active") return;
       running = true;
-      try { await attemptDueLowStockReport(); } catch {}
+      try {
+        const config = await loadLowStockReportConfig();
+        if (config?.schedule === "onOpen" && !fromOpenEvent) return;
+        await attemptDueLowStockReport();
+      } catch {}
       finally { running = false; }
     };
     void run(true);
     const timer = setInterval(() => { void run(); }, 60_000);
-    const subscription = AppState.addEventListener("change", state => { if (state === "active") void run(); });
+    const subscription = AppState.addEventListener("change", state => { if (state === "active") void run(true); });
     return () => { clearInterval(timer); subscription.remove(); };
   }, [user?.id, user?.role]);
   return null;
