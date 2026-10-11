@@ -53,15 +53,6 @@ export default function PatientForm() {
   const [implantSearch, setImplantSearch] = useState("");
 
   const { data: patients } = useQuery<Patient[]>({ queryKey: ["patients"], queryFn: () => api.get("/patients") });
-  const { data: trashedPatientMatch, isFetching: checkingTrashMatch } = useQuery<{
-    id: string; title: string; deleted_at: string; expires_at: string; patient: { mrNo: string; name: string };
-  } | null>({
-    queryKey: ["trash-patient-match", p.mrNo.trim().toLocaleLowerCase(), p.name.trim().toLocaleLowerCase()],
-    queryFn: () => api.get("/trash/patient-match?mrNo=" + encodeURIComponent(p.mrNo.trim()) + "&name=" + encodeURIComponent(p.name.trim())),
-    enabled: !isEdit && user?.role === "admin" && !!p.mrNo.trim() && !!p.name.trim(),
-    staleTime: 0,
-    retry: false,
-  });
   const { data: procedures } = useQuery<Procedure[]>({ queryKey: ["procedures"], queryFn: () => api.get("/procedures") });
   const { data: customFields = [] } = useQuery<any[]>({
     queryKey: ["patient-custom-fields"],
@@ -118,6 +109,16 @@ export default function PatientForm() {
   const [cropY, setCropY] = useState(0.5);
   const [p, setP] = useState<Patient>(empty);
   const selectedImplants = p.implants || [];
+
+  const { data: trashedPatientMatch, isFetching: checkingTrashMatch } = useQuery<{
+    id: string; title: string; deleted_at: string; expires_at: string; patient: { mrNo: string; name: string };
+  } | null>({
+    queryKey: ["trash-patient-match", p.mrNo.trim().toLocaleLowerCase(), p.name.trim().toLocaleLowerCase()],
+    queryFn: () => api.get("/trash/patient-match?mrNo=" + encodeURIComponent(p.mrNo.trim()) + "&name=" + encodeURIComponent(p.name.trim())),
+    enabled: !isEdit && user?.role === "admin" && !!p.mrNo.trim() && !!p.name.trim(),
+    staleTime: 0,
+    retry: false,
+  });
   const addImplant = (item: InventoryItem) => {
     setP(prev => {
       const current = prev.implants || [];
