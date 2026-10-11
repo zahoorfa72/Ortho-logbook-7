@@ -27,9 +27,13 @@ export type LowStockReportConfig = {
   whatsappTemplateName?: string;
   whatsappTemplateLanguage?: string;
   whatsappMode?: "manual" | "meta";
+  instantLowStockGmailEnabled?: boolean;
+  instantLowStockWhatsAppEnabled?: boolean;
+  lowStockWhatsAppTemplateName?: string;
+  lowStockWhatsAppTemplateLanguage?: string;
   savedAt: string;
 };
-type ReportState = { lastGeneratedAt?: string; lastSentAt?: string; lastPeriodKey?: string; lastStatus?: string };
+type ReportState = { lastGeneratedAt?: string; lastSentAt?: string; lastPeriodKey?: string; lastStatus?: string; activeLowStockIds?: string[]; lastImmediateAlertAt?: string };
 type PdfResult = { uri: string; count: number; periodStart: string; periodEnd: string; periodKey: string };
 const CONFIG_KEY = "ortho_low_stock_report_config";
 const STATE_KEY = "ortho_low_stock_report_state";
@@ -181,6 +185,106 @@ async function sendWhatsApp(pdf: PdfResult, config: LowStockReportConfig) {
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(String((body as any)?.error?.message || `WhatsApp send failed (HTTP ${response.status})`));
   }
+}
+
+
+async function sendLowStockAlertEmail(subject: string, message: string, config: LowStockReportConfig) {
+  const recipients = config.emails.split(/[;,\n]/).map(x => x.trim()).filter(Boolean);
+  if (!recipients.length) throw new Error("Add a recipient email for immediate low-stock alerts.");
+  const invalid = recipients.filter(address => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address));
+  if (invalid.length) throw new Error("Invalid low-stock alert email recipient(s): " + invalid.join(", "));
+  const token = await getGoogleGmailAccessToken();
+  const raw = "To: " + recipients.join(", ") + "\r\nSubject: " + subject +
+    "\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n" +
+    btoa(unescape(encodeURIComponent(message)));
+  const encoded = btoa(unescape(encodeURIComponent(raw))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const response = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+    method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+    body: JSON.stringify({ raw: encoded }),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(String((body as any)?.error?.message || "Gmail low-stock alert failed (HTTP " + response.status + ")"));
+}
+
+async function sendLowStockAlertWhatsApp(message: string, config: LowStockReportConfig) {
+  if (!config.whatsappToken?.trim() || !config.whatsappPhoneNumberId?.trim()) {
+    throw new Error("Enter the WhatsApp Cloud API token and phone-number ID for immediate alerts.");
+  }
+  const recipients = [...new Set(config.whatsappNumbers.split(/[;,\n]/).map(x => x.trim().replace(/^\+/, "").replace(/[\s().-]/g, "")).filter(Boolean))];
+  if (!recipients.length || recipients.some(x => !/^\d{8,15}$/.test(x))) {
+    throw new Error("Enter WhatsApp alert recipient numbers with country code, for example 923001234567.");
+  }
+  const version = (config.whatsappGraphVersion || "v23.0").trim();
+  const base = "https://graph.facebook.com/" + version + "/" + config.whatsappPhoneNumberId.trim();
+  for (const to of recipients) {
+    const templateName = String(config.lowStockWhatsAppTemplateName || "").trim();
+    const body = templateName
+      ? { messaging_product: "whatsapp", to, type: "template", template: { name: templateName, language: { code: String(config.lowStockWhatsAppTemplateLanguage || "en_US").trim() }, components: [{ type: "body", parameters: [{ type: "text", text: message.slice(0, 1024) }] }] } }
+      : { messaging_product: "whatsapp", to, type: "text", text: { preview_url: false, body: message.slice(0, 4096) } };
+    const response = await fetch(base + "/messages", {
+      method: "POST", headers: { Authorization: "Bearer " + config.whatsappToken.trim(), "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(String((result as any)?.error?.message || "WhatsApp low-stock alert failed (HTTP " + response.status + ")"));
+  }
+}
+
+/**
+ * Call after any inventory-changing action and when the app opens.
+ * Sends a plain-text alert only for items newly at/below their configured minimum,
+ * then remembers the active low-stock set to avoid repeated messages for the same low-stock condition.
+ */
+export async function checkAndSendImmediateLowStockAlerts(): Promise<string> {
+  const config = await loadLowStockReportConfig();
+  if (!config) return "Immediate low-stock alerts are not configured.";
+  const gmailOn = !!config.instantLowStockGmailEnabled;
+  const whatsappOn = !!config.instantLowStockWhatsAppEnabled;
+  if (!gmailOn && !whatsappOn) return "Immediate low-stock alerts are disabled.";
+  const inventory = await api.get<any[]>("/inventory");
+  const low = (Array.isArray(inventory) ? inventory : []).filter((item: any) => {
+    const qty = Number(item?.quantity);
+    const min = Number(item?.minimumStock ?? item?.minimum_stock);
+    return !!item?.id && Number.isFinite(qty) && Number.isFinite(min) && qty <= min;
+  });
+  const state = await getLowStockReportState();
+  const active = new Set((state.activeLowStockIds || []).map(String));
+  const newlyLow = low.filter((item: any) => !active.has(String(item.id)));
+  const currentIds = low.map((item: any) => String(item.id));
+  if (!newlyLow.length) {
+    await saveState({ ...state, activeLowStockIds: currentIds });
+    return "No newly low-stock items.";
+  }
+  const lines = newlyLow.map((item: any) => {
+    const name = String(item.name || item.category || "Implant");
+    const category = String(item.category || "");
+    const size = String(item.size || "");
+    const qty = Number(item.quantity);
+    const min = Number(item.minimumStock ?? item.minimum_stock);
+    return "- " + name + (category && category.toLowerCase() !== name.toLowerCase() ? " (" + category + ")" : "") +
+      (size ? ", size " + size : "") + ": remaining " + qty + " " + String(item.unit || "pcs") + ", minimum " + min;
+  });
+  const message = "ORTHO LOGBOOK — LOW STOCK ALERT\n" + newlyLow.length + " implant/item(s) just reached or fell below minimum stock:\n" + lines.join("\n") +
+    "\n\nPlease arrange replenishment. Alert time: " + new Date().toLocaleString();
+  const results: string[] = [];
+  let gmailSucceeded = !gmailOn;
+  let whatsappSucceeded = !whatsappOn;
+  if (gmailOn) {
+    try { await sendLowStockAlertEmail("URGENT: Implant low-stock alert (" + newlyLow.length + " item(s))", message, config); gmailSucceeded = true; results.push("Gmail sent"); }
+    catch (e: any) { results.push("Gmail FAILED: " + String(e?.message || e)); }
+  }
+  if (whatsappOn) {
+    try { await sendLowStockAlertWhatsApp(message, config); whatsappSucceeded = true; results.push("WhatsApp sent"); }
+    catch (e: any) { results.push("WhatsApp FAILED: " + String(e?.message || e)); }
+  }
+  // Do not mark an item as alerted unless all enabled channels succeeded; a later check retries it.
+  if (gmailSucceeded && whatsappSucceeded) {
+    await saveState({ ...state, activeLowStockIds: currentIds, lastImmediateAlertAt: new Date().toISOString(),
+      lastStatus: "Immediate low-stock text alert: " + results.join("; ") + " for " + newlyLow.length + " item(s)." });
+  } else {
+    await saveState({ ...state, lastStatus: "Immediate low-stock alert delivery issue: " + results.join("; ") });
+  }
+  return results.join("; ");
 }
 
 export async function shareLowStockPdfViaWhatsApp(): Promise<void> {
