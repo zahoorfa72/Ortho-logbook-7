@@ -1107,7 +1107,7 @@ function mergeIncrementalPayloads(previous: any, incoming: any): any {
   const tableNames = [
     "patients", "procedures", "inventoryCategories", "inventory", "patientImplants",
     "patientCustomFields", "implantRecords", "expenses", "users", "patientHistory",
-    "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts",
+    "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts", "trash",
   ];
   const changedTables = Array.from(new Set([
     ...(Array.isArray(previous.changedTables) ? previous.changedTables : []),
