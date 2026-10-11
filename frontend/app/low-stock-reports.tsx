@@ -49,7 +49,6 @@ export default function LowStockReportsScreen() {
       {config.schedule === "fixedDate" && field("Trigger date (YYYY-MM-DD)", config.fixedDate || "", v => update({ fixedDate: v }), "2026-12-01")}
       <Text style={styles.help}>Automatic checks run when the app starts/opens. Android may delay background work; this version cannot guarantee a send at an exact time while the app is closed.</Text>
       <Text style={styles.section}>Email delivery</Text>
-      {toggle("Send PDF by email", !!config.emails.trim(), () => update({ emails: config.emails ? "" : "recipient@gmail.com" }))}
       {field("Recipient email(s)", config.emails, v => update({ emails: v }), "recipient@gmail.com; another@gmail.com")}
       {field("Sender email (must be verified with Resend)", config.senderEmail, v => update({ senderEmail: v }), "reports@your-verified-domain.com")}
       {field("Resend API key", config.resendApiKey, v => update({ resendApiKey: v }), "re_…", true)}
