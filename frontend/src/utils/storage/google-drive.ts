@@ -738,20 +738,32 @@ async function mergeLegacyDriveHistory(localText: string, onProgress?: (stage: s
   const hasFullBaseline = !!fullBaseline;
   const baselineTime = fullBaseline ? Date.parse(String(fullBaseline.modifiedTime || "")) :
     Math.max(0, ...candidates.map((file: any) => Date.parse(String(file.modifiedTime || ""))).filter(Number.isFinite));
-  const allDeltas = await listIncrementalFiles();
-  const deltas = hasFullBaseline
-    ? allDeltas.filter((file: any) => file?.id && Number.isFinite(Date.parse(String(file.modifiedTime || ""))) &&
-        (!Number.isFinite(baselineTime) || Date.parse(String(file.modifiedTime)) > baselineTime))
-        .sort((a: any, b: any) => Date.parse(String(a.modifiedTime)) - Date.parse(String(b.modifiedTime)))
-    : allDeltas.filter((file: any) => file?.id)
-        .sort((a: any, b: any) => Date.parse(String(a.modifiedTime || "")) - Date.parse(String(b.modifiedTime || "")));
+  // Do not filter a rolling journal only by Drive modifiedTime. Updating a
+  // master file can advance its timestamp without changing its ID, making a
+  // still-required deletion journal appear older than the master. Validate the
+  // journal's baseline ID after downloading it instead.
+  const deltas = (await listIncrementalFiles())
+    .filter((file: any) => file?.id)
+    .sort((a: any, b: any) => Date.parse(String(a.modifiedTime || "")) - Date.parse(String(b.modifiedTime || "")));
   for (let index = 0; index < deltas.length; index++) {
     const deltaFile = deltas[index];
     onProgress?.("Merging saved changes… " + (index + 1) + "/" + deltas.length);
     try {
       const recovered = await downloadIncrementalWithRecovery(String(deltaFile.id), String(deltaFile.name || "Incremental backup"));
       if (recovered.warning) complete = false;
-      if (recovered.data?.incremental === true) applyIncrementalToMaster(local, recovered.data, !hasFullBaseline);
+      const delta = recovered.data;
+      if (delta?.incremental === true) {
+        const deltaBaseline = String(delta._baselineKey || "");
+        const matchesBaseline = hasFullBaseline && deltaBaseline.startsWith(String(fullBaseline.id) + ":");
+        const isLegacyDeltaAfterBaseline = !deltaBaseline && (!hasFullBaseline ||
+          Date.parse(String(deltaFile.modifiedTime || "")) > baselineTime);
+        // A keyed journal belongs to this master file even if the master's
+        // Drive modifiedTime moved forward later. Keep its tombstones so a
+        // deleted patient cannot be resurrected during restore.
+        if (!hasFullBaseline || matchesBaseline || isLegacyDeltaAfterBaseline) {
+          applyIncrementalToMaster(local, delta, !hasFullBaseline);
+        }
+      }
     } catch (error) {
       complete = false;
       console.warn("[drive-backup] incremental history could not be merged; retaining legacy files", deltaFile.name, error);
@@ -1393,10 +1405,12 @@ export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) 
   // Only apply incremental snapshots created after the full baseline. A manual
   // full backup therefore becomes the new baseline without needing risky file deletion.
   const baseTime = Date.parse(String(file.modifiedTime || ""));
+  // Inspect keyed journals even when their Drive timestamp is older than the
+  // master. The master may have been updated in place after the journal was
+  // written; the baseline file ID determines whether the journal still applies.
   const deltas = (await listIncrementalFiles())
-    .filter((item: any) => item?.id && Number.isFinite(Date.parse(String(item.modifiedTime || ""))) &&
-      (!Number.isFinite(baseTime) || Date.parse(String(item.modifiedTime)) > baseTime))
-    .sort((a: any, b: any) => Date.parse(String(a.modifiedTime)) - Date.parse(String(b.modifiedTime)));
+    .filter((item: any) => item?.id)
+    .sort((a: any, b: any) => Date.parse(String(a.modifiedTime || "")) - Date.parse(String(b.modifiedTime || "")));
   const recoveryWarnings: string[] = [];
   let appliedIncrementals = 0;
   for (let deltaIndex = 0; deltaIndex < deltas.length; deltaIndex++) {
@@ -1417,6 +1431,11 @@ export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) 
       recoveryWarnings.push(String(deltaFile.name || "An incremental backup") + " has an invalid format and was skipped.");
       continue;
     }
+    const deltaBaseline = String(delta._baselineKey || "");
+    const belongsToCurrentBaseline = deltaBaseline
+      ? deltaBaseline.startsWith(String(file.id) + ":")
+      : Number.isFinite(baseTime) && Date.parse(String(deltaFile.modifiedTime || "")) > baseTime;
+    if (!belongsToCurrentBaseline) continue;
     let appliedAnyTable = false;
     for (const table of delta.changedTables) {
       if (table === "branding" || table === "appSettings") {
