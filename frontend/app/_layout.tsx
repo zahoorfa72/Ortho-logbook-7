@@ -16,6 +16,7 @@ import { initializeDatabase, repairDatabaseData } from "@/src/db/database";
 import { ThemeProvider } from "@/src/theme";
 import { startAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-backup";
 import { DriveSyncIndicator } from "@/src/utils/storage/drive-sync-status";
+import { startLowStockReportScheduler } from "@/src/utils/low-stock-report";
 import { LowStockReportRunner } from "@/src/components/LowStockReportRunner";
 
 LogBox.ignoreAllLogs(true);
@@ -39,7 +40,9 @@ function DatabaseBootstrap({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!ready) return;
-    return startAutomaticDriveBackup();
+    const stopDriveBackup = startAutomaticDriveBackup();
+    const stopLowStockReports = startLowStockReportScheduler();
+    return () => { stopDriveBackup(); stopLowStockReports(); };
   }, [ready]);
 
   if (error) {
@@ -108,6 +111,7 @@ export default function RootLayout() {
                     <Stack.Screen name="low-stock-reports" />
                     <Stack.Screen name="trash" options={{ headerShown: false }} />
                     <Stack.Screen name="branding" />
+                    <Stack.Screen name="low-stock-reports" />
                     <Stack.Screen name="admin-pin" />
                     <Stack.Screen name="inventory-usage" options={{ headerShown: false }} />
                     <Stack.Screen name="join-clinic" />
