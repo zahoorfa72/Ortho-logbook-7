@@ -7,6 +7,7 @@ import { db } from "@/src/db/database";
 import { defaultBranding } from "@/src/theme";
 import { storage } from "@/src/utils/storage";
 import { buildInventoryHtml } from "@/src/utils/pdf";
+import { getGoogleGmailAccessToken } from "@/src/utils/storage/google-drive";
 
 export type LowStockSchedule = "weekly" | "15days" | "monthly" | "onOpen" | "fixedDate";
 export type LowStockReportConfig = {
@@ -96,23 +97,44 @@ async function readPdfBase64(uri: string): Promise<string> {
   return FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
 }
 async function sendEmail(pdf: PdfResult, config: LowStockReportConfig) {
-  if (!config.resendApiKey?.trim() || !config.senderEmail?.trim() || !config.emails?.trim()) {
-    throw new Error("Email sending is enabled but sender email, recipient email, or Resend API key is missing.");
-  }
+  if (!config.emails?.trim()) throw new Error("Connect Gmail and enter at least one recipient email address.");
+  const token = await getGoogleGmailAccessToken();
   const content = await readPdfBase64(pdf.uri);
-  const recipients = config.emails.split(/[;,\n]/).map(x => x.trim()).filter(Boolean);
-  const response = await fetch("https://api.resend.com/emails", {
+  const recipients = config.emails.split(/[;,\\n]/).map(x => x.trim()).filter(Boolean);
+  if (!recipients.length) throw new Error("Enter at least one recipient email address.");
+  const boundary = "ortho_logbook_" + Date.now().toString(36);
+  const subject = `Low Stock Report - ${pdf.periodStart.slice(0,10)} to ${pdf.periodEnd.slice(0,10)}`;
+  const pdfLines = content.match(/.{1,76}/g)?.join("\\r\\n") || content;
+  const rawMessage = [
+    `To: ${recipients.join(", ")}`,
+    `Subject: ${subject}`,
+    "MIME-Version: 1.0",
+    `Content-Type: multipart/mixed; boundary="${boundary}"`,
+    "",
+    `--${boundary}`,
+    'Content-Type: text/plain; charset="UTF-8"',
+    "Content-Transfer-Encoding: 7bit",
+    "",
+    `Attached is the low-stock report for ${pdf.periodStart.slice(0,10)} to ${pdf.periodEnd.slice(0,10)}. It contains ${pdf.count} low-stock item(s).`,
+    `--${boundary}`,
+    'Content-Type: application/pdf; name="low-stock-report.pdf"',
+    "Content-Transfer-Encoding: base64",
+    'Content-Disposition: attachment; filename="low-stock-report.pdf"',
+    "",
+    pdfLines,
+    `--${boundary}--`,
+    "",
+  ].join("\\r\\n");
+  let encoded: string;
+  try { encoded = btoa(rawMessage).replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/, ""); }
+  catch { throw new Error("Could not encode the Gmail message on this device."); }
+  const response = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
     method: "POST",
-    headers: { Authorization: `Bearer ${config.resendApiKey.trim()}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      from: config.senderEmail.trim(), to: recipients,
-      subject: `Low Stock Report — ${pdf.periodStart.slice(0,10)} to ${pdf.periodEnd.slice(0,10)}`,
-      text: `Attached is the low-stock report for the selected reporting period. It contains ${pdf.count} item(s) with low-stock events during this period.`,
-      attachments: [{ filename: `low-stock-${pdf.periodStart.slice(0,10)}-to-${pdf.periodEnd.slice(0,10)}.pdf`, content }],
-    }),
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ raw: encoded }),
   });
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(String((body as any)?.message || (body as any)?.name || `Email provider returned HTTP ${response.status}`));
+  if (!response.ok) throw new Error(String((body as any)?.error?.message || `Gmail send failed (HTTP ${response.status})`));
 }
 async function sendWhatsApp(pdf: PdfResult, config: LowStockReportConfig) {
   if (!config.whatsappToken?.trim() || !config.whatsappPhoneNumberId?.trim() || !config.whatsappNumbers?.trim()) {
