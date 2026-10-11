@@ -126,7 +126,7 @@ async function sendEmail(pdf: PdfResult, config: LowStockReportConfig) {
     "",
   ].join("\\r\\n");
   let encoded: string;
-  try { encoded = btoa(rawMessage).replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/, ""); }
+  try { encoded = btoa(rawMessage).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
   catch { throw new Error("Could not encode the Gmail message on this device."); }
   const response = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
     method: "POST",
