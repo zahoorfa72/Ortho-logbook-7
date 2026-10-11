@@ -169,10 +169,14 @@ async function sendWhatsApp(pdf: PdfResult, config: LowStockReportConfig) {
   const recipients = [...new Set(config.whatsappNumbers.split(/[;,\n]/).map(x => x.trim().replace(/^\+/, "").replace(/[\s().-]/g, "")).filter(Boolean))];
   if (!recipients.length || recipients.some(x => !/^\d{8,15}$/.test(x))) throw new Error("Enter WhatsApp recipient numbers with country code, digits only (for example 923001234567).");
   for (const to of recipients) {
-    const response = await fetch(`${base}/messages`, {
+    const templateName = String(config.whatsappTemplateName || "").trim();
+    const message = templateName
+      ? { messaging_product: "whatsapp", to, type: "template", template: { name: templateName, language: { code: String(config.whatsappTemplateLanguage || "en_US").trim() }, components: [{ type: "header", parameters: [{ type: "document", document: { id: (media as any).id, filename: "low-stock-report.pdf" } }] }] } }
+      : { messaging_product: "whatsapp", to, type: "document", document: { id: (media as any).id, filename: "low-stock-report.pdf", caption: "Low-stock report " + pdf.periodStart.slice(0,10) + " to " + pdf.periodEnd.slice(0,10) } };
+    const response = await fetch(base + "/messages", {
       method: "POST",
-      headers: { Authorization: `Bearer ${config.whatsappToken.trim()}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ messaging_product: "whatsapp", to, type: "document", document: { id: (media as any).id, filename: "low-stock-report.pdf", caption: `Low-stock report ${pdf.periodStart.slice(0,10)} to ${pdf.periodEnd.slice(0,10)}` } }),
+      headers: { Authorization: "Bearer " + config.whatsappToken.trim(), "Content-Type": "application/json" },
+      body: JSON.stringify(message),
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(String((body as any)?.error?.message || `WhatsApp send failed (HTTP ${response.status})`));
