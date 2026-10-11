@@ -34,6 +34,8 @@ export default function LowStockReportsScreen() {
     if (config.schedule === "fixedDate" && !/^\d{4}-\d{2}-\d{2}$/.test(String(config.fixedDate || "").trim())) { toast("Enter the trigger date as YYYY-MM-DD.", "error"); return false; }
     if (config.schedule === "fixedDate") { const from = String(config.reportFromDate || "").trim(); const to = String(config.reportToDate || "").trim(); if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) { toast("Enter both report From date and To date as YYYY-MM-DD.", "error"); return false; } if (from > to) { toast("Report From date must be on or before To date.", "error"); return false; } }
     if (config.autoEmailEnabled && !config.emails.trim() && !(config.whatsappMode === "meta" && config.whatsappNumbers.trim())) { toast("Add at least one email or WhatsApp recipient before enabling automatic sending.", "error"); return false; }
+    if (config.instantLowStockGmailEnabled && !config.emails.trim()) { toast("Enter recipient email(s) for immediate Gmail low-stock alerts.", "error"); return false; }
+    if (config.instantLowStockWhatsAppEnabled && (!config.whatsappNumbers.trim() || !config.whatsappToken.trim() || !config.whatsappPhoneNumberId.trim())) { toast("For immediate WhatsApp alerts, enter recipient number(s), Cloud API token, and phone-number ID.", "error"); return false; }
     try { const next = { ...config, savedAt: new Date().toISOString() }; await saveLowStockReportConfig(next); setConfig(next); toast("Low-stock delivery settings saved securely on this device.", "success"); return true; }
     catch { toast("Could not save settings on this device.", "error"); return false; }
   };
@@ -64,7 +66,7 @@ export default function LowStockReportsScreen() {
       {toggle("Enable automatic WhatsApp PDF delivery (Meta Cloud API)", config.whatsappMode === "meta", () => update({ whatsappMode: config.whatsappMode === "meta" ? "manual" : "meta" }))}
       {toggle("Send immediate low-stock text alerts by WhatsApp", !!config.instantLowStockWhatsAppEnabled, () => update({ instantLowStockWhatsAppEnabled: !config.instantLowStockWhatsAppEnabled }))}
       {field("Recipient WhatsApp number(s)", config.whatsappNumbers, v => update({ whatsappNumbers: v }), "923001234567; 923331234567")}
-      {config.whatsappMode === "meta" && <>
+      {(config.whatsappMode === "meta" || config.instantLowStockWhatsAppEnabled) && <>
         {field("Meta WhatsApp Cloud API access token", config.whatsappToken, v => update({ whatsappToken: v }), "Paste access token", true)}
         {field("WhatsApp Phone Number ID", config.whatsappPhoneNumberId, v => update({ whatsappPhoneNumberId: v }), "Phone Number ID")}
         {field("Graph API version", config.whatsappGraphVersion || "v23.0", v => update({ whatsappGraphVersion: v }), "v23.0")}
