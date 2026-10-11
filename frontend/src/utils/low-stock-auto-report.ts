@@ -150,7 +150,7 @@ export async function attemptDueLowStockReport(): Promise<string> {
     if (config.schedule === "onOpen") return true;
     if (config.schedule === "fixedDate") {
       const target = String(config.fixedDate || "").trim();
-      if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(target)) return false;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(target)) return false;
       const targetTime = new Date(target + "T00:00:00").getTime();
       return Number.isFinite(targetTime) && now >= targetTime && (!last || new Date(last).getTime() < targetTime);
     }
