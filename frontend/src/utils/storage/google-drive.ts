@@ -313,17 +313,13 @@ export async function restoreGoogleDriveBackupById(fileId: string) {
         }
         composed[table] = Array.from(merged.values());
       } else {
-        // Full-table journal snapshots contain the complete table as of that
-        // journal generation; apply the explicit deletion IDs after the snapshot.
-        const merged = new Map<string, any>();
-        for (const row of delta[table]) {
-          const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
-          merged.set(key, row);
-        }
-        for (const deletedId of Array.isArray(delta.deletedIds?.[table]) ? delta.deletedIds[table] : []) {
-          merged.delete("id:" + String(deletedId));
-        }
-        composed[table] = Array.from(merged.values());
+        // A full-table snapshot in the journal may predate rows now in the
+        // master. Merge by record recency instead of replacing the master table,
+        // then apply its explicit deletion tombstones.
+        let mergedRows = mergeRowsByRecency(composed[table] || [], delta[table], table);
+        const deletedIds = new Set<string>(Array.isArray(delta.deletedIds?.[table]) ? delta.deletedIds[table].map(String) : []);
+        if (deletedIds.size) mergedRows = mergedRows.filter((row: any) => row?.id == null || !deletedIds.has(String(row.id)));
+        composed[table] = mergedRows;
       }
       appliedAnyTable = true;
     }
@@ -1620,7 +1616,12 @@ export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) 
             }
             composed[table] = Array.from(merged.values());
           } else {
-            composed[table] = delta[table];
+            // Do not replace the current master with a possibly older full-table
+            // journal snapshot: keep newer master records and apply tombstones.
+            let mergedRows = mergeRowsByRecency(composed[table] || [], delta[table], table);
+            const deletedIds = new Set<string>(Array.isArray(delta.deletedIds?.[table]) ? delta.deletedIds[table].map(String) : []);
+            if (deletedIds.size) mergedRows = mergedRows.filter((row: any) => row?.id == null || !deletedIds.has(String(row.id)));
+            composed[table] = mergedRows;
           }
           appliedAnyTable = true;
         } else {
