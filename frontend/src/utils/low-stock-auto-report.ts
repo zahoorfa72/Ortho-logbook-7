@@ -28,6 +28,7 @@ const CONFIG_KEY = "ortho_low_stock_report_config";
 const STATE_KEY = "ortho_low_stock_report_state";
 export async function loadLowStockReportConfig(): Promise<LowStockReportConfig | null> {
   try {
+    await storage.secureRemove("ortho_stock_ocr_space_api_key").catch(() => {});
     const raw = await SecureStore.getItemAsync(CONFIG_KEY);
     if (!raw) return null;
     const old = JSON.parse(raw) as LowStockReportConfig;
