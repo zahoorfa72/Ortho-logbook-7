@@ -194,15 +194,41 @@ async function findBackupByName(name: string) {
 
 export async function listGoogleDriveBackups(): Promise<Array<{id:string;name:string;modifiedTime:string;size?:string}>> {
   const files = await findLatestBackupCandidates();
-  return files
-    // New builds use one rolling master file. Ignore legacy month/year/date
-    // snapshots in the picker so a partial historical file cannot be mistaken
-    // for a complete restore. Those old files are left untouched in Drive.
-    .filter((file:any) => file.id && (
-      String(file.name || "") === "Ortho Logbook Backup - All Time.orbackup" ||
-      String(file.name || "") === BACKUP_NAME
-    ))
-    .map((file:any) => ({id:String(file.id),name:String(file.name || "Ortho Logbook Backup"),modifiedTime:String(file.modifiedTime || ""),size:file.size == null ? undefined : String(file.size)}))
+  const masters = files.filter((file:any) => file.id && (
+    String(file.name || "") === "Ortho Logbook Backup - All Time.orbackup" ||
+    String(file.name || "") === BACKUP_NAME
+  ));
+
+  // Small automatic edits are stored in the rolling incremental journal so we
+  // do not re-upload every patient/photo for each change. The master file's
+  // Drive modifiedTime can therefore look hours old even though the journal is
+  // current. Report the effective backup time in the restore picker by checking
+  // whether the journal belongs to this exact master baseline.
+  let journalTimeByMaster = new Map<string, string>();
+  try {
+    const journalFile = await findBackupByName("Ortho Logbook Incremental Journal.orbackup");
+    if (journalFile?.id) {
+      const journal = await downloadDriveJsonValidated(String(journalFile.id));
+      const baseline = String(journal?._baselineKey || "");
+      for (const master of masters) {
+        const masterBaselinePrefix = String(master.id) + ":" + String(master.modifiedTime || "");
+        if (journal?.incremental === true && baseline === masterBaselinePrefix && journalFile.modifiedTime) {
+          journalTimeByMaster.set(String(master.id), String(journalFile.modifiedTime));
+        }
+      }
+    }
+  } catch (error) {
+    // Listing/restoring the verified full master remains available if journal
+    // metadata is temporarily unavailable; restore itself will report warnings.
+    console.warn("[drive-backup] could not determine latest journal time for restore picker", error);
+  }
+
+  return masters
+    .map((file:any) => {
+      const masterTime = String(file.modifiedTime || "");
+      const effectiveTime = journalTimeByMaster.get(String(file.id)) || masterTime;
+      return {id:String(file.id),name:String(file.name || "Ortho Logbook Backup"),modifiedTime:effectiveTime,size:file.size == null ? undefined : String(file.size)};
+    })
     .sort((a,b) => Date.parse(b.modifiedTime || "") - Date.parse(a.modifiedTime || ""));
 }
 
