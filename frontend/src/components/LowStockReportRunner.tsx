@@ -14,7 +14,7 @@ export function LowStockReportRunner() {
       try { await attemptDueLowStockReport(); } catch {}
       finally { running = false; }
     };
-    void run();
+    void run(true);
     const timer = setInterval(() => { void run(); }, 60_000);
     const subscription = AppState.addEventListener("change", state => { if (state === "active") void run(); });
     return () => { clearInterval(timer); subscription.remove(); };
