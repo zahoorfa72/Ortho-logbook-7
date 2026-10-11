@@ -291,7 +291,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
   inventoryCategories:include("inventoryCategories") ? db.getAllSync<any>("SELECT * FROM inventory_categories ORDER BY name COLLATE NOCASE") : [],
   inventory:include("inventory") ? await Promise.all(db.getAllSync<any>("SELECT id,name,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,low_stock_triggered_at,low_stock_since FROM inventory ORDER BY COALESCE(category,''),name COLLATE NOCASE,COALESCE(size,'')").map(async (row:any) => ({
     ...row,
-    bill_image: typeof row.bill_image === "string" && /^(data:image\\/|file:\\/\\/|content:\\/\\/)/i.test(row.bill_image)
+    bill_image: typeof row.bill_image === "string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(row.bill_image)
       ? await embedOptionalPhoto(row.bill_image, compressedPhotoCache)
       : row.bill_image,
   }))) : [],
