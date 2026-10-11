@@ -1,6 +1,7 @@
 import * as SecureStore from "expo-secure-store";
 import * as Print from "expo-print";
 import * as FileSystem from "expo-file-system/legacy";
+import * as Sharing from "expo-sharing";
 import { api } from "@/src/api/client";
 import { defaultBranding } from "@/src/theme";
 import { storage } from "@/src/utils/storage";
@@ -18,6 +19,7 @@ export type LowStockReportConfig = {
   whatsappGraphVersion: string;
   whatsappTemplateName?: string;
   whatsappTemplateLanguage?: string;
+  whatsappMode?: "manual" | "meta";
   savedAt: string;
 };
 type ReportState = { emailLastSentAt?: string; whatsappLastSentAt?: string; lastError?: string; lastStatus?: string };
@@ -57,6 +59,12 @@ async function makePdf(): Promise<{ uri: string; base64: string; count: number }
   const base64 = await FileSystem.readAsStringAsync(file.uri, { encoding: FileSystem.EncodingType.Base64 });
   if (!base64) throw new Error("Could not read the generated low-stock PDF.");
   return { uri: file.uri, base64, count: low.length };
+}
+export async function shareLowStockPdfViaWhatsApp(): Promise<void> {
+  const pdf = await makePdf();
+  const available = await Sharing.isAvailableAsync();
+  if (!available) throw new Error("PDF sharing is not available on this device.");
+  await Sharing.shareAsync(pdf.uri, { mimeType: "application/pdf", dialogTitle: "Share low-stock PDF with WhatsApp or WhatsApp Business", UTI: "com.adobe.pdf" });
 }
 export async function sendLowStockTestEmail(config: LowStockReportConfig, recipient?: string) {
   if (!config.resendApiKey.trim() || !config.senderEmail.trim()) throw new Error("Enter the Resend API key and verified sender email first.");
@@ -138,7 +146,7 @@ export async function attemptDueLowStockReport(): Promise<string> {
   const now = Date.now();
   const due = (last?: string) => !last || now - new Date(last).getTime() >= dueMs(config.schedule);
   const emailDue = parseList(config.emails).length > 0 && Boolean(config.resendApiKey && config.senderEmail) && due(state.emailLastSentAt);
-  const whatsappDue = parseList(config.whatsappNumbers).length > 0 && Boolean(config.whatsappToken && config.whatsappPhoneNumberId) && due(state.whatsappLastSentAt);
+  const whatsappDue = config.whatsappMode !== "manual" && parseList(config.whatsappNumbers).length > 0 && Boolean(config.whatsappToken && config.whatsappPhoneNumberId) && due(state.whatsappLastSentAt);
   if (!emailDue && !whatsappDue) return "No scheduled low-stock report is due.";
   try {
     const pdf = await makePdf();
@@ -152,7 +160,7 @@ export async function attemptDueLowStockReport(): Promise<string> {
       try { await sendWhatsAppPdf(config, pdf.uri, pdf.count); next.whatsappLastSentAt = isoNow(); successes.push("WhatsApp"); }
       catch (e: any) { next.lastError = "WhatsApp: " + String(e?.message || e); }
     }
-    next.lastStatus = successes.length ? "Sent low-stock PDF by " + successes.join(" and ") + "." : "Low-stock report delivery failed.";
+    next.lastStatus = successes.length ? "Sent low-stock PDF by " + successes.join(" and ") + (config.whatsappMode === "manual" && emailDue ? ". WhatsApp PDF is ready to share manually from the report settings." : ".") : "Low-stock report delivery failed.";
     await saveState(next);
     return next.lastStatus + (next.lastError ? " " + next.lastError : "");
   } catch (e: any) {
