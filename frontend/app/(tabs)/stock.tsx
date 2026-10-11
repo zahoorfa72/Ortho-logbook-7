@@ -11,6 +11,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api } from "@/src/api/client";
+import { checkAndSendImmediateLowStockAlerts } from "@/src/utils/low-stock-auto-report";
 import { useAuth } from "@/src/auth/AuthContext";
 import { PrimaryButton } from "@/src/components/PrimaryButton";
 import { useToast } from "@/src/components/toast";
@@ -140,6 +141,7 @@ export default function StockScreen(){
       });
     },
     onSuccess:()=>{
+      void checkAndSendImmediateLowStockAlerts().catch(()=>{});
       qc.invalidateQueries({queryKey:["inventory"]});
       qc.invalidateQueries({queryKey:["inventory","stock-picker"]});
       qc.invalidateQueries({queryKey:["inventory-purchase-receipts"]});
