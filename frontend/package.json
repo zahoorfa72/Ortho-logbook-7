@@ -59,7 +59,8 @@
     "expo-media-library": "57.0.5",
     "@react-native-google-signin/google-signin": "16.1.5",
     "expo-camera": "~57.0.6",
-    "expo-ocr-kit": "0.1.4"
+    "expo-ocr-kit": "0.1.4",
+    "@uzimandias/react-native-pdf-to-image": "0.1.0"
   },
   "devDependencies": {
     "@types/react": "19.2.10",
