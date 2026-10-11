@@ -108,6 +108,7 @@ export default function PatientForm() {
   const [cropX, setCropX] = useState(0.5);
   const [cropY, setCropY] = useState(0.5);
   const [p, setP] = useState<Patient>(empty);
+  const [dismissedTrashMatchId, setDismissedTrashMatchId] = useState<string | null>(null);
   const selectedImplants = p.implants || [];
 
   const { data: trashedPatientMatch, isFetching: checkingTrashMatch } = useQuery<{
@@ -587,29 +588,47 @@ export default function PatientForm() {
         bottomOffset={100}
         keyboardShouldPersistTaps="handled"
       >
-        {!isEdit && trashedPatientMatch?.id ? (
-          <View style={styles.restorePatientBanner} testID="matching-trash-patient-banner">
-            <View style={styles.restorePatientCopy}>
-              <Text style={styles.restorePatientTitle}>Matching patient found in Trash</Text>
-              <Text style={styles.restorePatientText}>
-                MR {trashedPatientMatch.patient.mrNo} · {trashedPatientMatch.patient.name}
-              </Text>
-              <Text style={styles.restorePatientText}>
-                Restore the original patient with all saved details and photos. Only the patient date will be changed to today.
-              </Text>
+        <Modal
+          visible={!isEdit && !!trashedPatientMatch?.id && dismissedTrashMatchId !== trashedPatientMatch.id}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setDismissedTrashMatchId(trashedPatientMatch?.id || null)}
+        >
+          <View style={styles.restorePatientOverlay} testID="matching-trash-patient-banner">
+            <View style={styles.restorePatientDialog}>
+              <View style={styles.restorePatientDialogHeader}>
+                <Ionicons name="person-circle-outline" size={34} color={colors.brandPrimary} />
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Dismiss patient restore suggestion"
+                  onPress={() => setDismissedTrashMatchId(trashedPatientMatch?.id || null)}
+                  hitSlop={10}
+                >
+                  <Ionicons name="close" size={24} color={colors.muted} />
+                </Pressable>
+              </View>
+              <View style={styles.restorePatientCopy}>
+                <Text style={styles.restorePatientTitle}>Matching patient found in Trash</Text>
+                <Text style={styles.restorePatientText}>
+                  MR {trashedPatientMatch?.patient.mrNo} · {trashedPatientMatch?.patient.name}
+                </Text>
+                <Text style={styles.restorePatientText}>
+                  Restore all saved details and photos. Only the patient date will be changed to today.
+                </Text>
+              </View>
+              <PrimaryButton
+                title={restoreDeletedPatient.isPending ? "Restoring…" : "Restore patient"}
+                onPress={() => Alert.alert(
+                  "Restore deleted patient?",
+                  "All saved patient details, photos, procedures and linked records will be restored. The patient date will be set to today.",
+                  [{ text: "Cancel", style: "cancel" }, { text: "Restore", onPress: () => restoreDeletedPatient.mutate() }],
+                )}
+                disabled={restoreDeletedPatient.isPending}
+                testID="restore-matching-trash-patient"
+              />
             </View>
-            <PrimaryButton
-              title={restoreDeletedPatient.isPending ? "Restoring…" : "Restore patient"}
-              onPress={() => Alert.alert(
-                "Restore deleted patient?",
-                "All saved patient details, photos, procedures and linked records will be restored. The patient date will be set to today.",
-                [{ text: "Cancel", style: "cancel" }, { text: "Restore", onPress: () => restoreDeletedPatient.mutate() }],
-              )}
-              disabled={restoreDeletedPatient.isPending}
-              testID="restore-matching-trash-patient"
-            />
           </View>
-        ) : null}
+        </Modal>
         {duplicate ? (
           <View style={styles.duplicateBanner} testID="duplicate-banner">
             <Ionicons name="repeat" size={20} color={colors.onWarning} />
@@ -1028,14 +1047,28 @@ const useStyles = makeStyles((colors) => ({
   quickChipText: { fontFamily: fontFamily.medium, fontSize: fontSize.sm, color: colors.onSurfaceTertiary },
   history: { flexDirection: "row", alignItems: "center", gap: spacing.sm, padding: spacing.lg, backgroundColor: colors.surfaceTertiary, borderRadius: radius.md, marginTop: spacing.md },
   historyText: { fontFamily: fontFamily.semibold, color: colors.brandPrimary },
-  restorePatientBanner: {
-    gap: spacing.md,
-    backgroundColor: colors.surfaceSecondary,
+  restorePatientOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(15,23,42,0.58)",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: spacing.lg,
+  },
+  restorePatientDialog: {
+    width: "100%",
+    maxWidth: 440,
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: colors.brandPrimary,
-    borderRadius: radius.md,
-    padding: spacing.md,
-    marginBottom: spacing.md,
+    padding: spacing.lg,
+    gap: spacing.lg,
+    elevation: 12,
+  },
+  restorePatientDialogHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
   },
   restorePatientCopy: { gap: spacing.xs },
   restorePatientTitle: { fontFamily: fontFamily.bold, fontSize: fontSize.base, color: colors.brandPrimary },
