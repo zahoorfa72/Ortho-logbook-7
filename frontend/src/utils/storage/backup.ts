@@ -170,10 +170,10 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
  }
  }
  const appSettings = include("appSettings") ? {
-   googleOAuthClientId: (await SecureStore.getItemAsync("ortho_google_drive_client_id").catch(() => null)) || undefined,
-   googleCloudProjectId: (await SecureStore.getItemAsync("ortho_google_drive_cloud_project_id").catch(() => null)) || undefined,
+   googleOAuthClientId: (await SecureStore.getItemAsync("ortho_google_drive_client_id").catch(() => null)) || null,
+   googleCloudProjectId: (await SecureStore.getItemAsync("ortho_google_drive_cloud_project_id").catch(() => null)) || null,
    // Recovery metadata only; Google credentials must be re-authorized after reinstall.
-   googleAccountEmail: (await storage.secureGet("ortho_drive_account_email", "")) || undefined,
+   googleAccountEmail: (await storage.secureGet("ortho_drive_account_email", "")) || null,
  } : undefined;
  const pf=whereForFilter(filter, "date");
  const patients=include("patients") ? db.getAllSync<any>(`SELECT * FROM patients${pf.sql} ORDER BY date DESC, created_at DESC`, pf.args) : [];
