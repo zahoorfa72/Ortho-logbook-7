@@ -9,7 +9,7 @@ import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/s
 import { attemptDueLowStockReport, getLowStockReportState, loadLowStockReportConfig, saveLowStockReportConfig, sendLowStockTestEmail, sendLowStockTestWhatsApp, shareLowStockPdfViaWhatsApp, type LowStockReportConfig, type LowStockSchedule } from "@/src/utils/low-stock-auto-report";
 import { storage } from "@/src/utils/storage";
 
-const blank = (): LowStockReportConfig => ({ schedule: "weekly", autoEmailEnabled: false, emails: "", resendApiKey: "", senderEmail: "", whatsappNumbers: "", whatsappToken: "", whatsappPhoneNumberId: "", whatsappGraphVersion: "v23.0", whatsappTemplateName: "", whatsappTemplateLanguage: "en_US", whatsappMode: "manual", savedAt: "" });
+const blank = (): LowStockReportConfig => ({ schedule: "weekly", fixedDate: "", autoEmailEnabled: false, emails: "", resendApiKey: "", senderEmail: "", whatsappNumbers: "", whatsappToken: "", whatsappPhoneNumberId: "", whatsappGraphVersion: "v23.0", whatsappTemplateName: "", whatsappTemplateLanguage: "en_US", whatsappMode: "manual", savedAt: "" });
 export default function LowStockReportsScreen() {
   const { user } = useAuth();
   const { colors } = useTheme();
@@ -41,13 +41,15 @@ export default function LowStockReportsScreen() {
   const runNow = async () => { if (!await save()) return; setBusy(true); try { const result = await attemptDueLowStockReport(); setStatus(result); toast(result, result.startsWith("Sent") ? "success" : "info"); } finally { setBusy(false); } };
   if (user?.role !== "admin") return <View style={[styles.container, { paddingTop: insets.top, justifyContent: "center", alignItems: "center" }]}><Text style={styles.title}>Administrator only</Text></View>;
   const field = (label: string, value: string, onChangeText: (v: string) => void, placeholder: string, secure = false, multiline = false) => <View style={styles.field}><Text style={styles.label}>{label}</Text><TextInput value={value} onChangeText={onChangeText} placeholder={placeholder} placeholderTextColor={colors.muted} secureTextEntry={secure} autoCapitalize="none" autoCorrect={false} multiline={multiline} style={[styles.input, multiline && { minHeight: 76, textAlignVertical: "top" }]} /></View>;
-  const schedules: { value: LowStockSchedule; label: string }[] = [{ value: "weekly", label: "Weekly" }, { value: "15days", label: "Every 15 days" }, { value: "monthly", label: "Monthly" }];
+  const schedules: { value: LowStockSchedule; label: string }[] = [{ value: "weekly", label: "Weekly" }, { value: "15days", label: "Every 15 days" }, { value: "monthly", label: "Monthly" }, { value: "onOpen", label: "Every app open" }, { value: "fixedDate", label: "Fixed date (once)" }];
   return <View style={styles.container}>
     <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}><Pressable onPress={() => router.back()} style={styles.back}><Ionicons name="arrow-back" size={22} color={colors.onSurface}/></Pressable><Text style={styles.title}>Automatic Low Stock Reports</Text><View style={styles.back}/></View>
     <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xxl }}>
       <Text style={styles.help}>Reports are checked automatically while Ortho Logbook is open and internet is available. Credentials are stored in the device's secure storage. Keep this app open for scheduled delivery.</Text>
       <Text style={styles.section}>Schedule</Text>
       <View style={styles.scheduleRow}>{schedules.map(s => <Pressable key={s.value} onPress={() => update({ schedule: s.value })} style={[styles.schedule, config.schedule === s.value && { borderColor: colors.brandPrimary, backgroundColor: colors.brandTertiary }]}><Text style={[styles.scheduleText, config.schedule === s.value && { color: colors.brandPrimary }]}>{s.label}</Text></Pressable>)}</View>
+      {config.schedule === "fixedDate" && <>{field("Send on this date (YYYY-MM-DD)", config.fixedDate || "", v => update({ fixedDate: v }), "2026-12-01")}<Text style={styles.help}>This is a one-time date. The report sends on or after that date the next time the app is open and online. For recurring delivery, choose Weekly, Every 15 days, or Monthly.</Text></>}
+      {config.schedule === "onOpen" && <Text style={styles.help}>The report is checked each time the admin opens or returns to the app. Keep the app online; no delivery can happen while it is closed. Repeated sending can occur on each new app opening if low-stock items remain.</Text>}
       <Text style={styles.section}>Invoice OCR setup</Text>
       {field("OCR.space API key (for scanning stock invoice images and PDFs)", ocrApiKey, setOcrApiKey, "Enter your OCR.space API key", true)}
       <Text style={styles.help}>The scanner uses this key to read an invoice image or PDF, suggest stock items and split sizes into editable rows. OCR output is never saved to stock until an admin reviews and confirms it.</Text>
