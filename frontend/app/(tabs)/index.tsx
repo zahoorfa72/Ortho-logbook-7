@@ -552,10 +552,13 @@ export default function Logbook() {
                 </View>
               ) : null}
               {abnormalLabLabels(item).length ? (
-                <View style={{ marginTop: spacing.xs, paddingVertical: spacing.xs, paddingHorizontal: spacing.sm, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.error || "#B91C1C", backgroundColor: (colors.error || "#B91C1C") + "12" }}>
-                  <Text style={{ color: colors.error || "#B91C1C", fontFamily: fontFamily.bold, fontSize: fontSize.xs }}>POSSIBLE ABNORMAL LAB RESULTS</Text>
-                  {abnormalLabLabels(item).map((label, index) => <Text key={label + index} style={{ color: colors.error || "#B91C1C", fontFamily: fontFamily.bold, fontSize: fontSize.sm, marginTop: 2 }}>{label}</Text>)}
-                  <Text style={{ color: colors.muted, fontSize: fontSize.xs, marginTop: 2 }}>Verify on original report</Text>
+                <View style={{ marginTop: spacing.xs, paddingVertical: 3, paddingHorizontal: spacing.sm, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.error || "#B91C1C", backgroundColor: (colors.error || "#B91C1C") + "12" }}>
+                  <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 4 }}>
+                    <Ionicons name="alert-circle" size={13} color={colors.error || "#B91C1C"} />
+                    <Text style={{ color: colors.error || "#B91C1C", fontFamily: fontFamily.bold, fontSize: fontSize.xs }}>LAB ALERT</Text>
+                    {abnormalLabLabels(item).map((label, index) => <Text key={label + index} style={{ color: colors.error || "#B91C1C", fontFamily: fontFamily.bold, fontSize: fontSize.xs }}>{label}</Text>)}
+                  </View>
+                  <Text style={{ color: colors.muted, fontSize: 10, marginTop: 1 }}>Verify report</Text>
                 </View>
               ) : null}
 
