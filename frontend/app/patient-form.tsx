@@ -141,10 +141,10 @@ export default function PatientForm() {
           // test name, retain OCR text only when lab-specific wording and numeric
           // content are present; unfamiliar rows are review-only, never alerts.
           const recognizedRows = text && isLikelyLabReportText(text, configuredLabTests);
-          const labCues = /\\b(?:laboratory|lab report|investigation|test name|test results?|reference range|normal range|biological reference|specimen|result|units?)\\b/i.test(text);
-          const numericContent = /[-+]?\\d+(?:[.,]\\d+)?/.test(text);
+          const labCues = /\b(?:laboratory|lab report|investigation|test name|test results?|reference range|normal range|biological reference|specimen|result|units?)\b/i.test(text);
+          const numericContent = /[-+]?\d+(?:[.,]\d+)?/.test(text);
           if (text && (recognizedRows || (labCues && numericContent))) {
-            pages.push("LAB REPORT IMAGE " + (i + 1) + "\\n" + text);
+            pages.push("LAB REPORT IMAGE " + (i + 1) + "\n" + text);
           }
         } catch {
           // Continue scanning other pictures; a single damaged/unavailable image
@@ -169,7 +169,7 @@ export default function PatientForm() {
         const line = rawLine.replace(/\s+/g, " ").trim();
         if (!line || line.length < 4 || isLabMetadataLine(line, configuredLabTests)) continue;
         const knownTest = hasKnownLabTestName(line, configuredLabTests);
-        const hasNumber = /[-+]?\\d+(?:[.,]\\d+)?/.test(line);
+        const hasNumber = /[-+]?\d+(?:[.,]\d+)?/.test(line);
         // Unknown numeric lines on a lab-looking page are preserved for human
         // review only; their names/ranges are never guessed or labelled abnormal.
         if (!knownTest && !(hasNumber && /[a-z]{2,}/i.test(line))) continue;
