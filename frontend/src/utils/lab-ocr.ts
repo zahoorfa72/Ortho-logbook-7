@@ -32,6 +32,10 @@ function normaliseName(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
 }
 
+export function hasKnownLabTestName(line: string): boolean { return !!findTestPrefix(line); }
+
+export function isLabMetadataLine(line: string): boolean { return isNonResultLine(line); }
+
 function findTestPrefix(line: string): { name: string; end: number } | null {
   const cleaned = line.replace(/^\s*[•*|:;\-]+\s*/, "");
   const lower = cleaned.toLowerCase();
