@@ -192,6 +192,8 @@ export default function Logbook() {
         const raw = await AsyncStorage.getItem("ortho_lab_ocr_patient_cache_v3");
         if (raw) Object.assign(snapshot, JSON.parse(raw));
       } catch {}
+      let configuredLabTests: import("@/src/utils/lab-ocr").LabTestDefinition[] = [];
+      try { const savedTests = await AsyncStorage.getItem("ortho_lab_test_definitions_v1"); if (savedTests) configuredLabTests = JSON.parse(savedTests); } catch {}
       for (const patient of data || []) {
         if (cancelled) return;
         const photos = [...new Set([...(patient.photos || []), ...((patient as any).photoUri ? [(patient as any).photoUri] : [])])].filter(Boolean);
@@ -205,11 +207,9 @@ export default function Logbook() {
             const result = await recognizeLabText(uri);
             const text = String(result?.text || "").trim();
             if (!text) continue;
-            if (isLikelyLabReportText(text)) reportTexts.push(text);
+            if (isLikelyLabReportText(text, configuredLabTests)) reportTexts.push(text);
           } catch {}
         }
-        let configuredLabTests: import("@/src/utils/lab-ocr").LabTestDefinition[] = [];
-        try { const savedTests = await AsyncStorage.getItem("ortho_lab_test_definitions_v1"); if (savedTests) configuredLabTests = JSON.parse(savedTests); } catch {}
         const flags = reportTexts.flatMap(reportText =>
           parseLabReportRows(reportText, configuredLabTests, patient.gender).map(row =>
             row.severity + ": " + row.test + " " + row.result + (row.unit ? " " + row.unit : "") + " | Ref: " + row.reference
