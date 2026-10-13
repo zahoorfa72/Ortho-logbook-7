@@ -74,7 +74,7 @@ function ordinalShort(n: number) {
 }
 
 function abnormalLabLabels(patient: Patient, automaticFlags?: string[]): string[] {
-  const saved = String(patient.customData?.labOcrPossibleFlags || automaticFlags?.join("\\n") || "").trim();
+  const saved = String(patient.customData?.labOcrPossibleFlags || automaticFlags?.join("\n") || "").trim();
   if (!saved) return [];
   const labels: string[] = [];
   for (const raw of saved.split(/\r?\n/)) {
