@@ -1,5 +1,7 @@
 import { recognizeText } from "expo-ocr-kit";
 import { Image } from "react-native";
+import * as ImageManipulator from "expo-image-manipulator";
+import * as FileSystem from "expo-file-system/legacy";
 
 export type LabTestDefinition = { id: string; name: string; maleMin: string; maleMax: string; femaleMin: string; femaleMax: string; unit: string };
 
