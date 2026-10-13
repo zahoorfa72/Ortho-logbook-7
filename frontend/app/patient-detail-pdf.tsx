@@ -32,6 +32,7 @@ const baseFields:Field[] = [
   {key:"diagnosis",label:"Diagnosis"}, {key:"procedure",label:"Procedure"}, {key:"procedureII",label:"Procedure 2"},
   {key:"implants",label:"Implants"}, {key:"fileName",label:"File Name"},
   {key:"hcvPlus",label:"HCV+"}, {key:"hbaSg",label:"HbAsg"}, {key:"hiv",label:"HIV"},
+  {key:"labOcrManualResults",label:"Manually Verified Lab Results"},
 ];
 
 export default function PatientDetailPdfScreen() {
