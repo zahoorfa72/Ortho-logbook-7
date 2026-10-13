@@ -8,6 +8,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "@/src/auth/AuthContext";
 import { useToast } from "@/src/components/toast";
 import { hasAdminPin } from "@/src/utils/admin-pin";
+import { triggerAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-backup";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 
 type Row = { icon: string; label: string; sub: string; to: string; testID: string };
@@ -20,10 +21,12 @@ export default function SettingsScreen() {
   const toast = useToast();
   const [pinSet, setPinSet] = useState(false);
   const [labOcrEnabled, setLabOcrEnabled] = useState(false);
+  const [labWarningsEnabled, setLabWarningsEnabled] = useState(true);
 
   useEffect(() => {
     hasAdminPin().then(setPinSet);
     AsyncStorage.getItem("ortho_lab_ocr_enabled").then(value => setLabOcrEnabled(value === "true")).catch(() => setLabOcrEnabled(false));
+    AsyncStorage.getItem("ortho_lab_warnings_enabled").then(value => setLabWarningsEnabled(value !== "false")).catch(() => setLabWarningsEnabled(true));
   }, []);
 
   if (user?.role !== "admin") {
@@ -77,12 +80,30 @@ export default function SettingsScreen() {
             value={labOcrEnabled}
             onValueChange={async value => {
               setLabOcrEnabled(value);
-              try { await AsyncStorage.setItem("ortho_lab_ocr_enabled", value ? "true" : "false"); }
+              try { await AsyncStorage.setItem("ortho_lab_ocr_enabled", value ? "true" : "false"); triggerAutomaticDriveBackup("appSettings"); }
               catch { setLabOcrEnabled(!value); toast("Could not save the lab reader setting.", "error"); }
             }}
             trackColor={{ false: colors.border, true: colors.brandPrimary }}
             thumbColor={labOcrEnabled ? colors.onBrandPrimary : colors.muted}
             accessibilityLabel="Enable offline lab report reader"
+          />
+        </View>
+        <View style={[styles.row, { marginBottom: spacing.md }]}>
+          <View style={styles.rowIcon}><Ionicons name="warning-outline" size={22} color={colors.warning || colors.brandPrimary} /></View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.rowLabel}>Show mild lab-result warnings</Text>
+            <Text style={styles.rowSub}>Yellow warnings are for small differences from the printed reference range. Turning this off hides warnings only; larger deviations remain flagged. Always verify the original report.</Text>
+          </View>
+          <Switch
+            value={labWarningsEnabled}
+            onValueChange={async value => {
+              setLabWarningsEnabled(value);
+              try { await AsyncStorage.setItem("ortho_lab_warnings_enabled", value ? "true" : "false"); triggerAutomaticDriveBackup("appSettings"); }
+              catch { setLabWarningsEnabled(!value); toast("Could not save the lab warning setting.", "error"); }
+            }}
+            trackColor={{ false: colors.border, true: colors.brandPrimary }}
+            thumbColor={labWarningsEnabled ? colors.onBrandPrimary : colors.muted}
+            accessibilityLabel="Show mild lab-result warnings"
           />
         </View>
         <View style={styles.brandingHero}>
