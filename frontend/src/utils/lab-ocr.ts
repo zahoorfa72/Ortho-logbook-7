@@ -452,11 +452,19 @@ async function recognizeOnlineLabText(uri: string, apiKey: string): Promise<stri
     body.append("isOverlayRequired", "false");
     body.append("detectOrientation", "true");
     body.append("scale", "true");
-    const response = await fetch("https://api.ocr.space/parse/image", {
-      method: "POST",
-      headers: { apikey: key },
-      body,
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    let response: Response;
+    try {
+      response = await fetch("https://api.ocr.space/parse/image", {
+        method: "POST",
+        headers: { apikey: key },
+        body,
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
     if (!response.ok) return "";
     const payload: any = await response.json();
     if (payload?.IsErroredOnProcessing) return "";
@@ -523,5 +531,5 @@ export async function recognizeLabText(uri: string, onlineApiKey = ""): Promise<
   } catch {
     // Raw on-device OCR text remains available if image geometry is unavailable.
   }
-  return { text, structuredText, mode };
+  return { text, structuredText: mode === "online" ? "" : structuredText, mode };
 }
