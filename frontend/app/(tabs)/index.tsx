@@ -71,6 +71,29 @@ function ordinalShort(n: number) {
   return n + (s[(v - 20) % 10] || s[v] || s[0]);
 }
 
+function abnormalLabLabels(patient: Patient): string[] {
+  const saved = String(patient.customData?.labOcrPossibleFlags || "").trim();
+  if (!saved) return [];
+  const labels: string[] = [];
+  for (const raw of saved.split(/\r?\n/)) {
+    const line = raw.replace(/\s+—\s*POSSIBLY OUT OF RANGE.*$/i, "").trim();
+    const nums = [...line.matchAll(/[-+]?\d+(?:[.,]\d+)?/g)].map(m => Number(m[0].replace(",", ".")));
+    const first = line.search(/[-+]?\d+(?:[.,]\d+)?/);
+    let test = first > 0 ? line.slice(0, first).replace(/^[\s:|•-]+|[\s:|•-]+$/g, "").trim() : "";
+    test = test.replace(/^(?:image\s+\d+\s*)/i, "").trim();
+    if (!test || /^(?:ref(?:erence)?|normal|range|result|value)$/i.test(test)) test = "Test name unclear";
+    let direction = "";
+    if (nums.length >= 3) {
+      const low = Math.min(nums[1], nums[2]);
+      const high = Math.max(nums[1], nums[2]);
+      direction = nums[0] < low ? "LOW" : nums[0] > high ? "HIGH" : "";
+    }
+    const label = (direction ? direction + ": " : "OUT OF RANGE: ") + test;
+    if (!labels.includes(label)) labels.push(label);
+  }
+  return labels.slice(0, 5);
+}
+
 export default function Logbook() {
   const styles = useStyles();
   const { colors, branding } = useTheme();
@@ -526,6 +549,13 @@ export default function Logbook() {
               {infectionResults(item).length ? (
                 <View style={styles.infectionRow}>
                   {infectionResults(item).map(label => <Text key={label} style={styles.infectionText}>{label}</Text>)}
+                </View>
+              ) : null}
+              {abnormalLabLabels(item).length ? (
+                <View style={{ marginTop: spacing.xs, paddingVertical: spacing.xs, paddingHorizontal: spacing.sm, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.error || "#B91C1C", backgroundColor: (colors.error || "#B91C1C") + "12" }}>
+                  <Text style={{ color: colors.error || "#B91C1C", fontFamily: fontFamily.bold, fontSize: fontSize.xs }}>POSSIBLE ABNORMAL LAB RESULTS</Text>
+                  {abnormalLabLabels(item).map((label, index) => <Text key={label + index} style={{ color: colors.error || "#B91C1C", fontFamily: fontFamily.bold, fontSize: fontSize.sm, marginTop: 2 }}>{label}</Text>)}
+                  <Text style={{ color: colors.muted, fontSize: fontSize.xs, marginTop: 2 }}>Verify on original report</Text>
                 </View>
               ) : null}
 
