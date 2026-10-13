@@ -149,39 +149,64 @@ export default function PatientForm() {
     setP(prev => ({ ...prev, customData: { ...(prev.customData || {}), labReportPhotoUris: JSON.stringify(next) } }));
   };
 
-  const analyzeLabPhotos = async () => {
-    if (!labOcrEnabled) { toast("Lab report reading is disabled by the administrator.", "info"); return; }
-    if (!labPhotos.length) { toast("Add lab report photos first.", "info"); return; }
+  const analyzeLabPhotos = async (photoUris: string[] = [...new Set([...p.photos, ...labPhotos])], automatic = false) => {
+    if (!labOcrEnabled || !photoUris.length || labOcrBusy) return;
     setLabOcrBusy(true);
     try {
       const pages: string[] = [];
-      for (let i = 0; i < labPhotos.length; i++) {
-        const result = await recognizeLabText(labPhotos[i]);
-        pages.push("PAGE " + (i + 1) + "\n" + String(result?.text || "").trim());
+      for (let i = 0; i < photoUris.length; i++) {
+        try {
+          const result = await recognizeLabText(photoUris[i]);
+          const text = String(result?.text || "").trim();
+          if (text) pages.push("IMAGE " + (i + 1) + "\n" + text);
+        } catch {
+          // Continue scanning other pictures; a single damaged/unavailable image
+          // must not prevent readable pages from being checked.
+        }
       }
-      const extracted = pages.filter(x => x.trim()).join("\n\n");
-      if (!extracted.trim()) throw new Error("No readable text was found. Retake the photo clearly, with good light and the full report in frame.");
+      const extracted = pages.join("\n\n");
+      if (!extracted.trim()) {
+        setLabOcrText("");
+        setLabOcrFindings([]);
+        if (automatic) toast("Lab text could not be read from the saved photos. Retake the lab report clearly; no abnormality can be confirmed.", "info");
+        else toast("No readable text found. Retake the report in good light with the full page in focus.", "error");
+        return;
+      }
       const candidates: string[] = [];
+      const uncertain: string[] = [];
       for (const rawLine of extracted.split(/\r?\n/)) {
         const line = rawLine.replace(/\s+/g, " ").trim();
         if (!line || line.length < 4) continue;
-        // Only flag a row when OCR sees a result and an explicit printed range.
-        const nums = [...line.matchAll(/[-+]?\d+(?:[.,]\d+)?/g)].map(m => ({ value: Number(m[0].replace(",", ".")), index: m.index ?? 0 }));
-        if (nums.length < 3) continue;
-        const resultNum = nums[0];
-        const rangeNums = nums.slice(1, 3);
-        const tail = line.slice(rangeNums[0].index);
-        if (!/(?:reference|normal|range|ref\.?\s*range|\bto\b|[-–—])/i.test(tail)) continue;
-        const lo = Math.min(rangeNums[0].value, rangeNums[1].value);
-        const hi = Math.max(rangeNums[0].value, rangeNums[1].value);
-        if (resultNum.value < lo || resultNum.value > hi) candidates.push(line + "  ← CHECK: result may be outside the printed reference range");
+        // Require a plausible printed interval and a numeric result on the same
+        // OCR row. This conservative check reduces false alerts on dates/IDs.
+        const nums = [...line.matchAll(/[-+]?\d+(?:[.,]\d+)?/g)].map(m => ({ value: Number(m[0].replace(",", ".")), index: m.index ?? 0, raw: m[0] }));
+        const hasRangeCue = /(?:reference|normal|range|ref\.?\s*range|\bto\b|[-–—])/i.test(line);
+        if (nums.length >= 3 && hasRangeCue) {
+          const resultNum = nums[0];
+          const rangeNums = nums.slice(1, 3);
+          const between = line.slice(resultNum.index + resultNum.raw.length, rangeNums[0].index);
+          // Avoid treating a row as a result-range row if another number appears
+          // between the result and the interval, which commonly indicates a date/ID.
+          if (/[0-9]/.test(between)) continue;
+          const lo = Math.min(rangeNums[0].value, rangeNums[1].value);
+          const hi = Math.max(rangeNums[0].value, rangeNums[1].value);
+          if (lo !== hi && (resultNum.value < lo || resultNum.value > hi)) {
+            candidates.push(line + " — POSSIBLY OUT OF RANGE (verify original report)");
+          }
+        } else if (/(?:reference|normal|range|result|\bcbc\b|haemoglobin|hemoglobin|glucose|creatinine|platelet|wbc|rbc|tsh|bilirubin|alt\b|ast\b)/i.test(line) && nums.length > 0) {
+          uncertain.push(line);
+        }
       }
       setLabOcrText(extracted);
       setLabOcrFindings(candidates);
-      setP(prev => ({ ...prev, customData: { ...(prev.customData || {}), labOcrExtractedText: extracted, labOcrPossibleFlags: candidates.join("\n") } }));
-      Alert.alert("Lab photo reading finished", (candidates.length ? candidates.length + " possible out-of-range row(s) need checking. " : "No clear out-of-range rows were detected. ") + "OCR can misread numbers; verify every result against the original report and clinician guidance.");
+      setP(prev => ({ ...prev, customData: { ...(prev.customData || {}), labOcrExtractedText: extracted, labOcrPossibleFlags: candidates.join("\n"), labOcrNeedsReview: uncertain.join("\n") } }));
+      if (candidates.length) {
+        Alert.alert("Possible abnormal lab result", candidates.length + " result row(s) appear outside the printed reference range. Verify the test name, value, units, range, and patient-specific range on the original report.");
+      } else if (uncertain.length && automatic) {
+        toast("Some lab-like rows were read, but their reference ranges were not clear. Please review the report; they were not labelled abnormal.", "info");
+      }
     } catch (e: any) {
-      toast(e?.message || "Could not read lab photos on this device.", "error");
+      if (!automatic) toast(e?.message || "Could not read lab photos on this device.", "error");
     } finally { setLabOcrBusy(false); }
   };
 
@@ -218,6 +243,19 @@ export default function PatientForm() {
     implants:(prev.implants || []).map(x => x.id === id ? { ...x, quantity:Math.max(1,x.quantity + delta) } : x),
   }));
   const [ready, setReady] = useState(false);
+  const lastAutoLabScan = useRef("");
+  useEffect(() => {
+    if (!labOcrEnabled || labOcrBusy) return;
+    // Automatically scan every photo already saved on the patient plus lab
+    // photos; deduplicate by URI so rerenders don't repeat alerts.
+    const uris = [...new Set([...p.photos, ...labPhotos])].filter(Boolean);
+    if (!uris.length || (isEdit && !ready)) return;
+    const signature = uris.join("|");
+    if (lastAutoLabScan.current === signature) return;
+    lastAutoLabScan.current = signature;
+    const timer = setTimeout(() => { void analyzeLabPhotos(uris, true); }, 500);
+    return () => clearTimeout(timer);
+  }, [labOcrEnabled, labOcrBusy, labPhotos, p.photos, ready, isEdit]);
   useEffect(() => {
     const source = isEdit ? detailedExisting : existing;
     if (!source) return;
@@ -827,8 +865,7 @@ export default function PatientForm() {
           <View style={{ marginTop: spacing.md, marginBottom: spacing.md }}>
             <PrimaryButton title={`Add Lab Report Photos${labPhotos.length ? " (" + labPhotos.length + ")" : ""}`} onPress={addLabPhotosFromLibrary} disabled={!imagePickerReady || labOcrBusy || photoBusy} testID="add-lab-photos-button" />
             {labPhotos.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.photoStrip}>{labPhotos.map((uri, idx) => <View key={uri + "-" + idx} style={styles.photoBox}><View style={{ flex: 1 }}><Image source={{ uri }} style={styles.photoThumb} resizeMode="cover" /></View><Pressable style={styles.photoRemove} onPress={() => removeLabPhoto(idx)} hitSlop={8}><Ionicons name="close" size={16} color="#FFFFFF" /></Pressable></View>)}</ScrollView> : <Text style={styles.hint}>Select only laboratory report pictures here. Multiple pages can be selected together.</Text>}
-            <PrimaryButton title={labOcrBusy ? "Reading lab photos…" : "Read lab report photos offline"} onPress={analyzeLabPhotos} loading={labOcrBusy} disabled={labOcrBusy || !labPhotos.length} testID="analyze-lab-photos-button" />
-            <Text style={styles.hint}>Runs on this device. Possible flags use printed reference ranges found in the text; check every result manually.</Text>
+            <Text style={styles.hint}>{labOcrBusy ? "Automatically checking saved patient and lab photos…" : "Automatic scanning is enabled. Saved patient photos and lab photos are checked when added or opened; only possible out-of-range results trigger an abnormal-result alert."}</Text>
             {labOcrText ? <View style={{ marginTop: spacing.sm, padding: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md }}>
               <Text style={styles.label}>Extracted lab text</Text>
               <Text selectable style={{ color: colors.onSurface, fontSize: fontSize.sm }}>{labOcrText}</Text>
