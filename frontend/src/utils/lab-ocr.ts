@@ -1,4 +1,5 @@
 import { recognizeText } from "expo-ocr-kit";
+import { Image } from "react-native";
 
 export type LabTestDefinition = { id: string; name: string; maleMin: string; maleMax: string; femaleMin: string; femaleMax: string; unit: string };
 
@@ -163,7 +164,98 @@ export function parseLabReportRows(text: string, configuredTests: LabTestDefinit
   return rows;
 }
 
-export async function recognizeLabText(uri: string): Promise<{ text: string }> {
+type OcrPositionedLine = { text: string; x: number; y: number; width: number; height: number };
+
+function imageSize(uri: string): Promise<{ width: number; height: number }> {
+  return new Promise((resolve, reject) => {
+    Image.getSize(uri, (width, height) => resolve({ width, height }), reject);
+  });
+}
+
+/**
+ * Rebuild table rows from OCR bounding boxes instead of trusting the OCR
+ * engine's flattened text order. All coordinates are in original image pixels.
+ */
+function structureLabColumns(blocks: any[], imageWidth: number, imageHeight: number): string {
+  const positioned: OcrPositionedLine[] = [];
+  for (const block of blocks || []) {
+    const box = block?.boundingBox;
+    const blockText = String(block?.text || "").trim();
+    if (!box || !blockText) continue;
+    const pieces = blockText.split(/\\r?\\n/).map((s: string) => s.trim()).filter(Boolean);
+    const blockHeight = Number(box.height) || 1;
+    const lineHeight = blockHeight / Math.max(1, pieces.length);
+    pieces.forEach((text: string, index: number) => positioned.push({
+      text,
+      x: Number(box.x) || 0,
+      y: (Number(box.y) || 0) + index * lineHeight,
+      width: Number(box.width) || 0,
+      height: lineHeight,
+    }));
+  }
+  if (!positioned.length || !imageWidth || !imageHeight) return "";
+
+  // Use printed column headings when the OCR provides separate heading blocks.
+  const headerX = (pattern: RegExp) => {
+    const hit = positioned.find(item => pattern.test(item.text));
+    return hit ? (hit.x + hit.width / 2) / imageWidth : undefined;
+  };
+  const testHeader = headerX(/^(?:test(?:\s*name)?|investigation|parameter|analyte)\\b/i);
+  const resultHeader = headerX(/^result\\b/i);
+  const unitHeader = headerX(/^units?\\b/i);
+  const refHeader = headerX(/^(?:reference|normal|biological)\\b/i);
+  const resultBoundary = resultHeader ?? 0.48;
+  const unitBoundary = unitHeader ?? 0.64;
+  const refBoundary = refHeader ?? 0.76;
+  const testBoundary = testHeader !== undefined ? Math.min(resultBoundary - 0.04, testHeader + 0.28) : 0.40;
+
+  const sorted = positioned.sort((a, b) => (a.y + a.height / 2) - (b.y + b.height / 2));
+  const typicalHeight = sorted.map(item => item.height).sort((a, b) => a - b)[Math.floor(sorted.length / 2)] || imageHeight * 0.02;
+  const rowTolerance = Math.max(typicalHeight * 0.65, imageHeight * 0.006);
+  const groups: OcrPositionedLine[][] = [];
+  for (const item of sorted) {
+    const center = item.y + item.height / 2;
+    let target = groups.find(group => {
+      const centers = group.map(line => line.y + line.height / 2);
+      const avg = centers.reduce((sum, value) => sum + value, 0) / centers.length;
+      return Math.abs(center - avg) <= Math.max(rowTolerance, Math.min(item.height, group[0].height) * 0.45);
+    });
+    if (!target) { target = []; groups.push(target); }
+    target.push(item);
+  }
+
+  const output: string[] = [];
+  for (const group of groups) {
+    const cells = ["", "", "", ""];
+    for (const item of group.sort((a, b) => a.x - b.x)) {
+      const xCenter = (item.x + item.width / 2) / imageWidth;
+      const column = xCenter < testBoundary ? 0 : xCenter < resultBoundary ? 1 : xCenter < unitBoundary ? 2 : xCenter < refBoundary ? 2 : 3;
+      cells[column] = (cells[column] + " " + item.text).trim();
+    }
+    // If geometry doesn't reveal separate cells, retain the row for manual
+    // review rather than inventing column assignments.
+    if (!cells[0] || !cells[1]) {
+      const fallback = group.map(item => item.text).join(" | ").trim();
+      if (fallback) output.push(fallback);
+      continue;
+    }
+    const row = [cells[0], cells[1], cells[2], cells[3]].filter(Boolean).join(" | ");
+    if (row && !/^(?:test(?:\\s*name)?|investigation|parameter|result|units?|reference(?:\\s*range)?|normal\\s*range)\\b/i.test(row)) {
+      output.push(row);
+    }
+  }
+  return output.join("\\n");
+}
+
+export async function recognizeLabText(uri: string): Promise<{ text: string; structuredText: string }> {
   const result = await recognizeText(uri);
-  return { text: String(result?.text || "") };
+  const text = String(result?.text || "");
+  let structuredText = "";
+  try {
+    const size = await imageSize(uri);
+    structuredText = structureLabColumns((result as any)?.blocks || [], size.width, size.height);
+  } catch {
+    // Raw on-device OCR text remains available if image geometry is unavailable.
+  }
+  return { text, structuredText };
 }
