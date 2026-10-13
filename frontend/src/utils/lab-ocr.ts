@@ -282,6 +282,19 @@ function defaultUnitForTest(name: string): string {
   return match?.[1] || "";
 }
 
+function normalizeLabUnit(testName: string, unit: string): string {
+  const value = String(unit || "").trim();
+  const test = canonicalTestName(testName);
+  // Hemoglobin is conventionally reported in g/dL. OCR often confuses a
+  // blurry lowercase "g" with R, and lowercase "l" with I or 1.
+  if (["hemoglobin", "haemoglobin", "hgb", "hb"].some(name => canonicalTestName(name) === test)) {
+    if (!value || /^(?:r|g|q|9)\s*\/\s*d\s*[li1]$/i.test(value) ||
+        /^(?:g|r|q|9)\s*\/\s*d\s*[li1]$/i.test(value) ||
+        /^(?:g|r|q|9)\s*d\s*[li1]$/i.test(value)) return "g/dL";
+  }
+  return value;
+}
+
 function unitFromResultCell(value: string): string {
   const text = String(value || "").trim();
   // Capture common units that may be attached to the result when the OCR
@@ -372,7 +385,7 @@ export function parseLabReportRows(text: string, configuredTests: LabTestDefinit
       rows.push({
         test: testPrefix.name,
         result: resultRaw,
-        unit: (cleanedUnit || testPrefix.configured?.unit || "").slice(0, 24),
+        unit: normalizeLabUnit(testPrefix.name, cleanedUnit || testPrefix.configured?.unit || defaultUnitForTest(testPrefix.name)).slice(0, 24),
         reference: reference.text,
         severity,
         sourceLine: line,
