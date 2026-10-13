@@ -457,7 +457,7 @@ export async function recognizeLabText(uri: string): Promise<{ text: string; str
       const scale = Math.min(2, 2200 / Math.max(1, maxDimension));
       const enhanced = await ImageManipulator.manipulateAsync(
         uri,
-        [{ resize: { width: Math.round(originalSize.width * scale), height: Math.round(originalSize.height * scale) } }],
+        [{ resize: originalSize.width >= originalSize.height ? { width: Math.round(originalSize.width * scale) } : { height: Math.round(originalSize.height * scale) } }],
         { compress: 1, format: ImageManipulator.SaveFormat.PNG },
       );
       try {
