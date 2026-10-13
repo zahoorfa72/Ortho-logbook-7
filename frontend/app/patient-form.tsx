@@ -216,21 +216,35 @@ export default function PatientForm() {
       );
       const rawOnly = extracted;
       const normalizedRawText = canonical(rawOnly);
+      const rawLines = rawOnly.split(/\r?\n/);
       const missingResultReviews = testCandidates.filter(test => {
         const aliases = isHemoglobin(test.name) ? ["hemoglobin", "haemoglobin", "hgb", "hb"] : [test.name];
-        const seenInText = aliases.some(alias => normalizedRawText.includes(canonical(alias)));
+        const aliasSeen = (line: string) => aliases.some(alias => canonical(line).includes(canonical(alias)));
         const matchingParsed = parsedRows.find(row => canonical(row.test) === canonical(test.name) ||
           (isHemoglobin(row.test) && isHemoglobin(test.name)));
         const parsedValue = matchingParsed ? Number(String(matchingParsed.result).replace(",", ".")) : NaN;
         const min = Number(String(test.min ?? "").replace(",", "."));
         const max = Number(String(test.max ?? "").replace(",", "."));
         const hasRange = String(test.min ?? "").trim() !== "" && String(test.max ?? "").trim() !== "" && Number.isFinite(min) && Number.isFinite(max) && min > 0 && max > min;
-        // A result several times outside its range may be a circled digit or decimal point
-        // that OCR misread (for example 7.0 as 70). Require visual admin verification.
-        const suspiciousScale = !!matchingParsed && hasRange && Number.isFinite(parsedValue) &&
-          (parsedValue > max * 3 || parsedValue < min / 3);
-        const alreadyParsed = !!matchingParsed && !suspiciousScale;
-        return seenInText && (!alreadyParsed || suspiciousScale);
+        // Look at the test row and the next line because OCR often separates a circled result
+        // from its label. Strip the reference-range section before deciding if a value was read.
+        let resultValue: number | null = null;
+        for (let lineIndex = 0; lineIndex < rawLines.length; lineIndex++) {
+          if (!aliasSeen(rawLines[lineIndex])) continue;
+          const nearby = [rawLines[lineIndex], rawLines[lineIndex + 1] || ""].join(" | ");
+          const beforeReference = nearby.split(/\b(?:reference\s*range|normal\s*range|biological\s*reference|ref(?:erence)?\s*range|male\s*:|female\s*:|m\s*:|f\s*:)\b/i)[0];
+          const afterTest = beforeReference.replace(new RegExp(aliases.map(alias => canonical(alias)).join("|"), "i"), "");
+          const numbers = [...afterTest.matchAll(/(?:^|[|:\s(])([<>≤≥]?\s*\d+(?:[.,]\d+)?)/g)]
+            .map(match => Number(String(match[1]).replace(/[<>≤≥\s]/g, "").replace(",", ".")))
+            .filter(value => Number.isFinite(value));
+          if (numbers.length) { resultValue = numbers[0]; break; }
+        }
+        const suspiciousScale = (matchingParsed && hasRange && Number.isFinite(parsedValue) &&
+          (parsedValue > max * 3 || parsedValue < min / 3)) ||
+          (resultValue !== null && hasRange && (resultValue > max * 3 || resultValue < min / 3));
+        const hasReadableResult = resultValue !== null || Number.isFinite(parsedValue);
+        const alreadyParsed = hasReadableResult && !suspiciousScale;
+        return rawLines.some(aliasSeen) && (!alreadyParsed || suspiciousScale);
       }).map(test => {
         const min = Number(String(test.min ?? "").replace(",", "."));
         const max = Number(String(test.max ?? "").replace(",", "."));
