@@ -143,6 +143,15 @@ export default function PatientForm() {
   const [cropX, setCropX] = useState(0.5);
   const [cropY, setCropY] = useState(0.5);
   const [p, setP] = useState<Patient>(empty);
+  const savedManualLabResults = useMemo(() => {
+    try {
+      const raw = p.customData?.labOcrManualResults;
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed.filter((item: any) => item && String(item.test || "").trim() && String(item.result || "").trim()) : [];
+    } catch {
+      return [];
+    }
+  }, [p.customData?.labOcrManualResults]);
   const allViewerPhotos = [...new Set(p.photos)];
   const [dismissedTrashMatchId, setDismissedTrashMatchId] = useState<string | null>(null);
   const selectedImplants = p.implants || [];
@@ -1066,6 +1075,17 @@ export default function PatientForm() {
               </View> : null}
               {labOcrOnlineHelp.length ? <><Text style={[styles.label, { marginTop: spacing.md }]}>Test-name reference assistance</Text><Text style={{ color: colors.onSurfaceSecondary, marginTop: spacing.xs }}>Only non-identifying test-name labels are checked. No photo, patient details, report text, result values or units are uploaded. This assistance does not confirm whether a result is normal.</Text>{labOcrOnlineHelp.map((item, i) => <Text key={i} style={{ color: colors.onSurface, marginTop: spacing.xs }}>{item}</Text>)}</> : null}
             </View> : null}
+          </View>
+        ) : null}
+        {savedManualLabResults.length > 0 ? (
+          <View style={{ marginTop: spacing.md, padding: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md }}>
+            <Text style={styles.section}>Manually verified lab results</Text>
+            <Text style={styles.hint}>These values are stored with this patient record. Confirm them against the original laboratory report.</Text>
+            {savedManualLabResults.map((item: any, index: number) => (
+              <Text key={String(item.test) + "-" + index} style={{ color: colors.onSurface, marginTop: spacing.xs }}>
+                {String(item.test)}: {String(item.result)}{item.unit ? " " + String(item.unit) : ""}{item.reference ? " · Reference: " + String(item.reference) : ""}
+              </Text>
+            ))}
           </View>
         ) : null}
         <Text style={styles.section}>Patient Details</Text>
