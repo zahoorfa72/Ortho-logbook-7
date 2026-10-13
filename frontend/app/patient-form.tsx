@@ -46,6 +46,15 @@ const empty = (): Patient => ({
   hcvPlus: false, hbaSg: false, hiv: false,
 });
 
+const isLikelyLabReportText = (text: string) => {
+  const value = String(text || "").toLowerCase();
+  const testNames = /\b(?:haemoglobin|hemoglobin|hb|wbc|rbc|platelets?|cbc|complete blood count|glucose|fasting blood sugar|fbs|rbs|creatinine|urea|bilirubin|alt|ast|sgpt|sgot|alkaline phosphatase|alp|tsh|t3|t4|electrolytes?|sodium|potassium|chloride|calcium|uric acid|esr|crp|hba1c|cholesterol|triglycerides|urinalysis|urine routine|blood group|laboratory|lab report|pathology|haematology|hematology|biochemistry|reference range|normal range|ref range)\b/gi;
+  const hits = [...value.matchAll(testNames)].length;
+  const hasResultStructure = /\b(?:result|value|unit|units|reference|normal|range|high|low|positive|negative)\b|\b[hl]\b|[↑↓]/i.test(value);
+  const numbers = [...value.matchAll(/[-+]?\d+(?:[.,]\d+)?/g)].length;
+  return hits >= 2 || (hits >= 1 && hasResultStructure && numbers >= 2);
+};
+
 export default function PatientForm() {
   const styles = useStyles();
   const { colors, branding } = useTheme();
@@ -120,7 +129,7 @@ export default function PatientForm() {
   const [cropX, setCropX] = useState(0.5);
   const [cropY, setCropY] = useState(0.5);
   const [p, setP] = useState<Patient>(empty);
-  const allViewerPhotos = [...new Set([...p.photos, ...labPhotos])];
+  const allViewerPhotos = [...new Set(p.photos)];
   const [dismissedTrashMatchId, setDismissedTrashMatchId] = useState<string | null>(null);
   const selectedImplants = p.implants || [];
 
@@ -152,7 +161,7 @@ export default function PatientForm() {
     setP(prev => ({ ...prev, customData: { ...(prev.customData || {}), labReportPhotoUris: JSON.stringify(next) } }));
   };
 
-  const analyzeLabPhotos = async (photoUris: string[] = [...new Set([...p.photos, ...labPhotos])], automatic = false) => {
+  const analyzeLabPhotos = async (photoUris: string[] = [...new Set(p.photos)], automatic = false) => {
     if (!labOcrEnabled || !photoUris.length || labOcrBusy) return;
     setLabOcrBusy(true);
     try {
@@ -161,7 +170,8 @@ export default function PatientForm() {
         try {
           const result = await recognizeLabText(photoUris[i]);
           const text = String(result?.text || "").trim();
-          if (text) pages.push("IMAGE " + (i + 1) + "\n" + text);
+          // Exclude ordinary clinical pictures from lab-result parsing.
+          if (text && isLikelyLabReportText(text)) pages.push("LAB REPORT IMAGE " + (i + 1) + "\n" + text);
         } catch {
           // Continue scanning other pictures; a single damaged/unavailable image
           // must not prevent readable pages from being checked.
@@ -268,16 +278,16 @@ export default function PatientForm() {
   const lastAutoLabScan = useRef("");
   useEffect(() => {
     if (!labOcrEnabled || labOcrBusy) return;
-    // Automatically scan every photo already saved on the patient plus lab
-    // photos; deduplicate by URI so rerenders don't repeat alerts.
-    const uris = [...new Set([...p.photos, ...labPhotos])].filter(Boolean);
+    // Inspect only pictures already saved in this patient's file; the OCR
+    // classifier excludes ordinary clinical photos from lab-result parsing.
+    const uris = [...new Set(p.photos)].filter(Boolean);
     if (!uris.length || (isEdit && !ready)) return;
     const signature = uris.join("|");
     if (lastAutoLabScan.current === signature) return;
     lastAutoLabScan.current = signature;
     const timer = setTimeout(() => { void analyzeLabPhotos(uris, true); }, 500);
     return () => clearTimeout(timer);
-  }, [labOcrEnabled, labOcrBusy, labPhotos, p.photos, ready, isEdit]);
+  }, [labOcrEnabled, labOcrBusy, p.photos, ready, isEdit]);
   useEffect(() => {
     const source = isEdit ? detailedExisting : existing;
     if (!source) return;
@@ -286,9 +296,6 @@ export default function PatientForm() {
       ? source.photos
       : source.photoUri ? [source.photoUri] : [];
     const customData = source.customData || {};
-    let savedLabPhotos: string[] = [];
-    try { const parsed = JSON.parse(String(customData.labReportPhotoUris || "[]")); if (Array.isArray(parsed)) savedLabPhotos = parsed.filter((x: any) => typeof x === "string"); } catch {}
-    setLabPhotos(savedLabPhotos);
     setP({ ...source, photos, customData });
     setReady(true);
   }, [isEdit, detailedExisting, existing]);
@@ -885,17 +892,15 @@ export default function PatientForm() {
         </Modal>
         {labOcrEnabled ? (
           <View style={{ marginTop: spacing.md, marginBottom: spacing.md }}>
-            <PrimaryButton title={`Add Lab Report Photos${labPhotos.length ? " (" + labPhotos.length + ")" : ""}`} onPress={addLabPhotosFromLibrary} disabled={!imagePickerReady || labOcrBusy || photoBusy} testID="add-lab-photos-button" />
-            {labPhotos.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.photoStrip}>{labPhotos.map((uri, idx) => <View key={uri + "-" + idx} style={styles.photoBox}><Pressable style={{ flex: 1 }} onPress={() => setSelectedPhoto(uri)}><Image source={{ uri }} style={styles.photoThumb} resizeMode="cover" /></Pressable><Pressable style={styles.photoRemove} onPress={() => removeLabPhoto(idx)} hitSlop={8}><Ionicons name="close" size={16} color="#FFFFFF" /></Pressable></View>)}</ScrollView> : <Text style={styles.hint}>Select only laboratory report pictures here. Multiple pages can be selected together.</Text>}
-            <Text style={styles.hint}>{labOcrBusy ? "Automatically checking saved patient and lab photos…" : "Automatic scanning is enabled. Saved patient photos and lab photos are checked when added or opened; only possible out-of-range results trigger an abnormal-result alert."}</Text>
+            <Text style={styles.section}>Automatic lab report check</Text>
+            <Text style={styles.hint}>{labOcrBusy ? "Automatically checking existing patient-file pictures for laboratory reports…" : "No photo needs to be added or selected. Existing patient-file pictures are checked automatically; only pictures recognized as laboratory reports are used for lab-result analysis."}</Text>
             {labOcrText ? <View style={{ marginTop: spacing.sm, padding: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md }}>
-              <Text style={styles.label}>Extracted lab text</Text>
+              <Text style={styles.label}>Detected laboratory report text</Text>
               <Text selectable style={{ color: colors.onSurface, fontSize: fontSize.sm }}>{labOcrText}</Text>
-              {labOcrFindings.length ? <><Text style={[styles.label, { marginTop: spacing.md, color: colors.error }]}>Possible out-of-range results — verify</Text>{labOcrFindings.map((finding, i) => <Text key={i} style={{ color: colors.error, marginTop: spacing.xs }}>{finding}</Text>)}</> : <Text style={{ color: colors.onSurfaceSecondary, marginTop: spacing.sm }}>No possible out-of-range rows detected by the printed-range check. This does not mean all results are normal.</Text>}
-              {labOcrOnlineHelp.length ? <><Text style={[styles.label, { marginTop: spacing.md }]}>Online test-name assistance</Text><Text style={{ color: colors.onSurfaceSecondary, marginTop: spacing.xs }}>Only short test-name labels were checked against the public NLM catalogue. No image, patient details, numeric results, units or report text were sent. These suggestions do not verify normality.</Text>{labOcrOnlineHelp.map((item, i) => <Text key={i} style={{ color: colors.onSurface, marginTop: spacing.xs }}>{item}</Text>)}</> : null}
+              {labOcrFindings.length ? <><Text style={[styles.label, { marginTop: spacing.md, color: colors.error }]}>Possible abnormal results — verify</Text>{labOcrFindings.map((finding, i) => <Text key={i} style={{ color: colors.error, marginTop: spacing.xs }}>{finding}</Text>)}</> : <Text style={{ color: colors.onSurfaceSecondary, marginTop: spacing.sm }}>No definite out-of-range rows were detected. This does not prove that every result is normal.</Text>}
+              {labOcrOnlineHelp.length ? <><Text style={[styles.label, { marginTop: spacing.md }]}>Test-name reference assistance</Text><Text style={{ color: colors.onSurfaceSecondary, marginTop: spacing.xs }}>Only non-identifying test-name labels are checked. No photo, patient details, report text, result values or units are uploaded. This assistance does not confirm whether a result is normal.</Text>{labOcrOnlineHelp.map((item, i) => <Text key={i} style={{ color: colors.onSurface, marginTop: spacing.xs }}>{item}</Text>)}</> : null}
             </View> : null}
           </View>
-        ) : null}
         <Text style={styles.section}>Patient Details</Text>
         {(() => {
           const builtIn = ["mrNo","name","gender","age","address","diagnosis","procedure","procedureII","fileName","date"];
