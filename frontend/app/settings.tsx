@@ -70,7 +70,7 @@ export default function SettingsScreen() {
           <View style={styles.rowIcon}><Ionicons name="flask-outline" size={22} color={colors.brandPrimary} /></View>
           <View style={{ flex: 1 }}>
             <Text style={styles.rowLabel}>Offline Lab Report Reader</Text>
-            <Text style={styles.rowSub}>Automatically read saved patient and lab photos on this device and flag possible results outside the printed range. Online help sends only a short test-name label to the public NLM catalogue — never photos, patient details, result values, units or report text. It cannot confirm a diagnosis; check the original report and clinician guidance.</Text>
+            <Text style={styles.rowSub}>Read saved lab-report photos locally on this device. Patient details, report text and results are not uploaded. Only clearly identified test rows are checked; uncertain rows are for manual review. Always verify against the original report and clinician guidance.</Text>
           </View>
           <Switch
             value={labOcrEnabled}
