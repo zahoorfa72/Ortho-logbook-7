@@ -96,6 +96,7 @@ export default function PatientForm() {
   }, [procedures, patients]);
 
   const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
+  const allViewerPhotos = [...new Set([...p.photos, ...labPhotos])];
   const [labOcrEnabled, setLabOcrEnabled] = useState(false);
   const [labPhotos, setLabPhotos] = useState<string[]>([]);
   const [labOcrBusy, setLabOcrBusy] = useState(false);
@@ -885,7 +886,7 @@ export default function PatientForm() {
         {labOcrEnabled ? (
           <View style={{ marginTop: spacing.md, marginBottom: spacing.md }}>
             <PrimaryButton title={`Add Lab Report Photos${labPhotos.length ? " (" + labPhotos.length + ")" : ""}`} onPress={addLabPhotosFromLibrary} disabled={!imagePickerReady || labOcrBusy || photoBusy} testID="add-lab-photos-button" />
-            {labPhotos.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.photoStrip}>{labPhotos.map((uri, idx) => <View key={uri + "-" + idx} style={styles.photoBox}><View style={{ flex: 1 }}><Image source={{ uri }} style={styles.photoThumb} resizeMode="cover" /></View><Pressable style={styles.photoRemove} onPress={() => removeLabPhoto(idx)} hitSlop={8}><Ionicons name="close" size={16} color="#FFFFFF" /></Pressable></View>)}</ScrollView> : <Text style={styles.hint}>Select only laboratory report pictures here. Multiple pages can be selected together.</Text>}
+            {labPhotos.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.photoStrip}>{labPhotos.map((uri, idx) => <View key={uri + "-" + idx} style={styles.photoBox}><Pressable style={{ flex: 1 }} onPress={() => setSelectedPhoto(uri)}><Image source={{ uri }} style={styles.photoThumb} resizeMode="cover" /></Pressable><Pressable style={styles.photoRemove} onPress={() => removeLabPhoto(idx)} hitSlop={8}><Ionicons name="close" size={16} color="#FFFFFF" /></Pressable></View>)}</ScrollView> : <Text style={styles.hint}>Select only laboratory report pictures here. Multiple pages can be selected together.</Text>}
             <Text style={styles.hint}>{labOcrBusy ? "Automatically checking saved patient and lab photos…" : "Automatic scanning is enabled. Saved patient photos and lab photos are checked when added or opened; only possible out-of-range results trigger an abnormal-result alert."}</Text>
             {labOcrText ? <View style={{ marginTop: spacing.sm, padding: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md }}>
               <Text style={styles.label}>Extracted lab text</Text>
@@ -1065,8 +1066,8 @@ export default function PatientForm() {
             <Ionicons name="close" size={30} color="#FFFFFF" />
           </Pressable>
           {!!selectedPhoto && (
-            <ScrollView key={selectedPhoto || "none"} horizontal pagingEnabled showsHorizontalScrollIndicator={false} contentOffset={{ x: Math.max(0, p.photos.indexOf(selectedPhoto)) * screenWidth, y: 0 }} onMomentumScrollEnd={(event) => { const idx = Math.max(0, Math.min(p.photos.length - 1, Math.round(event.nativeEvent.contentOffset.x / screenWidth))); setSelectedPhoto(p.photos[idx] || null); }} style={{ flex: 1, width: screenWidth }} contentContainerStyle={{ alignItems: "center" }}>
-              {p.photos.map((uri, idx) => <View key={uri + "-" + idx} style={{ width: screenWidth, height: "100%", alignItems: "center", justifyContent: "center" }}><Image source={{ uri }} style={styles.photoFull} resizeMode="contain" /></View>)}
+            <ScrollView key={selectedPhoto || "none"} horizontal pagingEnabled showsHorizontalScrollIndicator={false} contentOffset={{ x: Math.max(0, allViewerPhotos.indexOf(selectedPhoto)) * screenWidth, y: 0 }} onMomentumScrollEnd={(event) => { const idx = Math.max(0, Math.min(allViewerPhotos.length - 1, Math.round(event.nativeEvent.contentOffset.x / screenWidth))); setSelectedPhoto(allViewerPhotos[idx] || null); }} style={{ flex: 1, width: screenWidth }} contentContainerStyle={{ alignItems: "center" }}>
+              {allViewerPhotos.map((uri, idx) => <View key={uri + "-" + idx} style={{ width: screenWidth, height: "100%", alignItems: "center", justifyContent: "center" }}><Image source={{ uri }} style={styles.photoFull} resizeMode="contain" /></View>)}
             </ScrollView>
           )}
           {!!selectedPhoto && (
