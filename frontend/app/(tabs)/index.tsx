@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { router, useFocusEffect } from "expo-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { recognizeLabText } from "@/src/utils/lab-ocr";
+import { isLikelyLabReportText, parseLabReportRows, recognizeLabText } from "@/src/utils/lab-ocr";
 import {
   ActivityIndicator,
   Alert,
@@ -203,31 +203,14 @@ export default function Logbook() {
             const result = await recognizeLabText(uri);
             const text = String(result?.text || "").trim();
             if (!text) continue;
-            const value = text.toLowerCase();
-            const names = /\b(?:haemoglobin|hemoglobin|hb|wbc|rbc|platelets?|cbc|complete blood count|glucose|fasting blood sugar|fbs|rbs|creatinine|urea|bilirubin|alt|ast|sgpt|sgot|alkaline phosphatase|alp|tsh|t3|t4|electrolytes?|sodium|potassium|chloride|calcium|uric acid|esr|crp|hba1c|cholesterol|triglycerides|urinalysis|urine routine|laboratory|lab report|pathology|haematology|hematology|biochemistry|reference range|normal range|ref range)\b/gi;
-            const hits = [...value.matchAll(names)].length;
-            const structure = /\b(?:result|value|unit|units|reference|normal|range|high|low|positive|negative)\b|\b[hl]\b|[↑↓]/i.test(value);
-            const numericCount = [...value.matchAll(/[-+]?\d+(?:[.,]\d+)?/g)].length;
-            if (hits >= 2 || (hits >= 1 && structure && numericCount >= 2)) reportTexts.push(text);
+            if (isLikelyLabReportText(text)) reportTexts.push(text);
           } catch {}
         }
-        const flags: string[] = [];
-        for (const rawLine of reportTexts.join("\n").split(/\r?\n/)) {
-          const line = rawLine.replace(/\s+/g, " ").trim();
-          if (!line || !/(?:reference|normal|range|ref\.?\s*range|[-–—]|\bhigh\b|\blow\b|[↑↓]|\b[HL]\b)/i.test(line)) continue;
-          const nums = [...line.matchAll(/[-+]?\d+(?:[.,]\d+)?/g)].map(m => ({ value: Number(m[0].replace(",", ".")), index: m.index ?? 0, raw: m[0] }));
-          if (nums.length < 3) continue;
-          const between = line.slice(nums[0].index + nums[0].raw.length, nums[1].index);
-          if (/[0-9]/.test(between)) continue;
-          const lo = Math.min(nums[1].value, nums[2].value), hi = Math.max(nums[1].value, nums[2].value);
-          const explicit = /\bhigh\b|↑|\bH\b/i.test(line) ? "HIGH" : /\blow\b|↓|\bL\b/i.test(line) ? "LOW" : "";
-          const direction = explicit || (nums[0].value < lo ? "LOW" : nums[0].value > hi ? "HIGH" : "");
-          if (!direction) continue;
-          const test = line.slice(0, nums[0].index).replace(/^[\s:|•-]+|[\s:|•-]+$/g, "").trim();
-          if (!test || test.length < 2) continue;
-          const flag = direction + ": " + test + " " + nums[0].raw + " — POSSIBLY OUT OF RANGE (verify report)";
-          if (!flags.includes(flag)) flags.push(flag);
-        }
+        const flags = reportTexts.flatMap(reportText =>
+          parseLabReportRows(reportText).map(row =>
+            row.severity + ": " + row.test + " " + row.result + (row.unit ? " " + row.unit : "") + " | Ref: " + row.reference
+          )
+        ).filter((flag, index, all) => all.indexOf(flag) === index);
         snapshot[patient.id] = { signature, flags: flags.slice(0, 20) };
         if (!cancelled) setLabFlagsByPatient({ ...snapshot });
         try { await AsyncStorage.setItem("ortho_lab_ocr_patient_cache_v2", JSON.stringify(snapshot)); } catch {}
