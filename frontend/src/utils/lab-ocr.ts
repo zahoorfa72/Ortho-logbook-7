@@ -35,6 +35,38 @@ function normaliseName(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
 }
 
+const TEST_EQUIVALENCE_GROUPS: string[][] = [
+  ["hemoglobin", "haemoglobin", "hgb", "hb"],
+  ["hematocrit", "haematocrit", "hct", "pcv"],
+  ["white blood cell count", "wbc", "total leukocyte count", "tlc"],
+  ["red blood cell count", "rbc", "erythrocyte count"],
+  ["platelet count", "platelets", "plt"],
+  ["fasting blood sugar", "fbs", "fasting glucose"],
+  ["random blood sugar", "rbs", "random glucose"],
+  ["alanine aminotransferase", "sgpt", "alt"],
+  ["aspartate aminotransferase", "sgot", "ast"],
+  ["alkaline phosphatase", "alp"],
+  ["glycated hemoglobin", "glycosylated hemoglobin", "hba1c"],
+  ["blood urea nitrogen", "bun"],
+  ["triglycerides", "triglyceride"],
+  ["total cholesterol", "cholesterol"],
+  ["thyroid stimulating hormone", "tsh"],
+];
+
+function canonicalTestName(value: string): string {
+  const normal = normaliseName(value);
+  const group = TEST_EQUIVALENCE_GROUPS.find(items => items.some(item => normaliseName(item) === normal));
+  return group ? normaliseName(group[0]) : normal;
+}
+
+function configuredTestForName(name: string, configuredTests: LabTestDefinition[]): LabTestDefinition | undefined {
+  const key = canonicalTestName(name);
+  return configuredTests.find(item => {
+    const configured = canonicalTestName(item.name || "");
+    return configured === key || normaliseName(item.name || "").startsWith(normaliseName(name) + " ");
+  });
+}
+
 export function hasKnownLabTestName(line: string, configuredTests: LabTestDefinition[] = []): boolean { return !!findTestPrefix(line, configuredTests); }
 
 export function isLabMetadataLine(line: string, configuredTests: LabTestDefinition[] = []): boolean { return isNonResultLine(line, configuredTests); }
@@ -54,7 +86,7 @@ function findTestPrefix(line: string, configuredTests: LabTestDefinition[] = [])
   for (const alias of TEST_ALIASES) {
     const pattern = new RegExp("^" + alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?=$|\\s|[:|])", "i");
     const match = pattern.exec(cleaned);
-    if (match) return { name: cleaned.slice(0, match[0].length).trim(), end: match[0].length };
+    if (match) { const name = cleaned.slice(0, match[0].length).trim(); return { name, end: match[0].length, configured: configuredTestForName(name, configuredTests) }; }
   }
   // A known test may be prefixed by a short lab code, but never infer arbitrary words.
   const normal = normaliseName(lower);
@@ -89,82 +121,159 @@ export function isLikelyLabReportText(text: string, configuredTests: LabTestDefi
 }
 
 const numericValue = (raw: string) => Number(raw.replace(",", "."));
+const NUMBER_PATTERN = "[-+]?\\d+(?:[.,]\\d+)?";
+const INTERVAL_PATTERN = new RegExp("(" + NUMBER_PATTERN + ")\\s*(?:-|–|—|\\bto\\b)\\s*(" + NUMBER_PATTERN + ")", "i");
+
+type ReferenceInterval = { low: number; high: number; text: string; start: number };
+
+function genderKind(gender: string): "male" | "female" | "" {
+  if (/^(?:m|male|man|men)$/i.test(gender.trim())) return "male";
+  if (/^(?:f|female|woman|women)$/i.test(gender.trim())) return "female";
+  return "";
+}
+
+function configuredReference(test: LabTestDefinition | undefined, gender: string): ReferenceInterval | null {
+  const sex = genderKind(gender);
+  if (!test || !sex) return null;
+  const minRaw = sex === "male" ? test.maleMin : test.femaleMin;
+  const maxRaw = sex === "male" ? test.maleMax : test.femaleMax;
+  if (!String(minRaw ?? "").trim() || !String(maxRaw ?? "").trim()) return null;
+  const min = numericValue(String(minRaw));
+  const max = numericValue(String(maxRaw));
+  if (!Number.isFinite(min) || !Number.isFinite(max) || min >= max) return null;
+  return { low: min, high: max, text: String(minRaw) + "–" + String(maxRaw), start: -1 };
+}
+
+/**
+ * Select the interval matching the patient's sex when a report prints both
+ * male and female ranges. Never use the last numeric interval by default:
+ * that can accidentally treat the male range's upper limit as the result.
+ */
+function extractReferenceInterval(text: string, gender: string): ReferenceInterval | null {
+  const sex = genderKind(gender);
+  const intervals: ReferenceInterval[] = [];
+  const labelled = /\b(male|female|men|women|m|f)\b[\s():=]*(?:reference\s*)?([-+]?\d+(?:[.,]\d+)?)\s*(?:-|–|—|\bto\b)\s*([-+]?\d+(?:[.,]\d+)?)/gi;
+  for (const match of text.matchAll(labelled)) {
+    const label = /^(?:male|men|m)$/i.test(match[1]) ? "male" : "female";
+    const a = numericValue(match[2]);
+    const b = numericValue(match[3]);
+    if (Number.isFinite(a) && Number.isFinite(b) && a !== b) {
+      intervals.push({ low: Math.min(a, b), high: Math.max(a, b), text: match[2] + "–" + match[3], start: match.index ?? 0 });
+      (intervals[intervals.length - 1] as any).sex = label;
+    }
+  }
+  if (intervals.length) {
+    const selected = sex ? intervals.find(item => (item as any).sex === sex) : undefined;
+    return selected || null; // Ambiguous sex-specific ranges must not be guessed.
+  }
+
+  const matches = [...text.matchAll(new RegExp(NUMBER_PATTERN + "\\s*(?:-|–|—|\\bto\\b)\\s*" + NUMBER_PATTERN, "gi"))];
+  if (matches.length !== 1) return null;
+  const match = matches[0];
+  const pair = INTERVAL_PATTERN.exec(match[0]);
+  if (!pair) return null;
+  const a = numericValue(pair[1]);
+  const b = numericValue(pair[2]);
+  if (!Number.isFinite(a) || !Number.isFinite(b) || a === b) return null;
+  return { low: Math.min(a, b), high: Math.max(a, b), text: pair[1] + "–" + pair[2], start: match.index ?? 0 };
+}
+
+function firstReferenceStart(text: string): number {
+  const candidates = [
+    text.search(/\b(?:male|female|men|women|m|f)\b/i),
+    text.search(/\b(?:reference|ref|normal|biological)\s*(?:range|interval|reference)?\b/i),
+    (() => { const match = new RegExp(NUMBER_PATTERN + "\\s*(?:-|–|—|\\bto\\b)\\s*" + NUMBER_PATTERN, "i").exec(text); return match?.index ?? -1; })(),
+  ].filter(index => index >= 0);
+  return candidates.length ? Math.min(...candidates) : -1;
+}
+
+function resultNumber(text: string): string | null {
+  if (!text || /\b(?:male|female|men|women|reference|normal|range|interval)\b/i.test(text)) return null;
+  const match = new RegExp(NUMBER_PATTERN).exec(text);
+  return match?.[0] ?? null;
+}
+
+function classifyDeviation(resultRaw: string, reference: ReferenceInterval): ParsedLabRow["severity"] | null {
+  const result = numericValue(resultRaw);
+  if (!Number.isFinite(result)) return null;
+  if (result >= reference.low && result <= reference.high) return null;
+  const excursion = result < reference.low ? reference.low - result : result - reference.high;
+  const width = reference.high - reference.low;
+  return excursion / width <= 0.1 ? "WARNING" : "ALERT";
+}
 
 export function parseLabReportRows(text: string, configuredTests: LabTestDefinition[] = [], gender = ""): ParsedLabRow[] {
   const rows: ParsedLabRow[] = [];
   const seen = new Set<string>();
 
-  for (const rawLine of String(text || "").split(/\r?\n/)) {
-    const line = rawLine.replace(/\s+/g, " ").trim();
-    if (isNonResultLine(line, configuredTests)) continue;
-    const testPrefix = findTestPrefix(line, configuredTests);
-    if (!testPrefix) continue;
+  // Each page includes reconstructed table rows followed by raw OCR for review.
+  // When structured rows exist for a page, never parse the raw section as a
+  // second source of numbers: it can contain both male and female ranges.
+  const pages = String(text || "").split(/(?=LAB REPORT IMAGE\s+\d+)/i);
+  for (const page of pages) {
+    const structuredMarker = "RECONSTRUCTED TABLE ROWS (test | result | unit | reference range)";
+    const rawMarker = "RAW OCR TEXT FOR REVIEW";
+    const structuredAt = page.indexOf(structuredMarker);
+    const rawAt = page.indexOf(rawMarker);
+    const structuredSection = structuredAt >= 0 ? page.slice(structuredAt + structuredMarker.length, rawAt >= 0 ? rawAt : undefined) : "";
+    const useStructured = !!structuredSection.trim();
+    const source = useStructured ? structuredSection : page;
 
-    const rest = line.slice(testPrefix.end).replace(/^\s*[:|\-]+\s*/, "");
-    const intervalMatches = [...rest.matchAll(new RegExp(NUM + "\\s*(?:-|–|—|\\bto\\b)\\s*" + NUM, "gi"))];
-    let resultMatch: RegExpMatchArray | undefined;
-    let beforeInterval = "";
-    let rangeText = "";
-    let rangeMatch: RegExpMatchArray | null = null;
-    if (intervalMatches.length) {
-      const interval = intervalMatches[intervalMatches.length - 1];
-      const intervalStart = interval.index ?? -1;
-      if (intervalStart <= 0) continue;
-      beforeInterval = rest.slice(0, intervalStart);
-      const resultMatches = [...beforeInterval.matchAll(new RegExp(NUM, "g"))];
-      if (!resultMatches.length) continue;
-      resultMatch = resultMatches[resultMatches.length - 1];
-      rangeText = interval[0];
-      rangeMatch = INTERVAL_RE.exec(rangeText);
-    } else if (testPrefix.configured) {
-      const values = [...rest.matchAll(new RegExp(NUM, "g"))];
-      if (!values.length) continue;
-      resultMatch = values[0];
-      beforeInterval = rest;
-      const male = /^(m|male)$/i.test(gender.trim());
-      if (!male && !/^(f|female)$/i.test(gender.trim())) continue;
-      const minRaw = male ? testPrefix.configured.maleMin : testPrefix.configured.femaleMin;
-      const maxRaw = male ? testPrefix.configured.maleMax : testPrefix.configured.femaleMax;
-      const min = Number(minRaw), max = Number(maxRaw);
-      if (!String(minRaw).trim() || !String(maxRaw).trim() || !Number.isFinite(min) || !Number.isFinite(max) || min > max) continue;
-      rangeText = String(minRaw) + "–" + String(maxRaw);
-      rangeMatch = [rangeText, String(minRaw), String(maxRaw)] as unknown as RegExpMatchArray;
-    } else continue;
-    if (!resultMatch || !rangeMatch) continue;
-    const result = numericValue(resultMatch[0]);
-    const a = numericValue(rangeMatch[1]);
-    const b = numericValue(rangeMatch[2]);
-    if (![result, a, b].every(Number.isFinite) || a === b) continue;
+    for (const rawLine of source.split(/\r?\n/)) {
+      const line = rawLine.replace(/\s+/g, " ").trim();
+      if (isNonResultLine(line, configuredTests)) continue;
 
-    const low = Math.min(a, b);
-    const high = Math.max(a, b);
-    if (result >= low && result <= high) continue;
+      const cells = line.includes("|") ? line.split("|").map(cell => cell.trim()) : [];
+      const structured = cells.length >= 3 ? findTestPrefix(cells[0], configuredTests) : null;
+      let testPrefix: { name: string; end: number; configured?: LabTestDefinition } | null = structured || findTestPrefix(line, configuredTests);
+      if (!testPrefix) continue;
 
-    const resultEnd = (resultMatch.index ?? 0) + resultMatch[0].length;
-    const unit = (intervalMatches.length ? beforeInterval.slice(resultEnd) : (testPrefix.configured?.unit || ""))
-      .replace(/\b(?:result|value|ref|reference|range|normal)\b/gi, " ")
-      .replace(/[0-9.,+\-–—:|;]/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-    const reference = rangeMatch[1] + "–" + rangeMatch[2];
-    const key = (testPrefix.name + "|" + resultMatch[0] + "|" + reference).toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    // Visual triage only, not a medical criticality rule: a small excursion
-    // (up to 10% of the printed reference interval width) is a yellow WARNING.
-    // Larger excursions are an ALERT. Both require checking the original report
-    // and clinical context; never interpret this heuristic as a diagnosis.
-    const excursion = result < low ? low - result : result > high ? result - high : 0;
-    const intervalWidth = high - low;
-    const severity: ParsedLabRow["severity"] = excursion / intervalWidth <= 0.1 ? "WARNING" : "ALERT";
-    rows.push({
-      test: testPrefix.name,
-      result: resultMatch[0],
-      unit: unit.slice(0, 24),
-      reference,
-      severity,
-      sourceLine: line,
-    });
+      let resultRaw: string | null = null;
+      let unit = "";
+      let reference: ReferenceInterval | null = null;
+
+      if (structured) {
+        // The measured result must come from the result column only. If OCR
+        // placed "M (Male)" or a reference interval in that cell, reject it
+        // instead of mistaking a range limit for the patient's result.
+        resultRaw = resultNumber(cells[1]);
+        unit = cells[2] || testPrefix.configured?.unit || "";
+        reference = extractReferenceInterval(cells.slice(3).join(" | "), gender);
+      } else {
+        const rest = line.slice(testPrefix.end).replace(/^\s*[:|\-]+\s*/, "");
+        const referenceStart = firstReferenceStart(rest);
+        const resultArea = referenceStart >= 0 ? rest.slice(0, referenceStart) : rest;
+        resultRaw = resultNumber(resultArea);
+        reference = referenceStart >= 0 ? extractReferenceInterval(rest.slice(referenceStart), gender) : null;
+        const resultEnd = resultRaw ? resultArea.indexOf(resultRaw) + resultRaw.length : 0;
+        unit = resultRaw ? resultArea.slice(resultEnd) : "";
+      }
+
+      // A saved sex-specific range is a fallback only when the report does not
+      // provide an unambiguous applicable range and the patient's sex is known.
+      if (!reference) reference = configuredReference(testPrefix.configured, gender);
+      if (!resultRaw || !reference) continue;
+
+      const severity = classifyDeviation(resultRaw, reference);
+      if (!severity) continue;
+      const result = numericValue(resultRaw);
+      const cleanedUnit = unit
+        .replace(/\b(?:result|value|ref|reference|range|normal|male|female)\b/gi, " ")
+        .replace(/[0-9.,+\-–—:|;]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+      const key = (normaliseName(testPrefix.name) + "|" + result + "|" + reference.text).toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      rows.push({
+        test: testPrefix.name,
+        result: resultRaw,
+        unit: (cleanedUnit || testPrefix.configured?.unit || "").slice(0, 24),
+        reference: reference.text,
+        severity,
+        sourceLine: line,
+      });
+    }
   }
   return rows;
 }
