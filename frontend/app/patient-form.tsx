@@ -38,6 +38,27 @@ type InventoryItem = { id: string; name: string; category: string; categoryId?: 
 type SelectedImplant = { id: string; inventoryId: string; name: string; category: string; size: string; quantity: number };
 
 const today = () => new Date().toISOString().slice(0, 10);
+
+function detectPositiveScreening(text: string): { hcvPlus: boolean; hbaSg: boolean; hiv: boolean } {
+  const found = { hcvPlus: false, hbaSg: false, hiv: false };
+  const lines = String(text || "").split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  for (const line of lines) {
+    const cells = line.includes("|") ? line.split("|").map(cell => cell.trim()) : [];
+    const candidates = cells.length >= 2 ? [cells[0] + " " + cells[1]] : [line];
+    for (const candidate of candidates) {
+      const name = candidate.match(/\b(?:hbsag|hba\s*sg|hepatitis\s*b\s*surface\s*antigen|hcv(?:\s*(?:antibody|ab|antigen))?|hepatitis\s*c(?:\s*(?:antibody|ab))?|hiv(?:\s*(?:1\s*\/?\s*2)?\s*(?:antibody|ab|screen))?)\b/i)?.[0] || "";
+      if (!name) continue;
+      const resultPart = cells.length >= 2 ? cells[1] : candidate.slice(candidate.toLowerCase().indexOf(name.toLowerCase()) + name.length);
+      if (/\b(?:negative|non[\s-]?reactive|not\s+detected|non[\s-]?detected|absent|normal)\b/i.test(resultPart)) continue;
+      const positive = /\b(?:positive|reactive|detected|presumptive\s+positive|pos\.?)\b/i.test(resultPart);
+      if (!positive) continue;
+      if (/\b(?:hbsag|hba\s*sg|hepatitis\s*b\s*surface\s*antigen)\b/i.test(name)) found.hbaSg = true;
+      else if (/\b(?:hcv|hepatitis\s*c)\b/i.test(name)) found.hcvPlus = true;
+      else if (/\bhiv\b/i.test(name)) found.hiv = true;
+    }
+  }
+  return found;
+}
 const empty = (): Patient => ({
   id: "", mrNo: "", name: "", gender: "", age: "", diagnosis: "",
   procedure: "", procedureII: "", implant: "", implantII: "", address: "", fileName: "",
@@ -197,7 +218,20 @@ export default function PatientForm() {
       setLabOcrText(extracted);
       setLabOcrFindings(candidates);
       setLabOcrOnlineHelp(onlineHelp);
-      setP(prev => ({ ...prev, customData: { ...(prev.customData || {}), labOcrExtractedText: extracted, labOcrPossibleFlags: candidates.join("\n"), labOcrNeedsReview: uncertain.join("\n"), labOcrOnlineTestNameHelp: onlineHelp.join("\n") } }));
+      const positiveScreening = detectPositiveScreening(extracted);
+      setP(prev => ({
+        ...prev,
+        hcvPlus: prev.hcvPlus || positiveScreening.hcvPlus,
+        hbaSg: prev.hbaSg || positiveScreening.hbaSg,
+        hiv: prev.hiv || positiveScreening.hiv,
+        customData: { ...(prev.customData || {}), labOcrExtractedText: extracted, labOcrPossibleFlags: candidates.join("\n"), labOcrNeedsReview: uncertain.join("\n"), labOcrOnlineTestNameHelp: onlineHelp.join("\n") },
+      }));
+      const newlyTicked = [
+        positiveScreening.hcvPlus && !p.hcvPlus ? "HCV+" : "",
+        positiveScreening.hbaSg && !p.hbaSg ? "HbAsg" : "",
+        positiveScreening.hiv && !p.hiv ? "HIV" : "",
+      ].filter(Boolean);
+      if (newlyTicked.length) toast("Positive lab result detected; screening checkbox ticked for review: " + newlyTicked.join(", "), "info");
       const alertCandidates = candidates.filter(row => row.startsWith("ALERT:"));
       if (alertCandidates.length && automatic && isEdit && id && ready) {
         // Show a lab warning only when opening an existing patient's detail.
