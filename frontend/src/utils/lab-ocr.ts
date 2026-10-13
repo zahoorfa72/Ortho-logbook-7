@@ -263,6 +263,33 @@ function resultNumber(text: string): string | null {
   return raw;
 }
 
+function defaultUnitForTest(name: string): string {
+  const key = canonicalTestName(name);
+  const units: Array<[string[], string]> = [
+    [["hemoglobin", "haemoglobin", "hgb", "hb"], "g/dL"],
+    [["hematocrit", "haematocrit", "hct", "pcv"], "%"],
+    [["red blood cell count", "rbc", "erythrocyte count"], "x10^6 cells/uL"],
+    [["white blood cell count", "wbc", "total leukocyte count", "tlc"], "x10^3 cells/uL"],
+    [["platelet count", "platelets", "platelet", "plt"], "x10^3 cells/uL"],
+    [["mcv"], "fL"], [["mch"], "pg"], [["mchc"], "g/dL"], [["mpv"], "fL"], [["rdw", "rdw-cv"], "%"],
+    [["neutrophils", "lymphocytes", "eosinophils", "monocytes", "basophils"], "%"],
+    [["fasting blood sugar", "random blood sugar", "glucose", "fbs", "rbs"], "mg/dL"],
+    [["creatinine"], "mg/dL"], [["urea", "blood urea nitrogen", "bun"], "mg/dL"],
+    [["total cholesterol", "cholesterol", "triglycerides"], "mg/dL"],
+    [["sodium", "potassium", "chloride"], "mmol/L"],
+  ];
+  const match = units.find(([names]) => names.some(item => canonicalTestName(item) === key));
+  return match?.[1] || "";
+}
+
+function unitFromResultCell(value: string): string {
+  const text = String(value || "").trim();
+  // Capture common units that may be attached to the result when the OCR
+  // misses the separate Units column.
+  const match = text.match(/(?:g\s*\/\s*d?l|mg\s*\/\s*d?l|mmol\s*\/\s*l|mol\s*\/\s*l|iu\s*\/\s*l|u\s*\/\s*l|cells?\s*\/\s*(?:ul|µl|μl)|x\s*10\s*\^?\s*\d+\s*(?:cells?\s*\/\s*(?:ul|µl|μl))?|fl|pg|%|seconds?|sec)\b?/i);
+  return match?.[0]?.replace(/\s+/g, "") || "";
+}
+
 function classifyDeviation(resultRaw: string, reference: ReferenceInterval, warningPercent = 10): ParsedLabRow["severity"] | null {
   const result = numericValue(resultRaw);
   if (!Number.isFinite(result)) return null;
@@ -309,7 +336,7 @@ export function parseLabReportRows(text: string, configuredTests: LabTestDefinit
         // placed "M (Male)" or a reference interval in that cell, reject it
         // instead of mistaking a range limit for the patient's result.
         resultRaw = resultNumber(cells[1]);
-        unit = cells[2] || testPrefix.configured?.unit || "";
+        unit = cells[2] || unitFromResultCell(cells[1]) || testPrefix.configured?.unit || defaultUnitForTest(testPrefix.name);
         reference = extractReferenceInterval(cells.slice(3).join(" | "), gender);
       } else {
         const rest = line.slice(testPrefix.end).replace(/^\s*[:|\-]+\s*/, "");
@@ -318,7 +345,7 @@ export function parseLabReportRows(text: string, configuredTests: LabTestDefinit
         resultRaw = resultNumber(resultArea);
         reference = referenceStart >= 0 ? extractReferenceInterval(rest.slice(referenceStart), gender) : null;
         const resultEnd = resultRaw ? resultArea.indexOf(resultRaw) + resultRaw.length : 0;
-        unit = resultRaw ? resultArea.slice(resultEnd) : "";
+        unit = resultRaw ? (unitFromResultCell(resultArea) || resultArea.slice(resultEnd).trim() || testPrefix.configured?.unit || defaultUnitForTest(testPrefix.name)) : "";
       }
 
       // A saved sex-specific range is a fallback only when the report does not
