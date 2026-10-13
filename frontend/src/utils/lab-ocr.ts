@@ -235,6 +235,11 @@ function resultNumber(text: string): string | null {
   const value = String(text || "").replace(/\s+/g, " ").trim();
   if (!value || /\b(?:male|female|men|women|reference|normal|range|interval)\b/i.test(value)) return null;
 
+  // A lone F/M marker often belongs to the report's sex-specific reference
+  // range, but OCR can shift it into the result cell (for example "18.0 F").
+  // Do not silently accept the number as a verified measurement in that case.
+  if (/(?:^|\s)(?:[fm]|i[fm])\s*$/i.test(value)) return null;
+
   // A result cell should contain one measured scalar, optionally followed by
   // a unit or H/L flag. Never take the first number from a cell that also
   // contains a reference interval or multiple unrelated numbers: that was
