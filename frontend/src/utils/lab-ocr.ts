@@ -50,10 +50,6 @@ function findTestPrefix(line: string, configuredTests: LabTestDefinition[] = [])
       if (!nextChar || /[\\s:|]/.test(nextChar)) return { name: cleaned.slice(0, name.length).trim(), end: name.length, configured };
     }
   }
-  for (const alias of TEST_ALIASES) {") + "(?=$|\\\\s|[:|])", "i");
-    const match = pattern.exec(cleaned);
-    if (match) return { name: match[0].trim(), end: match[0].length, configured };
-  }
   for (const alias of TEST_ALIASES) {
     const pattern = new RegExp("^" + alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?=$|\\s|[:|])", "i");
     const match = pattern.exec(cleaned);
