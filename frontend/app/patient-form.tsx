@@ -7,7 +7,7 @@ import * as ImageManipulator from "expo-image-manipulator";
 import { Asset, requestPermissionsAsync } from "expo-media-library";
 import * as FileSystem from "expo-file-system/legacy";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { recognizeText } from "expo-ocr-kit";
+import { recognizeLabText } from "@/src/utils/lab-ocr";
 import { Dimensions } from "react-native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AppState, Image, InteractionManager, Modal, Pressable, ScrollView, Text, View } from "react-native";
@@ -131,7 +131,7 @@ export default function PatientForm() {
     try {
       const pages: string[] = [];
       for (let i = 0; i < p.photos.length; i++) {
-        const result = await recognizeText(p.photos[i]);
+        const result = await recognizeLabText(p.photos[i]);
         pages.push("PAGE " + (i + 1) + "\n" + String(result?.text || "").trim());
       }
       const extracted = pages.filter(x => x.trim()).join("\n\n");
