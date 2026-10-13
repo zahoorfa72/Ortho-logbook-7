@@ -204,10 +204,14 @@ function structureLabColumns(blocks: any[], imageWidth: number, imageHeight: num
   const resultHeader = headerX(/^result\b/i);
   const unitHeader = headerX(/^units?\b/i);
   const refHeader = headerX(/^(?:reference|normal|biological)\b/i);
-  const resultBoundary = resultHeader ?? 0.48;
-  const unitBoundary = unitHeader ?? 0.64;
-  const refBoundary = refHeader ?? 0.76;
-  const testBoundary = testHeader !== undefined ? Math.min(resultBoundary - 0.04, testHeader + 0.28) : 0.40;
+  // Boundaries sit between column centres, not on the header text itself.
+  const testCenter = testHeader ?? 0.20;
+  const resultCenter = resultHeader ?? 0.50;
+  const unitCenter = unitHeader ?? 0.66;
+  const refCenter = refHeader ?? 0.84;
+  const testBoundary = (testCenter + resultCenter) / 2;
+  const resultBoundary = (resultCenter + unitCenter) / 2;
+  const unitBoundary = (unitCenter + refCenter) / 2;
 
   const sorted = positioned.sort((a, b) => (a.y + a.height / 2) - (b.y + b.height / 2));
   const typicalHeight = sorted.map(item => item.height).sort((a, b) => a - b)[Math.floor(sorted.length / 2)] || imageHeight * 0.02;
@@ -229,7 +233,7 @@ function structureLabColumns(blocks: any[], imageWidth: number, imageHeight: num
     const cells = ["", "", "", ""];
     for (const item of group.sort((a, b) => a.x - b.x)) {
       const xCenter = (item.x + item.width / 2) / imageWidth;
-      const column = xCenter < testBoundary ? 0 : xCenter < resultBoundary ? 1 : xCenter < unitBoundary ? 2 : xCenter < refBoundary ? 2 : 3;
+      const column = xCenter < testBoundary ? 0 : xCenter < resultBoundary ? 1 : xCenter < unitBoundary ? 2 : 3;
       cells[column] = (cells[column] + " " + item.text).trim();
     }
     // If geometry doesn't reveal separate cells, retain the row for manual
