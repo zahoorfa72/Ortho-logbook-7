@@ -975,7 +975,7 @@ export default function PatientForm() {
             <Ionicons name="close" size={30} color="#FFFFFF" />
           </Pressable>
           {!!selectedPhoto && (
-            <ScrollView horizontal pagingEnabled showsHorizontalScrollIndicator={false} contentOffset={{ x: Math.max(0, p.photos.indexOf(selectedPhoto)) * screenWidth, y: 0 }} onMomentumScrollEnd={(event) => { const idx = Math.max(0, Math.min(p.photos.length - 1, Math.round(event.nativeEvent.contentOffset.x / screenWidth))); setSelectedPhoto(p.photos[idx] || null); }} style={{ flex: 1, width: screenWidth }} contentContainerStyle={{ alignItems: "center" }}>
+            <ScrollView key={selectedPhoto || "none"} horizontal pagingEnabled showsHorizontalScrollIndicator={false} contentOffset={{ x: Math.max(0, p.photos.indexOf(selectedPhoto)) * screenWidth, y: 0 }} onMomentumScrollEnd={(event) => { const idx = Math.max(0, Math.min(p.photos.length - 1, Math.round(event.nativeEvent.contentOffset.x / screenWidth))); setSelectedPhoto(p.photos[idx] || null); }} style={{ flex: 1, width: screenWidth }} contentContainerStyle={{ alignItems: "center" }}>
               {p.photos.map((uri, idx) => <View key={uri + "-" + idx} style={{ width: screenWidth, height: "100%", alignItems: "center", justifyContent: "center" }}><Image source={{ uri }} style={styles.photoFull} resizeMode="contain" /></View>)}
             </ScrollView>
           )}
