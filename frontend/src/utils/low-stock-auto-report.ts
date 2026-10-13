@@ -278,8 +278,8 @@ export async function checkAndSendImmediateLowStockAlerts(): Promise<string> {
         "Current stock: " + qty + " " + unit,
         "Minimum stock: " + min + " " + unit,
         "Status: LOW STOCK",
-      ].join("\\n");
-    }).join("\\n\\n");
+      ].join("\n");
+    }).join("\n\n");
     return [
       "ORTHO LOGBOOK",
       "IMMEDIATE LOW-STOCK ALERT",
@@ -292,7 +292,7 @@ export async function checkAndSendImmediateLowStockAlerts(): Promise<string> {
       "Alert time: " + timestamp,
       "",
       "This alert includes only item(s) newly reaching or falling below minimum stock."
-    ].join("\\n");
+    ].join("\n");
   };
 
   const results: string[] = [];
@@ -336,7 +336,7 @@ export async function checkAndSendImmediateLowStockAlerts(): Promise<string> {
   if (successful.length) {
     Alert.alert(
       "Low-stock alert sent",
-      successful.join("\\n") + "\\n\\nThe message included only the newly affected low-stock item(s)."
+      successful.join("\n") + "\n\nThe message included only the newly affected low-stock item(s)."
     );
   }
   return results.length ? results.join("; ") : "No newly low-stock items.";
