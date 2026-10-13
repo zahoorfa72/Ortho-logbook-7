@@ -442,7 +442,34 @@ function structureLabColumns(blocks: any[], imageWidth: number, imageHeight: num
   return output.join("\n");
 }
 
-export async function recognizeLabText(uri: string): Promise<{ text: string; structuredText: string }> {
+async function recognizeOnlineLabText(uri: string, apiKey: string): Promise<string> {
+  const key = String(apiKey || "").trim();
+  if (!key) return "";
+  try {
+    const body = new FormData();
+    body.append("file", { uri, name: "lab-report.jpg", type: "image/jpeg" } as any);
+    body.append("language", "eng");
+    body.append("isOverlayRequired", "false");
+    body.append("detectOrientation", "true");
+    body.append("scale", "true");
+    const response = await fetch("https://api.ocr.space/parse/image", {
+      method: "POST",
+      headers: { apikey: key },
+      body,
+    });
+    if (!response.ok) return "";
+    const payload: any = await response.json();
+    if (payload?.IsErroredOnProcessing) return "";
+    return Array.isArray(payload?.ParsedResults)
+      ? payload.ParsedResults.map((item: any) => String(item?.ParsedText || "")).filter(Boolean).join("\\n").trim()
+      : "";
+  } catch {
+    // Network, service, or API-key errors fall back to offline OCR silently.
+    return "";
+  }
+}
+
+export async function recognizeLabText(uri: string, onlineApiKey = ""): Promise<{ text: string; structuredText: string; mode: "online" | "offline" }> {
   // Run on-device OCR on the original and, for small/blurry-looking captures,
   // an enlarged high-quality copy. Upscaling cannot restore lost detail, but
   // often helps OCR read small printed digits without sending data online.
@@ -477,7 +504,18 @@ export async function recognizeLabText(uri: string): Promise<{ text: string; str
   } catch {
     best = await recognizeText(uri);
   }
-  const text = String(best?.text || "");
+  let text = String(best?.text || "");
+  let mode: "online" | "offline" = "offline";
+  // Optional cloud OCR is attempted only when the admin explicitly saves a key.
+  // If it is unavailable or returns less readable text, retain the offline result.
+  const onlineText = await recognizeOnlineLabText(uri, onlineApiKey);
+  const qualityScore = (value: string) => value.length +
+    (value.match(/\\d+(?:[.,]\\d+)?/g) || []).length * 8 +
+    (value.match(/\\b(?:result|reference|range|hemoglobin|platelets|glucose|creatinine)\\b/gi) || []).length * 12;
+  if (onlineText && qualityScore(onlineText) > qualityScore(text)) {
+    text = onlineText;
+    mode = "online";
+  }
   let structuredText = "";
   try {
     const size = bestSize || await imageSize(uri);
@@ -485,5 +523,5 @@ export async function recognizeLabText(uri: string): Promise<{ text: string; str
   } catch {
     // Raw on-device OCR text remains available if image geometry is unavailable.
   }
-  return { text, structuredText };
+  return { text, structuredText, mode };
 }
