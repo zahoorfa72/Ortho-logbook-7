@@ -47,7 +47,7 @@ function findTestPrefix(line: string, configuredTests: LabTestDefinition[] = [])
     const lowerName = name.toLowerCase();
     if (cleaned.toLowerCase().startsWith(lowerName)) {
       const nextChar = cleaned.charAt(name.length);
-      if (!nextChar || /[\\s:|]/.test(nextChar)) return { name: cleaned.slice(0, name.length).trim(), end: name.length, configured };
+      if (!nextChar || /[\s:|]/.test(nextChar)) return { name: cleaned.slice(0, name.length).trim(), end: name.length, configured };
     }
   }
   for (const alias of TEST_ALIASES) {
