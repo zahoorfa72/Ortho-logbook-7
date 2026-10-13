@@ -321,7 +321,12 @@ export function parseLabReportRows(text: string, configuredTests: LabTestDefinit
       if (!severity) continue;
       const result = numericValue(resultRaw);
       const cleanedUnit = unit
-        .replace(/\b(?:result|value|ref|reference|range|normal|male|female)\b/gi, " ")
+        // OCR frequently merges sex labels (F, M, iM) or stray glyphs into
+        // the unit column. These are not measurement units and must not be
+        // shown as part of the patient's result.
+        .replace(/\b(?:result|value|ref|reference|range|normal|male|female|men|women|im)\b/gi, " ")
+        .replace(/\b[fm]\b/gi, " ")
+        .replace(/\by\b/gi, " ")
         .replace(/[0-9.,+\-–—:|;]/g, " ")
         .replace(/\s+/g, " ")
         .trim();
