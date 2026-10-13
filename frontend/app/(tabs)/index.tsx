@@ -100,7 +100,7 @@ function abnormalLabLabels(patient: Patient, automaticFlags?: string[]): string[
     const label = status + ": " + test + (resultText ? " " + resultText : "") + (unit ? " " + unit : "") + (reference ? " (Ref " + reference + ")" : "");
     if (!labels.includes(label)) labels.push(label);
   }
-  return labels.slice(0, 5);
+  return labels.slice(0, 20);
 }
 
 export default function Logbook() {
