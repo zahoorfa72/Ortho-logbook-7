@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { router, useFocusEffect } from "expo-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { triggerAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-backup";
 import { isLikelyLabReportText, parseLabReportRows, recognizeLabText } from "@/src/utils/lab-ocr";
 import {
   ActivityIndicator,
@@ -73,7 +74,7 @@ function ordinalShort(n: number) {
   return n + (s[(v - 20) % 10] || s[v] || s[0]);
 }
 
-function abnormalLabLabels(patient: Patient, automaticFlags?: string[]): string[] {
+function abnormalLabLabels(patient: Patient, automaticFlags?: string[], includeWarnings = true): string[] {
   const saved = String(automaticFlags !== undefined
     ? automaticFlags.join("\n")
     : patient.customData?.labOcrPossibleFlags || "").trim();
@@ -100,7 +101,7 @@ function abnormalLabLabels(patient: Patient, automaticFlags?: string[]): string[
     const label = status + ": " + test + (resultText ? " " + resultText : "") + (unit ? " " + unit : "") + (reference ? " (Ref " + reference + ")" : "");
     if (!labels.includes(label)) labels.push(label);
   }
-  return labels.slice(0, 20);
+  return labels.filter(label => includeWarnings || !label.startsWith("WARNING:")).slice(0, 20);
 }
 
 export default function Logbook() {
@@ -123,10 +124,14 @@ export default function Logbook() {
   const [pdfYear, setPdfYear] = useState("");
   const [reminder, setReminder] = useState<ReminderState>({ show: false, lastBackupIso: null, reason: null });
   const [labOcrEnabled, setLabOcrEnabled] = useState(false);
+  const [labWarningsEnabled, setLabWarningsEnabled] = useState(true);
+  const [labResultsHiddenByPatient, setLabResultsHiddenByPatient] = useState<Record<string, boolean>>({});
   const [labFlagsByPatient, setLabFlagsByPatient] = useState<Record<string, { signature: string; flags: string[] }>>({});
 
   useEffect(() => {
     AsyncStorage.getItem("ortho_lab_ocr_enabled").then(value => setLabOcrEnabled(value === "true")).catch(() => setLabOcrEnabled(false));
+    AsyncStorage.getItem("ortho_lab_warnings_enabled").then(value => setLabWarningsEnabled(value !== "false")).catch(() => setLabWarningsEnabled(true));
+    AsyncStorage.getItem("ortho_lab_results_hidden_by_patient_v1").then(raw => { if (raw) { try { const parsed = JSON.parse(raw); if (parsed && typeof parsed === "object") setLabResultsHiddenByPatient(parsed); } catch {} } }).catch(() => {});
     AsyncStorage.getItem("ortho_lab_ocr_patient_cache_v3").then(raw => {
       if (!raw) return;
       try {
@@ -223,6 +228,18 @@ export default function Logbook() {
     void scan();
     return () => { cancelled = true; };
   }, [labOcrEnabled, data]);
+
+  const toggleLabResultsHidden = async (id: string) => {
+    const next = { ...labResultsHiddenByPatient, [id]: !labResultsHiddenByPatient[id] };
+    setLabResultsHiddenByPatient(next);
+    try {
+      await AsyncStorage.setItem("ortho_lab_results_hidden_by_patient_v1", JSON.stringify(next));
+      triggerAutomaticDriveBackup("appSettings");
+    } catch {
+      setLabResultsHiddenByPatient(labResultsHiddenByPatient);
+      toast("Could not save this patient's lab-result visibility setting.", "error");
+    }
+  };
 
   const togglePatient = (id: string) => setSelectedIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
   const selectAllPatients = () => setSelectedIds(selectedIds.length === filtered.length ? [] : filtered.map((p) => p.id));
@@ -616,16 +633,29 @@ export default function Logbook() {
                   {infectionResults(item).map(label => <Text key={label} style={styles.infectionText}>{label}</Text>)}
                 </View>
               ) : null}
-              {abnormalLabLabels(item, labFlagsByPatient[item.id]?.flags).length ? (
-                <View style={{ marginTop: spacing.xs, paddingVertical: 3, paddingHorizontal: spacing.sm, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.error || "#B91C1C", backgroundColor: (colors.error || "#B91C1C") + "12" }}>
+              {(() => {
+                const labLabels = abnormalLabLabels(item, labFlagsByPatient[item.id]?.flags, labWarningsEnabled);
+                if (!labLabels.length) return null;
+                const hidden = labResultsHiddenByPatient[item.id] === true;
+                const hasAlert = labLabels.some(label => label.startsWith("ALERT:"));
+                const tone = hasAlert ? (colors.error || "#B91C1C") : (colors.warning || "#B7791F");
+                return <View style={{ marginTop: spacing.xs, paddingVertical: 4, paddingHorizontal: spacing.sm, borderRadius: radius.sm, borderWidth: 1, borderColor: tone, backgroundColor: tone + "12" }}>
                   <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 4 }}>
-                    <Ionicons name="alert-circle" size={13} color={colors.error || "#B91C1C"} />
-                    <Text style={{ color: colors.error || "#B91C1C", fontFamily: fontFamily.bold, fontSize: fontSize.xs }}>LAB ALERT</Text>
-                    {abnormalLabLabels(item, labFlagsByPatient[item.id]?.flags).map((label, index) => <Text key={label + index} style={{ color: colors.error || "#B91C1C", fontFamily: fontFamily.bold, fontSize: fontSize.xs }}>{label}</Text>)}
+                    <Ionicons name={hasAlert ? "alert-circle" : "warning"} size={14} color={tone} />
+                    <Text style={{ color: tone, fontFamily: fontFamily.bold, fontSize: fontSize.xs }}>{hasAlert ? "LAB ALERT" : "LAB WARNING"}</Text>
+                    {hidden ? <Text style={{ color: tone, fontSize: fontSize.xs }}>Results hidden — warning symbol remains visible</Text> : labLabels.map((label, index) => {
+                      const warning = label.startsWith("WARNING:");
+                      const labelTone = warning ? (colors.warning || "#B7791F") : (colors.error || "#B91C1C");
+                      return <Text key={label + index} style={{ color: labelTone, fontFamily: fontFamily.bold, fontSize: fontSize.xs }}>{label}</Text>;
+                    })}
+                    <Pressable onPress={event => { event.stopPropagation(); void toggleLabResultsHidden(item.id); }} hitSlop={8} accessibilityLabel={hidden ? "Show this patient's lab results" : "Hide this patient's lab results"} style={{ flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 4, paddingVertical: 2 }}>
+                      <Ionicons name={hidden ? "eye-outline" : "eye-off-outline"} size={14} color={tone} />
+                      <Text style={{ color: tone, fontFamily: fontFamily.semibold, fontSize: fontSize.xs }}>{hidden ? "Show" : "Hide"}</Text>
+                    </Pressable>
                   </View>
-                  <Text style={{ color: colors.muted, fontSize: 10, marginTop: 1 }}>Verify report</Text>
-                </View>
-              ) : null}
+                  {!hidden ? <Text style={{ color: colors.muted, fontSize: 10, marginTop: 1 }}>Verify against original report</Text> : null}
+                </View>;
+              })()}
 
               {((item.implants && item.implants.length) || item.implant || item.implantII) ? (
                 <View style={styles.implantRow}>
