@@ -1,4 +1,5 @@
 import * as SecureStore from "expo-secure-store";
+import { Alert } from "react-native";
 import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
 import * as FileSystem from "expo-file-system/legacy";
@@ -253,50 +254,90 @@ export async function checkAndSendImmediateLowStockAlerts(): Promise<string> {
   const currentIds = low.map((item: any) => String(item.id));
   const gmailActive = new Set((state.activeLowStockGmailIds || []).map(String));
   const whatsappActive = new Set((state.activeLowStockWhatsAppIds || []).map(String));
-  const gmailNew = gmailOn ? low.filter((item: any) => !gmailActive.has(String(item.id))) : [];
-  const whatsappNew = whatsappOn ? low.filter((item: any) => !whatsappActive.has(String(item.id))) : [];
-  const formatMessage = (items: any[]) => "ORTHO LOGBOOK — LOW STOCK ALERT\n" + items.length +
-    " implant/item(s) just reached or fell below minimum stock:\n" +
-    items.map((item: any) => {
-      const name = String(item.name || item.category || "Implant");
+
+  // First run establishes a baseline so old low-stock items are not falsely
+  // reported as if they triggered a brand-new immediate alert.
+  const hasAnyBaseline = Array.isArray(state.activeLowStockGmailIds) || Array.isArray(state.activeLowStockWhatsAppIds);
+  const gmailNew = gmailOn && hasAnyBaseline ? low.filter((item: any) => !gmailActive.has(String(item.id))) : [];
+  const whatsappNew = whatsappOn && hasAnyBaseline ? low.filter((item: any) => !whatsappActive.has(String(item.id))) : [];
+
+  const formatMessage = (items: any[]) => {
+    const timestamp = new Date().toLocaleString();
+    const itemDetails = items.map((item: any, index: number) => {
+      const name = String(item.name || item.category || "Inventory item");
       const category = String(item.category || "");
       const size = String(item.size || "");
       const qty = Number(item.quantity);
       const min = Number(item.minimumStock ?? item.minimum_stock);
-      return "- " + name + (category && category.toLowerCase() !== name.toLowerCase() ? " (" + category + ")" : "") +
-        (size ? ", size " + size : "") + ": remaining " + qty + " " + String(item.unit || "pcs") + ", minimum " + min;
-    }).join("\n") + "\n\nPlease arrange replenishment. Alert time: " + new Date().toLocaleString();
+      const unit = String(item.unit || "pcs");
+      return [
+        (index + 1) + ". " + name,
+        ...(category && category.toLowerCase() !== name.toLowerCase() ? ["Category: " + category] : []),
+        ...(size ? ["Size: " + size] : []),
+        "Current stock: " + qty + " " + unit,
+        "Minimum stock: " + min + " " + unit,
+        "Status: LOW STOCK",
+      ].join("\\n");
+    }).join("\\n\\n");
+    return [
+      "ORTHO LOGBOOK",
+      "IMMEDIATE LOW-STOCK ALERT",
+      "--------------------------------",
+      "Newly affected item(s): " + items.length,
+      "",
+      itemDetails,
+      "",
+      "Action required: Please arrange replenishment for the item(s) listed above.",
+      "Alert time: " + timestamp,
+      "",
+      "This alert includes only item(s) newly reaching or falling below minimum stock."
+    ].join("\\n");
+  };
+
   const results: string[] = [];
   let gmailActiveIds = [...(state.activeLowStockGmailIds || [])];
   let whatsappActiveIds = [...(state.activeLowStockWhatsAppIds || [])];
   if (gmailOn) {
-    if (!gmailNew.length) gmailActiveIds = currentIds;
+    if (!hasAnyBaseline || !gmailNew.length) gmailActiveIds = currentIds;
     else {
       try {
-        await sendLowStockAlertEmail("URGENT: Implant low-stock alert (" + gmailNew.length + " item(s))", formatMessage(gmailNew), config);
+        await sendLowStockAlertEmail(
+          "LOW STOCK ALERT — " + gmailNew.map((item: any) => String(item.name || item.category || "Inventory item")).join(", "),
+          formatMessage(gmailNew),
+          config
+        );
         gmailActiveIds = currentIds;
-        results.push("Gmail text alert sent");
+        results.push("Gmail immediate alert sent");
       } catch (e: any) { results.push("Gmail FAILED: " + String(e?.message || e)); }
     }
   }
   if (whatsappOn) {
-    if (!whatsappNew.length) whatsappActiveIds = currentIds;
+    if (!hasAnyBaseline || !whatsappNew.length) whatsappActiveIds = currentIds;
     else {
       try {
         await sendLowStockAlertWhatsApp(formatMessage(whatsappNew), config);
         whatsappActiveIds = currentIds;
-        results.push("WhatsApp text alert sent");
+        results.push("WhatsApp immediate alert sent");
       } catch (e: any) { results.push("WhatsApp FAILED: " + String(e?.message || e)); }
     }
   }
+
   await saveState({
     ...state,
     ...(gmailOn ? { activeLowStockGmailIds: gmailActiveIds } : {}),
     ...(whatsappOn ? { activeLowStockWhatsAppIds: whatsappActiveIds } : {}),
     activeLowStockIds: currentIds,
-    ...(results.length ? { lastImmediateAlertAt: new Date().toISOString() } : {}),
-    ...(results.length ? { lastStatus: "Immediate low-stock text alert: " + results.join("; ") } : {}),
+    ...(results.some(x => x.includes("sent")) ? { lastImmediateAlertAt: new Date().toISOString() } : {}),
+    ...(results.length ? { lastStatus: "Immediate low-stock alert: " + results.join("; ") } : {}),
   });
+
+  const successful = results.filter(x => x.includes("sent"));
+  if (successful.length) {
+    Alert.alert(
+      "Low-stock alert sent",
+      successful.join("\\n") + "\\n\\nThe message included only the newly affected low-stock item(s)."
+    );
+  }
   return results.length ? results.join("; ") : "No newly low-stock items.";
 }
 
