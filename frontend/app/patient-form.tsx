@@ -764,11 +764,26 @@ export default function PatientForm() {
 
   const save = useMutation({
     mutationFn: () => {
+      // Persist the current manual lab-review entries in the same patient save
+      // request. Do not rely on a prior asynchronous setP() from the Apply button.
+      const reviewedLabResults = labManualReviews
+        .filter(item => String(item.result || "").trim())
+        .map(item => ({
+          test: item.test,
+          result: String(item.result).trim(),
+          unit: item.unit,
+          reference: item.reference,
+          manuallyVerified: true,
+        }));
+      const existingLabResults = (p.customData || {}).labOcrManualResults;
       const customData = {
         ...(p.customData || {}),
         hcvPlus: p.hcvPlus ? "true" : "false",
         hbaSg: p.hbaSg ? "true" : "false",
         hiv: p.hiv ? "true" : "false",
+        ...((reviewedLabResults.length || !existingLabResults) ? {
+          labOcrManualResults: JSON.stringify(reviewedLabResults),
+        } : {}),
       };
       const payload = { ...p, customData };
       return isEdit ? api.put("/patients/" + id, payload) : api.post("/patients", payload);
@@ -1039,8 +1054,12 @@ export default function PatientForm() {
                 }) : null}
                 {user?.role === "admin" ? <Pressable onPress={() => {
                   const manual = labManualReviews.filter(item => item.result.trim()).map(item => ({ test: item.test, result: item.result.trim(), unit: item.unit, reference: item.reference, manuallyVerified: true }));
+                  if (!manual.length) {
+                    toast("Enter at least one lab result before applying manual review.", "error");
+                    return;
+                  }
                   setP(previous => ({ ...previous, customData: { ...(previous.customData || {}), labOcrManualResults: JSON.stringify(manual) } }));
-                  toast("Manual lab review values added to this patient form draft. Verify them before saving.", "info");
+                  toast("Lab results are attached to this patient form and will be saved with Save Record / Update Record.", "success");
                 }} style={{ marginTop: spacing.md, padding: spacing.md, backgroundColor: colors.brandPrimary, borderRadius: radius.md, alignItems: "center" }}>
                   <Text style={{ color: colors.onBrandPrimary, fontFamily: fontFamily.semibold }}>Apply manual review to patient draft</Text>
                 </Pressable> : null}
