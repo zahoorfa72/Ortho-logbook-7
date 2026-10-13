@@ -252,19 +252,6 @@ export default function PatientForm() {
         const range = validRange ? String(test.min) + "–" + String(test.max) : "";
         return { test: test.name, unit: test.unit || "", result: "", reference: range, photoUri: reviewSourcePhotos[0] || "", min: validRange ? min : undefined, max: validRange ? max : undefined };
       });
-      const candidates: string[] = parsedRows").replace(/\s+/g, "\\s*");
-          return new RegExp("\\b" + escaped + "\\b", "i").test(rawOnly);
-        });
-        const alreadyParsed = parsedRows.some(row => canonical(row.test) === canonical(test.name) ||
-          (isHemoglobin(row.test) && isHemoglobin(test.name)));
-        return seenInText && !alreadyParsed;
-      }).map(test => {
-        const min = Number(String(test.min ?? "").replace(",", "."));
-        const max = Number(String(test.max ?? "").replace(",", "."));
-        const validRange = String(test.min ?? "").trim() !== "" && String(test.max ?? "").trim() !== "" && Number.isFinite(min) && Number.isFinite(max);
-        const range = validRange ? String(test.min) + "–" + String(test.max) : "";
-        return { test: test.name, unit: test.unit || "", result: "", reference: range, photoUri: reviewSourcePhotos[0] || "", min: validRange ? min : undefined, max: validRange ? max : undefined };
-      });
       const candidates: string[] = parsedRows
         .filter(row => row.severity === "ALERT" || labWarningsEnabled)
         .map(row => row.severity + ": " + row.test + " " + row.result + (row.unit ? " " + row.unit : "") + " | Ref: " + row.reference);
