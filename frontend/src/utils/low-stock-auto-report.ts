@@ -448,8 +448,25 @@ export async function attemptDueLowStockReport(): Promise<string> {
   if (!channels.length) return "Automatic report is enabled, but no delivery channel and recipient are configured.";
   const pdf = await makePdf(config.schedule, config.reportFromDate, config.reportToDate);
   if (state.lastPeriodKey === pdf.periodKey) return "This reporting period has already been sent.";
-  if (channels.includes("email")) await sendEmail(pdf, config);
-  if (channels.includes("WhatsApp")) await sendWhatsApp(pdf, config);
+  const deliveredChannels: string[] = [];
+  try {
+    if (channels.includes("email")) {
+      await sendEmail(pdf, config);
+      deliveredChannels.push("Gmail");
+    }
+    if (channels.includes("WhatsApp")) {
+      await sendWhatsApp(pdf, config);
+      deliveredChannels.push("WhatsApp");
+    }
+  } catch (error: any) {
+    if (deliveredChannels.length) {
+      Alert.alert(
+        "Automatic report partially sent",
+        deliveredChannels.join(" and ") + " delivery succeeded, but another enabled channel failed: " + String(error?.message || error)
+      );
+    }
+    throw error;
+  }
   const nextState = {
     ...state, lastGeneratedAt: new Date().toISOString(), lastSentAt: new Date().toISOString(),
     lastPeriodKey: config.schedule === "fixedDate" ? "fixedDate:" + String(config.fixedDate || "") + ":" + String(config.reportFromDate || "") + ":" + String(config.reportToDate || "") : pdf.periodKey,
@@ -458,7 +475,7 @@ export async function attemptDueLowStockReport(): Promise<string> {
   await saveState(nextState);
   Alert.alert(
     "Automatic low-stock report sent",
-    nextState.lastStatus + "\n\nDelivery completed successfully."
+    "Successfully delivered by " + deliveredChannels.join(" and ") + ".\n\n" + nextState.lastStatus
   );
   return nextState.lastStatus!;
 }
