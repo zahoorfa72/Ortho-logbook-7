@@ -8,6 +8,7 @@ import { Asset, requestPermissionsAsync } from "expo-media-library";
 import * as FileSystem from "expo-file-system/legacy";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { recognizeLabText } from "@/src/utils/lab-ocr";
+import { lookupLabTestName } from "@/src/utils/lab-reference-lookup";
 import { Dimensions } from "react-native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AppState, Image, InteractionManager, Modal, Pressable, ScrollView, Text, View } from "react-native";
@@ -100,6 +101,7 @@ export default function PatientForm() {
   const [labOcrBusy, setLabOcrBusy] = useState(false);
   const [labOcrText, setLabOcrText] = useState("");
   const [labOcrFindings, setLabOcrFindings] = useState<string[]>([]);
+  const [labOcrOnlineHelp, setLabOcrOnlineHelp] = useState<string[]>([]);
   const screenWidth = Dimensions.get("window").width;
   const [editingPhotoIndex, setEditingPhotoIndex] = useState<number | null>(null);
   const [editingPhotoOriginal, setEditingPhotoOriginal] = useState<string | null>(null);
@@ -197,9 +199,28 @@ export default function PatientForm() {
           uncertain.push(line);
         }
       }
+      // Online assistance is deliberately limited to test-name identification.
+      // Never send an image, patient details, OCR text, numeric values or units.
+      // Online catalogue suggestions are not reference ranges and never decide
+      // whether a result is normal/abnormal.
+      const onlineHelp: string[] = [];
+      if (uncertain.length) {
+        for (const line of uncertain.slice(0, 5)) {
+          const firstNumber = line.search(/[-+]?\d+(?:[.,]\d+)?/);
+          const label = (firstNumber >= 0 ? line.slice(0, firstNumber) : line)
+            .replace(/\b(?:result|value|reference|normal|range)\b/ig, " ")
+            .replace(/[^a-zA-Z ]/g, " ")
+            .replace(/\s+/g, " ")
+            .trim();
+          if (label.length < 3) continue;
+          const matches = await lookupLabTestName(label);
+          if (matches.length) onlineHelp.push(label + ": catalogue suggests " + matches.join("; "));
+        }
+      }
       setLabOcrText(extracted);
       setLabOcrFindings(candidates);
-      setP(prev => ({ ...prev, customData: { ...(prev.customData || {}), labOcrExtractedText: extracted, labOcrPossibleFlags: candidates.join("\n"), labOcrNeedsReview: uncertain.join("\n") } }));
+      setLabOcrOnlineHelp(onlineHelp);
+      setP(prev => ({ ...prev, customData: { ...(prev.customData || {}), labOcrExtractedText: extracted, labOcrPossibleFlags: candidates.join("\n"), labOcrNeedsReview: uncertain.join("\n"), labOcrOnlineTestNameHelp: onlineHelp.join("\n") } }));
       if (candidates.length) {
         Alert.alert("Possible abnormal lab result", candidates.length + " result row(s) appear outside the printed reference range. Verify the test name, value, units, range, and patient-specific range on the original report.");
       } else if (uncertain.length && automatic) {
@@ -869,7 +890,8 @@ export default function PatientForm() {
             {labOcrText ? <View style={{ marginTop: spacing.sm, padding: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md }}>
               <Text style={styles.label}>Extracted lab text</Text>
               <Text selectable style={{ color: colors.onSurface, fontSize: fontSize.sm }}>{labOcrText}</Text>
-              {labOcrFindings.length ? <><Text style={[styles.label, { marginTop: spacing.md, color: colors.error }]}>Possible out-of-range results — verify</Text>{labOcrFindings.map((finding, i) => <Text key={i} style={{ color: colors.error, marginTop: spacing.xs }}>{finding}</Text>)}</> : <Text style={{ color: colors.onSurfaceSecondary, marginTop: spacing.sm }}>No possible out-of-range rows detected by the simple range check. This does not mean all results are normal.</Text>}
+              {labOcrFindings.length ? <><Text style={[styles.label, { marginTop: spacing.md, color: colors.error }]}>Possible out-of-range results — verify</Text>{labOcrFindings.map((finding, i) => <Text key={i} style={{ color: colors.error, marginTop: spacing.xs }}>{finding}</Text>)}</> : <Text style={{ color: colors.onSurfaceSecondary, marginTop: spacing.sm }}>No possible out-of-range rows detected by the printed-range check. This does not mean all results are normal.</Text>}
+              {labOcrOnlineHelp.length ? <><Text style={[styles.label, { marginTop: spacing.md }]}>Online test-name assistance</Text><Text style={{ color: colors.onSurfaceSecondary, marginTop: spacing.xs }}>Only short test-name labels were checked against the public NLM catalogue. No image, patient details, numeric results, units or report text were sent. These suggestions do not verify normality.</Text>{labOcrOnlineHelp.map((item, i) => <Text key={i} style={{ color: colors.onSurface, marginTop: spacing.xs }}>{item}</Text>)}</> : null}
             </View> : null}
           </View>
         ) : null}
