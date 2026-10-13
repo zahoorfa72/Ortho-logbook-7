@@ -257,9 +257,10 @@ export async function checkAndSendImmediateLowStockAlerts(): Promise<string> {
 
   // First run establishes a baseline so old low-stock items are not falsely
   // reported as if they triggered a brand-new immediate alert.
-  const hasAnyBaseline = Array.isArray(state.activeLowStockGmailIds) || Array.isArray(state.activeLowStockWhatsAppIds);
-  const gmailNew = gmailOn && hasAnyBaseline ? low.filter((item: any) => !gmailActive.has(String(item.id))) : [];
-  const whatsappNew = whatsappOn && hasAnyBaseline ? low.filter((item: any) => !whatsappActive.has(String(item.id))) : [];
+  const hasGmailBaseline = Array.isArray(state.activeLowStockGmailIds);
+  const hasWhatsAppBaseline = Array.isArray(state.activeLowStockWhatsAppIds);
+  const gmailNew = gmailOn && hasGmailBaseline ? low.filter((item: any) => !gmailActive.has(String(item.id))) : [];
+  const whatsappNew = whatsappOn && hasWhatsAppBaseline ? low.filter((item: any) => !whatsappActive.has(String(item.id))) : [];
 
   const formatMessage = (items: any[]) => {
     const timestamp = new Date().toLocaleString();
@@ -298,7 +299,7 @@ export async function checkAndSendImmediateLowStockAlerts(): Promise<string> {
   let gmailActiveIds = [...(state.activeLowStockGmailIds || [])];
   let whatsappActiveIds = [...(state.activeLowStockWhatsAppIds || [])];
   if (gmailOn) {
-    if (!hasAnyBaseline || !gmailNew.length) gmailActiveIds = currentIds;
+    if (!hasGmailBaseline || !gmailNew.length) gmailActiveIds = currentIds;
     else {
       try {
         await sendLowStockAlertEmail(
@@ -312,7 +313,7 @@ export async function checkAndSendImmediateLowStockAlerts(): Promise<string> {
     }
   }
   if (whatsappOn) {
-    if (!hasAnyBaseline || !whatsappNew.length) whatsappActiveIds = currentIds;
+    if (!hasWhatsAppBaseline || !whatsappNew.length) whatsappActiveIds = currentIds;
     else {
       try {
         await sendLowStockAlertWhatsApp(formatMessage(whatsappNew), config);
