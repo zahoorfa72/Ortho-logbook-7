@@ -48,11 +48,30 @@ jobs:
           set -euo pipefail
           SDKMAN="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           yes | "$SDKMAN" --licenses >/dev/null 2>&1 || true
-          "$SDKMAN" "ndk;${NDK_VERSION}" "cmake;3.22.1"
-          NDK_DIR="$ANDROID_HOME/ndk/${NDK_VERSION}"
-          CMAKE_DIR="$ANDROID_HOME/cmake/3.22.1"
-          test -f "$NDK_DIR/source.properties"
-          test -f "$CMAKE_DIR/bin/cmake"
+
+          # GitHub-hosted runners occasionally receive a truncated NDK ZIP.
+          # Retry cleanly and remove partial SDK downloads before each retry.
+          installed=false
+          for attempt in 1 2 3; do
+            echo "Installing NDK/CMake (attempt $attempt of 3)"
+            if "$SDKMAN" --install "ndk;${NDK_VERSION}" "cmake;3.22.1"; then
+              NDK_DIR="$ANDROID_HOME/ndk/${NDK_VERSION}"
+              CMAKE_DIR="$ANDROID_HOME/cmake/3.22.1"
+              if [ -f "$NDK_DIR/source.properties" ] && [ -f "$CMAKE_DIR/bin/cmake" ]; then
+                installed=true
+                break
+              fi
+            fi
+            echo "SDK install was incomplete; cleaning partial NDK/CMake downloads before retry."
+            rm -rf "$ANDROID_HOME/ndk/${NDK_VERSION}" "$ANDROID_HOME/cmake/3.22.1"
+            rm -rf "$ANDROID_HOME/temp/"* "$HOME/.android/cache/"*
+            sleep $((attempt * 10))
+          done
+          if [ "$installed" != true ]; then
+            echo "::error::Android NDK/CMake installation failed after 3 attempts."
+            exit 1
+          fi
+
           {
             echo "ANDROID_SDK_ROOT=$ANDROID_HOME"
             echo "ANDROID_NDK_HOME=$NDK_DIR"
