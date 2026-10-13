@@ -134,6 +134,51 @@ export default function Logbook() {
     }).catch(() => {});
   }, []);
 
+  // Re-evaluate the daily backup reminder whenever the Logbook tab regains focus.
+  useFocusEffect(
+    useCallback(() => {
+      if (user?.role !== "admin") {
+        setReminder({ show: false, lastBackupIso: null, reason: null });
+        return;
+      }
+      let cancelled = false;
+      evaluateReminder().then((r) => {
+        if (!cancelled) setReminder(r);
+      });
+      return () => {
+        cancelled = true;
+      };
+    }, [user?.role]),
+  );
+
+  const dismissReminder = useCallback(async () => {
+    await dismissReminderForToday();
+    setReminder({ show: false, lastBackupIso: reminder.lastBackupIso, reason: null });
+  }, [reminder.lastBackupIso]);
+
+  const goBackupNow = useCallback(() => {
+    setReminder({ show: false, lastBackupIso: reminder.lastBackupIso, reason: null });
+    router.push("/backup-restore");
+  }, [reminder.lastBackupIso]);
+
+  const bottomChrome = usesNativeTabs ? insets.bottom : 0;
+
+  const { data: customFields = [] } = useQuery<any[]>({
+    queryKey: ["patient-custom-fields"],
+    queryFn: () => api.get("/patient-custom-fields"),
+  });
+
+  const {
+    data,
+    isLoading,
+    isError,
+    refetch,
+    isRefetching,
+  } = useQuery<Patient[]>({
+    queryKey: ["patients"],
+    queryFn: () => api.get("/patients"),
+  });
+
   // Background scan existing patient-file pictures. There is no upload/selection
   // step: OCR is local on the device, and only lab-like text rows are evaluated.
   useEffect(() => {
@@ -191,51 +236,6 @@ export default function Logbook() {
     void scan();
     return () => { cancelled = true; };
   }, [labOcrEnabled, data]);
-
-  // Re-evaluate the daily backup reminder whenever the Logbook tab regains focus.
-  useFocusEffect(
-    useCallback(() => {
-      if (user?.role !== "admin") {
-        setReminder({ show: false, lastBackupIso: null, reason: null });
-        return;
-      }
-      let cancelled = false;
-      evaluateReminder().then((r) => {
-        if (!cancelled) setReminder(r);
-      });
-      return () => {
-        cancelled = true;
-      };
-    }, [user?.role]),
-  );
-
-  const dismissReminder = useCallback(async () => {
-    await dismissReminderForToday();
-    setReminder({ show: false, lastBackupIso: reminder.lastBackupIso, reason: null });
-  }, [reminder.lastBackupIso]);
-
-  const goBackupNow = useCallback(() => {
-    setReminder({ show: false, lastBackupIso: reminder.lastBackupIso, reason: null });
-    router.push("/backup-restore");
-  }, [reminder.lastBackupIso]);
-
-  const bottomChrome = usesNativeTabs ? insets.bottom : 0;
-
-  const { data: customFields = [] } = useQuery<any[]>({
-    queryKey: ["patient-custom-fields"],
-    queryFn: () => api.get("/patient-custom-fields"),
-  });
-
-  const {
-    data,
-    isLoading,
-    isError,
-    refetch,
-    isRefetching,
-  } = useQuery<Patient[]>({
-    queryKey: ["patients"],
-    queryFn: () => api.get("/patients"),
-  });
 
   const togglePatient = (id: string) => setSelectedIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
   const selectAllPatients = () => setSelectedIds(selectedIds.length === filtered.length ? [] : filtered.map((p) => p.id));
