@@ -13,16 +13,18 @@ export type ParsedLabRow = {
 };
 
 const TEST_ALIASES = [
-  "complete blood count", "fasting blood sugar", "blood urea nitrogen",
-  "alkaline phosphatase", "urine routine", "urinalysis", "haemoglobin",
-  "hemoglobin", "hematocrit", "haematocrit", "platelets", "creatinine",
-  "triglycerides", "cholesterol", "bilirubin", "electrolytes", "uric acid",
-  "neutrophils", "lymphocytes", "eosinophils", "monocytes", "basophils",
-  "hba1c", "hbsag", "hcv antibody", "glucose", "urea", "calcium",
-  "potassium", "sodium", "chloride", "hematocrit", "haematocrit",
-  "mcv", "mch", "mchc", "mpv", "rdw", "esr", "crp", "tsh", "sgpt",
-  "sgot", "alt", "ast", "fbs", "rbs", "hgb", "hct", "wbc", "rbc",
-  "hiv", "t3", "t4", "hb", "alp", "bun", "uc",
+  "complete blood count", "fasting blood sugar", "random blood sugar", "blood urea nitrogen",
+  "alkaline phosphatase", "urine routine", "urinalysis", "haemoglobin", "hemoglobin",
+  "hematocrit", "haematocrit", "platelet count", "platelets", "creatinine",
+  "triglycerides", "total cholesterol", "cholesterol", "total bilirubin", "direct bilirubin",
+  "indirect bilirubin", "bilirubin", "electrolytes", "uric acid", "neutrophils",
+  "lymphocytes", "eosinophils", "monocytes", "basophils", "hba1c", "hbsag",
+  "hcv antibody", "glucose", "urea", "calcium", "potassium", "sodium", "chloride",
+  "mcv", "mch", "mchc", "mpv", "rdw-cv", "rdw-sd", "rdw", "esr", "crp", "tsh",
+  "sgpt", "sgot", "alt", "ast", "fbs", "rbs", "hgb", "hct", "wbc", "rbc",
+  "ggt", "gamma gt", "albumin", "total protein", "globulin", "ferritin", "iron",
+  "vitamin d", "vitamin b12", "magnesium", "phosphate", "prothrombin time", "aptt",
+  "inr", "d dimer", "troponin", "hiv", "t3", "t4", "hb", "alp", "bun", "uc",
 ].sort((a, b) => b.length - a.length);
 
 const META_LINE = /\b(?:patient\s*(?:name|id|no|number)|mr\s*(?:no|number)|registration|accession|collection\s*date|reporting\s*date|reported\s*date|request\s*date|sample\s*date|specimen\s*date|date\s*of\s*(?:birth|collection|report)|dob|age|gender|sex|address|phone|mobile|doctor|consultant|laboratory|lab\s*name|test\s*date|printed\s*on|page\s*\d+)\b/i;
