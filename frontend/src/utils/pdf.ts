@@ -403,7 +403,7 @@ export async function buildPatientDetailHtml(
           value = Array.isArray(saved) ? saved
             .filter((item:any)=>item && String(item.test||"").trim() && String(item.result||"").trim())
             .map((item:any)=>String(item.test)+": "+String(item.result)+(item.unit?" "+String(item.unit):"")+(item.reference?" (Ref: "+String(item.reference)+")":""))
-            .join("\\n") : "";
+            .join("\n") : "";
         } catch { value = ""; }
       }
       else value=String((p.customData||{})[key]||"");
