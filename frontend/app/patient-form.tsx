@@ -150,7 +150,9 @@ export default function PatientForm() {
         else toast("No readable text found. Retake the report in good light with the full page in focus.", "error");
         return;
       }
-      const parsedRows = parseLabReportRows(extracted);
+      let configuredLabTests: import("@/src/utils/lab-ocr").LabTestDefinition[] = [];
+      try { const savedTests = await AsyncStorage.getItem("ortho_lab_test_definitions_v1"); if (savedTests) configuredLabTests = JSON.parse(savedTests); } catch {}
+      const parsedRows = parseLabReportRows(extracted, configuredLabTests, p.gender);
       const candidates: string[] = parsedRows.map(row =>
         row.severity + ": " + row.test + " " + row.result + (row.unit ? " " + row.unit : "") + " | Ref: " + row.reference
       );
@@ -158,7 +160,7 @@ export default function PatientForm() {
       const seenReviewLines = new Set<string>();
       for (const rawLine of extracted.split(/\r?\n/)) {
         const line = rawLine.replace(/\s+/g, " ").trim();
-        if (!line || line.length < 4 || isLabMetadataLine(line) || !hasKnownLabTestName(line)) continue;
+        if (!line || line.length < 4 || isLabMetadataLine(line, configuredLabTests) || !hasKnownLabTestName(line, configuredLabTests)) continue;
         const hasNumber = /[-+]?\d+(?:[.,]\d+)?/.test(line);
         const hasInterval = /[-+]?\d+(?:[.,]\d+)?\s*(?:-|–|—|\bto\b)\s*[-+]?\d+(?:[.,]\d+)?/i.test(line);
         if (hasNumber && !hasInterval && !seenReviewLines.has(line.toLowerCase())) {
