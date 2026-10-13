@@ -150,14 +150,19 @@ export function parseLabReportRows(text: string, configuredTests: LabTestDefinit
     const key = (testPrefix.name + "|" + resultMatch[0] + "|" + reference).toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
-    // Do not invent a critical/severity threshold. Every out-of-range row is
-    // a possible alert for human verification; criticality is not inferred.
+    // Visual triage only, not a medical criticality rule: a small excursion
+    // (up to 10% of the printed reference interval width) is a yellow WARNING.
+    // Larger excursions are an ALERT. Both require checking the original report
+    // and clinical context; never interpret this heuristic as a diagnosis.
+    const excursion = result < low ? low - result : result > high ? result - high : 0;
+    const intervalWidth = high - low;
+    const severity: ParsedLabRow["severity"] = excursion / intervalWidth <= 0.1 ? "WARNING" : "ALERT";
     rows.push({
       test: testPrefix.name,
       result: resultMatch[0],
       unit: unit.slice(0, 24),
       reference,
-      severity: "ALERT",
+      severity,
       sourceLine: line,
     });
   }
