@@ -20,6 +20,7 @@ export type LabTestDefinition = {
 };
 
 const STORAGE_KEY = "ortho_lab_test_definitions_v1";
+const WARNING_THRESHOLD_KEY = "ortho_lab_warning_threshold_percent_v1";
 const blank = (): LabTestDefinition => ({ id: "", name: "", maleMin: "", maleMax: "", femaleMin: "", femaleMax: "", unit: "" });
 
 export default function LabTestSettingsScreen() {
@@ -32,8 +33,10 @@ export default function LabTestSettingsScreen() {
   const [form, setForm] = useState<LabTestDefinition>(blank());
   const [editingId, setEditingId] = useState("");
   const [busy, setBusy] = useState(false);
+  const [warningPercent, setWarningPercent] = useState("10");
+  const [thresholdBusy, setThresholdBusy] = useState(false);
 
-  useEffect(() => { AsyncStorage.getItem(STORAGE_KEY).then(raw => { if (raw) { try { setTests(JSON.parse(raw)); } catch {} } }).catch(() => {}); }, []);
+  useEffect(() => { AsyncStorage.getItem(STORAGE_KEY).then(raw => { if (raw) { try { setTests(JSON.parse(raw)); } catch {} } }).catch(() => {}); AsyncStorage.getItem(WARNING_THRESHOLD_KEY).then(raw => { if (raw && Number.isFinite(Number(raw))) setWarningPercent(String(Math.max(1, Math.min(100, Math.round(Number(raw)))))); }).catch(() => {}); }, []);
   const update = (patch: Partial<LabTestDefinition>) => setForm(current => ({ ...current, ...patch }));
   const save = async () => {
     const name = form.name.trim();
@@ -55,6 +58,20 @@ export default function LabTestSettingsScreen() {
     } catch { toast("Could not save the lab test settings.", "error"); }
     finally { setBusy(false); }
   };
+  const saveWarningThreshold = async () => {
+    const value = Number(warningPercent);
+    if (!Number.isInteger(value) || value < 1 || value > 100) {
+      toast("Enter a whole percentage from 1 to 100.", "error"); return;
+    }
+    setThresholdBusy(true);
+    try {
+      await AsyncStorage.setItem(WARNING_THRESHOLD_KEY, String(value));
+      triggerAutomaticDriveBackup("appSettings");
+      setWarningPercent(String(value));
+      toast("Lab warning threshold saved: " + value + "%.", "success");
+    } catch { toast("Could not save the warning threshold.", "error"); }
+    finally { setThresholdBusy(false); }
+  };
   const edit = (item: LabTestDefinition) => { setForm({ ...item }); setEditingId(item.id); };
   const remove = (item: LabTestDefinition) => Alert.alert("Delete test?", "Remove " + item.name + " and its configured reference ranges?", [
     { text: "Cancel", style: "cancel" },
@@ -73,6 +90,13 @@ export default function LabTestSettingsScreen() {
     </View>
     <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xxl }}>
       <Text style={styles.help}>Add the exact test names used by your laboratory and the reference interval printed by that lab. These settings are saved locally on this phone. OCR must not guess a test name or treat dates and report headers as tests.</Text>
+      <Text style={styles.section}>Warning threshold (%)</Text>
+      <Text style={styles.help}>If a result is outside the selected reference limit by this percentage or less, show WARNING. A larger difference shows ALERT. Example: at 10%, a result 5% above the upper limit is WARNING; 15% above is ALERT. Results inside the range are not flagged.</Text>
+      <View style={styles.field}>
+        <Text style={styles.label}>Threshold from 1% to 100%</Text>
+        <TextInput value={warningPercent} onChangeText={setWarningPercent} keyboardType="number-pad" placeholder="10" placeholderTextColor={colors.muted} style={styles.input}/>
+      </View>
+      <Pressable disabled={thresholdBusy} onPress={saveWarningThreshold} style={styles.action}><Text style={styles.actionText}>{thresholdBusy ? "Saving…" : "Save warning threshold"}</Text></Pressable>
       {field("Test name", "name", "e.g. Hemoglobin")}
       <Text style={styles.section}>Male reference range</Text>
       <View style={styles.two}>{field("From (minimum)", "maleMin", "12")}{field("To (maximum)", "maleMax", "16")}</View>
