@@ -1,6 +1,7 @@
 import { router } from "expo-router";
 import { useEffect, useState } from "react";
-import { Pressable, ScrollView, Text, View } from "react-native";
+import { Pressable, ScrollView, Text, View, Switch } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -18,9 +19,11 @@ export default function SettingsScreen() {
   const { user } = useAuth();
   const toast = useToast();
   const [pinSet, setPinSet] = useState(false);
+  const [labOcrEnabled, setLabOcrEnabled] = useState(false);
 
   useEffect(() => {
     hasAdminPin().then(setPinSet);
+    AsyncStorage.getItem("ortho_lab_ocr_enabled").then(value => setLabOcrEnabled(value === "true")).catch(() => setLabOcrEnabled(false));
   }, []);
 
   if (user?.role !== "admin") {
@@ -63,6 +66,24 @@ export default function SettingsScreen() {
         <View style={styles.headerBtn} />
       </View>
       <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xxl }}>
+        <View style={[styles.row, { marginBottom: spacing.md }]}>
+          <View style={styles.rowIcon}><Ionicons name="flask-outline" size={22} color={colors.brandPrimary} /></View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.rowLabel}>Offline Lab Report Reader</Text>
+            <Text style={styles.rowSub}>Read text from patient lab photos and flag possible values outside the printed reference range. Results must be checked manually.</Text>
+          </View>
+          <Switch
+            value={labOcrEnabled}
+            onValueChange={async value => {
+              setLabOcrEnabled(value);
+              try { await AsyncStorage.setItem("ortho_lab_ocr_enabled", value ? "true" : "false"); }
+              catch { setLabOcrEnabled(!value); toast("Could not save the lab reader setting.", "error"); }
+            }}
+            trackColor={{ false: colors.border, true: colors.brandPrimary }}
+            thumbColor={labOcrEnabled ? colors.onBrandPrimary : colors.muted}
+            accessibilityLabel="Enable offline lab report reader"
+          />
+        </View>
         <View style={styles.brandingHero}>
           {branding.logoBase64 ? (
             // eslint-disable-next-line @typescript-eslint/no-require-imports
