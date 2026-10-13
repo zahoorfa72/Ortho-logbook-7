@@ -96,6 +96,7 @@ export default function PatientForm() {
 
   const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
   const [labOcrEnabled, setLabOcrEnabled] = useState(false);
+  const [labPhotos, setLabPhotos] = useState<string[]>([]);
   const [labOcrBusy, setLabOcrBusy] = useState(false);
   const [labOcrText, setLabOcrText] = useState("");
   const [labOcrFindings, setLabOcrFindings] = useState<string[]>([]);
@@ -124,14 +125,38 @@ export default function PatientForm() {
     AsyncStorage.getItem("ortho_lab_ocr_enabled").then(value => setLabOcrEnabled(value === "true")).catch(() => setLabOcrEnabled(false));
   }, []);
 
+  const addLabPhotosFromLibrary = async () => {
+    if (!imagePickerReady || imagePickerOpening.current || photoBusy) return;
+    imagePickerOpening.current = true;
+    try {
+      await new Promise<void>(resolve => InteractionManager.runAfterInteractions(() => setTimeout(resolve, 120)));
+      if (!(await waitForImagePickerActivity())) { toast("Photo picker is still starting. Please try again.", "error"); return; }
+      const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], allowsEditing: false, allowsMultipleSelection: true, selectionLimit: 20, quality: 0.95 });
+      if (result.canceled) return;
+      const newUris: string[] = [];
+      for (const asset of result.assets) if (asset.uri) newUris.push(await persistPhoto(asset.uri));
+      const next = [...labPhotos, ...newUris];
+      setLabPhotos(next);
+      setP(prev => ({ ...prev, customData: { ...(prev.customData || {}), labReportPhotoUris: JSON.stringify(next) } }));
+      toast(newUris.length + " lab report photo(s) added.", "success");
+    } catch (e: any) { toast(e?.message || "Could not add lab report photos.", "error"); }
+    finally { imagePickerOpening.current = false; }
+  };
+
+  const removeLabPhoto = (index: number) => {
+    const next = labPhotos.filter((_, i) => i !== index);
+    setLabPhotos(next);
+    setP(prev => ({ ...prev, customData: { ...(prev.customData || {}), labReportPhotoUris: JSON.stringify(next) } }));
+  };
+
   const analyzeLabPhotos = async () => {
     if (!labOcrEnabled) { toast("Lab report reading is disabled by the administrator.", "info"); return; }
-    if (!p.photos.length) { toast("Add lab report photos first.", "info"); return; }
+    if (!labPhotos.length) { toast("Add lab report photos first.", "info"); return; }
     setLabOcrBusy(true);
     try {
       const pages: string[] = [];
-      for (let i = 0; i < p.photos.length; i++) {
-        const result = await recognizeLabText(p.photos[i]);
+      for (let i = 0; i < labPhotos.length; i++) {
+        const result = await recognizeLabText(labPhotos[i]);
         pages.push("PAGE " + (i + 1) + "\n" + String(result?.text || "").trim());
       }
       const extracted = pages.filter(x => x.trim()).join("\n\n");
@@ -200,7 +225,11 @@ export default function PatientForm() {
     const photos = Array.isArray(source.photos) && source.photos.length
       ? source.photos
       : source.photoUri ? [source.photoUri] : [];
-    setP({ ...source, photos, customData: source.customData || {} });
+    const customData = source.customData || {};
+    let savedLabPhotos: string[] = [];
+    try { const parsed = JSON.parse(String(customData.labReportPhotoUris || "[]")); if (Array.isArray(parsed)) savedLabPhotos = parsed.filter((x: any) => typeof x === "string"); } catch {}
+    setLabPhotos(savedLabPhotos);
+    setP({ ...source, photos, customData });
     setReady(true);
   }, [isEdit, detailedExisting, existing]);
 
@@ -796,8 +825,10 @@ export default function PatientForm() {
         </Modal>
         {labOcrEnabled ? (
           <View style={{ marginTop: spacing.md, marginBottom: spacing.md }}>
-            <PrimaryButton title={labOcrBusy ? "Reading lab photos…" : "Read lab report photos (offline)"} onPress={analyzeLabPhotos} loading={labOcrBusy} disabled={labOcrBusy || !p.photos.length} testID="analyze-lab-photos-button" />
-            <Text style={styles.hint}>Reads attached photos on this device. Possible flags use only reference ranges detected in the report; check every result manually.</Text>
+            <PrimaryButton title={`Add Lab Report Photos${labPhotos.length ? " (" + labPhotos.length + ")" : ""}`} onPress={addLabPhotosFromLibrary} disabled={!imagePickerReady || labOcrBusy || photoBusy} testID="add-lab-photos-button" />
+            {labPhotos.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.photoStrip}>{labPhotos.map((uri, idx) => <View key={uri + "-" + idx} style={styles.photoBox}><Pressable style={{ flex: 1 }} onPress={() => setSelectedPhoto(uri)}><Image source={{ uri }} style={styles.photoThumb} resizeMode="cover" /></Pressable><Pressable style={styles.photoRemove} onPress={() => removeLabPhoto(idx)} hitSlop={8}><Ionicons name="close" size={16} color="#FFFFFF" /></Pressable></View>)}</ScrollView> : <Text style={styles.hint}>Select only laboratory report pictures here. Multiple pages can be selected together.</Text>}
+            <PrimaryButton title={labOcrBusy ? "Reading lab photos…" : "Read lab report photos offline"} onPress={analyzeLabPhotos} loading={labOcrBusy} disabled={labOcrBusy || !labPhotos.length} testID="analyze-lab-photos-button" />
+            <Text style={styles.hint}>Runs on this device. Possible flags use printed reference ranges found in the text; check every result manually.</Text>
             {labOcrText ? <View style={{ marginTop: spacing.sm, padding: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md }}>
               <Text style={styles.label}>Extracted lab text</Text>
               <Text selectable style={{ color: colors.onSurface, fontSize: fontSize.sm }}>{labOcrText}</Text>
