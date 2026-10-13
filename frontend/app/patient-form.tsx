@@ -159,11 +159,13 @@ export default function PatientForm() {
       let configuredLabTests: import("@/src/utils/lab-ocr").LabTestDefinition[] = [];
       try { const savedTests = await AsyncStorage.getItem("ortho_lab_test_definitions_v1"); if (savedTests) configuredLabTests = JSON.parse(savedTests); } catch {}
       const pages: string[] = [];
+      let onlineOcrKey = "";
+      try { onlineOcrKey = (await AsyncStorage.getItem("ortho_lab_online_ocr_api_key_v1")) || ""; } catch {}
       for (let i = 0; i < photoUris.length; i++) {
         try {
-          const result = await recognizeLabText(photoUris[i]);
+          const result = await recognizeLabText(photoUris[i], onlineOcrKey);
           const text = String(result?.text || "").trim();
-          const structuredText = String(result?.structuredText || "").trim();
+          const structuredText = result?.mode === "online" ? "" : String(result?.structuredText || "").trim();
           // Prefer rows reconstructed from OCR bounding-box positions. Keep the
           // original OCR text too, so the admin can verify any uncertain mapping.
           // Unknown rows remain review-only; the parser never guesses a test name.
