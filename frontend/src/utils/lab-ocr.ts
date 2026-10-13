@@ -182,7 +182,7 @@ function structureLabColumns(blocks: any[], imageWidth: number, imageHeight: num
     const box = block?.boundingBox;
     const blockText = String(block?.text || "").trim();
     if (!box || !blockText) continue;
-    const pieces = blockText.split(/\\r?\\n/).map((s: string) => s.trim()).filter(Boolean);
+    const pieces = blockText.split(/\r?\n/).map((s: string) => s.trim()).filter(Boolean);
     const blockHeight = Number(box.height) || 1;
     const lineHeight = blockHeight / Math.max(1, pieces.length);
     pieces.forEach((text: string, index: number) => positioned.push({
@@ -200,10 +200,10 @@ function structureLabColumns(blocks: any[], imageWidth: number, imageHeight: num
     const hit = positioned.find(item => pattern.test(item.text));
     return hit ? (hit.x + hit.width / 2) / imageWidth : undefined;
   };
-  const testHeader = headerX(/^(?:test(?:\s*name)?|investigation|parameter|analyte)\\b/i);
-  const resultHeader = headerX(/^result\\b/i);
-  const unitHeader = headerX(/^units?\\b/i);
-  const refHeader = headerX(/^(?:reference|normal|biological)\\b/i);
+  const testHeader = headerX(/^(?:test(?:\s*name)?|investigation|parameter|analyte)\b/i);
+  const resultHeader = headerX(/^result\b/i);
+  const unitHeader = headerX(/^units?\b/i);
+  const refHeader = headerX(/^(?:reference|normal|biological)\b/i);
   const resultBoundary = resultHeader ?? 0.48;
   const unitBoundary = unitHeader ?? 0.64;
   const refBoundary = refHeader ?? 0.76;
@@ -240,11 +240,11 @@ function structureLabColumns(blocks: any[], imageWidth: number, imageHeight: num
       continue;
     }
     const row = [cells[0], cells[1], cells[2], cells[3]].filter(Boolean).join(" | ");
-    if (row && !/^(?:test(?:\\s*name)?|investigation|parameter|result|units?|reference(?:\\s*range)?|normal\\s*range)\\b/i.test(row)) {
+    if (row && !/^(?:test(?:\s*name)?|investigation|parameter|result|units?|reference(?:\s*range)?|normal\s*range)\b/i.test(row)) {
       output.push(row);
     }
   }
-  return output.join("\\n");
+  return output.join("\n");
 }
 
 export async function recognizeLabText(uri: string): Promise<{ text: string; structuredText: string }> {
