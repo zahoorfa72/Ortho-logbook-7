@@ -214,11 +214,14 @@ export default function PatientForm() {
           const knownTest = hasKnownLabTestName(cells[0], configuredLabTests);
           const resultLooksNumeric = /^\\s*[<>≤≥]?\\s*[-+]?\\d+(?:[.,]\\d+)?(?:\\s|$)/.test(cells[1] || "");
           let reason = "";
-          if (!knownTest) {
+          // Ignore header/logo noise that OCR mistakenly placed in the test-name
+          // column (e.g. "SASINS") when that row has no numeric patient result.
+          // Keep warnings when an unknown name is paired with an actual result.
+          if (!knownTest && resultLooksNumeric) {
             reason = "Check test name (OCR may have misread it)";
-          } else if (!resultLooksNumeric) {
+          } else if (knownTest && !resultLooksNumeric) {
             reason = "Check result (OCR could not read a clear numeric value)";
-          } else {
+          } else if (knownTest && resultLooksNumeric) {
             const testName = cells[0];
             const saved = configuredLabTests.find(item => item.name.toLowerCase() === testName.toLowerCase()) ||
               configuredLabTests.find(item => testName.toLowerCase().startsWith(item.name.toLowerCase()));
@@ -491,15 +494,15 @@ export default function PatientForm() {
       Image.getSize(sourceUri, (width, height) => resolve({ width, height }), reject);
     });
     const actions: any[] = [];
-    if (dimensions.width > 1600 || dimensions.height > 1600) {
+    if (dimensions.width > 2200 || dimensions.height > 2200) {
       actions.push(dimensions.width >= dimensions.height
-        ? { resize: { width: 1600 } }
-        : { resize: { height: 1600 } });
+        ? { resize: { width: 2200 } }
+        : { resize: { height: 2200 } });
     }
     const normalized = await ImageManipulator.manipulateAsync(
       sourceUri,
       actions,
-      { compress: 0.68, format: ImageManipulator.SaveFormat.JPEG },
+      { compress: 0.84, format: ImageManipulator.SaveFormat.JPEG },
     );
     const filename = `patient-photo-${Date.now()}-${Math.random().toString(36).slice(2, 10)}.jpg`;
     const destination = `${directory}${filename}`;
