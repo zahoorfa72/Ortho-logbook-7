@@ -7,7 +7,7 @@ import * as ImageManipulator from "expo-image-manipulator";
 import { Asset, requestPermissionsAsync } from "expo-media-library";
 import * as FileSystem from "expo-file-system/legacy";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { recognizeLabText } from "@/src/utils/lab-ocr";
+import { isLikelyLabReportText, parseLabReportRows, recognizeLabText } from "@/src/utils/lab-ocr";
 import { lookupLabTestName } from "@/src/utils/lab-reference-lookup";
 import { Dimensions } from "react-native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -45,15 +45,6 @@ const empty = (): Patient => ({
   photoUri: "", photos: [], date: today(), implants: [], customData: {},
   hcvPlus: false, hbaSg: false, hiv: false,
 });
-
-const isLikelyLabReportText = (text: string) => {
-  const value = String(text || "").toLowerCase();
-  const testNames = /\b(?:haemoglobin|hemoglobin|hb|wbc|rbc|platelets?|cbc|complete blood count|glucose|fasting blood sugar|fbs|rbs|creatinine|urea|bilirubin|alt|ast|sgpt|sgot|alkaline phosphatase|alp|tsh|t3|t4|electrolytes?|sodium|potassium|chloride|calcium|uric acid|esr|crp|hba1c|cholesterol|triglycerides|urinalysis|urine routine|blood group|laboratory|lab report|pathology|haematology|hematology|biochemistry|reference range|normal range|ref range)\b/gi;
-  const hits = [...value.matchAll(testNames)].length;
-  const hasResultStructure = /\b(?:result|value|unit|units|reference|normal|range|high|low|positive|negative)\b|\b[hl]\b|[↑↓]/i.test(value);
-  const numbers = [...value.matchAll(/[-+]?\d+(?:[.,]\d+)?/g)].length;
-  return hits >= 2 || (hits >= 1 && hasResultStructure && numbers >= 2);
-};
 
 export default function PatientForm() {
   const styles = useStyles();
@@ -160,30 +151,18 @@ export default function PatientForm() {
         else toast("No readable text found. Retake the report in good light with the full page in focus.", "error");
         return;
       }
-      const candidates: string[] = [];
+      const parsedRows = parseLabReportRows(extracted);
+      const candidates: string[] = parsedRows.map(row =>
+        row.severity + ": " + row.test + " " + row.result + (row.unit ? " " + row.unit : "") + " | Ref: " + row.reference
+      );
       const uncertain: string[] = [];
       for (const rawLine of extracted.split(/\r?\n/)) {
         const line = rawLine.replace(/\s+/g, " ").trim();
         if (!line || line.length < 4) continue;
-        // Require a plausible printed interval and a numeric result on the same
-        // OCR row. This conservative check reduces false alerts on dates/IDs.
-        const nums = [...line.matchAll(/[-+]?\d+(?:[.,]\d+)?/g)].map(m => ({ value: Number(m[0].replace(",", ".")), index: m.index ?? 0, raw: m[0] }));
-        const hasRangeCue = /(?:reference|normal|range|ref\.?\s*range|\bto\b|[-–—])/i.test(line);
-        if (nums.length >= 3 && hasRangeCue) {
-          const resultNum = nums[0];
-          const rangeNums = nums.slice(1, 3);
-          const between = line.slice(resultNum.index + resultNum.raw.length, rangeNums[0].index);
-          // Avoid treating a row as a result-range row if another number appears
-          // between the result and the interval, which commonly indicates a date/ID.
-          if (/[0-9]/.test(between)) continue;
-          const lo = Math.min(rangeNums[0].value, rangeNums[1].value);
-          const hi = Math.max(rangeNums[0].value, rangeNums[1].value);
-          if (lo !== hi && (resultNum.value < lo || resultNum.value > hi)) {
-            candidates.push(line + " — POSSIBLY OUT OF RANGE (verify original report)");
-          }
-        } else if (/(?:reference|normal|range|result|\bcbc\b|haemoglobin|hemoglobin|glucose|creatinine|platelet|wbc|rbc|tsh|bilirubin|alt\b|ast\b)/i.test(line) && nums.length > 0) {
-          uncertain.push(line);
-        }
+        const hasTestName = isLikelyLabReportText(line);
+        const hasNumber = /[-+]?\d+(?:[.,]\d+)?/.test(line);
+        const hasInterval = /[-+]?\d+(?:[.,]\d+)?\s*(?:-|–|—|\bto\b)\s*[-+]?\d+(?:[.,]\d+)?/i.test(line);
+        if (hasTestName && hasNumber && !hasInterval) uncertain.push(line);
       }
       // Online assistance is deliberately limited to test-name identification.
       // Never send an image, patient details, OCR text, numeric values or units.
@@ -194,7 +173,7 @@ export default function PatientForm() {
         for (const line of uncertain.slice(0, 5)) {
           const firstNumber = line.search(/[-+]?\d+(?:[.,]\d+)?/);
           const label = (firstNumber >= 0 ? line.slice(0, firstNumber) : line)
-            .replace(/\b(?:result|value|reference|normal|range)\b/ig, " ")
+            .replace(/\b(?:result|value|reference|normal|range|warning|alert|ref)\b/ig, " ")
             .replace(/[^a-zA-Z ]/g, " ")
             .replace(/\s+/g, " ")
             .trim();
