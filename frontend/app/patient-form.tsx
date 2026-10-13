@@ -130,13 +130,15 @@ export default function PatientForm() {
     if (!labOcrEnabled || !photoUris.length || labOcrBusy) return;
     setLabOcrBusy(true);
     try {
+      let configuredLabTests: import("@/src/utils/lab-ocr").LabTestDefinition[] = [];
+      try { const savedTests = await AsyncStorage.getItem("ortho_lab_test_definitions_v1"); if (savedTests) configuredLabTests = JSON.parse(savedTests); } catch {}
       const pages: string[] = [];
       for (let i = 0; i < photoUris.length; i++) {
         try {
           const result = await recognizeLabText(photoUris[i]);
           const text = String(result?.text || "").trim();
           // Exclude ordinary clinical pictures from lab-result parsing.
-          if (text && isLikelyLabReportText(text)) pages.push("LAB REPORT IMAGE " + (i + 1) + "\n" + text);
+          if (text && isLikelyLabReportText(text, configuredLabTests)) pages.push("LAB REPORT IMAGE " + (i + 1) + "\n" + text);
         } catch {
           // Continue scanning other pictures; a single damaged/unavailable image
           // must not prevent readable pages from being checked.
@@ -150,8 +152,6 @@ export default function PatientForm() {
         else toast("No readable text found. Retake the report in good light with the full page in focus.", "error");
         return;
       }
-      let configuredLabTests: import("@/src/utils/lab-ocr").LabTestDefinition[] = [];
-      try { const savedTests = await AsyncStorage.getItem("ortho_lab_test_definitions_v1"); if (savedTests) configuredLabTests = JSON.parse(savedTests); } catch {}
       const parsedRows = parseLabReportRows(extracted, configuredLabTests, p.gender);
       const candidates: string[] = parsedRows.map(row =>
         row.severity + ": " + row.test + " " + row.result + (row.unit ? " " + row.unit : "") + " | Ref: " + row.reference
