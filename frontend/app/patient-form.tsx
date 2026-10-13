@@ -174,7 +174,12 @@ export default function PatientForm() {
         // review only; their names/ranges are never guessed or labelled abnormal.
         if (!knownTest && !(hasNumber && /[a-z]{2,}/i.test(line))) continue;
         const hasInterval = /[-+]?\d+(?:[.,]\d+)?\s*(?:-|–|—|\bto\b)\s*[-+]?\d+(?:[.,]\d+)?/i.test(line);
-        if (hasNumber && !hasInterval && !seenReviewLines.has(line.toLowerCase())) {
+        // OCR often puts a test/result and its clearly printed reference interval
+        // on adjacent lines or separate columns. Don't claim the range is unclear
+        // if a nearby OCR line contains a valid interval.
+        const nearbyText = [rawLine, extracted.split(/\r?\n/)[Math.max(0, extracted.split(/\r?\n/).indexOf(rawLine) - 1)], extracted.split(/\r?\n/)[extracted.split(/\r?\n/).indexOf(rawLine) + 1]].filter(Boolean).join(" ");
+        const hasNearbyInterval = /[-+]?\d+(?:[.,]\d+)?\s*(?:-|–|—|\bto\b)\s*[-+]?\d+(?:[.,]\d+)?/i.test(nearbyText);
+        if (hasNumber && !hasInterval && !hasNearbyInterval && !seenReviewLines.has(line.toLowerCase())) {
           seenReviewLines.add(line.toLowerCase());
           uncertain.push(line);
         }
@@ -209,7 +214,7 @@ export default function PatientForm() {
           // If local rate-limit storage is unavailable, avoid repeated popups.
         }
       } else if (uncertain.length && automatic) {
-        toast("Some lab-like rows were read, but their reference ranges were not clear. Please review the report; they were not labelled abnormal.", "info");
+        toast("Some test rows could not be matched confidently to a reference range. Check the extracted report text below; no abnormality was assumed.", "info");
       }
     } catch (e: any) {
       if (!automatic) toast(e?.message || "Could not read lab photos on this device.", "error");
