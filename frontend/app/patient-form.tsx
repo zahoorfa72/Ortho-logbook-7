@@ -160,6 +160,7 @@ export default function PatientForm() {
       let configuredLabTests: import("@/src/utils/lab-ocr").LabTestDefinition[] = [];
       try { const savedTests = await AsyncStorage.getItem("ortho_lab_test_definitions_v1"); if (savedTests) configuredLabTests = JSON.parse(savedTests); } catch {}
       const pages: string[] = [];
+      const recognizedPhotoUris: string[] = [];
       let onlineOcrKey = "";
       try { onlineOcrKey = (await AsyncStorage.getItem("ortho_lab_online_ocr_api_key_v1")) || ""; } catch {}
       for (let i = 0; i < photoUris.length; i++) {
@@ -177,6 +178,7 @@ export default function PatientForm() {
             pages.push("LAB REPORT IMAGE " + (i + 1) + "\n" +
               (structuredText ? "RECONSTRUCTED TABLE ROWS (test | result | unit | reference range)\n" + structuredText + "\n" : "") +
               "RAW OCR TEXT FOR REVIEW\n" + text);
+            recognizedPhotoUris.push(photoUris[i]);
           }
         } catch {
           // Continue scanning other pictures; a single damaged/unavailable image
@@ -192,7 +194,7 @@ export default function PatientForm() {
         return;
       }
       const parsedRows = parseLabReportRows(extracted, configuredLabTests, p.gender, labWarningThreshold);
-      const reviewSourcePhotos = [...new Set(photoUris)];
+      const reviewSourcePhotos = [...new Set(recognizedPhotoUris)];
       const canonical = (value: string) => String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
       const isHemoglobin = (value: string) => ["hemoglobin", "haemoglobin", "hgb", "hb"].includes(canonical(value));
       const configuredCandidates = configuredLabTests.map(item => ({
@@ -217,9 +219,18 @@ export default function PatientForm() {
       const missingResultReviews = testCandidates.filter(test => {
         const aliases = isHemoglobin(test.name) ? ["hemoglobin", "haemoglobin", "hgb", "hb"] : [test.name];
         const seenInText = aliases.some(alias => normalizedRawText.includes(canonical(alias)));
-        const alreadyParsed = parsedRows.some(row => canonical(row.test) === canonical(test.name) ||
+        const matchingParsed = parsedRows.find(row => canonical(row.test) === canonical(test.name) ||
           (isHemoglobin(row.test) && isHemoglobin(test.name)));
-        return seenInText && !alreadyParsed;
+        const parsedValue = matchingParsed ? Number(String(matchingParsed.result).replace(",", ".")) : NaN;
+        const min = Number(String(test.min ?? "").replace(",", "."));
+        const max = Number(String(test.max ?? "").replace(",", "."));
+        const hasRange = String(test.min ?? "").trim() !== "" && String(test.max ?? "").trim() !== "" && Number.isFinite(min) && Number.isFinite(max) && min > 0 && max > min;
+        // A result several times outside its range may be a circled digit or decimal point
+        // that OCR misread (for example 7.0 as 70). Require visual admin verification.
+        const suspiciousScale = !!matchingParsed && hasRange && Number.isFinite(parsedValue) &&
+          (parsedValue > max * 3 || parsedValue < min / 3);
+        const alreadyParsed = !!matchingParsed && !suspiciousScale;
+        return seenInText && (!alreadyParsed || suspiciousScale);
       }).map(test => {
         const min = Number(String(test.min ?? "").replace(",", "."));
         const max = Number(String(test.max ?? "").replace(",", "."));
@@ -1003,8 +1014,8 @@ export default function PatientForm() {
               {showLabRawText ? <Text selectable style={{ color: colors.onSurface, fontSize: fontSize.sm, marginTop: spacing.xs }}>{labOcrText}</Text> : null}
               {labManualReviews.length ? <View style={{ marginTop: spacing.md, padding: spacing.sm, borderWidth: 1, borderColor: colors.warning || "#B7791F", borderRadius: radius.md }}>
                 <Text style={[styles.label, { color: colors.warning || "#B7791F" }]}>Admin verification required</Text>
-                <Text style={{ color: colors.onSurfaceSecondary, marginTop: spacing.xs }}>OCR may miss digits circled on the report. Open the original image, read the result yourself, and enter the value below. These are manual review entries, not OCR-confirmed results.</Text>
-                {labManualReviews.map((item, index) => {
+                <Text style={{ color: colors.onSurfaceSecondary, marginTop: spacing.xs }}>{user?.role === "admin" ? "OCR may miss digits circled on the report. Open the original image, read the result yourself, and enter the value below. These are manual review entries, not OCR-confirmed results." : "Some lab results need visual verification. Please ask an administrator to open the original report and confirm the result."}</Text>
+                {user?.role === "admin" ? labManualReviews.map((item, index) => {
                   const numeric = Number(String(item.result || "").replace(",", ".").trim());
                   const hasValue = !!item.result.trim() && Number.isFinite(numeric);
                   const abnormal = hasValue && item.min !== undefined && item.max !== undefined && (numeric < item.min || numeric > item.max);
@@ -1018,14 +1029,14 @@ export default function PatientForm() {
                     {item.reference ? <Text style={{ color: colors.onSurfaceSecondary, marginTop: spacing.xs }}>Reference range: {item.reference}</Text> : <Text style={{ color: colors.onSurfaceSecondary, marginTop: spacing.xs }}>No saved reference range available. Compare with the printed range.</Text>}
                     {hasValue ? <Text style={{ color: abnormal ? (colors.error || "#B91C1C") : colors.onSurfaceSecondary, marginTop: spacing.xs, fontFamily: abnormal ? fontFamily.bold : fontFamily.regular }}>{abnormal ? "Outside the saved reference range — verify promptly with a qualified clinician." : item.min !== undefined && item.max !== undefined ? "Within the saved reference range; still verify the source and units." : "Value entered. Verify against the printed reference range."}</Text> : null}
                   </View>;
-                })}
-                <Pressable onPress={() => {
+                }) : null}
+                {user?.role === "admin" ? <Pressable onPress={() => {
                   const manual = labManualReviews.filter(item => item.result.trim()).map(item => ({ test: item.test, result: item.result.trim(), unit: item.unit, reference: item.reference, manuallyVerified: true }));
                   setP(previous => ({ ...previous, customData: { ...(previous.customData || {}), labOcrManualResults: JSON.stringify(manual) } }));
                   toast("Manual lab review values added to this patient form draft. Verify them before saving.", "info");
                 }} style={{ marginTop: spacing.md, padding: spacing.md, backgroundColor: colors.brandPrimary, borderRadius: radius.md, alignItems: "center" }}>
                   <Text style={{ color: colors.onBrandPrimary, fontFamily: fontFamily.semibold }}>Apply manual review to patient draft</Text>
-                </Pressable>
+                </Pressable> : null}
               </View> : null}
               {labOcrOnlineHelp.length ? <><Text style={[styles.label, { marginTop: spacing.md }]}>Test-name reference assistance</Text><Text style={{ color: colors.onSurfaceSecondary, marginTop: spacing.xs }}>Only non-identifying test-name labels are checked. No photo, patient details, report text, result values or units are uploaded. This assistance does not confirm whether a result is normal.</Text>{labOcrOnlineHelp.map((item, i) => <Text key={i} style={{ color: colors.onSurface, marginTop: spacing.xs }}>{item}</Text>)}</> : null}
             </View> : null}
