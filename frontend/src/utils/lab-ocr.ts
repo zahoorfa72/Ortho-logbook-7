@@ -86,7 +86,7 @@ export function isLikelyLabReportText(text: string, configuredTests: LabTestDefi
     const test = findTestPrefix(line, configuredTests);
     if (!test) continue;
     const rest = line.slice(test.end);
-    if (new RegExp(NUM).test(rest) && (INTERVAL_RE.test(rest) || /\b(?:positive|negative|reactive|nonreactive)\b/i.test(rest))) validRows++;
+    if (new RegExp(NUM).test(rest) || /\b(?:positive|negative|reactive|nonreactive)\b/i.test(rest)) validRows++;
   }
   return validRows >= 1;
 }
@@ -125,6 +125,7 @@ export function parseLabReportRows(text: string, configuredTests: LabTestDefinit
       resultMatch = values[0];
       beforeInterval = rest;
       const male = /^(m|male)$/i.test(gender.trim());
+      if (!male && !/^(f|female)$/i.test(gender.trim())) continue;
       const minRaw = male ? testPrefix.configured.maleMin : testPrefix.configured.femaleMin;
       const maxRaw = male ? testPrefix.configured.maleMax : testPrefix.configured.femaleMax;
       const min = Number(minRaw), max = Number(maxRaw);
