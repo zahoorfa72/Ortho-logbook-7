@@ -5,11 +5,12 @@ import * as ImageManipulator from "expo-image-manipulator";
 import * as SecureStore from "expo-secure-store";
 import nacl from "tweetnacl";
 import { Image } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { db, initializeDatabase, markInventoryResetDone, repairDatabaseData } from "@/src/db/database";
 import { storage } from "@/src/utils/storage";
 import type { BrandingConfig } from "@/src/theme";
 
-const BACKUP_VERSION = 9;
+const BACKUP_VERSION = 10;
 const BACKUP_APP = "Ortho Logbook";
 
 type BackupData = {
@@ -17,7 +18,7 @@ type BackupData = {
   patients:any[]; procedures:any[]; inventoryCategories:any[]; inventory:any[]; patientImplants:any[]; patientCustomFields:any[]; implantRecords:any[]; expenses:any[]; users:any[];
   patientHistory:any[]; inventoryMovements:any[]; inventoryPurchaseReceipts:any[]; stockReceipts:any[]; trash?:any[];
   branding?: BrandingConfig | null;
-  appSettings?: { googleOAuthClientId: string | null; googleCloudProjectId: string | null; googleAccountEmail: string | null };
+  appSettings?: { googleOAuthClientId: string | null; googleCloudProjectId: string | null; googleAccountEmail: string | null; labOcrEnabled?: string | null; labWarningsEnabled?: string | null; labTestDefinitions?: string | null; labResultsHiddenByPatient?: string | null };
   filter?: BackupFilter;
   incremental?: boolean;
   changedTables?: string[];
@@ -26,6 +27,22 @@ type EncryptedBackup = {
   version:number; app:string; encrypted:true; algorithm:"XSalsa20-Poly1305"; kdf:"SHA-256";
   createdAt:string; salt:string; nonce:string; ciphertext:string; ciphertextEncoding?: "base64";
 };
+
+async function restoreLabSettings(settings: BackupData["appSettings"] | undefined) {
+  if (!settings) return;
+  const mappings: Array<[keyof NonNullable<BackupData["appSettings"]>, string]> = [
+    ["labOcrEnabled", "ortho_lab_ocr_enabled"],
+    ["labWarningsEnabled", "ortho_lab_warnings_enabled"],
+    ["labTestDefinitions", "ortho_lab_test_definitions_v1"],
+    ["labResultsHiddenByPatient", "ortho_lab_results_hidden_by_patient_v1"],
+  ];
+  for (const [field, key] of mappings) {
+    if (!(field in settings)) continue;
+    const value = settings[field];
+    if (typeof value === "string") await AsyncStorage.setItem(key, value);
+    else await AsyncStorage.removeItem(key);
+  }
+}
 
 const bytesToHex=(b:Uint8Array)=>Array.from(b).map(x=>x.toString(16).padStart(2,"0")).join("");
 function hexToBytes(hex:string){if(!hex||hex.length%2)throw new Error("Invalid encrypted backup data.");const b=new Uint8Array(hex.length/2);for(let i=0;i<b.length;i++){const n=parseInt(hex.slice(i*2,i*2+2),16);if(Number.isNaN(n))throw new Error("Invalid encrypted backup data.");b[i]=n;}return b;}
@@ -174,6 +191,10 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
    googleCloudProjectId: (await SecureStore.getItemAsync("ortho_google_drive_cloud_project_id").catch(() => null)) || null,
    // Recovery metadata only; Google credentials must be re-authorized after reinstall.
    googleAccountEmail: (await storage.secureGet("ortho_drive_account_email", "")) || null,
+   labOcrEnabled: await AsyncStorage.getItem("ortho_lab_ocr_enabled"),
+   labWarningsEnabled: await AsyncStorage.getItem("ortho_lab_warnings_enabled"),
+   labTestDefinitions: await AsyncStorage.getItem("ortho_lab_test_definitions_v1"),
+   labResultsHiddenByPatient: await AsyncStorage.getItem("ortho_lab_results_hidden_by_patient_v1"),
  } : undefined;
  const pf=whereForFilter(filter, "date");
  const patients=include("patients") ? db.getAllSync<any>(`SELECT * FROM patients${pf.sql} ORDER BY date DESC, created_at DESC`, pf.args) : [];
@@ -497,7 +518,7 @@ export async function exportIncrementalBackup(changedTables: string[], onProgres
 
 function parseHeader(text:string):any{
  let b:any;try{b=JSON.parse(text);}catch{throw new Error("The selected backup file is not valid.");}
- if(!b||![2,3,4,5,6,7,8,9].includes(b.version)||b.app!==BACKUP_APP)throw new Error("Invalid or unsupported Ortho Logbook backup.");
+ if(!b||![2,3,4,5,6,7,8,9,10].includes(b.version)||b.app!==BACKUP_APP)throw new Error("Invalid or unsupported Ortho Logbook backup.");
  if(b.encrypted===true){
   if(b.algorithm!=="XSalsa20-Poly1305"||b.kdf!=="SHA-256"||!b.createdAt||!b.salt||!b.nonce||!b.ciphertext)throw new Error("The backup file is incomplete or damaged.");
  } else if(!Array.isArray(b.patients)||!Array.isArray(b.inventory)||!Array.isArray(b.users)){
@@ -776,7 +797,8 @@ export async function restoreBackup(backup:BackupData){
      await storage.secureRemove("ortho_drive_account_email");
    }
  }
- markInventoryResetDone();
+ await restoreLabSettings(backup.appSettings);
+  markInventoryResetDone();
  return {patients:patients.length,procedures:procedures.length,inventory:inventory.length,inventoryCategories:inventoryCategories.length,patientImplants:patientImplants.length,expenses:expenses.length,users:users.length,patientHistory:patientHistory.length,inventoryMovements:inventoryMovements.length};
 }
 
@@ -923,7 +945,8 @@ export async function mergeBackup(backup: BackupData) {
      await storage.secureRemove("ortho_drive_account_email");
    }
  }
- markInventoryResetDone();
+ await restoreLabSettings(backup.appSettings);
+  markInventoryResetDone();
  return stats;
 }
 
