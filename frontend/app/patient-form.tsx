@@ -137,8 +137,15 @@ export default function PatientForm() {
         try {
           const result = await recognizeLabText(photoUris[i]);
           const text = String(result?.text || "").trim();
-          // Exclude ordinary clinical pictures from lab-result parsing.
-          if (text && isLikelyLabReportText(text, configuredLabTests)) pages.push("LAB REPORT IMAGE " + (i + 1) + "\n" + text);
+          // Keep recognized lab rows. If a report uses an unfamiliar or split
+          // test name, retain OCR text only when lab-specific wording and numeric
+          // content are present; unfamiliar rows are review-only, never alerts.
+          const recognizedRows = text && isLikelyLabReportText(text, configuredLabTests);
+          const labCues = /\\b(?:laboratory|lab report|investigation|test name|test results?|reference range|normal range|biological reference|specimen|result|units?)\\b/i.test(text);
+          const numericContent = /[-+]?\\d+(?:[.,]\\d+)?/.test(text);
+          if (text && (recognizedRows || (labCues && numericContent))) {
+            pages.push("LAB REPORT IMAGE " + (i + 1) + "\\n" + text);
+          }
         } catch {
           // Continue scanning other pictures; a single damaged/unavailable image
           // must not prevent readable pages from being checked.
@@ -160,8 +167,12 @@ export default function PatientForm() {
       const seenReviewLines = new Set<string>();
       for (const rawLine of extracted.split(/\r?\n/)) {
         const line = rawLine.replace(/\s+/g, " ").trim();
-        if (!line || line.length < 4 || isLabMetadataLine(line, configuredLabTests) || !hasKnownLabTestName(line, configuredLabTests)) continue;
-        const hasNumber = /[-+]?\d+(?:[.,]\d+)?/.test(line);
+        if (!line || line.length < 4 || isLabMetadataLine(line, configuredLabTests)) continue;
+        const knownTest = hasKnownLabTestName(line, configuredLabTests);
+        const hasNumber = /[-+]?\\d+(?:[.,]\\d+)?/.test(line);
+        // Unknown numeric lines on a lab-looking page are preserved for human
+        // review only; their names/ranges are never guessed or labelled abnormal.
+        if (!knownTest && !(hasNumber && /[a-z]{2,}/i.test(line))) continue;
         const hasInterval = /[-+]?\d+(?:[.,]\d+)?\s*(?:-|–|—|\bto\b)\s*[-+]?\d+(?:[.,]\d+)?/i.test(line);
         if (hasNumber && !hasInterval && !seenReviewLines.has(line.toLowerCase())) {
           seenReviewLines.add(line.toLowerCase());
