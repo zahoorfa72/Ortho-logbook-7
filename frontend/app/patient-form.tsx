@@ -6,6 +6,9 @@ import { CameraView } from "expo-camera";
 import * as ImageManipulator from "expo-image-manipulator";
 import { Asset, requestPermissionsAsync } from "expo-media-library";
 import * as FileSystem from "expo-file-system/legacy";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { recognizeText } from "expo-ocr-kit";
+import { Dimensions } from "react-native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AppState, Image, InteractionManager, Modal, Pressable, ScrollView, Text, View } from "react-native";
 import Ionicons from "@react-native-vector-icons/ionicons";
@@ -92,6 +95,11 @@ export default function PatientForm() {
   }, [procedures, patients]);
 
   const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
+  const [labOcrEnabled, setLabOcrEnabled] = useState(false);
+  const [labOcrBusy, setLabOcrBusy] = useState(false);
+  const [labOcrText, setLabOcrText] = useState("");
+  const [labOcrFindings, setLabOcrFindings] = useState<string[]>([]);
+  const screenWidth = Dimensions.get("window").width;
   const [editingPhotoIndex, setEditingPhotoIndex] = useState<number | null>(null);
   const [editingPhotoOriginal, setEditingPhotoOriginal] = useState<string | null>(null);
   const [editingPhotoUri, setEditingPhotoUri] = useState<string | null>(null);
@@ -111,6 +119,46 @@ export default function PatientForm() {
   const [p, setP] = useState<Patient>(empty);
   const [dismissedTrashMatchId, setDismissedTrashMatchId] = useState<string | null>(null);
   const selectedImplants = p.implants || [];
+
+  useEffect(() => {
+    AsyncStorage.getItem("ortho_lab_ocr_enabled").then(value => setLabOcrEnabled(value === "true")).catch(() => setLabOcrEnabled(false));
+  }, []);
+
+  const analyzeLabPhotos = async () => {
+    if (!labOcrEnabled) { toast("Lab report reading is disabled by the administrator.", "info"); return; }
+    if (!p.photos.length) { toast("Add lab report photos first.", "info"); return; }
+    setLabOcrBusy(true);
+    try {
+      const pages: string[] = [];
+      for (let i = 0; i < p.photos.length; i++) {
+        const result = await recognizeText(p.photos[i]);
+        pages.push("PAGE " + (i + 1) + "\n" + String(result?.text || "").trim());
+      }
+      const extracted = pages.filter(x => x.trim()).join("\n\n");
+      if (!extracted.trim()) throw new Error("No readable text was found. Retake the photo clearly, with good light and the full report in frame.");
+      const candidates: string[] = [];
+      for (const rawLine of extracted.split(/\r?\n/)) {
+        const line = rawLine.replace(/\s+/g, " ").trim();
+        if (!line || line.length < 4) continue;
+        // Only flag a row when OCR sees a result and an explicit printed range.
+        const nums = [...line.matchAll(/[-+]?\d+(?:[.,]\d+)?/g)].map(m => ({ value: Number(m[0].replace(",", ".")), index: m.index ?? 0 }));
+        if (nums.length < 3) continue;
+        const resultNum = nums[0];
+        const rangeNums = nums.slice(1, 3);
+        const tail = line.slice(rangeNums[0].index);
+        if (!/(?:reference|normal|range|ref\.?\s*range|\bto\b|[-–—])/i.test(tail)) continue;
+        const lo = Math.min(rangeNums[0].value, rangeNums[1].value);
+        const hi = Math.max(rangeNums[0].value, rangeNums[1].value);
+        if (resultNum.value < lo || resultNum.value > hi) candidates.push(line + "  ← CHECK: result may be outside the printed reference range");
+      }
+      setLabOcrText(extracted);
+      setLabOcrFindings(candidates);
+      setP(prev => ({ ...prev, customData: { ...(prev.customData || {}), labOcrExtractedText: extracted, labOcrPossibleFlags: candidates.join("\n") } }));
+      Alert.alert("Lab photo reading finished", (candidates.length ? candidates.length + " possible out-of-range row(s) need checking. " : "No clear out-of-range rows were detected. ") + "OCR can misread numbers; verify every result against the original report and clinician guidance.");
+    } catch (e: any) {
+      toast(e?.message || "Could not read lab photos on this device.", "error");
+    } finally { setLabOcrBusy(false); }
+  };
 
   const { data: trashedPatientMatch, isFetching: checkingTrashMatch } = useQuery<{
     id: string; title: string; deleted_at: string; expires_at: string; patient: { mrNo: string; name: string };
@@ -380,8 +428,7 @@ export default function PatientForm() {
       if (!result?.uri) throw new Error("The camera did not return a photo.");
       const permanentUri = await persistPhoto(result.uri);
       setP((x) => ({ ...x, photos: [...x.photos, permanentUri] }));
-      setCameraOpen(false);
-      setCameraReady(false);
+      toast("Photo added. Take another photo or tap Done.", "success");
     } catch (e: any) {
       toast(e?.message || "Could not save the camera photo.", "error");
     } finally {
@@ -747,6 +794,17 @@ export default function PatientForm() {
             </View>
           </View>
         </Modal>
+        {labOcrEnabled ? (
+          <View style={{ marginTop: spacing.md, marginBottom: spacing.md }}>
+            <PrimaryButton title={labOcrBusy ? "Reading lab photos…" : "Read lab report photos (offline)"} onPress={analyzeLabPhotos} loading={labOcrBusy} disabled={labOcrBusy || !p.photos.length} testID="analyze-lab-photos-button" />
+            <Text style={styles.hint}>Reads attached photos on this device. Possible flags use only reference ranges detected in the report; check every result manually.</Text>
+            {labOcrText ? <View style={{ marginTop: spacing.sm, padding: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md }}>
+              <Text style={styles.label}>Extracted lab text</Text>
+              <Text selectable style={{ color: colors.onSurface, fontSize: fontSize.sm }}>{labOcrText}</Text>
+              {labOcrFindings.length ? <><Text style={[styles.label, { marginTop: spacing.md, color: colors.error }]}>Possible out-of-range results — verify</Text>{labOcrFindings.map((finding, i) => <Text key={i} style={{ color: colors.error, marginTop: spacing.xs }}>{finding}</Text>)}</> : <Text style={{ color: colors.onSurfaceSecondary, marginTop: spacing.sm }}>No possible out-of-range rows detected by the simple range check. This does not mean all results are normal.</Text>}
+            </View> : null}
+          </View>
+        ) : null}
         <Text style={styles.section}>Patient Details</Text>
         {(() => {
           const builtIn = ["mrNo","name","gender","age","address","diagnosis","procedure","procedureII","fileName","date"];
@@ -878,7 +936,7 @@ export default function PatientForm() {
               <Ionicons name="close" size={24} color="#FFFFFF" />
             </Pressable>
             <Text style={styles.cameraTitle}>Take Patient Photo</Text>
-            <View style={{ width: 40 }} />
+            <Pressable onPress={() => { setCameraOpen(false); setCameraReady(false); }} style={styles.photoEditIconButton} disabled={cameraTaking}><Text style={{ color: "#FFFFFF", fontWeight: "700" }}>Done</Text></Pressable>
           </View>
           <View style={styles.cameraPreviewWrap}>
             {cameraOpen ? (
@@ -917,7 +975,9 @@ export default function PatientForm() {
             <Ionicons name="close" size={30} color="#FFFFFF" />
           </Pressable>
           {!!selectedPhoto && (
-            <Image source={{ uri: selectedPhoto }} style={styles.photoFull} resizeMode="contain" />
+            <ScrollView horizontal pagingEnabled showsHorizontalScrollIndicator={false} contentOffset={{ x: Math.max(0, p.photos.indexOf(selectedPhoto)) * screenWidth, y: 0 }} onMomentumScrollEnd={(event) => { const idx = Math.max(0, Math.min(p.photos.length - 1, Math.round(event.nativeEvent.contentOffset.x / screenWidth))); setSelectedPhoto(p.photos[idx] || null); }} style={{ flex: 1, width: screenWidth }} contentContainerStyle={{ alignItems: "center" }}>
+              {p.photos.map((uri, idx) => <View key={uri + "-" + idx} style={{ width: screenWidth, height: "100%", alignItems: "center", justifyContent: "center" }}><Image source={{ uri }} style={styles.photoFull} resizeMode="contain" /></View>)}
+            </ScrollView>
           )}
           {!!selectedPhoto && (
             <View style={styles.photoViewerToolbar}>
