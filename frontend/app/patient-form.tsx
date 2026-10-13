@@ -137,14 +137,17 @@ export default function PatientForm() {
         try {
           const result = await recognizeLabText(photoUris[i]);
           const text = String(result?.text || "").trim();
-          // Keep recognized lab rows. If a report uses an unfamiliar or split
-          // test name, retain OCR text only when lab-specific wording and numeric
-          // content are present; unfamiliar rows are review-only, never alerts.
+          const structuredText = String(result?.structuredText || "").trim();
+          // Prefer rows reconstructed from OCR bounding-box positions. Keep the
+          // original OCR text too, so the admin can verify any uncertain mapping.
+          // Unknown rows remain review-only; the parser never guesses a test name.
           const recognizedRows = text && isLikelyLabReportText(text, configuredLabTests);
           const labCues = /\b(?:laboratory|lab report|investigation|test name|test results?|reference range|normal range|biological reference|specimen|result|units?)\b/i.test(text);
           const numericContent = /[-+]?\d+(?:[.,]\d+)?/.test(text);
           if (text && (recognizedRows || (labCues && numericContent))) {
-            pages.push("LAB REPORT IMAGE " + (i + 1) + "\n" + text);
+            pages.push("LAB REPORT IMAGE " + (i + 1) + "\n" +
+              (structuredText ? "RECONSTRUCTED TABLE ROWS (test | result | unit | reference range)\n" + structuredText + "\n" : "") +
+              "RAW OCR TEXT FOR REVIEW\n" + text);
           }
         } catch {
           // Continue scanning other pictures; a single damaged/unavailable image
