@@ -212,7 +212,8 @@ export default function PatientForm() {
         { name: "Creatinine", unit: "mg/dL" }, { name: "Glucose", unit: "mg/dL" }
       ].map(item => ({ ...item, min: "", max: "" }));
       const testCandidates = [...configuredCandidates, ...commonCandidates].filter((item, index, all) =>
-        item.name && all.findIndex(other => canonical(other.name) === canonical(item.name)) === index
+        item.name && all.findIndex(other => canonical(other.name) === canonical(item.name) ||
+          (isHemoglobin(other.name) && isHemoglobin(item.name))) === index
       );
       const rawOnly = extracted;
       const rawLines = rawOnly.split(/\r?\n/);
@@ -231,7 +232,7 @@ export default function PatientForm() {
         for (let lineIndex = 0; lineIndex < rawLines.length; lineIndex++) {
           if (!aliasSeen(rawLines[lineIndex])) continue;
           const nearby = [rawLines[lineIndex], rawLines[lineIndex + 1] || ""].join(" | ");
-          const beforeReference = nearby.split(/\b(?:reference\s*range|normal\s*range|biological\s*reference|ref(?:erence)?\s*range|male\s*:|female\s*:|m\s*:|f\s*:)\b/i)[0];
+          const beforeReference = nearby.split(/(?:reference\s*range|normal\s*range|biological\s*reference|ref(?:erence)?\s*range|male\s*:|female\s*:|(?:^|\s)[mf]\s*:)/i)[0];
           const afterTest = beforeReference.replace(new RegExp(aliases.map(alias => canonical(alias)).join("|"), "i"), "");
           const numbers = [...afterTest.matchAll(/(?:^|[|:\s(])([<>≤≥]?\s*\d+(?:[.,]\d+)?)/g)]
             .map(match => Number(String(match[1]).replace(/[<>≤≥\s]/g, "").replace(",", ".")))
