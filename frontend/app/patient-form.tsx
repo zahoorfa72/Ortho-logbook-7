@@ -215,7 +215,6 @@ export default function PatientForm() {
         item.name && all.findIndex(other => canonical(other.name) === canonical(item.name)) === index
       );
       const rawOnly = extracted;
-      const normalizedRawText = canonical(rawOnly);
       const rawLines = rawOnly.split(/\r?\n/);
       const missingResultReviews = testCandidates.filter(test => {
         const aliases = isHemoglobin(test.name) ? ["hemoglobin", "haemoglobin", "hgb", "hb"] : [test.name];
