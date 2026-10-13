@@ -397,6 +397,15 @@ export async function buildPatientDetailHtml(
         value = items.join(" • ");
       }
       else if(key==="fileName") value=p.fileName||"";
+      else if(key==="labOcrManualResults") {
+        try {
+          const saved = JSON.parse(String((p.customData||{}).labOcrManualResults || "[]"));
+          value = Array.isArray(saved) ? saved
+            .filter((item:any)=>item && String(item.test||"").trim() && String(item.result||"").trim())
+            .map((item:any)=>String(item.test)+": "+String(item.result)+(item.unit?" "+String(item.unit):"")+(item.reference?" (Ref: "+String(item.reference)+")":""))
+            .join("\\n") : "";
+        } catch { value = ""; }
+      }
       else value=String((p.customData||{})[key]||"");
       fieldValues.set(key,value);
       return value;
