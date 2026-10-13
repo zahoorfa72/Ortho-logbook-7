@@ -1026,7 +1026,13 @@ export default function PatientForm() {
                       <Ionicons name="image-outline" size={18} color={colors.brandPrimary} />
                       <Text style={{ color: colors.brandPrimary, fontFamily: fontFamily.semibold }}>View original report image</Text>
                     </Pressable>
-                    <Field label={"Enter result" + (item.unit ? " (" + item.unit + ")" : "")} value={item.result} onChangeText={(value: string) => setLabManualReviews(previous => previous.map((row, rowIndex) => rowIndex === index ? { ...row, result: value } : row))} keyboardType="decimal-pad" placeholder="Read value from original report" />
+                    <Field label={"Enter result" + (item.unit ? " (" + item.unit + ")" : "")} value={item.result} onChangeText={(value: string) => {
+                      // Keep manual lab results numeric even if the keyboard allows pasted text.
+                      const cleaned = value.replace(/,/g, ".").replace(/[^0-9.]/g, "");
+                      const firstDot = cleaned.indexOf(".");
+                      const numericValue = firstDot < 0 ? cleaned : cleaned.slice(0, firstDot + 1) + cleaned.slice(firstDot + 1).replace(/\./g, "");
+                      setLabManualReviews(previous => previous.map((row, rowIndex) => rowIndex === index ? { ...row, result: numericValue } : row));
+                    }} keyboardType="decimal-pad" inputMode="decimal" placeholder="Digits only — read the value from the report" />
                     {item.reference ? <Text style={{ color: colors.onSurfaceSecondary, marginTop: spacing.xs }}>Reference range: {item.reference}</Text> : <Text style={{ color: colors.onSurfaceSecondary, marginTop: spacing.xs }}>No saved reference range available. Compare with the printed range.</Text>}
                     {hasValue ? <Text style={{ color: abnormal ? (colors.error || "#B91C1C") : colors.onSurfaceSecondary, marginTop: spacing.xs, fontFamily: abnormal ? fontFamily.bold : fontFamily.regular }}>{abnormal ? "Outside the saved reference range — verify promptly with a qualified clinician." : item.min !== undefined && item.max !== undefined ? "Within the saved reference range; still verify the source and units." : "Value entered. Verify against the printed reference range."}</Text> : null}
                   </View>;
