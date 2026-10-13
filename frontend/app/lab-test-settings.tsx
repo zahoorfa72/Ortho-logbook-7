@@ -21,6 +21,7 @@ export type LabTestDefinition = {
 
 const STORAGE_KEY = "ortho_lab_test_definitions_v1";
 const WARNING_THRESHOLD_KEY = "ortho_lab_warning_threshold_percent_v1";
+const ONLINE_OCR_KEY = "ortho_lab_online_ocr_api_key_v1";
 const blank = (): LabTestDefinition => ({ id: "", name: "", maleMin: "", maleMax: "", femaleMin: "", femaleMax: "", unit: "" });
 
 export default function LabTestSettingsScreen() {
@@ -35,8 +36,10 @@ export default function LabTestSettingsScreen() {
   const [busy, setBusy] = useState(false);
   const [warningPercent, setWarningPercent] = useState("10");
   const [thresholdBusy, setThresholdBusy] = useState(false);
+  const [onlineOcrKey, setOnlineOcrKey] = useState("");
+  const [onlineKeyBusy, setOnlineKeyBusy] = useState(false);
 
-  useEffect(() => { AsyncStorage.getItem(STORAGE_KEY).then(raw => { if (raw) { try { setTests(JSON.parse(raw)); } catch {} } }).catch(() => {}); AsyncStorage.getItem(WARNING_THRESHOLD_KEY).then(raw => { if (raw && Number.isFinite(Number(raw))) setWarningPercent(String(Math.max(1, Math.min(100, Math.round(Number(raw)))))); }).catch(() => {}); }, []);
+  useEffect(() => { AsyncStorage.getItem(STORAGE_KEY).then(raw => { if (raw) { try { setTests(JSON.parse(raw)); } catch {} } }).catch(() => {}); AsyncStorage.getItem(WARNING_THRESHOLD_KEY).then(raw => { if (raw && Number.isFinite(Number(raw))) setWarningPercent(String(Math.max(1, Math.min(100, Math.round(Number(raw)))))); }).catch(() => {}); AsyncStorage.getItem(ONLINE_OCR_KEY).then(raw => setOnlineOcrKey(raw || "")).catch(() => {}); }, []);
   const update = (patch: Partial<LabTestDefinition>) => setForm(current => ({ ...current, ...patch }));
   const save = async () => {
     const name = form.name.trim();
@@ -72,6 +75,17 @@ export default function LabTestSettingsScreen() {
     } catch { toast("Could not save the warning threshold.", "error"); }
     finally { setThresholdBusy(false); }
   };
+  const saveOnlineOcrKey = async () => {
+    setOnlineKeyBusy(true);
+    try {
+      const key = onlineOcrKey.trim();
+      if (key) await AsyncStorage.setItem(ONLINE_OCR_KEY, key);
+      else await AsyncStorage.removeItem(ONLINE_OCR_KEY);
+      triggerAutomaticDriveBackup("appSettings");
+      toast(key ? "Online OCR key saved on this device." : "Online OCR disabled; offline OCR remains available.", "success");
+    } catch { toast("Could not save the online OCR key.", "error"); }
+    finally { setOnlineKeyBusy(false); }
+  };
   const edit = (item: LabTestDefinition) => { setForm({ ...item }); setEditingId(item.id); };
   const remove = (item: LabTestDefinition) => Alert.alert("Delete test?", "Remove " + item.name + " and its configured reference ranges?", [
     { text: "Cancel", style: "cancel" },
@@ -90,6 +104,13 @@ export default function LabTestSettingsScreen() {
     </View>
     <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xxl }}>
       <Text style={styles.help}>Add the exact test names used by your laboratory and the reference interval printed by that lab. These settings are saved locally on this phone. OCR must not guess a test name or treat dates and report headers as tests.</Text>
+      <Text style={styles.section}>Online OCR (optional)</Text>
+      <Text style={styles.help}>When a key is saved, the app tries OCR.space online and uses its text only if it appears more complete than offline OCR. If internet or the service fails, offline OCR continues. Lab images are sent to OCR.space while online OCR is enabled. Obtain an API key from ocr.space; do not paste a Google/GitHub key here.</Text>
+      <View style={styles.field}>
+        <Text style={styles.label}>OCR.space API key</Text>
+        <TextInput value={onlineOcrKey} onChangeText={setOnlineOcrKey} placeholder="Enter API key (optional)" placeholderTextColor={colors.muted} autoCapitalize="none" autoCorrect={false} secureTextEntry style={styles.input}/>
+      </View>
+      <Pressable disabled={onlineKeyBusy} onPress={saveOnlineOcrKey} style={styles.action}><Text style={styles.actionText}>{onlineKeyBusy ? "Saving…" : "Save online OCR key"}</Text></Pressable>
       <Text style={styles.section}>Warning threshold (%)</Text>
       <Text style={styles.help}>If a result is outside the selected reference limit by this percentage or less, show WARNING. A larger difference shows ALERT. Example: at 10%, a result 5% above the upper limit is WARNING; 15% above is ALERT. Results inside the range are not flagged.</Text>
       <View style={styles.field}>
