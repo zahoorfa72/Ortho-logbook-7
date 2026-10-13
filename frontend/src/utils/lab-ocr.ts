@@ -283,14 +283,14 @@ function defaultUnitForTest(name: string): string {
 }
 
 function normalizeLabUnit(testName: string, unit: string): string {
-  const value = String(unit || "").trim();
+  const value = String(unit || "").trim().replace(/\s+/g, "");
   const test = canonicalTestName(testName);
-  // Hemoglobin is conventionally reported in g/dL. OCR often confuses a
-  // blurry lowercase "g" with R, and lowercase "l" with I or 1.
+  // Hemoglobin is conventionally reported in g/dL. OCR can misread g as R,
+  // d as a, and L as l, I, or 1 (for example, "R/aL" or "R/al").
   if (["hemoglobin", "haemoglobin", "hgb", "hb"].some(name => canonicalTestName(name) === test)) {
-    if (!value || /^(?:r|g|q|9)\s*\/\s*d\s*[li1]$/i.test(value) ||
-        /^(?:g|r|q|9)\s*\/\s*d\s*[li1]$/i.test(value) ||
-        /^(?:g|r|q|9)\s*d\s*[li1]$/i.test(value)) return "g/dL";
+    if (!value || /^(?:g|r|q|9)\/?(?:d|a)\/?[d]?\/?[li1]$/i.test(value) ||
+        /^(?:g|r|q|9)\/(?:d|a)[li1]$/i.test(value) ||
+        /^(?:g|r|q|9)(?:d|a)[li1]$/i.test(value)) return "g/dL";
   }
   return value;
 }
