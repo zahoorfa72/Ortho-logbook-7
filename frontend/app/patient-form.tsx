@@ -239,7 +239,7 @@ export default function PatientForm() {
       const onlineHelp: string[] = [];
       setShowLabRawText(false);
       setLabOcrText(extracted);
-      setLabOcrFindings(candidates);
+      setLabOcrFindings([...candidates, ...uncertain.map(item => "REVIEW: " + item)]);
       setLabOcrOnlineHelp(onlineHelp);
       const positiveScreening = detectPositiveScreening(extracted);
       setP(prev => ({
