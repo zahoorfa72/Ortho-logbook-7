@@ -240,7 +240,7 @@ function resultNumber(text: string): string | null {
   // F/M (including OCR forms iF/iM) may be a sex marker, not a unit.
   // Remove a trailing standalone marker while preserving the numeric result;
   // the patient's gender is used separately to select the reference range.
-  const withoutSexMarker = value.replace(/(?:^|\\s)(?:i?[fm])\\s*$/i, "").trim();
+  const withoutSexMarker = value.replace(/(?:^|\s)(?:i?[fm])\s*$/i, "").trim();
 
   // A result cell should contain one measured scalar, optionally followed by
   // a unit or H/L flag. Never take the first number from a cell that also
@@ -499,8 +499,8 @@ export async function recognizeLabText(uri: string, onlineApiKey = ""): Promise<
         const second = await recognizeText(enhanced.uri);
         const score = (value: any) => {
           const text = String(value?.text || "");
-          return text.length + (text.match(/\\d+(?:[.,]\\d+)?/g) || []).length * 8 +
-            (text.match(/\\b(?:result|reference|range|hemoglobin|platelets|glucose|creatinine)\\b/gi) || []).length * 12;
+          return text.length + (text.match(/\d+(?:[.,]\d+)?/g) || []).length * 8 +
+            (text.match(/\b(?:result|reference|range|hemoglobin|platelets|glucose|creatinine)\b/gi) || []).length * 12;
         };
         if (score(second) > score(best)) {
           best = second;
@@ -518,8 +518,8 @@ export async function recognizeLabText(uri: string, onlineApiKey = ""): Promise<
   // If it is unavailable or returns less readable text, retain the offline result.
   const onlineText = await recognizeOnlineLabText(uri, onlineApiKey);
   const qualityScore = (value: string) => value.length +
-    (value.match(/\\d+(?:[.,]\\d+)?/g) || []).length * 8 +
-    (value.match(/\\b(?:result|reference|range|hemoglobin|platelets|glucose|creatinine)\\b/gi) || []).length * 12;
+    (value.match(/\d+(?:[.,]\d+)?/g) || []).length * 8 +
+    (value.match(/\b(?:result|reference|range|hemoglobin|platelets|glucose|creatinine)\b/gi) || []).length * 12;
   if (onlineText && qualityScore(onlineText) > qualityScore(text)) {
     text = onlineText;
     mode = "online";
