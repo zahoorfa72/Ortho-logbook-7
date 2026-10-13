@@ -213,10 +213,20 @@ export default function PatientForm() {
         item.name && all.findIndex(other => canonical(other.name) === canonical(item.name)) === index
       );
       const rawOnly = extracted;
+      const normalizedRawText = canonical(rawOnly);
       const missingResultReviews = testCandidates.filter(test => {
-        const aliases = isHemoglobin(test.name) ? ["hemoglobin", "haemoglobin", "hgb", "hb"] : [test.name.toLowerCase()];
-        const seenInText = aliases.some(alias => {
-          const escaped = alias.replace(/[.*+?^$()|[\]\\]/g, "\\      const parsedRows = parseLabReportRows(extracted, configuredLabTests, p.gender, labWarningThreshold);
+        const aliases = isHemoglobin(test.name) ? ["hemoglobin", "haemoglobin", "hgb", "hb"] : [test.name];
+        const seenInText = aliases.some(alias => normalizedRawText.includes(canonical(alias)));
+        const alreadyParsed = parsedRows.some(row => canonical(row.test) === canonical(test.name) ||
+          (isHemoglobin(row.test) && isHemoglobin(test.name)));
+        return seenInText && !alreadyParsed;
+      }).map(test => {
+        const min = Number(String(test.min ?? "").replace(",", "."));
+        const max = Number(String(test.max ?? "").replace(",", "."));
+        const validRange = String(test.min ?? "").trim() !== "" && String(test.max ?? "").trim() !== "" && Number.isFinite(min) && Number.isFinite(max);
+        const range = validRange ? String(test.min) + "–" + String(test.max) : "";
+        return { test: test.name, unit: test.unit || "", result: "", reference: range, photoUri: reviewSourcePhotos[0] || "", min: validRange ? min : undefined, max: validRange ? max : undefined };
+      });
       const candidates: string[] = parsedRows").replace(/\s+/g, "\\s*");
           return new RegExp("\\b" + escaped + "\\b", "i").test(rawOnly);
         });
