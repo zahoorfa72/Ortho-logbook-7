@@ -99,6 +99,8 @@ export default function PatientForm() {
   const [labOcrBusy, setLabOcrBusy] = useState(false);
   const [labOcrText, setLabOcrText] = useState("");
   const [labOcrFindings, setLabOcrFindings] = useState<string[]>([]);
+  const [labWarningsEnabled, setLabWarningsEnabled] = useState(true);
+  const [showLabRawText, setShowLabRawText] = useState(false);
   const [labOcrOnlineHelp, setLabOcrOnlineHelp] = useState<string[]>([]);
   const screenWidth = Dimensions.get("window").width;
   const [editingPhotoIndex, setEditingPhotoIndex] = useState<number | null>(null);
@@ -124,6 +126,7 @@ export default function PatientForm() {
 
   useEffect(() => {
     AsyncStorage.getItem("ortho_lab_ocr_enabled").then(value => setLabOcrEnabled(value === "true")).catch(() => setLabOcrEnabled(false));
+    AsyncStorage.getItem("ortho_lab_warnings_enabled").then(value => setLabWarningsEnabled(value !== "false")).catch(() => setLabWarningsEnabled(true));
   }, []);
 
   const analyzeLabPhotos = async (photoUris: string[] = [...new Set(p.photos)], automatic = false) => {
@@ -163,9 +166,9 @@ export default function PatientForm() {
         return;
       }
       const parsedRows = parseLabReportRows(extracted, configuredLabTests, p.gender);
-      const candidates: string[] = parsedRows.map(row =>
-        row.severity + ": " + row.test + " " + row.result + (row.unit ? " " + row.unit : "") + " | Ref: " + row.reference
-      );
+      const candidates: string[] = parsedRows
+        .filter(row => row.severity === "ALERT" || labWarningsEnabled)
+        .map(row => row.severity + ": " + row.test + " " + row.result + (row.unit ? " " + row.unit : "") + " | Ref: " + row.reference);
       const uncertain: string[] = [];
       const seenReviewLines = new Set<string>();
       for (const rawLine of extracted.split(/\r?\n/)) {
@@ -190,11 +193,13 @@ export default function PatientForm() {
       // Lab analysis is deliberately offline-only. Uncertain rows are shown for
       // human review; the app never guesses a test name or uploads OCR text.
       const onlineHelp: string[] = [];
+      setShowLabRawText(false);
       setLabOcrText(extracted);
       setLabOcrFindings(candidates);
       setLabOcrOnlineHelp(onlineHelp);
       setP(prev => ({ ...prev, customData: { ...(prev.customData || {}), labOcrExtractedText: extracted, labOcrPossibleFlags: candidates.join("\n"), labOcrNeedsReview: uncertain.join("\n"), labOcrOnlineTestNameHelp: onlineHelp.join("\n") } }));
-      if (candidates.length && automatic && isEdit && id && ready) {
+      const alertCandidates = candidates.filter(row => row.startsWith("ALERT:"));
+      if (alertCandidates.length && automatic && isEdit && id && ready) {
         // Show a lab warning only when opening an existing patient's detail.
         // Limit to two alerts per patient per local calendar day.
         const now = new Date();
@@ -210,7 +215,7 @@ export default function PatientForm() {
             await AsyncStorage.setItem(storageKey, JSON.stringify(counts));
             Alert.alert(
               "Possible abnormal lab result",
-              candidates.length + " possible out-of-range lab result row(s) found for " + (p.name || "this patient") + ". Verify test name, result, units and reference range against the original report."
+              "Results to verify for " + (p.name || "this patient") + ":\n\n" + alertCandidates.join("\n") + "\n\nCompare each result, unit and reference range with the original report and clinical guidance."
             );
           }
         } catch {
@@ -877,9 +882,12 @@ export default function PatientForm() {
             <Text style={styles.section}>Automatic lab report check</Text>
             <Text style={styles.hint}>{labOcrBusy ? "Automatically checking existing patient-file pictures for laboratory reports…" : "No photo needs to be added or selected. Existing patient-file pictures are checked automatically; only pictures recognized as laboratory reports are used for lab-result analysis."}</Text>
             {labOcrText ? <View style={{ marginTop: spacing.sm, padding: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md }}>
-              <Text style={styles.label}>Detected laboratory report text</Text>
-              <Text selectable style={{ color: colors.onSurface, fontSize: fontSize.sm }}>{labOcrText}</Text>
-              {labOcrFindings.length ? <><Text style={[styles.label, { marginTop: spacing.md, color: colors.error }]}>Possible abnormal results — verify</Text>{labOcrFindings.map((finding, i) => <Text key={i} style={{ color: colors.error, marginTop: spacing.xs }}>{finding}</Text>)}</> : <Text style={{ color: colors.onSurfaceSecondary, marginTop: spacing.sm }}>No definite out-of-range rows were detected. This does not prove that every result is normal.</Text>}
+              {labOcrFindings.length ? <><Text style={[styles.label, { marginTop: spacing.xs }]}>Lab results to verify</Text>{labOcrFindings.map((finding, i) => { const isWarning = finding.startsWith("WARNING:"); const tone = isWarning ? (colors.warning || "#B7791F") : (colors.error || "#B91C1C"); return <Text key={i} style={{ color: tone, marginTop: spacing.xs, fontFamily: isWarning ? fontFamily.medium : fontFamily.bold }}>{finding}</Text>; })}</> : <Text style={{ color: colors.onSurfaceSecondary, marginTop: spacing.sm }}>No out-of-range rows were detected by this scan. This does not prove that every result is normal.</Text>}
+              <Pressable onPress={() => setShowLabRawText(value => !value)} style={{ marginTop: spacing.md, paddingVertical: spacing.sm, flexDirection: "row", alignItems: "center", gap: spacing.xs }}>
+                <Ionicons name={showLabRawText ? "chevron-up" : "document-text-outline"} size={18} color={colors.brandPrimary} />
+                <Text style={{ color: colors.brandPrimary, fontFamily: fontFamily.semibold }}>{showLabRawText ? "Hide full OCR text" : "Show full OCR text (" + labOcrText.length + " characters)"}</Text>
+              </Pressable>
+              {showLabRawText ? <Text selectable style={{ color: colors.onSurface, fontSize: fontSize.sm, marginTop: spacing.xs }}>{labOcrText}</Text> : null}
               {labOcrOnlineHelp.length ? <><Text style={[styles.label, { marginTop: spacing.md }]}>Test-name reference assistance</Text><Text style={{ color: colors.onSurfaceSecondary, marginTop: spacing.xs }}>Only non-identifying test-name labels are checked. No photo, patient details, report text, result values or units are uploaded. This assistance does not confirm whether a result is normal.</Text>{labOcrOnlineHelp.map((item, i) => <Text key={i} style={{ color: colors.onSurface, marginTop: spacing.xs }}>{item}</Text>)}</> : null}
             </View> : null}
           </View>
