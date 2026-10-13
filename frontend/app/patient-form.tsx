@@ -7,8 +7,7 @@ import * as ImageManipulator from "expo-image-manipulator";
 import { Asset, requestPermissionsAsync } from "expo-media-library";
 import * as FileSystem from "expo-file-system/legacy";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { isLikelyLabReportText, parseLabReportRows, recognizeLabText } from "@/src/utils/lab-ocr";
-import { lookupLabTestName } from "@/src/utils/lab-reference-lookup";
+import { hasKnownLabTestName, isLabMetadataLine, isLikelyLabReportText, parseLabReportRows, recognizeLabText } from "@/src/utils/lab-ocr";
 import { Dimensions } from "react-native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AppState, Image, InteractionManager, Modal, Pressable, ScrollView, Text, View } from "react-native";
@@ -156,32 +155,20 @@ export default function PatientForm() {
         row.severity + ": " + row.test + " " + row.result + (row.unit ? " " + row.unit : "") + " | Ref: " + row.reference
       );
       const uncertain: string[] = [];
+      const seenReviewLines = new Set<string>();
       for (const rawLine of extracted.split(/\r?\n/)) {
         const line = rawLine.replace(/\s+/g, " ").trim();
-        if (!line || line.length < 4) continue;
-        const hasTestName = isLikelyLabReportText(line);
+        if (!line || line.length < 4 || isLabMetadataLine(line) || !hasKnownLabTestName(line)) continue;
         const hasNumber = /[-+]?\d+(?:[.,]\d+)?/.test(line);
         const hasInterval = /[-+]?\d+(?:[.,]\d+)?\s*(?:-|–|—|\bto\b)\s*[-+]?\d+(?:[.,]\d+)?/i.test(line);
-        if (hasTestName && hasNumber && !hasInterval) uncertain.push(line);
-      }
-      // Online assistance is deliberately limited to test-name identification.
-      // Never send an image, patient details, OCR text, numeric values or units.
-      // Online catalogue suggestions are not reference ranges and never decide
-      // whether a result is normal/abnormal.
-      const onlineHelp: string[] = [];
-      if (uncertain.length) {
-        for (const line of uncertain.slice(0, 5)) {
-          const firstNumber = line.search(/[-+]?\d+(?:[.,]\d+)?/);
-          const label = (firstNumber >= 0 ? line.slice(0, firstNumber) : line)
-            .replace(/\b(?:result|value|reference|normal|range|warning|alert|ref)\b/ig, " ")
-            .replace(/[^a-zA-Z ]/g, " ")
-            .replace(/\s+/g, " ")
-            .trim();
-          if (label.length < 3) continue;
-          const matches = await lookupLabTestName(label);
-          if (matches.length) onlineHelp.push(label + ": catalogue suggests " + matches.join("; "));
+        if (hasNumber && !hasInterval && !seenReviewLines.has(line.toLowerCase())) {
+          seenReviewLines.add(line.toLowerCase());
+          uncertain.push(line);
         }
       }
+      // Lab analysis is deliberately offline-only. Uncertain rows are shown for
+      // human review; the app never guesses a test name or uploads OCR text.
+      const onlineHelp: string[] = [];
       setLabOcrText(extracted);
       setLabOcrFindings(candidates);
       setLabOcrOnlineHelp(onlineHelp);
