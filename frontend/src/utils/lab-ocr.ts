@@ -232,9 +232,28 @@ function firstReferenceStart(text: string): number {
 }
 
 function resultNumber(text: string): string | null {
-  if (!text || /\b(?:male|female|men|women|reference|normal|range|interval)\b/i.test(text)) return null;
-  const match = new RegExp(NUMBER_PATTERN).exec(text);
-  return match?.[0] ?? null;
+  const value = String(text || "").replace(/\s+/g, " ").trim();
+  if (!value || /\b(?:male|female|men|women|reference|normal|range|interval)\b/i.test(value)) return null;
+
+  // A result cell should contain one measured scalar, optionally followed by
+  // a unit or H/L flag. Never take the first number from a cell that also
+  // contains a reference interval or multiple unrelated numbers: that was
+  // causing the lower/upper reference limit to be reported as the result.
+  if (INTERVAL_PATTERN.test(value)) return null;
+  const scalar = new RegExp("^\\s*([<>≤≥]?\\s*" + NUMBER_PATTERN + ")").exec(value);
+  if (!scalar) return null;
+  const raw = scalar[1].replace(/[<>≤≥\s]/g, "");
+  const remainder = value.slice(scalar[0].length).trim();
+
+  // Scientific lab units such as 5.2 x10^9/L contain a second number as part
+  // of the unit. Remove that notation before checking for a second result.
+  const remainderWithoutScientificUnit = remainder
+    .replace(/[x×]\s*10\s*\^?\s*[-+]?\d+/gi, "")
+    .replace(/\b(?:10\^?\d+)\b/gi, "")
+    .trim();
+  if (new RegExp(NUMBER_PATTERN).test(remainderWithoutScientificUnit)) return null;
+  if (/^[.\-–—/]/.test(remainderWithoutScientificUnit)) return null;
+  return raw;
 }
 
 function classifyDeviation(resultRaw: string, reference: ReferenceInterval): ParsedLabRow["severity"] | null {
