@@ -96,7 +96,6 @@ export default function PatientForm() {
   }, [procedures, patients]);
 
   const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
-  const allViewerPhotos = [...new Set([...p.photos, ...labPhotos])];
   const [labOcrEnabled, setLabOcrEnabled] = useState(false);
   const [labPhotos, setLabPhotos] = useState<string[]>([]);
   const [labOcrBusy, setLabOcrBusy] = useState(false);
@@ -121,6 +120,7 @@ export default function PatientForm() {
   const [cropX, setCropX] = useState(0.5);
   const [cropY, setCropY] = useState(0.5);
   const [p, setP] = useState<Patient>(empty);
+  const allViewerPhotos = [...new Set([...p.photos, ...labPhotos])];
   const [dismissedTrashMatchId, setDismissedTrashMatchId] = useState<string | null>(null);
   const selectedImplants = p.implants || [];
 
