@@ -261,16 +261,18 @@ function resultNumber(text: string): string | null {
   return raw;
 }
 
-function classifyDeviation(resultRaw: string, reference: ReferenceInterval): ParsedLabRow["severity"] | null {
+function classifyDeviation(resultRaw: string, reference: ReferenceInterval, warningPercent = 10): ParsedLabRow["severity"] | null {
   const result = numericValue(resultRaw);
   if (!Number.isFinite(result)) return null;
   if (result >= reference.low && result <= reference.high) return null;
-  const excursion = result < reference.low ? reference.low - result : result - reference.high;
-  const width = reference.high - reference.low;
-  return excursion / width <= 0.1 ? "WARNING" : "ALERT";
+  const boundary = result < reference.low ? reference.low : reference.high;
+  const excursionPercent = boundary === 0
+    ? (result === boundary ? 0 : Number.POSITIVE_INFINITY)
+    : Math.abs(result - boundary) / Math.abs(boundary) * 100;
+  return excursionPercent <= Math.max(1, Math.min(100, warningPercent)) ? "WARNING" : "ALERT";
 }
 
-export function parseLabReportRows(text: string, configuredTests: LabTestDefinition[] = [], gender = ""): ParsedLabRow[] {
+export function parseLabReportRows(text: string, configuredTests: LabTestDefinition[] = [], gender = "", warningPercent = 10): ParsedLabRow[] {
   const rows: ParsedLabRow[] = [];
   const seen = new Set<string>();
 
@@ -322,7 +324,7 @@ export function parseLabReportRows(text: string, configuredTests: LabTestDefinit
       if (!reference) reference = configuredReference(testPrefix.configured, gender);
       if (!resultRaw || !reference) continue;
 
-      const severity = classifyDeviation(resultRaw, reference);
+      const severity = classifyDeviation(resultRaw, reference, warningPercent);
       if (!severity) continue;
       const result = numericValue(resultRaw);
       const cleanedUnit = unit
@@ -439,12 +441,45 @@ function structureLabColumns(blocks: any[], imageWidth: number, imageHeight: num
 }
 
 export async function recognizeLabText(uri: string): Promise<{ text: string; structuredText: string }> {
-  const result = await recognizeText(uri);
-  const text = String(result?.text || "");
+  // Run on-device OCR on the original and, for small/blurry-looking captures,
+  // an enlarged high-quality copy. Upscaling cannot restore lost detail, but
+  // often helps OCR read small printed digits without sending data online.
+  let best: any = null;
+  let bestSize: { width: number; height: number } | null = null;
+  try {
+    const originalSize = await imageSize(uri);
+    bestSize = originalSize;
+    best = await recognizeText(uri);
+    const maxDimension = Math.max(originalSize.width, originalSize.height);
+    if (maxDimension < 2200) {
+      const scale = Math.min(2, 2200 / Math.max(1, maxDimension));
+      const enhanced = await ImageManipulator.manipulateAsync(
+        uri,
+        [{ resize: { width: Math.round(originalSize.width * scale), height: Math.round(originalSize.height * scale) } }],
+        { compress: 1, format: ImageManipulator.SaveFormat.PNG },
+      );
+      try {
+        const second = await recognizeText(enhanced.uri);
+        const score = (value: any) => {
+          const text = String(value?.text || "");
+          return text.length + (text.match(/\\d+(?:[.,]\\d+)?/g) || []).length * 8 +
+            (text.match(/\\b(?:result|reference|range|hemoglobin|platelets|glucose|creatinine)\\b/gi) || []).length * 12;
+        };
+        if (score(second) > score(best)) {
+          best = second;
+          bestSize = { width: Math.round(originalSize.width * scale), height: Math.round(originalSize.height * scale) };
+        }
+      } catch {}
+      try { await FileSystem.deleteAsync(enhanced.uri, { idempotent: true }); } catch {}
+    }
+  } catch {
+    best = await recognizeText(uri);
+  }
+  const text = String(best?.text || "");
   let structuredText = "";
   try {
-    const size = await imageSize(uri);
-    structuredText = structureLabColumns((result as any)?.blocks || [], size.width, size.height);
+    const size = bestSize || await imageSize(uri);
+    structuredText = structureLabColumns(best?.blocks || [], size.width, size.height);
   } catch {
     // Raw on-device OCR text remains available if image geometry is unavailable.
   }
