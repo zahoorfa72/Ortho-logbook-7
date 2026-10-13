@@ -40,7 +40,29 @@ const TEST_EQUIVALENCE_GROUPS: string[][] = [
   ["hematocrit", "haematocrit", "hct", "pcv"],
   ["white blood cell count", "wbc", "total leukocyte count", "tlc"],
   ["red blood cell count", "rbc", "erythrocyte count"],
-  ["platelet count", "platelets", "plt"],
+  ["platelet count", "platelets", "platelet", "plt"],
+  ["mean corpuscular volume", "mcv"],
+  ["mean corpuscular hemoglobin", "mch"],
+  ["mean corpuscular hemoglobin concentration", "mchc"],
+  ["red cell distribution width", "rdw", "rdw-cv"],
+  ["mean platelet volume", "mpv"],
+  ["erythrocyte sedimentation rate", "esr"],
+  ["c reactive protein", "crp"],
+  ["gamma glutamyl transferase", "ggt", "gamma gt"],
+  ["total bilirubin", "bilirubin total"],
+  ["direct bilirubin", "bilirubin direct"],
+  ["indirect bilirubin", "bilirubin indirect"],
+  ["serum albumin", "albumin"],
+  ["total protein", "serum total protein"],
+  ["prothrombin time", "pt"],
+  ["international normalized ratio", "inr"],
+  ["activated partial thromboplastin time", "aptt"],
+  ["vitamin d", "25 oh vitamin d", "25-hydroxy vitamin d"],
+  ["vitamin b12", "cobalamin"],
+  ["serum ferritin", "ferritin"],
+  ["serum iron", "iron"],
+  ["serum magnesium", "magnesium"],
+  ["serum phosphate", "phosphate"],
   ["fasting blood sugar", "fbs", "fasting glucose"],
   ["random blood sugar", "rbs", "random glucose"],
   ["alanine aminotransferase", "sgpt", "alt"],
@@ -49,6 +71,10 @@ const TEST_EQUIVALENCE_GROUPS: string[][] = [
   ["glycated hemoglobin", "glycosylated hemoglobin", "hba1c"],
   ["blood urea nitrogen", "bun"],
   ["triglycerides", "triglyceride"],
+  ["serum calcium", "calcium"],
+  ["serum sodium", "sodium"],
+  ["serum potassium", "potassium"],
+  ["serum chloride", "chloride"],
   ["total cholesterol", "cholesterol"],
   ["thyroid stimulating hormone", "tsh"],
 ];
@@ -93,7 +119,7 @@ function findTestPrefix(line: string, configuredTests: LabTestDefinition[] = [])
   for (const alias of TEST_ALIASES) {
     if (normal.startsWith(alias + " ")) {
       const index = lower.indexOf(alias);
-      if (index >= 0 && index <= 8) return { name: cleaned.slice(index, index + alias.length).trim(), end: index + alias.length };
+      if (index >= 0 && index <= 8) { const name = cleaned.slice(index, index + alias.length).trim(); return { name, end: index + alias.length, configured: configuredTestForName(name, configuredTests) }; }
     }
   }
   return null;
