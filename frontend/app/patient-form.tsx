@@ -207,8 +207,28 @@ export default function PatientForm() {
       setLabOcrFindings(candidates);
       setLabOcrOnlineHelp(onlineHelp);
       setP(prev => ({ ...prev, customData: { ...(prev.customData || {}), labOcrExtractedText: extracted, labOcrPossibleFlags: candidates.join("\n"), labOcrNeedsReview: uncertain.join("\n"), labOcrOnlineTestNameHelp: onlineHelp.join("\n") } }));
-      if (candidates.length) {
-        Alert.alert("Possible abnormal lab result", candidates.length + " result row(s) appear outside the printed reference range. Verify the test name, value, units, range, and patient-specific range on the original report.");
+      if (candidates.length && automatic && isEdit && id && ready) {
+        // Show a lab warning only when opening an existing patient's detail.
+        // Limit to two alerts per patient per local calendar day.
+        const now = new Date();
+        const dayKey = now.getFullYear() + "-" + String(now.getMonth() + 1).padStart(2, "0") + "-" + String(now.getDate()).padStart(2, "0");
+        const storageKey = "ortho_lab_alert_daily_counts_v1";
+        try {
+          const rawCounts = await AsyncStorage.getItem(storageKey);
+          const counts = rawCounts ? JSON.parse(rawCounts) : {};
+          const patientDayKey = String(id) + ":" + dayKey;
+          const shown = Number(counts?.[patientDayKey] || 0);
+          if (shown < 2) {
+            counts[patientDayKey] = shown + 1;
+            await AsyncStorage.setItem(storageKey, JSON.stringify(counts));
+            Alert.alert(
+              "Possible abnormal lab result",
+              candidates.length + " possible out-of-range lab result row(s) found for " + (p.name || "this patient") + ". Verify test name, result, units and reference range against the original report."
+            );
+          }
+        } catch {
+          // If local rate-limit storage is unavailable, avoid repeated popups.
+        }
       } else if (uncertain.length && automatic) {
         toast("Some lab-like rows were read, but their reference ranges were not clear. Please review the report; they were not labelled abnormal.", "info");
       }
