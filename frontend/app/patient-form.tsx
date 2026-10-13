@@ -121,6 +121,7 @@ export default function PatientForm() {
   const [labOcrText, setLabOcrText] = useState("");
   const [labOcrFindings, setLabOcrFindings] = useState<string[]>([]);
   const [labWarningsEnabled, setLabWarningsEnabled] = useState(true);
+  const [labWarningThreshold, setLabWarningThreshold] = useState(10);
   const [showLabRawText, setShowLabRawText] = useState(false);
   const [labOcrOnlineHelp, setLabOcrOnlineHelp] = useState<string[]>([]);
   const screenWidth = Dimensions.get("window").width;
@@ -148,6 +149,7 @@ export default function PatientForm() {
   useEffect(() => {
     AsyncStorage.getItem("ortho_lab_ocr_enabled").then(value => setLabOcrEnabled(value === "true")).catch(() => setLabOcrEnabled(false));
     AsyncStorage.getItem("ortho_lab_warnings_enabled").then(value => setLabWarningsEnabled(value !== "false")).catch(() => setLabWarningsEnabled(true));
+    AsyncStorage.getItem("ortho_lab_warning_threshold_percent_v1").then(value => { const n = Number(value); if (value && Number.isInteger(n) && n >= 1 && n <= 100) setLabWarningThreshold(n); }).catch(() => setLabWarningThreshold(10));
   }, []);
 
   const analyzeLabPhotos = async (photoUris: string[] = [...new Set(p.photos)], automatic = false) => {
@@ -186,29 +188,50 @@ export default function PatientForm() {
         else toast("No readable text found. Retake the report in good light with the full page in focus.", "error");
         return;
       }
-      const parsedRows = parseLabReportRows(extracted, configuredLabTests, p.gender);
+      const parsedRows = parseLabReportRows(extracted, configuredLabTests, p.gender, labWarningThreshold);
       const candidates: string[] = parsedRows
         .filter(row => row.severity === "ALERT" || labWarningsEnabled)
         .map(row => row.severity + ": " + row.test + " " + row.result + (row.unit ? " " + row.unit : "") + " | Ref: " + row.reference);
       const uncertain: string[] = [];
       const seenReviewLines = new Set<string>();
-      for (const rawLine of extracted.split(/\r?\n/)) {
-        const line = rawLine.replace(/\s+/g, " ").trim();
-        if (!line || line.length < 4 || isLabMetadataLine(line, configuredLabTests)) continue;
-        const knownTest = hasKnownLabTestName(line, configuredLabTests);
-        const hasNumber = /[-+]?\d+(?:[.,]\d+)?/.test(line);
-        // Unknown numeric lines on a lab-looking page are preserved for human
-        // review only; their names/ranges are never guessed or labelled abnormal.
-        if (!knownTest && !(hasNumber && /[a-z]{2,}/i.test(line))) continue;
-        const hasInterval = /[-+]?\d+(?:[.,]\d+)?\s*(?:-|–|—|\bto\b)\s*[-+]?\d+(?:[.,]\d+)?/i.test(line);
-        // OCR often puts a test/result and its clearly printed reference interval
-        // on adjacent lines or separate columns. Don't claim the range is unclear
-        // if a nearby OCR line contains a valid interval.
-        const nearbyText = [rawLine, extracted.split(/\r?\n/)[Math.max(0, extracted.split(/\r?\n/).indexOf(rawLine) - 1)], extracted.split(/\r?\n/)[extracted.split(/\r?\n/).indexOf(rawLine) + 1]].filter(Boolean).join(" ");
-        const hasNearbyInterval = /[-+]?\d+(?:[.,]\d+)?\s*(?:-|–|—|\bto\b)\s*[-+]?\d+(?:[.,]\d+)?/i.test(nearbyText);
-        if (hasNumber && !hasInterval && !hasNearbyInterval && !seenReviewLines.has(line.toLowerCase())) {
-          seenReviewLines.add(line.toLowerCase());
-          uncertain.push(line);
+      // Only generate review suggestions from reconstructed table rows. Raw OCR
+      // includes headings, reference ranges, and normal rows, so scanning every
+      // raw line produced false "could not match" warnings even for clear reports.
+      for (const page of extracted.split(/(?=LAB REPORT IMAGE\\s+\\d+)/i)) {
+        const marker = "RECONSTRUCTED TABLE ROWS (test | result | unit | reference range)";
+        const rawMarker = "RAW OCR TEXT FOR REVIEW";
+        const at = page.indexOf(marker);
+        const rawAt = page.indexOf(rawMarker);
+        if (at < 0) continue;
+        const section = page.slice(at + marker.length, rawAt >= 0 ? rawAt : undefined);
+        for (const rawLine of section.split(/\\r?\\n/)) {
+          const line = rawLine.replace(/\\s+/g, " ").trim();
+          if (!line || !line.includes("|")) continue;
+          const cells = line.split("|").map(cell => cell.trim());
+          if (cells.length < 2 || !/[a-z]{2,}/i.test(cells[0])) continue;
+          const knownTest = hasKnownLabTestName(cells[0], configuredLabTests);
+          const resultLooksNumeric = /^\\s*[<>≤≥]?\\s*[-+]?\\d+(?:[.,]\\d+)?(?:\\s|$)/.test(cells[1] || "");
+          let reason = "";
+          if (!knownTest) {
+            reason = "Check test name (OCR may have misread it)";
+          } else if (!resultLooksNumeric) {
+            reason = "Check result (OCR could not read a clear numeric value)";
+          } else {
+            const testName = cells[0];
+            const saved = configuredLabTests.find(item => item.name.toLowerCase() === testName.toLowerCase()) ||
+              configuredLabTests.find(item => testName.toLowerCase().startsWith(item.name.toLowerCase()));
+            const sex = /^\\s*(?:m|male|man|men)\\s*$/i.test(p.gender) ? "male" :
+              /^\\s*(?:f|female|woman|women)\\s*$/i.test(p.gender) ? "female" : "";
+            const savedRangeExists = !!saved && !!sex &&
+              String(sex === "male" ? saved.maleMin : saved.femaleMin).trim() !== "" &&
+              String(sex === "male" ? saved.maleMax : saved.femaleMax).trim() !== "";
+            const reportRangeExists = /[-+]?\\d+(?:[.,]\\d+)?\\s*(?:-|–|—|\\bto\\b)\\s*[-+]?\\d+(?:[.,]\\d+)?/i.test(cells.slice(3).join(" "));
+            if (!reportRangeExists && !savedRangeExists) reason = "Check reference range (not readable and no saved range is available for this patient's sex)";
+          }
+          if (reason && !seenReviewLines.has(line.toLowerCase())) {
+            seenReviewLines.add(line.toLowerCase());
+            uncertain.push(reason + ": " + line);
+          }
         }
       }
       // Lab analysis is deliberately offline-only. Uncertain rows are shown for
