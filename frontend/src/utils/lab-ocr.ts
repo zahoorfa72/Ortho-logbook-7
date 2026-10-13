@@ -151,25 +151,41 @@ function configuredReference(test: LabTestDefinition | undefined, gender: string
  */
 function extractReferenceInterval(text: string, gender: string): ReferenceInterval | null {
   const sex = genderKind(gender);
-  const intervals: ReferenceInterval[] = [];
-  const labelled = /\b(male|female|men|women|m|f)\b[\s():=]*(?:reference\s*)?([-+]?\d+(?:[.,]\d+)?)\s*(?:-|–|—|\bto\b)\s*([-+]?\d+(?:[.,]\d+)?)/gi;
-  for (const match of text.matchAll(labelled)) {
-    const label = /^(?:male|men|m)$/i.test(match[1]) ? "male" : "female";
-    const a = numericValue(match[2]);
-    const b = numericValue(match[3]);
-    if (Number.isFinite(a) && Number.isFinite(b) && a !== b) {
-      intervals.push({ low: Math.min(a, b), high: Math.max(a, b), text: match[2] + "–" + match[3], start: match.index ?? 0 });
-      (intervals[intervals.length - 1] as any).sex = label;
-    }
-  }
-  if (intervals.length) {
-    const selected = sex ? intervals.find(item => (item as any).sex === sex) : undefined;
-    return selected || null; // Ambiguous sex-specific ranges must not be guessed.
-  }
-
   const matches = [...text.matchAll(new RegExp(NUMBER_PATTERN + "\\s*(?:-|–|—|\\bto\\b)\\s*" + NUMBER_PATTERN, "gi"))];
+  if (matches.length > 1) {
+    const labelledIntervals: Array<ReferenceInterval & { sex: "male" | "female" }> = [];
+    let previousEnd = 0;
+    for (const match of matches) {
+      const start = match.index ?? 0;
+      const preceding = text.slice(previousEnd, start);
+      const labels = [...preceding.matchAll(/\b(male|female|men|women|m|f)\b/gi)];
+      const lastLabel = labels[labels.length - 1]?.[1] || "";
+      const intervalSex = /^(?:male|men|m)$/i.test(lastLabel) ? "male" : /^(?:female|women|f)$/i.test(lastLabel) ? "female" : "";
+      const pair = INTERVAL_PATTERN.exec(match[0]);
+      if (intervalSex && pair) {
+        const a = numericValue(pair[1]);
+        const b = numericValue(pair[2]);
+        if (Number.isFinite(a) && Number.isFinite(b) && a !== b) {
+          labelledIntervals.push({ low: Math.min(a, b), high: Math.max(a, b), text: pair[1] + "–" + pair[2], start, sex: intervalSex });
+        }
+      }
+      previousEnd = start + match[0].length;
+    }
+    if (labelledIntervals.length) return (sex ? labelledIntervals.find(item => item.sex === sex) : undefined) || null;
+    return null; // Multiple unlabelled intervals are ambiguous.
+  }
   if (matches.length !== 1) return null;
+
+  // A single interval is usable only when it is not explicitly labelled for
+  // the opposite sex. A report's lone male interval must not be applied to a female.
   const match = matches[0];
+  const before = text.slice(0, match.index ?? 0);
+  const labels = [...before.matchAll(/\b(male|female|men|women|m|f)\b/gi)];
+  const label = labels[labels.length - 1]?.[1] || "";
+  if (label) {
+    const intervalSex = /^(?:male|men|m)$/i.test(label) ? "male" : "female";
+    if (!sex || intervalSex !== sex) return null;
+  }
   const pair = INTERVAL_PATTERN.exec(match[0]);
   if (!pair) return null;
   const a = numericValue(pair[1]);
