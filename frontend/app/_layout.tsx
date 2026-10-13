@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useFonts } from "expo-font";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import { LogBox, Pressable, Text, View } from "react-native";
+import { KeyboardAvoidingView, LogBox, Platform, Pressable, Text, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -91,6 +91,11 @@ export default function RootLayout() {
                     <StatusBar style="dark" />
                     <DriveSyncIndicator />
 
+                  <KeyboardAvoidingView
+                    style={{ flex: 1 }}
+                    behavior={Platform.OS === "ios" ? "padding" : "height"}
+                    keyboardVerticalOffset={0}
+                  >
                   <Stack screenOptions={{ headerShown: false }}>
                     <Stack.Screen name="index" />
                     <Stack.Screen name="login" />
@@ -117,6 +122,7 @@ export default function RootLayout() {
                     <Stack.Screen name="inventory-usage" options={{ headerShown: false }} />
                     <Stack.Screen name="join-clinic" />
                   </Stack>
+                  </KeyboardAvoidingView>
 
                   </ToastProvider>
                 </AuthProvider>
