@@ -286,7 +286,7 @@ function unitFromResultCell(value: string): string {
   const text = String(value || "").trim();
   // Capture common units that may be attached to the result when the OCR
   // misses the separate Units column.
-  const match = text.match(/(?:g\s*\/\s*d?l|mg\s*\/\s*d?l|mmol\s*\/\s*l|mol\s*\/\s*l|iu\s*\/\s*l|u\s*\/\s*l|cells?\s*\/\s*(?:ul|µl|μl)|x\s*10\s*\^?\s*\d+\s*(?:cells?\s*\/\s*(?:ul|µl|μl))?|fl|pg|%|seconds?|sec)\b?/i);
+  const match = text.match(/(?:g\s*\/\s*d?l|mg\s*\/\s*d?l|mmol\s*\/\s*l|mol\s*\/\s*l|iu\s*\/\s*l|u\s*\/\s*l|cells?\s*\/\s*(?:ul|µl|μl)|x\s*10\s*\^?\s*\d+\s*(?:cells?\s*\/\s*(?:ul|µl|μl))?|fl|pg|%|seconds?|sec)(?![a-z])/i);
   return match?.[0]?.replace(/\s+/g, "") || "";
 }
 
