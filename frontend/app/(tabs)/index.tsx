@@ -208,8 +208,10 @@ export default function Logbook() {
             if (isLikelyLabReportText(text)) reportTexts.push(text);
           } catch {}
         }
+        let configuredLabTests: import("@/src/utils/lab-ocr").LabTestDefinition[] = [];
+        try { const savedTests = await AsyncStorage.getItem("ortho_lab_test_definitions_v1"); if (savedTests) configuredLabTests = JSON.parse(savedTests); } catch {}
         const flags = reportTexts.flatMap(reportText =>
-          parseLabReportRows(reportText).map(row =>
+          parseLabReportRows(reportText, configuredLabTests, patient.gender).map(row =>
             row.severity + ": " + row.test + " " + row.result + (row.unit ? " " + row.unit : "") + " | Ref: " + row.reference
           )
         ).filter((flag, index, all) => all.indexOf(flag) === index);
