@@ -106,7 +106,6 @@ export default function PatientForm() {
 
   const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
   const [labOcrEnabled, setLabOcrEnabled] = useState(false);
-  const [labPhotos, setLabPhotos] = useState<string[]>([]);
   const [labOcrBusy, setLabOcrBusy] = useState(false);
   const [labOcrText, setLabOcrText] = useState("");
   const [labOcrFindings, setLabOcrFindings] = useState<string[]>([]);
@@ -136,30 +135,6 @@ export default function PatientForm() {
   useEffect(() => {
     AsyncStorage.getItem("ortho_lab_ocr_enabled").then(value => setLabOcrEnabled(value === "true")).catch(() => setLabOcrEnabled(false));
   }, []);
-
-  const addLabPhotosFromLibrary = async () => {
-    if (!imagePickerReady || imagePickerOpening.current || photoBusy) return;
-    imagePickerOpening.current = true;
-    try {
-      await new Promise<void>(resolve => InteractionManager.runAfterInteractions(() => setTimeout(resolve, 120)));
-      if (!(await waitForImagePickerActivity())) { toast("Photo picker is still starting. Please try again.", "error"); return; }
-      const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], allowsEditing: false, allowsMultipleSelection: true, selectionLimit: 20, quality: 0.95 });
-      if (result.canceled) return;
-      const newUris: string[] = [];
-      for (const asset of result.assets) if (asset.uri) newUris.push(await persistPhoto(asset.uri));
-      const next = [...labPhotos, ...newUris];
-      setLabPhotos(next);
-      setP(prev => ({ ...prev, customData: { ...(prev.customData || {}), labReportPhotoUris: JSON.stringify(next) } }));
-      toast(newUris.length + " lab report photo(s) added.", "success");
-    } catch (e: any) { toast(e?.message || "Could not add lab report photos.", "error"); }
-    finally { imagePickerOpening.current = false; }
-  };
-
-  const removeLabPhoto = (index: number) => {
-    const next = labPhotos.filter((_, i) => i !== index);
-    setLabPhotos(next);
-    setP(prev => ({ ...prev, customData: { ...(prev.customData || {}), labReportPhotoUris: JSON.stringify(next) } }));
-  };
 
   const analyzeLabPhotos = async (photoUris: string[] = [...new Set(p.photos)], automatic = false) => {
     if (!labOcrEnabled || !photoUris.length || labOcrBusy) return;
