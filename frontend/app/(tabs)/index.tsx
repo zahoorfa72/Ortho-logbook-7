@@ -77,18 +77,23 @@ function abnormalLabLabels(patient: Patient): string[] {
   const labels: string[] = [];
   for (const raw of saved.split(/\r?\n/)) {
     const line = raw.replace(/\s+—\s*POSSIBLY OUT OF RANGE.*$/i, "").trim();
-    const nums = [...line.matchAll(/[-+]?\d+(?:[.,]\d+)?/g)].map(m => Number(m[0].replace(",", ".")));
+    const matches = [...line.matchAll(/[-+]?\d+(?:[.,]\d+)?/g)];
+    const nums = matches.map(m => Number(m[0].replace(",", ".")));
     const first = line.search(/[-+]?\d+(?:[.,]\d+)?/);
     let test = first > 0 ? line.slice(0, first).replace(/^[\s:|•-]+|[\s:|•-]+$/g, "").trim() : "";
     test = test.replace(/^(?:image\s+\d+\s*)/i, "").trim();
-    if (!test || /^(?:ref(?:erence)?|normal|range|result|value)$/i.test(test)) test = "Test name unclear";
+    if (!test || /^(?:ref(?:erence)?|normal|range|result|value)$/i.test(test)) test = "Test unclear";
     let direction = "";
     if (nums.length >= 3) {
       const low = Math.min(nums[1], nums[2]);
       const high = Math.max(nums[1], nums[2]);
       direction = nums[0] < low ? "LOW" : nums[0] > high ? "HIGH" : "";
     }
-    const label = (direction ? direction + ": " : "OUT OF RANGE: ") + test;
+    const resultText = matches[0]?.[0] || "";
+    const unit = (line.slice((matches[0]?.index ?? 0) + resultText.length, matches[1]?.index ?? line.length)
+      .replace(/[0-9.,:+\-–—]/g, " ").replace(/\b(?:to|ref|range|normal|result|value)\b/ig, " ")
+      .replace(/\s+/g, " ").trim()).slice(0, 12);
+    const label = (direction ? direction + ": " : "OUT OF RANGE: ") + test + (resultText ? " " + resultText : "") + (unit ? " " + unit : "");
     if (!labels.includes(label)) labels.push(label);
   }
   return labels.slice(0, 5);
