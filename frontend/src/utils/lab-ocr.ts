@@ -235,20 +235,20 @@ function resultNumber(text: string): string | null {
   const value = String(text || "").replace(/\s+/g, " ").trim();
   if (!value || /\b(?:male|female|men|women|reference|normal|range|interval)\b/i.test(value)) return null;
 
-  // A lone F/M marker often belongs to the report's sex-specific reference
-  // range, but OCR can shift it into the result cell (for example "18.0 F").
-  // Do not silently accept the number as a verified measurement in that case.
-  if (/(?:^|\s)(?:[fm]|i[fm])\s*$/i.test(value)) return null;
+  // F/M (including OCR forms iF/iM) may be a sex marker, not a unit.
+  // Remove a trailing standalone marker while preserving the numeric result;
+  // the patient's gender is used separately to select the reference range.
+  const withoutSexMarker = value.replace(/(?:^|\\s)(?:i?[fm])\\s*$/i, "").trim();
 
   // A result cell should contain one measured scalar, optionally followed by
   // a unit or H/L flag. Never take the first number from a cell that also
   // contains a reference interval or multiple unrelated numbers: that was
   // causing the lower/upper reference limit to be reported as the result.
-  if (INTERVAL_PATTERN.test(value)) return null;
-  const scalar = new RegExp("^\\s*([<>≤≥]?\\s*" + NUMBER_PATTERN + ")").exec(value);
+  if (INTERVAL_PATTERN.test(withoutSexMarker)) return null;
+  const scalar = new RegExp("^\\s*([<>≤≥]?\\s*" + NUMBER_PATTERN + ")").exec(withoutSexMarker);
   if (!scalar) return null;
   const raw = scalar[1].replace(/[<>≤≥\s]/g, "");
-  const remainder = value.slice(scalar[0].length).trim();
+  const remainder = withoutSexMarker.slice(scalar[0].length).trim();
 
   // Scientific lab units such as 5.2 x10^9/L contain a second number as part
   // of the unit. Remove that notation before checking for a second result.
