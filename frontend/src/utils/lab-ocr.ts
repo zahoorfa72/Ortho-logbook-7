@@ -517,10 +517,14 @@ export async function recognizeLabText(uri: string, onlineApiKey = ""): Promise<
   // Optional cloud OCR is attempted only when the admin explicitly saves a key.
   // If it is unavailable or returns less readable text, retain the offline result.
   const onlineText = await recognizeOnlineLabText(uri, onlineApiKey);
-  const qualityScore = (value: string) => value.length +
+  const qualityScore = (value: string) =>
+    (isLikelyLabReportText(value) ? 80 : 0) +
     (value.match(/\d+(?:[.,]\d+)?/g) || []).length * 8 +
     (value.match(/\b(?:result|reference|range|hemoglobin|platelets|glucose|creatinine)\b/gi) || []).length * 12;
-  if (onlineText && qualityScore(onlineText) > qualityScore(text)) {
+  if (onlineText && (
+    qualityScore(onlineText) > qualityScore(text) ||
+    (isLikelyLabReportText(onlineText) && !isLikelyLabReportText(text))
+  )) {
     text = onlineText;
     mode = "online";
   }
