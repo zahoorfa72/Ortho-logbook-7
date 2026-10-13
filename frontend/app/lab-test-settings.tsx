@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "@/src/auth/AuthContext";
 import { useToast } from "@/src/components/toast";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
+import { triggerAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-backup";
 
 export type LabTestDefinition = {
   id: string;
@@ -48,6 +49,7 @@ export default function LabTestSettingsScreen() {
     setBusy(true);
     try {
       await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      triggerAutomaticDriveBackup("appSettings");
       setTests(next); setForm(blank()); setEditingId("");
       toast("Lab test and reference ranges saved on this device.", "success");
     } catch { toast("Could not save the lab test settings.", "error"); }
@@ -58,7 +60,7 @@ export default function LabTestSettingsScreen() {
     { text: "Cancel", style: "cancel" },
     { text: "Delete", style: "destructive", onPress: async () => {
       const next = tests.filter(test => test.id !== item.id);
-      try { await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)); setTests(next); if (editingId === item.id) { setEditingId(""); setForm(blank()); } }
+      try { await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)); triggerAutomaticDriveBackup("appSettings"); setTests(next); if (editingId === item.id) { setEditingId(""); setForm(blank()); } }
       catch { toast("Could not delete this test.", "error"); }
     } },
   ]);
