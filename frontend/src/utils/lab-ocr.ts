@@ -44,7 +44,12 @@ function findTestPrefix(line: string, configuredTests: LabTestDefinition[] = [])
   for (const configured of configuredTests) {
     const name = String(configured.name || "").trim();
     if (name.length < 2) continue;
-    const pattern = new RegExp("^" + name.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\  const lower = cleaned.toLowerCase();
+    const lowerName = name.toLowerCase();
+    if (cleaned.toLowerCase().startsWith(lowerName)) {
+      const nextChar = cleaned.charAt(name.length);
+      if (!nextChar || /[\\s:|]/.test(nextChar)) return { name: cleaned.slice(0, name.length).trim(), end: name.length, configured };
+    }
+  }
   for (const alias of TEST_ALIASES) {") + "(?=$|\\\\s|[:|])", "i");
     const match = pattern.exec(cleaned);
     if (match) return { name: match[0].trim(), end: match[0].length, configured };
