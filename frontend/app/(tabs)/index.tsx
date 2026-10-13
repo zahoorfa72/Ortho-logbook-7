@@ -145,7 +145,7 @@ export default function Logbook() {
         const raw = await AsyncStorage.getItem("ortho_lab_ocr_patient_cache_v2");
         if (raw) Object.assign(snapshot, JSON.parse(raw));
       } catch {}
-      for (const patient of patients || []) {
+      for (const patient of data || []) {
         if (cancelled) return;
         const photos = [...new Set([...(patient.photos || []), ...((patient as any).photoUri ? [(patient as any).photoUri] : [])])].filter(Boolean);
         if (!photos.length) continue;
@@ -190,7 +190,7 @@ export default function Logbook() {
     };
     void scan();
     return () => { cancelled = true; };
-  }, [labOcrEnabled, patients]);
+  }, [labOcrEnabled, data]);
 
   // Re-evaluate the daily backup reminder whenever the Logbook tab regains focus.
   useFocusEffect(
