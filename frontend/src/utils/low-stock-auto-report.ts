@@ -456,6 +456,10 @@ export async function attemptDueLowStockReport(): Promise<string> {
     lastStatus: `Automatically sent ${pdf.count} low-stock item(s) for ${pdf.periodStart.slice(0,10)} to ${pdf.periodEnd.slice(0,10)} via ${channels.join(" and ")}.`,
   };
   await saveState(nextState);
+  Alert.alert(
+    "Automatic low-stock report sent",
+    nextState.lastStatus + "\n\nDelivery completed successfully."
+  );
   return nextState.lastStatus!;
 }
 
