@@ -220,7 +220,27 @@ export default function PatientForm() {
         { name: "Neutrophils", unit: "%" }, { name: "Lymphocytes", unit: "%" },
         { name: "Creatinine", unit: "mg/dL" }, { name: "Glucose", unit: "mg/dL" }
       ].map(item => ({ ...item, min: "", max: "" }));
-      const testCandidates = [...configuredCandidates, ...commonCandidates].filter((item, index, all) =>
+      const observedCandidates: Array<{ name: string; unit: string; min: string; max: string }> = [];
+      for (const page of extracted.split(/(?=LAB REPORT IMAGE\s+\d+)/i)) {
+        const marker = "RECONSTRUCTED TABLE ROWS (test | result | unit | reference range)";
+        const rawMarker = "RAW OCR TEXT FOR REVIEW";
+        const at = page.indexOf(marker);
+        if (at < 0) continue;
+        const rawAt = page.indexOf(rawMarker, at + marker.length);
+        const section = page.slice(at + marker.length, rawAt >= 0 ? rawAt : undefined);
+        for (const line of section.split(/\r?\n/)) {
+          const cells = line.split("|").map(cell => cell.trim());
+          if (cells.length < 2 || !hasKnownLabTestName(cells[0], configuredLabTests)) continue;
+          const range = cells.slice(3).join(" ").match(/([-+]?\d+(?:[.,]\d+)?)\s*(?:-|–|—|to)\s*([-+]?\d+(?:[.,]\d+)?)/i);
+          observedCandidates.push({
+            name: cells[0],
+            unit: cells[2] || "",
+            min: range ? range[1] : "",
+            max: range ? range[2] : "",
+          });
+        }
+      }
+      const testCandidates = [...configuredCandidates, ...commonCandidates, ...observedCandidates].filter((item, index, all) =>
         item.name && all.findIndex(other => canonical(other.name) === canonical(item.name) ||
           (isHemoglobin(other.name) && isHemoglobin(item.name))) === index
       );
@@ -240,7 +260,21 @@ export default function PatientForm() {
         let resultValue: number | null = null;
         for (let lineIndex = 0; lineIndex < rawLines.length; lineIndex++) {
           if (!aliasSeen(rawLines[lineIndex])) continue;
-          const nearby = [rawLines[lineIndex], rawLines[lineIndex + 1] || ""].join(" | ");
+          const currentLine = rawLines[lineIndex];
+          // Structured OCR rows have explicit columns: inspect only the result
+          // cell, never a number from the reference-range cell.
+          if (currentLine.includes("|")) {
+            const cells = currentLine.split("|").map(cell => cell.trim());
+            if (aliasSeen(cells[0] || "")) {
+              const scalar = /^\s*[<>≤≥]?\s*(\d+(?:[.,]\d+)?)(?:\s|$)/.exec(cells[1] || "");
+              if (scalar) {
+                const parsed = Number(scalar[1].replace(",", "."));
+                if (Number.isFinite(parsed)) { resultValue = parsed; break; }
+              }
+              continue;
+            }
+          }
+          const nearby = [currentLine, rawLines[lineIndex + 1] || ""].join(" | ");
           const beforeReference = nearby.split(/(?:reference\s*range|normal\s*range|biological\s*reference|ref(?:erence)?\s*range|male\s*:|female\s*:|(?:^|\s)[mf]\s*:)/i)[0];
           const afterTest = beforeReference.replace(new RegExp(aliases.map(alias => canonical(alias)).join("|"), "i"), "");
           const numbers = [...afterTest.matchAll(/(?:^|[|:\s(])([<>≤≥]?\s*\d+(?:[.,]\d+)?)/g)]
