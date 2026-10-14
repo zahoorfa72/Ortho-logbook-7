@@ -920,10 +920,10 @@ export default function Logbook() {
                 const labLabels = abnormalLabLabels(item, labFlagsByPatient[item.id]?.flags, labWarningsEnabled);
                 const persistedReportDate = String(item.customData?.labOcrReportDate || "").trim();
                 const persistedScanAt = String(item.customData?.labOcrDetectedAt || "").trim();
-                const savedScanExists = !!persistedScanAt && !!persistedReportDate;
+                const savedScanExists = !!persistedScanAt;
                 const status: LabScanStatus = labScanStates[item.id] || (savedScanExists
-                  ? { status: "success", message: "Scan result and report date restored from this patient record.", reportDate: persistedReportDate, updatedAt: persistedScanAt }
-                  : { status: "not-scanned", message: "Older patient — not scanned automatically. An administrator can tap Retry when needed." });
+                  ? { status: "success", message: "", reportDate: persistedReportDate, updatedAt: persistedScanAt }
+                  : { status: "not-scanned", message: "", reportDate: "", updatedAt: "" });
                 const hidden = labResultsHiddenByPatient[item.id] === true;
                 let manualReportDates: string[] = [];
                 try {
@@ -932,8 +932,6 @@ export default function Logbook() {
                     .map((result: any) => String(result?.date || result?.reportDate || "").trim())
                     .filter((date: string) => !!date && !/^date not (?:detected|entered)$/i.test(date));
                 } catch {}
-                // Build dates from raw saved scan results, not warning-filtered labels.
-                // This keeps report dates visible when mild WARNING rows are hidden.
                 const cachedLabFlags = labFlagsByPatient[item.id]?.flags;
                 const rawSavedLabFlags = [
                   ...(Array.isArray(cachedLabFlags) ? cachedLabFlags : []),
@@ -943,66 +941,54 @@ export default function Logbook() {
                   .map(label => label.match(/\|\s*Date\s*:\s*([^|]+)/i)?.[1]?.trim()
                     || label.match(/\s· DATE:\s*(.+)$/i)?.[1]?.trim() || "")
                   .filter(date => !!date && !/^date not (?:detected|entered)$/i.test(date));
-                const dateCandidates = [
-                  ...datesFromFlags,
-                  ...manualReportDates,
+                const dateCandidates = [...datesFromFlags, ...manualReportDates,
                   ...(persistedReportDate && !/^(?:date not detected|multiple report dates — see each result)$/i.test(persistedReportDate) ? [persistedReportDate] : []),
-                  ...(status.reportDate && !/^(?:date not detected|multiple report dates — see each result)$/i.test(status.reportDate) ? [status.reportDate] : []),
-                ];
+                  ...(status.reportDate && !/^(?:date not detected|multiple report dates — see each result)$/i.test(status.reportDate) ? [status.reportDate] : [])];
                 const uniqueReportDates = [...new Set(dateCandidates)];
-                const reportDateDisplay = uniqueReportDates.length
-                  ? uniqueReportDates.join(", ")
-                  : status.reportDate || persistedReportDate;
-                const reportDateLabel = uniqueReportDates.length > 1 ? "Report dates: " : "Report date: ";
+                const reportDateDisplay = uniqueReportDates.length ? uniqueReportDates.join(", ") : "";
                 const hasAlert = labLabels.some(label => label.startsWith("ALERT:"));
                 const hasWarning = labLabels.some(label => label.startsWith("WARNING:"));
                 const tone = hasAlert ? (colors.error || "#B91C1C") : hasWarning ? (colors.warning || "#B7791F")
                   : status.status === "failed" ? (colors.error || "#B91C1C")
                   : status.status === "success" ? "#15803D" : colors.brandPrimary;
-                const statusLabel = status.status === "queued" ? "WAITING TO SCAN"
+                const statusLabel = status.status === "queued" ? "WAITING"
                   : status.status === "scanning" ? "SCANNING"
-                  : status.status === "success" ? "SCAN SUCCESSFUL"
-                  : status.status === "failed" ? "SCAN FAILED"
-                  : status.status === "stopped" ? "SCAN STOPPED" : "NOT SCANNED";
+                  : status.status === "success" ? "SUCCESS"
+                  : status.status === "failed" ? "FAILED"
+                  : status.status === "stopped" ? "STOPPED" : "NOT SCANNED";
                 const canStop = status.status === "queued" || status.status === "scanning";
-                const dateMatchExists = labLabels.some(label => /\s· DATE:\s*/.test(label));
-                return <View style={{ marginTop: spacing.xs, paddingVertical: spacing.sm, paddingHorizontal: spacing.sm, borderRadius: radius.sm, borderWidth: 1, borderColor: tone, backgroundColor: tone + "10" }}>
-                  <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
+                const hasLabContent = labLabels.length > 0 || !!reportDateDisplay || status.status !== "not-scanned";
+                if (!hasLabContent) return null;
+                return <View style={{ marginTop: spacing.xs, paddingVertical: 5, paddingHorizontal: 6, borderRadius: radius.sm, borderWidth: 1, borderColor: tone, backgroundColor: tone + "10" }}>
+                  <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 5 }}>
                     {status.status === "scanning" || status.status === "queued"
                       ? <ActivityIndicator size="small" color={tone} />
-                      : <Ionicons name={hasAlert ? "alert-circle" : hasWarning ? "warning" : status.status === "success" ? "checkmark-circle" : status.status === "failed" ? "close-circle" : status.status === "stopped" ? "pause-circle" : "flask-outline"} size={15} color={tone} />}
-                    <Text style={{ color: tone, fontFamily: fontFamily.bold, fontSize: fontSize.xs }}>
-                      {hasAlert ? "LAB ALERT" : hasWarning ? "LAB WARNING" : labLabels.length ? "LAB RESULTS" : "LAB SCAN"} · {statusLabel}
+                      : <Ionicons name={hasAlert ? "alert-circle" : hasWarning ? "warning" : status.status === "success" ? "checkmark-circle" : status.status === "failed" ? "close-circle" : status.status === "stopped" ? "pause-circle" : "flask-outline"} size={14} color={tone} />}
+                    <Text style={{ color: tone, fontFamily: fontFamily.bold, fontSize: 10 }}>
+                      {hasAlert ? "LAB ALERT" : hasWarning ? "LAB WARNING" : "LAB SCAN"} · {statusLabel}
                     </Text>
                     {user?.role === "admin" ? (canStop
-                      ? <Pressable onPress={event => { event.stopPropagation(); stopLabScan(item.id); }} hitSlop={8} style={{ paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, borderWidth: 1, borderColor: tone }}>
-                          <Text style={{ color: tone, fontFamily: fontFamily.semibold, fontSize: fontSize.xs }}>Stop</Text>
-                        </Pressable>
-                      : <Pressable onPress={event => { event.stopPropagation(); requestLabScan(item.id, false); }} hitSlop={8} style={{ paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, borderWidth: 1, borderColor: tone }}>
-                          <Text style={{ color: tone, fontFamily: fontFamily.semibold, fontSize: fontSize.xs }}>Retry</Text>
-                        </Pressable>) : null}
+                      ? <Pressable onPress={event => { event.stopPropagation(); stopLabScan(item.id); }} hitSlop={8} style={{ paddingHorizontal: 7, paddingVertical: 2, borderRadius: 5, borderWidth: 1, borderColor: tone }}><Text style={{ color: tone, fontFamily: fontFamily.semibold, fontSize: 10 }}>Stop</Text></Pressable>
+                      : <Pressable onPress={event => { event.stopPropagation(); requestLabScan(item.id, false); }} hitSlop={8} style={{ paddingHorizontal: 7, paddingVertical: 2, borderRadius: 5, borderWidth: 1, borderColor: tone }}><Text style={{ color: tone, fontFamily: fontFamily.semibold, fontSize: 10 }}>Retry</Text></Pressable>) : null}
+                    {labLabels.length || reportDateDisplay ? <Pressable onPress={event => { event.stopPropagation(); void toggleLabResultsHidden(item.id); }} hitSlop={8} accessibilityLabel={hidden ? "Show this patient's lab results" : "Hide this patient's lab results"} style={{ flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 4, paddingVertical: 2 }}>
+                      <Ionicons name={hidden ? "eye-outline" : "eye-off-outline"} size={14} color={tone} />
+                      <Text style={{ color: tone, fontFamily: fontFamily.semibold, fontSize: 10 }}>{hidden ? "Show" : "Hide"}</Text>
+                    </Pressable> : null}
                   </View>
-                  {status.message ? <Text style={{ color: status.status === "failed" ? tone : colors.onSurfaceSecondary, fontSize: 10, marginTop: 4 }}>{status.message}</Text> : null}
-                  {reportDateDisplay ? <Text testID={`lab-report-date-${item.id}`} style={{ color: colors.muted, fontSize: 10, marginTop: 2 }}>{reportDateLabel}{reportDateDisplay}</Text> : status.status === "success" ? <Text testID={`lab-report-date-${item.id}`} style={{ color: colors.muted, fontSize: 10, marginTop: 2 }}>Report date: Date not detected</Text> : null}
-                  {labLabels.length ? <View style={{ marginTop: spacing.xs }}>
-                    <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 4 }}>
-                      {hidden ? <Text style={{ color: tone, fontSize: fontSize.xs }}>Results hidden — status indicator remains visible</Text> : labLabels.map((label, index) => {
+                  {!hidden ? <>
+                    {reportDateDisplay ? <Text testID={\`lab-report-date-\${item.id}\`} style={{ color: colors.muted, fontSize: 10, marginTop: 2 }}>Report date: {reportDateDisplay}</Text> : null}
+                    {labLabels.length ? <View style={{ marginTop: 3, flexDirection: "row", flexWrap: "wrap", gap: 4 }}>
+                      {labLabels.map((label, index) => {
                         const warning = label.startsWith("WARNING:");
                         const labelTone = warning ? (colors.warning || "#B7791F") : (colors.error || "#B91C1C");
                         const dateMatch = label.match(/\s· DATE:\s*(.+)$/);
                         const visibleLabel = dateMatch ? label.slice(0, dateMatch.index) : label;
-                        return <Text key={label + index} style={{ color: labelTone, fontFamily: fontFamily.bold, fontSize: fontSize.xs }}>{visibleLabel} · {dateMatch ? dateMatch[1] : "Date not detected"}</Text>;
+                        const compactLabel = visibleLabel.length > 92 ? visibleLabel.slice(0, 89) + "…" : visibleLabel;
+                        return <Text key={label + index} numberOfLines={2} style={{ color: labelTone, fontFamily: fontFamily.semibold, fontSize: 10, lineHeight: 13, flexShrink: 1 }}>{compactLabel}{dateMatch ? " · " + dateMatch[1] : ""}</Text>;
                       })}
-                      <Pressable onPress={event => { event.stopPropagation(); void toggleLabResultsHidden(item.id); }} hitSlop={8} accessibilityLabel={hidden ? "Show this patient's lab results" : "Hide this patient's lab results"} style={{ flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 4, paddingVertical: 2 }}>
-                        <Ionicons name={hidden ? "eye-outline" : "eye-off-outline"} size={14} color={tone} />
-                        <Text style={{ color: tone, fontFamily: fontFamily.semibold, fontSize: fontSize.xs }}>{hidden ? "Show results" : "Hide results"}</Text>
-                      </Pressable>
-                    </View>
-                    {!hidden ? <Text style={{ color: colors.muted, fontSize: 10, marginTop: 1 }}>Verify abnormal flags against the original report; this is not a diagnosis.</Text> : null}
-                  </View> : null}
-                  {!dateMatchExists && labLabels.length === 0 && status.status === "success" ? <Text style={{ color: colors.muted, fontSize: 10, marginTop: 2 }}>No abnormal result row to display. Normal results stay hidden; verify the original report if needed.</Text> : null}
+                    </View> : null}
+                  </> : null}
                 </View>;
-              })()}
 
               {((item.implants && item.implants.length) || item.implant || item.implantII) ? (
                 <View style={styles.implantRow}>

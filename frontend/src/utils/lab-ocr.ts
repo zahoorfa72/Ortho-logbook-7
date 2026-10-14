@@ -339,19 +339,52 @@ function classifyDeviation(resultRaw: string, reference: ReferenceInterval, warn
  * Never fall back to the patient's operation/file date or an unlabelled DOB.
  */
 export function extractLabReportDate(text: string): string {
-  const source = String(text || "").replace(/\s+/g, " ");
-  const labelled = /\b(?:image\s+report\s+date|report(?:ing)?\s+date|date\s+of\s+report|collection\s+date|date\s+of\s+collection|sample\s+date|specimen\s+date|test\s+date|collected\s+on|tested\s+on|date)\b\s*[:=\-]?\s*(?!of\s+birth)(\d{1,4}[\/.-]\d{1,2}[\/.-]\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{2,4})/i.exec(source);
-  if (!labelled) return "";
-  const value = labelled[1].replace(/\s+/g, " ").trim();
-  const numeric = /^(\d{1,4})[\/.-](\d{1,2})[\/.-](\d{2,4})$/.exec(value);
-  if (numeric) {
-    const first = Number(numeric[1]), second = Number(numeric[2]), third = Number(numeric[3]);
-    const year = numeric[1].length === 4 ? first : third;
-    const month = second;
-    const day = numeric[1].length === 4 ? third : first;
-    if (day < 1 || day > 31 || month < 1 || month > 12 || year < 0 || year > 9999) return "";
+  const source = String(text || "").replace(/[\t\r\n]+/g, " ").replace(/\s+/g, " ");
+  const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const normalize = (raw: string): string => {
+    const value = String(raw || "").trim().replace(/[,]/g, "").replace(/\s+/g, " ");
+    let m = /^(\d{1,2})[-\/. ]([A-Za-z]{3,9})[-\/. ](\d{2,4})$/.exec(value);
+    if (m) {
+      const month = monthNames.findIndex(name => name.toLowerCase() === m![2].slice(0, 3).toLowerCase());
+      let year = Number(m[3]); if (m[3].length === 2) year += year >= 50 ? 1900 : 2000;
+      const day = Number(m[1]);
+      if (month >= 0 && day >= 1 && day <= 31 && year >= 1900 && year <= 2200) return String(day).padStart(2, "0") + "-" + monthNames[month] + "-" + year;
+      return "";
+    }
+    m = /^(\d{1,2})[\/. -](\d{1,2})[\/. -](\d{4})$/.exec(value);
+    if (m) {
+      const day = Number(m[1]), month = Number(m[2]), year = Number(m[3]);
+      if (day >= 1 && day <= 31 && month >= 1 && month <= 12 && year >= 1900 && year <= 2200)
+        return String(day).padStart(2, "0") + "-" + monthNames[month - 1] + "-" + year;
+      return "";
+    }
+    m = /^([A-Za-z]{3,9})[-\/. ](\d{1,2})[-\/. ](\d{4})$/.exec(value);
+    if (m) {
+      const month = monthNames.findIndex(name => name.toLowerCase() === m![1].slice(0, 3).toLowerCase());
+      const day = Number(m[2]), year = Number(m[3]);
+      if (month >= 0 && day >= 1 && day <= 31 && year >= 1900 && year <= 2200)
+        return String(day).padStart(2, "0") + "-" + monthNames[month] + "-" + year;
+    }
+    m = /^([A-Za-z]{3,9})\s+(\d{1,2}),?\s+(\d{4})$/.exec(value);
+    if (m) {
+      const month = monthNames.findIndex(name => name.toLowerCase() === m![1].slice(0, 3).toLowerCase());
+      const day = Number(m[2]), year = Number(m[3]);
+      if (month >= 0 && day >= 1 && day <= 31 && year >= 1900 && year <= 2200)
+        return String(day).padStart(2, "0") + "-" + monthNames[month] + "-" + year;
+    }
+    return "";
+  };
+  const month = "(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)";
+  const date = "(?:\\d{1,2}[-\\/. ]" + month + "[-\\/. ]\\d{2,4}|\\d{1,2}[-\\/. ]\\d{1,2}[-\\/. ]\\d{4}|" + month + "\\s+\\d{1,2},?\\s+\\d{4})";
+  const labelPattern = new RegExp("\\b(?:image\\s+report\\s+date|report(?:ing)?\\s+date|date\\s+of\\s+report|collection\\s+date|date\\s+of\\s+collection|sample\\s+date|specimen\\s+date|test\\s+date|collected\\s+on|tested\\s+on|date)\\b\\s*[:=\\-]?\\s*(?!of\\s+birth)(" + date + ")", "i");
+  const labelled = labelPattern.exec(source);
+  if (labelled) {
+    const normalized = normalize(labelled[1]);
+    if (normalized) return normalized;
   }
-  return value;
+  // Last resort only accepts a recognizable full date shape, never an isolated year or DOB label.
+  const loose = new RegExp("(?<![A-Za-z])(" + date + ")(?![A-Za-z])", "i").exec(source);
+  return loose ? normalize(loose[1]) : "";
 }
 
 export function parseLabReportRows(text: string, configuredTests: LabTestDefinition[] = [], gender = "", warningPercent = 10): ParsedLabRow[] {
