@@ -965,7 +965,7 @@ export default function Logbook() {
                       ? <ActivityIndicator size="small" color={tone} />
                       : <Ionicons name={hasAlert ? "alert-circle" : hasWarning ? "warning" : status.status === "success" ? "checkmark-circle" : status.status === "failed" ? "close-circle" : status.status === "stopped" ? "pause-circle" : "flask-outline"} size={14} color={tone} />}
                     <Text style={{ color: tone, fontFamily: fontFamily.bold, fontSize: 10 }}>
-                      {hasAlert ? "LAB ALERT" : hasWarning ? "LAB WARNING" : "LAB SCAN"} · {statusLabel}
+                      {hasAlert ? "LAB ALERT" : hasWarning ? "LAB WARNING" : "LAB SCAN · " + statusLabel}
                     </Text>
                     {user?.role === "admin" ? (canStop
                       ? <Pressable onPress={event => { event.stopPropagation(); stopLabScan(item.id); }} hitSlop={8} style={{ paddingHorizontal: 7, paddingVertical: 2, borderRadius: 5, borderWidth: 1, borderColor: tone }}><Text style={{ color: tone, fontFamily: fontFamily.semibold, fontSize: 10 }}>Stop</Text></Pressable>
