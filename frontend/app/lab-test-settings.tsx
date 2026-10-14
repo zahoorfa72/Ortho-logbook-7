@@ -21,6 +21,7 @@ export type LabTestDefinition = {
 
 const STORAGE_KEY = "ortho_lab_test_definitions_v1";
 const WARNING_THRESHOLD_KEY = "ortho_lab_warning_threshold_percent_v1";
+const OLD_RESULT_DAYS_KEY = "ortho_lab_old_result_days_v1";
 const ONLINE_OCR_KEY = "ortho_lab_online_ocr_api_key_v1";
 const blank = (): LabTestDefinition => ({ id: "", name: "", maleMin: "", maleMax: "", femaleMin: "", femaleMax: "", unit: "" });
 
@@ -35,11 +36,13 @@ export default function LabTestSettingsScreen() {
   const [editingId, setEditingId] = useState("");
   const [busy, setBusy] = useState(false);
   const [warningPercent, setWarningPercent] = useState("10");
+  const [oldResultDays, setOldResultDays] = useState("10");
+  const [oldDaysBusy, setOldDaysBusy] = useState(false);
   const [thresholdBusy, setThresholdBusy] = useState(false);
   const [onlineOcrKey, setOnlineOcrKey] = useState("");
   const [onlineKeyBusy, setOnlineKeyBusy] = useState(false);
 
-  useEffect(() => { AsyncStorage.getItem(STORAGE_KEY).then(raw => { if (raw) { try { setTests(JSON.parse(raw)); } catch {} } }).catch(() => {}); AsyncStorage.getItem(WARNING_THRESHOLD_KEY).then(raw => { if (raw && Number.isFinite(Number(raw))) setWarningPercent(String(Math.max(1, Math.min(100, Math.round(Number(raw)))))); }).catch(() => {}); AsyncStorage.getItem(ONLINE_OCR_KEY).then(raw => setOnlineOcrKey(raw || "")).catch(() => {}); }, []);
+  useEffect(() => { AsyncStorage.getItem(STORAGE_KEY).then(raw => { if (raw) { try { setTests(JSON.parse(raw)); } catch {} } }).catch(() => {}); AsyncStorage.getItem(WARNING_THRESHOLD_KEY).then(raw => { if (raw && Number.isFinite(Number(raw))) setWarningPercent(String(Math.max(1, Math.min(100, Math.round(Number(raw)))))); }).catch(() => {}); AsyncStorage.getItem(ONLINE_OCR_KEY).then(raw => setOnlineOcrKey(raw || "")).catch(() => {}); AsyncStorage.getItem(OLD_RESULT_DAYS_KEY).then(raw => { if (raw && Number.isFinite(Number(raw))) setOldResultDays(String(Math.max(1, Math.min(3650, Math.round(Number(raw)))))); }).catch(() => {}); }, []);
   const update = (patch: Partial<LabTestDefinition>) => setForm(current => ({ ...current, ...patch }));
   const save = async () => {
     const name = form.name.trim();
@@ -75,6 +78,19 @@ export default function LabTestSettingsScreen() {
     } catch { toast("Could not save the warning threshold.", "error"); }
     finally { setThresholdBusy(false); }
   };
+  const saveOldResultDays = async () => {
+    const value = Number(oldResultDays);
+    if (!Number.isInteger(value) || value < 1 || value > 3650) { toast("Enter a whole number of days from 1 to 3650.", "error"); return; }
+    setOldDaysBusy(true);
+    try {
+      await AsyncStorage.setItem(OLD_RESULT_DAYS_KEY, String(value));
+      triggerAutomaticDriveBackup("appSettings");
+      setOldResultDays(String(value));
+      toast("Old lab-result alert saved: " + value + " days before patient date.", "success");
+    } catch { toast("Could not save the old-result alert setting.", "error"); }
+    finally { setOldDaysBusy(false); }
+  };
+
   const saveOnlineOcrKey = async () => {
     setOnlineKeyBusy(true);
     try {
@@ -119,6 +135,14 @@ export default function LabTestSettingsScreen() {
       </View>
       <Pressable disabled={thresholdBusy} onPress={saveWarningThreshold} style={styles.action}><Text style={styles.actionText}>{thresholdBusy ? "Saving…" : "Save warning threshold"}</Text></Pressable>
       {field("Test name", "name", "e.g. Hemoglobin")}
+      <Text style={styles.section}>Old lab-result alert</Text>
+      <Text style={styles.help}>Show an OLD LAB RESULT alert outside the Patient Form when a report date is this many days or more before the patient record date. Example: 10 days. A readable report date and patient date are required.</Text>
+      <View style={styles.row}>
+        <Text style={styles.label}>Days before patient date</Text>
+        <TextInput value={oldResultDays} onChangeText={setOldResultDays} keyboardType="number-pad" selectTextOnFocus style={styles.input} placeholder="10" />
+      </View>
+      <Pressable disabled={oldDaysBusy} onPress={saveOldResultDays} style={styles.action}><Text style={styles.actionText}>{oldDaysBusy ? "Saving…" : "Save old-result alert"}</Text></Pressable>
+
       <Text style={styles.section}>Male reference range</Text>
       <View style={styles.two}>{field("From (minimum)", "maleMin", "12")}{field("To (maximum)", "maleMax", "16")}</View>
       <Text style={styles.section}>Female reference range</Text>

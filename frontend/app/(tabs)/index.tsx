@@ -91,6 +91,44 @@ function ordinalShort(n: number) {
   return n + (s[(v - 20) % 10] || s[v] || s[0]);
 }
 
+const LAB_OLD_RESULT_DAYS_KEY = "ortho_lab_old_result_days_v1";
+function parseLabDate(value: string): Date | null {
+  const text = String(value || "").trim();
+  let m = /^(\d{1,2})[-/. ]([A-Za-z]{3})[-/. ](\d{4})$/.exec(text);
+  if (m) {
+    const months: Record<string, number> = { jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11 };
+    const month = months[m[2].toLowerCase()];
+    if (month === undefined) return null;
+    const date = new Date(Number(m[3]), month, Number(m[1]));
+    return date.getFullYear() === Number(m[3]) && date.getMonth() === month && date.getDate() === Number(m[1]) ? date : null;
+  }
+  m = /^(\d{1,2})[-/. ](\d{1,2})[-/. ](\d{4})$/.exec(text);
+  if (m) {
+    const date = new Date(Number(m[3]), Number(m[2])-1, Number(m[1]));
+    return date.getFullYear() === Number(m[3]) && date.getMonth() === Number(m[2])-1 && date.getDate() === Number(m[1]) ? date : null;
+  }
+  return null;
+}
+function oldLabResultLabels(patient: Patient, days: number): string[] {
+  if (!Number.isFinite(days) || days < 1) return [];
+  const addedDate = parseLabDate(String(patient.date || ""));
+  if (!addedDate) return [];
+  const lines = String(patient.customData?.labOcrPossibleFlags || "").split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+  const stale: string[] = [];
+  for (const line of lines) {
+    const match = line.match(/\|\s*Date\s*:\s*([^|]+)/i) || line.match(/\s· DATE:\s*(.+)$/i);
+    if (!match) continue;
+    const reportDate = parseLabDate(match[1].trim());
+    if (!reportDate) continue;
+    const ageDays = Math.floor((new Date(addedDate.getFullYear(), addedDate.getMonth(), addedDate.getDate()).getTime() - new Date(reportDate.getFullYear(), reportDate.getMonth(), reportDate.getDate()).getTime()) / 86400000);
+    if (ageDays >= days) {
+      const testName = line.replace(/^(?:WARNING|ALERT|HIGH|LOW)\s*:\s*/i, "").split(/[|:]/)[0].trim();
+      stale.push("OLD RESULT: " + testName + " · Report date " + match[1].trim() + " is " + ageDays + " days before patient date");
+    }
+  }
+  return [...new Set(stale)];
+}
+
 function abnormalLabLabels(patient: Patient, automaticFlags?: string[], includeWarnings = true): string[] {
   const cachedFlags = Array.isArray(automaticFlags) ? automaticFlags : [];
   const persistedFlags = String(patient.customData?.labOcrPossibleFlags || "").split(/\r?\n/).map(value => value.trim()).filter(Boolean);
@@ -172,6 +210,7 @@ export default function Logbook() {
   const [labOcrEnabled, setLabOcrEnabled] = useState(false);
   const [labWarningsEnabled, setLabWarningsEnabled] = useState(true);
   const [labResultsHiddenByPatient, setLabResultsHiddenByPatient] = useState<Record<string, boolean>>({});
+  const [oldLabResultDays, setOldLabResultDays] = useState(10);
   const [labFlagsByPatient, setLabFlagsByPatient] = useState<Record<string, { signature: string; flags: string[]; reportDate?: string }>>({});
   const [labScanStates, setLabScanStates] = useState<Record<string, LabScanStatus>>({});
   const [labScanStateLoaded, setLabScanStateLoaded] = useState(false);
@@ -189,6 +228,7 @@ export default function Logbook() {
     AsyncStorage.getItem("ortho_lab_ocr_enabled").then(value => setLabOcrEnabled(value === "true")).catch(() => setLabOcrEnabled(false));
     AsyncStorage.getItem("ortho_lab_warnings_enabled").then(value => setLabWarningsEnabled(value !== "false")).catch(() => setLabWarningsEnabled(true));
     AsyncStorage.getItem("ortho_lab_results_hidden_by_patient_v1").then(raw => { if (raw) { try { const parsed = JSON.parse(raw); if (parsed && typeof parsed === "object") setLabResultsHiddenByPatient(parsed); } catch {} } }).catch(() => {});
+    AsyncStorage.getItem("ortho_lab_old_result_days_v1").then(raw => { const value = Number(raw); if (raw && Number.isInteger(value) && value >= 1 && value <= 3650) setOldLabResultDays(value); }).catch(() => {});
     AsyncStorage.getItem("ortho_lab_ocr_patient_cache_v7").then(raw => {
       if (!raw) return;
       try {
@@ -918,6 +958,7 @@ export default function Logbook() {
               ) : null}
               {(() => {
                 const labLabels = abnormalLabLabels(item, labFlagsByPatient[item.id]?.flags, labWarningsEnabled);
+                const oldResultLabels = oldLabResultLabels(item, oldLabResultDays);
                 const persistedReportDate = String(item.customData?.labOcrReportDate || "").trim();
                 const persistedScanAt = String(item.customData?.labOcrDetectedAt || "").trim();
                 const savedScanExists = !!persistedScanAt;
@@ -946,7 +987,8 @@ export default function Logbook() {
                   ...(status.reportDate && !/^(?:date not detected|multiple report dates — see each result)$/i.test(status.reportDate) ? [status.reportDate] : [])];
                 const uniqueReportDates = [...new Set(dateCandidates)];
                 const reportDateDisplay = uniqueReportDates.length ? uniqueReportDates.join(", ") : "";
-                const hasAlert = labLabels.some(label => label.startsWith("ALERT:"));
+                const allDisplayLabLabels = [...labLabels, ...oldResultLabels];
+                const hasAlert = labLabels.some(label => label.startsWith("ALERT:")) || oldResultLabels.length > 0;
                 const hasWarning = labLabels.some(label => label.startsWith("WARNING:"));
                 const tone = hasAlert ? (colors.error || "#B91C1C") : hasWarning ? (colors.warning || "#B7791F")
                   : status.status === "failed" ? (colors.error || "#B91C1C")
@@ -957,7 +999,7 @@ export default function Logbook() {
                   : status.status === "failed" ? "FAILED"
                   : status.status === "stopped" ? "STOPPED" : "NOT SCANNED";
                 const canStop = status.status === "queued" || status.status === "scanning";
-                const hasLabContent = labLabels.length > 0 || !!reportDateDisplay || status.status !== "not-scanned";
+                const hasLabContent = allDisplayLabLabels.length > 0 || !!reportDateDisplay || status.status !== "not-scanned";
                 if (!hasLabContent) return null;
                 return <View style={{ marginTop: spacing.xs, paddingVertical: 5, paddingHorizontal: 6, borderRadius: radius.sm, borderWidth: 1, borderColor: tone, backgroundColor: tone + "10" }}>
                   <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 5 }}>
@@ -965,12 +1007,12 @@ export default function Logbook() {
                       ? <ActivityIndicator size="small" color={tone} />
                       : <Ionicons name={hasAlert ? "alert-circle" : hasWarning ? "warning" : status.status === "success" ? "checkmark-circle" : status.status === "failed" ? "close-circle" : status.status === "stopped" ? "pause-circle" : "flask-outline"} size={14} color={tone} />}
                     <Text style={{ color: tone, fontFamily: fontFamily.bold, fontSize: 10 }}>
-                      {hasAlert ? "LAB ALERT" : hasWarning ? "LAB WARNING" : "LAB SCAN · " + statusLabel}
+                      {oldResultLabels.length ? "OLD LAB RESULT" : hasAlert ? "LAB ALERT" : hasWarning ? "LAB WARNING" : "LAB SCAN · " + statusLabel}
                     </Text>
                     {user?.role === "admin" ? (canStop
                       ? <Pressable onPress={event => { event.stopPropagation(); stopLabScan(item.id); }} hitSlop={8} style={{ paddingHorizontal: 7, paddingVertical: 2, borderRadius: 5, borderWidth: 1, borderColor: tone }}><Text style={{ color: tone, fontFamily: fontFamily.semibold, fontSize: 10 }}>Stop</Text></Pressable>
                       : <Pressable onPress={event => { event.stopPropagation(); requestLabScan(item.id, false); }} hitSlop={8} style={{ paddingHorizontal: 7, paddingVertical: 2, borderRadius: 5, borderWidth: 1, borderColor: tone }}><Text style={{ color: tone, fontFamily: fontFamily.semibold, fontSize: 10 }}>Retry</Text></Pressable>) : null}
-                    {labLabels.length || reportDateDisplay ? <Pressable onPress={event => { event.stopPropagation(); void toggleLabResultsHidden(item.id); }} hitSlop={8} accessibilityLabel={hidden ? "Show this patient's lab results" : "Hide this patient's lab results"} style={{ flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 4, paddingVertical: 2 }}>
+                    {allDisplayLabLabels.length || reportDateDisplay ? <Pressable onPress={event => { event.stopPropagation(); void toggleLabResultsHidden(item.id); }} hitSlop={8} accessibilityLabel={hidden ? "Show this patient's lab results" : "Hide this patient's lab results"} style={{ flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 4, paddingVertical: 2 }}>
                       <Ionicons name={hidden ? "eye-outline" : "eye-off-outline"} size={14} color={tone} />
                       <Text style={{ color: tone, fontFamily: fontFamily.semibold, fontSize: 10 }}>{hidden ? "Show" : "Hide"}</Text>
                     </Pressable> : null}
@@ -979,7 +1021,7 @@ export default function Logbook() {
                     {reportDateDisplay ? <Text testID={\`lab-report-date-\${item.id}\`} style={{ color: colors.muted, fontSize: 10, marginTop: 2 }}>Report date: {reportDateDisplay}</Text> : null}
                     {labLabels.length ? <View style={{ marginTop: 3, flexDirection: "row", flexWrap: "wrap", gap: 4 }}>
                       {labLabels.map((label, index) => {
-                        const warning = label.startsWith("WARNING:");
+                        const warning = label.startsWith("WARNING:");\n                        const oldResult = label.startsWith("OLD RESULT:");
                         const labelTone = warning ? (colors.warning || "#B7791F") : (colors.error || "#B91C1C");
                         const dateMatch = label.match(/\s· DATE:\s*(.+)$/);
                         const visibleLabel = dateMatch ? label.slice(0, dateMatch.index) : label;
