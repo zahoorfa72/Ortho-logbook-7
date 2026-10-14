@@ -121,6 +121,13 @@ export default function PatientForm() {
   const [labOcrText, setLabOcrText] = useState("");
   const [labOcrFindings, setLabOcrFindings] = useState<string[]>([]);
   const [labManualReviews, setLabManualReviews] = useState<Array<{ test: string; unit: string; result: string; reference: string; photoUri: string; reportDate?: string; min?: number; max?: number }>>([]);
+  const [labTestTemplates, setLabTestTemplates] = useState<import("@/src/utils/lab-ocr").LabTestDefinition[]>([]);
+  const [labAddedResults, setLabAddedResults] = useState<Array<{ test: string; unit: string; result: string; reference: string; photoUri: string; reportDate?: string; min?: number; max?: number }>>([]);
+  const [manualTestName, setManualTestName] = useState("");
+  const [manualTestUnit, setManualTestUnit] = useState("");
+  const [manualTestResult, setManualTestResult] = useState("");
+  const [manualTestDate, setManualTestDate] = useState(today());
+  const [manualTestReference, setManualTestReference] = useState("");
   const [labWarningsEnabled, setLabWarningsEnabled] = useState(true);
   const [labWarningThreshold, setLabWarningThreshold] = useState(10);
   const [showLabRawText, setShowLabRawText] = useState(false);
@@ -158,6 +165,7 @@ export default function PatientForm() {
 
   useEffect(() => {
     AsyncStorage.getItem("ortho_lab_ocr_enabled").then(value => setLabOcrEnabled(value === "true")).catch(() => setLabOcrEnabled(false));
+    AsyncStorage.getItem("ortho_lab_test_definitions_v1").then(raw => { if (raw) { try { const parsed = JSON.parse(raw); if (Array.isArray(parsed)) setLabTestTemplates(parsed); } catch {} } }).catch(() => {});
     AsyncStorage.getItem("ortho_lab_warnings_enabled").then(value => setLabWarningsEnabled(value !== "false")).catch(() => setLabWarningsEnabled(true));
     AsyncStorage.getItem("ortho_lab_warning_threshold_percent_v1").then(value => { const n = Number(value); if (value && Number.isInteger(n) && n >= 1 && n <= 100) setLabWarningThreshold(n); }).catch(() => setLabWarningThreshold(10));
   }, []);
@@ -843,7 +851,7 @@ export default function PatientForm() {
     mutationFn: () => {
       // Persist the current manual lab-review entries in the same patient save
       // request. Do not rely on a prior asynchronous setP() from the Apply button.
-      const reviewedLabResults = labManualReviews
+      const reviewedLabResults = [...labManualReviews, ...labAddedResults]
         .filter(item => String(item.result || "").trim())
         .map(item => {
           const range = String(item.reference || "").match(/([-+]?\d+(?:[.,]\d+)?)\s*(?:-|–|—|to)\s*([-+]?\d+(?:[.,]\d+)?)/i);
@@ -1122,6 +1130,61 @@ export default function PatientForm() {
             </View>
           </View>
         </Modal>
+        <View style={{ marginTop: spacing.md, marginBottom: spacing.md, padding: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md }}>
+          <Text style={styles.section}>Lab results for this patient</Text>
+          <Text style={styles.hint}>Choose an admin-defined test or add a patient-specific test. Enter the measured result and report date. Saved reference ranges are used when available; these entries are saved with this patient record.</Text>
+          {labTestTemplates.length ? <View style={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.xs, marginTop: spacing.xs }}>
+            {labTestTemplates.map(template => <Pressable key={template.id} onPress={() => {
+              const male = /^(?:m|male)$/i.test(String(p.gender || "").trim());
+              const female = /^(?:f|female)$/i.test(String(p.gender || "").trim());
+              const minText = male ? template.maleMin : female ? template.femaleMin : "";
+              const maxText = male ? template.maleMax : female ? template.femaleMax : "";
+              const min = minText.trim() ? Number(minText) : undefined;
+              const max = maxText.trim() ? Number(maxText) : undefined;
+              const reference = minText.trim() && maxText.trim() ? minText + "–" + maxText : "";
+              setLabAddedResults(previous => [...previous, { test: template.name, unit: template.unit || "", result: "", reference, photoUri: "", reportDate: today(), min: Number.isFinite(min) ? min : undefined, max: Number.isFinite(max) ? max : undefined }]);
+            }} style={{ borderWidth: 1, borderColor: colors.brandPrimary, borderRadius: radius.md, paddingHorizontal: spacing.sm, paddingVertical: spacing.xs }}>
+              <Text style={{ color: colors.brandPrimary, fontFamily: fontFamily.semibold, fontSize: fontSize.sm }}>+ {template.name}</Text>
+            </Pressable>)}
+          </View> : <Text style={{ color: colors.onSurfaceSecondary, marginTop: spacing.xs }}>No test templates yet. An administrator can create them in Settings → Lab Test Reference Ranges.</Text>}
+          <Text style={[styles.label, { marginTop: spacing.md }]}>Add an individual test</Text>
+          <Field label="Test name" value={manualTestName} onChangeText={setManualTestName} placeholder="e.g. Vitamin D" />
+          <View style={{ flexDirection: "row", gap: spacing.sm }}>
+            <View style={{ flex: 1 }}><Field label="Unit" value={manualTestUnit} onChangeText={setManualTestUnit} placeholder="e.g. ng/mL" /></View>
+            <View style={{ flex: 1 }}><Field label="Result" value={manualTestResult} onChangeText={setManualTestResult} keyboardType="decimal-pad" inputMode="decimal" selectTextOnFocus placeholder="Measured value" /></View>
+          </View>
+          <Field label="Reference range (optional)" value={manualTestReference} onChangeText={setManualTestReference} placeholder="e.g. 20–50" />
+          <Field label="Report date (YYYY-MM-DD)" value={manualTestDate} onChangeText={setManualTestDate} placeholder="YYYY-MM-DD" />
+          <Pressable onPress={() => {
+            const test = manualTestName.trim();
+            const result = manualTestResult.trim().replace(",", ".");
+            if (!test || !result || !Number.isFinite(Number(result))) { toast("Enter a test name and a numeric result.", "error"); return; }
+            const range = manualTestReference.match(/([-+]?\d+(?:[.,]\d+)?)\s*(?:-|–|—|to)\s*([-+]?\d+(?:[.,]\d+)?)/i);
+            setLabAddedResults(previous => [...previous, { test, unit: manualTestUnit.trim(), result, reference: manualTestReference.trim(), photoUri: "", reportDate: manualTestDate.trim(), min: range ? Number(range[1].replace(",", ".")) : undefined, max: range ? Number(range[2].replace(",", ".")) : undefined }]);
+            setManualTestName(""); setManualTestUnit(""); setManualTestResult(""); setManualTestReference(""); setManualTestDate(today());
+            toast("Test added to this patient's draft. Save/Update Record to keep it.", "success");
+          }} style={{ marginTop: spacing.xs, padding: spacing.md, backgroundColor: colors.brandPrimary, borderRadius: radius.md, alignItems: "center" }}>
+            <Text style={{ color: colors.onBrandPrimary, fontFamily: fontFamily.semibold }}>Add individual test</Text>
+          </Pressable>
+          {labAddedResults.length ? <View style={{ marginTop: spacing.md }}>
+            <Text style={styles.label}>Tests waiting to save ({labAddedResults.length})</Text>
+            {labAddedResults.map((item, index) => <View key={item.test + "-" + index} style={{ borderTopWidth: 1, borderColor: colors.border, paddingTop: spacing.sm, marginTop: spacing.sm }}>
+              <Text style={{ color: colors.onSurface, fontFamily: fontFamily.semibold }}>{item.test}{item.unit ? " (" + item.unit + ")" : ""}</Text>
+              <Field label="Result" value={item.result} onChangeText={value => setLabAddedResults(previous => previous.map((row, rowIndex) => rowIndex === index ? { ...row, result: value.replace(",", ".").replace(/[^0-9.]/g, "") } : row))} keyboardType="decimal-pad" inputMode="decimal" selectTextOnFocus />
+              <Field label="Report date (YYYY-MM-DD)" value={item.reportDate || ""} onChangeText={value => setLabAddedResults(previous => previous.map((row, rowIndex) => rowIndex === index ? { ...row, reportDate: value } : row))} />
+              {item.reference ? <Text style={{ color: colors.onSurfaceSecondary, fontSize: fontSize.sm }}>Saved reference range: {item.reference}</Text> : <Text style={{ color: colors.onSurfaceSecondary, fontSize: fontSize.sm }}>No reference range saved; result will not be automatically classified.</Text>}
+              <Pressable onPress={() => setLabAddedResults(previous => previous.filter((_, rowIndex) => rowIndex !== index))} style={{ alignSelf: "flex-start", paddingVertical: spacing.xs }}>
+                <Text style={{ color: colors.error, fontFamily: fontFamily.semibold }}>Remove test</Text>
+              </Pressable>
+            </View>)}
+          </View> : null}
+          {savedManualLabResults.length ? <View style={{ marginTop: spacing.md }}>
+            <Text style={styles.label}>Saved results</Text>
+            {savedManualLabResults.map((item: any, index: number) => <Text key={String(item.test) + "-" + index} style={{ color: colors.onSurface, fontSize: fontSize.sm, marginTop: spacing.xs }}>
+              {String(item.test || "Test")}: {String(item.result || "")}{item.unit ? " " + String(item.unit) : ""}{item.date ? " · " + String(item.date) : item.reportDate ? " · " + String(item.reportDate) : ""}{item.severity ? " · " + String(item.severity) : ""}
+            </Text>)}
+          </View> : null}
+        </View>
         {labOcrEnabled ? (
           <View style={{ marginTop: spacing.md, marginBottom: spacing.md }}>
             <Text style={styles.section}>Automatic lab report check</Text>
