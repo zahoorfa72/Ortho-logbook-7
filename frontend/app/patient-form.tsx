@@ -294,7 +294,7 @@ export default function PatientForm() {
           (resultValue !== null && hasRange && (resultValue > max * 3 || resultValue < min / 3));
         const hasReadableResult = resultValue !== null || Number.isFinite(parsedValue);
         const alreadyParsed = hasReadableResult && !suspiciousScale;
-        return rawLines.some(aliasSeen) && (!alreadyParsed || suspiciousScale);
+        return rawLines.some(aliasSeen) && (!alreadyParsed || suspiciousScale || !hasRange);
       }).map(test => {
         const min = Number(String(test.min ?? "").replace(",", "."));
         const max = Number(String(test.max ?? "").replace(",", "."));
