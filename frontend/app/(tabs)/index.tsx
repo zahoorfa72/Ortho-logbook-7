@@ -129,9 +129,10 @@ function abnormalLabLabels(patient: Patient, automaticFlags?: string[], includeW
       const deviation = Math.abs(value - boundary) / Math.max(Math.abs(boundary), 0.000001) * 100;
       severity = deviation <= 10 ? "WARNING" : "ALERT";
     }
-    if (!severity || (!outside && !item.severity)) continue;
     if (severity === "WARNING" && !includeWarnings) continue;
-    const label = severity + ": [MANUAL] " + String(item.test).trim() + " " + String(item.result).trim()
+    if (!severity && !item.manuallyVerified) continue;
+    const resultStatus = severity || "VERIFIED";
+    const label = resultStatus + ": [MANUAL] " + String(item.test).trim() + " " + String(item.result).trim()
       + (item.unit ? " " + String(item.unit).trim() : "")
       + (item.reference ? " (Ref " + String(item.reference).trim() + ")" : "")
       + (item.date ? " · DATE: " + String(item.date).trim() : "");
@@ -167,7 +168,7 @@ export default function Logbook() {
     AsyncStorage.getItem("ortho_lab_ocr_enabled").then(value => setLabOcrEnabled(value === "true")).catch(() => setLabOcrEnabled(false));
     AsyncStorage.getItem("ortho_lab_warnings_enabled").then(value => setLabWarningsEnabled(value !== "false")).catch(() => setLabWarningsEnabled(true));
     AsyncStorage.getItem("ortho_lab_results_hidden_by_patient_v1").then(raw => { if (raw) { try { const parsed = JSON.parse(raw); if (parsed && typeof parsed === "object") setLabResultsHiddenByPatient(parsed); } catch {} } }).catch(() => {});
-    AsyncStorage.getItem("ortho_lab_ocr_patient_cache_v4").then(raw => {
+    AsyncStorage.getItem("ortho_lab_ocr_patient_cache_v5").then(raw => {
       if (!raw) return;
       try {
         const parsed = JSON.parse(raw);
@@ -704,14 +705,18 @@ export default function Logbook() {
                 if (!labLabels.length) return null;
                 const hidden = labResultsHiddenByPatient[item.id] === true;
                 const hasAlert = labLabels.some(label => label.startsWith("ALERT:"));
-                const tone = hasAlert ? (colors.error || "#B91C1C") : (colors.warning || "#B7791F");
+                const hasWarning = labLabels.some(label => label.startsWith("WARNING:"));
+                const hasAbnormal = hasAlert || hasWarning;
+                const tone = hasAlert ? (colors.error || "#B91C1C") : hasWarning ? (colors.warning || "#B7791F") : colors.brandPrimary;
                 return <View style={{ marginTop: spacing.xs, paddingVertical: 4, paddingHorizontal: spacing.sm, borderRadius: radius.sm, borderWidth: 1, borderColor: tone, backgroundColor: tone + "12" }}>
                   <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 4 }}>
                     <Ionicons name={hasAlert ? "alert-circle" : "warning"} size={14} color={tone} />
-                    <Text style={{ color: tone, fontFamily: fontFamily.bold, fontSize: fontSize.xs }}>{hasAlert ? "LAB ALERT" : "LAB WARNING"}</Text>
+                    <Text style={{ color: tone, fontFamily: fontFamily.bold, fontSize: fontSize.xs }}>{hasAlert ? "LAB ALERT" : hasWarning ? "LAB WARNING" : "LAB RESULTS"}</Text>
                     {hidden ? <Text style={{ color: tone, fontSize: fontSize.xs }}>Results hidden — warning symbol remains visible</Text> : labLabels.map((label, index) => {
                       const warning = label.startsWith("WARNING:");
-                      const labelTone = warning ? (colors.warning || "#B7791F") : (colors.error || "#B91C1C");
+                      const alert = label.startsWith("ALERT:");
+                      const verified = label.startsWith("VERIFIED:");
+                      const labelTone = warning ? (colors.warning || "#B7791F") : alert ? (colors.error || "#B91C1C") : verified ? colors.onSurface : (colors.error || "#B91C1C");
                       const dateMatch = label.match(/\s· DATE: (.+)$/);
                       const visibleLabel = dateMatch ? label.slice(0, dateMatch.index) : label;
                       return <Text key={label + index} style={{ color: labelTone, fontFamily: fontFamily.bold, fontSize: fontSize.xs }}>{visibleLabel}{dateMatch ? <Text style={{ color: colors.muted, fontFamily: fontFamily.medium, fontSize: 10 }}> · {dateMatch[1]}</Text> : null}</Text>;
