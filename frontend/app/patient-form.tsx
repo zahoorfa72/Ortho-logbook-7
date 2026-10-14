@@ -1062,13 +1062,35 @@ export default function PatientForm() {
                   </View>;
                 }) : null}
                 {user?.role === "admin" ? <Pressable onPress={() => {
-                  const manual = labManualReviews.filter(item => item.result.trim()).map(item => ({ test: item.test, result: item.result.trim(), unit: item.unit, reference: item.reference, manuallyVerified: true }));
+                  const manual = labManualReviews.filter(item => item.result.trim()).map(item => {
+                    const range = String(item.reference || "").match(/([-+]?\d+(?:[.,]\d+)?)\s*(?:-|–|—|to)\s*([-+]?\d+(?:[.,]\d+)?)/i);
+                    const min = item.min ?? (range ? Number(range[1].replace(",", ".")) : undefined);
+                    const max = item.max ?? (range ? Number(range[2].replace(",", ".")) : undefined);
+                    const value = Number(item.result.replace(",", "."));
+                    const hasRange = Number.isFinite(min) && Number.isFinite(max) && (max as number) > (min as number);
+                    const abnormal = hasRange && (value < (min as number) || value > (max as number));
+                    const boundary = hasRange ? (value < (min as number) ? (min as number) : (max as number)) : 0;
+                    const excursion = abnormal && boundary !== 0 ? Math.abs(value - boundary) / Math.abs(boundary) * 100 : abnormal ? 100 : 0;
+                    const severity = abnormal ? (excursion <= labWarningThreshold ? "WARNING" : "ALERT") : "";
+                    return { test: item.test, result: item.result.trim(), unit: item.unit, reference: item.reference, min, max, severity, manuallyVerified: true };
+                  });
                   if (!manual.length) {
                     toast("Enter at least one lab result before applying manual review.", "error");
                     return;
                   }
                   setP(previous => ({ ...previous, customData: { ...(previous.customData || {}), labOcrManualResults: JSON.stringify(manual) } }));
-                  toast("Lab results are attached to this patient form and will be saved with Save Record / Update Record.", "success");
+                  const abnormal = manual.filter(item => item.severity);
+                  const findings = manual.map(item => item.severity
+                    ? item.severity + ": " + item.test + " " + item.result + (item.unit ? " " + item.unit : "") + " | Ref: " + (item.reference || "not available")
+                    : "VERIFIED: " + item.test + " " + item.result + (item.unit ? " " + item.unit : "") + (item.reference ? " | Ref: " + item.reference : ""));
+                  setLabOcrFindings(previous => [...previous.filter(row => !/^(?:WARNING|ALERT|VERIFIED):/.test(row)), ...findings]);
+                  if (abnormal.length) {
+                    const alertItems = abnormal.map(item => item.severity + ": " + item.test + " = " + item.result + (item.unit ? " " + item.unit : "") + " (reference " + (item.reference || "not available") + ")");
+                    Alert.alert("Manual lab review: out-of-range result", alertItems.join("\n") + "\n\nVerify the value, unit and printed reference range against the original report. This is a range comparison, not a diagnosis.");
+                  } else {
+                    Alert.alert("Manual lab review applied", "The entered values were attached to this patient draft. No out-of-range result was confirmed from the available reference ranges. Save or update the patient record to keep these values.");
+                  }
+                  toast("Manual lab results attached to this patient draft. Save or update the patient record to keep them.", "success");
                 }} style={{ marginTop: spacing.md, padding: spacing.md, backgroundColor: colors.brandPrimary, borderRadius: radius.md, alignItems: "center" }}>
                   <Text style={{ color: colors.onBrandPrimary, fontFamily: fontFamily.semibold }}>Apply manual review to patient draft</Text>
                 </Pressable> : null}
@@ -1081,11 +1103,16 @@ export default function PatientForm() {
           <View style={{ marginTop: spacing.md, padding: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md }}>
             <Text style={styles.section}>Manually verified lab results</Text>
             <Text style={styles.hint}>These values are stored with this patient record. Confirm them against the original laboratory report.</Text>
-            {savedManualLabResults.map((item: any, index: number) => (
-              <Text key={String(item.test) + "-" + index} style={{ color: colors.onSurface, marginTop: spacing.xs }}>
-                {String(item.test)}: {String(item.result)}{item.unit ? " " + String(item.unit) : ""}{item.reference ? " · Reference: " + String(item.reference) : ""}
-              </Text>
-            ))}
+            {savedManualLabResults.map((item: any, index: number) => {
+              const range = String(item.reference || "").match(/([-+]?\d+(?:[.,]\d+)?)\s*(?:-|–|—|to)\s*([-+]?\d+(?:[.,]\d+)?)/i);
+              const min = Number(String(item.min ?? (range ? range[1] : "")).replace(",", "."));
+              const max = Number(String(item.max ?? (range ? range[2] : "")).replace(",", "."));
+              const value = Number(String(item.result || "").replace(",", "."));
+              const outside = !!range && Number.isFinite(value) && Number.isFinite(min) && Number.isFinite(max) && (value < min || value > max);
+              return <Text key={String(item.test) + "-" + index} style={{ color: outside ? (colors.error || "#B91C1C") : colors.onSurface, marginTop: spacing.xs, fontFamily: outside ? fontFamily.bold : fontFamily.regular }}>
+                {outside ? "ALERT — OUT OF RANGE · " : ""}{String(item.test)}: {String(item.result)}{item.unit ? " " + String(item.unit) : ""}{item.reference ? " · Reference: " + String(item.reference) : ""}{outside ? " · Verify against original report" : ""}
+              </Text>;
+            })}
           </View>
         ) : null}
         <Text style={styles.section}>Patient Details</Text>
