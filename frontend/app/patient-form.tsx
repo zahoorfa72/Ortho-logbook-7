@@ -1225,7 +1225,19 @@ export default function PatientForm() {
               const outside = !!range && Number.isFinite(value) && Number.isFinite(min) && Number.isFinite(max) && (value < min || value > max);
               const updateSavedManualResult = (field: string, nextValue: string) => {
                 const current = [...savedManualLabResults];
-                current[index] = { ...current[index], [field]: nextValue };
+                const updated = { ...current[index], [field]: nextValue };
+                const referenceMatch = String(updated.reference || "").match(/([-+]?\d+(?:[.,]\d+)?)\s*(?:-|–|—|to)\s*([-+]?\d+(?:[.,]\d+)?)/i);
+                const minValue = referenceMatch ? Number(referenceMatch[1].replace(",", ".")) : Number(updated.min);
+                const maxValue = referenceMatch ? Number(referenceMatch[2].replace(",", ".")) : Number(updated.max);
+                const resultValue = Number(String(updated.result || "").replace(",", "."));
+                updated.min = Number.isFinite(minValue) ? minValue : undefined;
+                updated.max = Number.isFinite(maxValue) ? maxValue : undefined;
+                const hasRange = Number.isFinite(minValue) && Number.isFinite(maxValue) && maxValue > minValue;
+                const outside = hasRange && Number.isFinite(resultValue) && (resultValue < minValue || resultValue > maxValue);
+                const boundary = resultValue < minValue ? minValue : maxValue;
+                const deviation = outside ? Math.abs(resultValue - boundary) / Math.max(Math.abs(boundary), 0.000001) * 100 : 0;
+                updated.severity = outside ? (deviation <= labWarningThreshold ? "WARNING" : "ALERT") : "";
+                current[index] = updated;
                 const nextCustomData = { ...(p.customData || {}), labOcrManualResults: JSON.stringify(current) };
                 setP(previous => ({ ...previous, customData: nextCustomData }));
               };
