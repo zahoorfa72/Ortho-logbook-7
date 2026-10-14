@@ -76,29 +76,59 @@ function ordinalShort(n: number) {
 
 function abnormalLabLabels(patient: Patient, automaticFlags?: string[], includeWarnings = true): string[] {
   const saved = String(automaticFlags !== undefined
-    ? automaticFlags.join("\n")
+    ? automaticFlags.join("\\n")
     : patient.customData?.labOcrPossibleFlags || "").trim();
-  if (!saved) return [];
   const labels: string[] = [];
-  for (const raw of saved.split(/\r?\n/)) {
+  // Keep automatic OCR findings, then independently evaluate saved manual reviews.
+  // This ensures verified results still appear on the patient list after leaving the form.
+  for (const raw of saved.split(/\\r?\\n/)) {
     const line = raw.trim();
     if (!line) continue;
-    const statusMatch = line.match(/^(WARNING|ALERT|HIGH|LOW)\s*:\s*/i);
+    const statusMatch = line.match(/^(WARNING|ALERT|HIGH|LOW)\\s*:\\s*/i);
     const status = statusMatch?.[1]?.toUpperCase() || "ALERT";
     const withoutStatus = statusMatch ? line.slice(statusMatch[0].length) : line;
-    const refMatch = withoutStatus.match(/\|\s*Ref\s*:\s*(.+)$/i);
+    const refMatch = withoutStatus.match(/\\|\\s*Ref\\s*:\\s*(.+)$/i);
     const reference = refMatch?.[1]?.trim();
-    const core = refMatch ? withoutStatus.slice(0, refMatch.index).trim() : withoutStatus.replace(/\s+—\s*POSSIBLY OUT OF RANGE.*$/i, "").trim();
-    const resultMatch = core.match(/[-+]?\d+(?:[.,]\d+)?/);
+    const core = refMatch ? withoutStatus.slice(0, refMatch.index).trim() : withoutStatus.replace(/\\s+—\\s*POSSIBLY OUT OF RANGE.*$/i, "").trim();
+    const resultMatch = core.match(/[-+]?\\d+(?:[.,]\\d+)?/);
     const resultText = resultMatch?.[0] || "";
     const first = resultMatch?.index ?? -1;
-    let test = first > 0 ? core.slice(0, first).replace(/^[\s:|•-]+|[\s:|•-]+$/g, "").trim() : "";
-    test = test.replace(/^(?:image\s+\d+\s*)/i, "").trim();
+    let test = first > 0 ? core.slice(0, first).replace(/^[\\s:|•-]+|[\\s:|•-]+$/g, "").trim() : "";
+    test = test.replace(/^(?:image\\s+\\d+\\s*)/i, "").trim();
     if (!test || /^(?:ref(?:erence)?|normal|range|result|value)$/i.test(test)) test = "Test unclear";
-    const unit = resultMatch
-      ? core.slice(first + resultText.length).replace(/[|:;]/g, " ").replace(/\s+/g, " ").trim().slice(0, 12)
-      : "";
+    const unit = resultMatch ? core.slice(first + resultText.length).replace(/[|:;]/g, " ").replace(/\\s+/g, " ").trim().slice(0, 12) : "";
     const label = status + ": " + test + (resultText ? " " + resultText : "") + (unit ? " " + unit : "") + (reference ? " (Ref " + reference + ")" : "");
+    if (!labels.includes(label)) labels.push(label);
+  }
+
+  let manual: any[] = [];
+  try {
+    const parsed = patient.customData?.labOcrManualResults ? JSON.parse(patient.customData.labOcrManualResults) : [];
+    if (Array.isArray(parsed)) manual = parsed;
+  } catch {}
+  for (const item of manual) {
+    if (!item || !String(item.test || "").trim() || !String(item.result ?? "").trim()) continue;
+    const value = Number(String(item.result).replace(",", "."));
+    const range = String(item.reference || "").match(/^\\s*([-+]?\\d+(?:[.,]\\d+)?)\\s*(?:-|–|—|to)\\s*([-+]?\\d+(?:[.,]\\d+)?)\\s*$/i)
+      || String(item.reference || "").match(/([-+]?\\d+(?:[.,]\\d+)?)\\s*(?:-|–|—|to)\\s*([-+]?\\d+(?:[.,]\\d+)?)/i);
+    const min = Number.isFinite(Number(item.min)) ? Number(item.min) : range ? Number(range[1].replace(",", ".")) : NaN;
+    const max = Number.isFinite(Number(item.max)) ? Number(item.max) : range ? Number(range[2].replace(",", ".")) : NaN;
+    const hasRange = Number.isFinite(value) && Number.isFinite(min) && Number.isFinite(max) && max > min;
+    const outside = hasRange && (value < min || value > max);
+    let severity = String(item.severity || "").toUpperCase();
+    if (severity !== "ALERT" && severity !== "WARNING") severity = "";
+    if (outside && !severity) {
+      const boundary = value < min ? min : max;
+      const deviation = Math.abs(value - boundary) / Math.max(Math.abs(boundary), 0.000001) * 100;
+      severity = deviation <= 10 ? "WARNING" : "ALERT";
+    }
+    // Only display manual entries as alerts when a valid range proves they are outside,
+    // or a saved explicit severity exists. Do not infer abnormality from a missing range.
+    if (!severity || (!outside && !item.severity)) continue;
+    if (severity === "WARNING" && !includeWarnings) continue;
+    const label = severity + ": [MANUAL] " + String(item.test).trim() + " " + String(item.result).trim()
+      + (item.unit ? " " + String(item.unit).trim() : "")
+      + (item.reference ? " (Ref " + String(item.reference).trim() + ")" : "");
     if (!labels.includes(label)) labels.push(label);
   }
   return labels.filter(label => includeWarnings || !label.startsWith("WARNING:")).slice(0, 20);
