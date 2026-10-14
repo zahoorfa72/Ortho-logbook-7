@@ -245,13 +245,13 @@ export default function PatientForm() {
       // sex-specific values, so a later blurry report cannot overwrite them.
       let savedRangesChanged = false;
       const genderIsMale = /^\s*(?:m|male|man|men)\s*$/i.test(p.gender);
-      const rangeByName = new Map<string, { min: string; max: string; unit: string }>();
+      const rangeByName = new Map<string, { name: string; min: string; max: string; unit: string }>();
       for (const candidate of observedCandidates) {
         const min = Number(String(candidate.min || "").replace(",", "."));
         const max = Number(String(candidate.max || "").replace(",", "."));
         if (!candidate.name || !candidate.min || !candidate.max || !Number.isFinite(min) || !Number.isFinite(max) || max <= min) continue;
         const key = canonical(candidate.name);
-        if (!rangeByName.has(key)) rangeByName.set(key, { min: String(candidate.min), max: String(candidate.max), unit: candidate.unit || "" });
+        if (!rangeByName.has(key)) rangeByName.set(key, { name: candidate.name, min: String(candidate.min), max: String(candidate.max), unit: candidate.unit || "" });
       }
       for (const observed of rangeByName.values()) {
         let definition = configuredLabTests.find(item => canonical(item.name) === canonical(observed.name) ||
