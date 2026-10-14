@@ -811,13 +811,27 @@ export default function PatientForm() {
       // request. Do not rely on a prior asynchronous setP() from the Apply button.
       const reviewedLabResults = labManualReviews
         .filter(item => String(item.result || "").trim())
-        .map(item => ({
-          test: item.test,
-          result: String(item.result).trim(),
-          unit: item.unit,
-          reference: item.reference,
-          manuallyVerified: true,
-        }));
+        .map(item => {
+          const range = String(item.reference || "").match(/([-+]?\\d+(?:[.,]\\d+)?)\\s*(?:-|–|—|to)\\s*([-+]?\\d+(?:[.,]\\d+)?)/i);
+          const min = item.min ?? (range ? Number(range[1].replace(",", ".")) : undefined);
+          const max = item.max ?? (range ? Number(range[2].replace(",", ".")) : undefined);
+          const value = Number(String(item.result).replace(",", "."));
+          const hasRange = Number.isFinite(min) && Number.isFinite(max) && (max as number) > (min as number);
+          const abnormal = hasRange && (value < (min as number) || value > (max as number));
+          const boundary = hasRange ? (value < (min as number) ? (min as number) : (max as number)) : 0;
+          const excursion = abnormal && boundary !== 0 ? Math.abs(value - boundary) / Math.max(Math.abs(boundary), 0.000001) * 100 : abnormal ? 100 : 0;
+          const severity = abnormal ? (excursion <= labWarningThreshold ? "WARNING" : "ALERT") : "";
+          return {
+            test: item.test,
+            result: String(item.result).trim(),
+            unit: item.unit,
+            reference: item.reference,
+            min,
+            max,
+            severity,
+            manuallyVerified: true,
+          };
+        });
       const existingLabResults = (p.customData || {}).labOcrManualResults;
       let previousReviewed: any[] = [];
       try {
