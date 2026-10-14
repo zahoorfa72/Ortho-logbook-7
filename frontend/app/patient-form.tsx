@@ -819,13 +819,26 @@ export default function PatientForm() {
           manuallyVerified: true,
         }));
       const existingLabResults = (p.customData || {}).labOcrManualResults;
+      let previousReviewed: any[] = [];
+      try {
+        const parsed = existingLabResults ? JSON.parse(existingLabResults) : [];
+        if (Array.isArray(parsed)) previousReviewed = parsed;
+      } catch {}
+      // Keep previously verified tests when this review session only contains
+      // a subset. New values replace the same test, but never erase other tests.
+      const mergedReviewed = new Map<string, any>();
+      previousReviewed.forEach(item => {
+        if (item && String(item.test || "").trim()) mergedReviewed.set(String(item.test).trim().toLowerCase(), item);
+      });
+      reviewedLabResults.forEach(item => mergedReviewed.set(String(item.test).trim().toLowerCase(), item));
+      const allReviewedLabResults = [...mergedReviewed.values()];
       const customData = {
         ...(p.customData || {}),
         hcvPlus: p.hcvPlus ? "true" : "false",
         hbaSg: p.hbaSg ? "true" : "false",
         hiv: p.hiv ? "true" : "false",
         ...((reviewedLabResults.length || !existingLabResults) ? {
-          labOcrManualResults: JSON.stringify(reviewedLabResults),
+          labOcrManualResults: JSON.stringify(allReviewedLabResults),
         } : {}),
       };
       const payload = { ...p, customData };
