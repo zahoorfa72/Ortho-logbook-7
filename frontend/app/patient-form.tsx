@@ -7,7 +7,7 @@ import * as ImageManipulator from "expo-image-manipulator";
 import { Asset, requestPermissionsAsync } from "expo-media-library";
 import * as FileSystem from "expo-file-system/legacy";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { hasKnownLabTestName, isLabMetadataLine, isLikelyLabReportText, parseLabReportRows, recognizeLabText } from "@/src/utils/lab-ocr";
+import { extractLabReportDate, hasKnownLabTestName, isLabMetadataLine, isLikelyLabReportText, parseLabReportRows, recognizeLabText } from "@/src/utils/lab-ocr";
 import { Dimensions } from "react-native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AppState, Image, InteractionManager, Modal, Pressable, ScrollView, Text, View } from "react-native";
@@ -120,7 +120,7 @@ export default function PatientForm() {
   const [labOcrBusy, setLabOcrBusy] = useState(false);
   const [labOcrText, setLabOcrText] = useState("");
   const [labOcrFindings, setLabOcrFindings] = useState<string[]>([]);
-  const [labManualReviews, setLabManualReviews] = useState<Array<{ test: string; unit: string; result: string; reference: string; photoUri: string; min?: number; max?: number }>>([]);
+  const [labManualReviews, setLabManualReviews] = useState<Array<{ test: string; unit: string; result: string; reference: string; photoUri: string; reportDate?: string; min?: number; max?: number }>>([]);
   const [labWarningsEnabled, setLabWarningsEnabled] = useState(true);
   const [labWarningThreshold, setLabWarningThreshold] = useState(10);
   const [showLabRawText, setShowLabRawText] = useState(false);
@@ -300,7 +300,9 @@ export default function PatientForm() {
         const max = Number(String(test.max ?? "").replace(",", "."));
         const validRange = String(test.min ?? "").trim() !== "" && String(test.max ?? "").trim() !== "" && Number.isFinite(min) && Number.isFinite(max);
         const range = validRange ? String(test.min) + "–" + String(test.max) : "";
-        return { test: test.name, unit: test.unit || "", result: "", reference: range, photoUri: reviewSourcePhotos[0] || "", min: validRange ? min : undefined, max: validRange ? max : undefined };
+        const matchingPage = extracted.split(/(?=LAB REPORT IMAGE\\s+\\d+)/i).find(page => canonical(page).includes(canonical(test.name)));
+        const reportDate = extractLabReportDate(matchingPage || extracted);
+        return { test: test.name, unit: test.unit || "", result: "", reference: range, photoUri: reviewSourcePhotos[0] || "", reportDate: reportDate || undefined, min: validRange ? min : undefined, max: validRange ? max : undefined };
       });
       const candidates: string[] = parsedRows
         .filter(row => row.severity === "ALERT" || labWarningsEnabled)
@@ -1160,7 +1162,7 @@ export default function PatientForm() {
                     const boundary = hasRange ? (value < (min as number) ? (min as number) : (max as number)) : 0;
                     const excursion = abnormal && boundary !== 0 ? Math.abs(value - boundary) / Math.abs(boundary) * 100 : abnormal ? 100 : 0;
                     const severity = abnormal ? (excursion <= labWarningThreshold ? "WARNING" : "ALERT") : "";
-                    return { test: item.test, result: item.result.trim(), unit: item.unit, reference: item.reference, min, max, severity, manuallyVerified: true };
+                    return { test: item.test, result: item.result.trim(), unit: item.unit, reference: item.reference, date: item.reportDate || "", min, max, severity, manuallyVerified: true };
                   });
                   if (!manual.length) {
                     toast("Enter at least one lab result before applying manual review.", "error");
