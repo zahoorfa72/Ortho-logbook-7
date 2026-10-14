@@ -233,7 +233,7 @@ export default function Logbook() {
       const snapshot: Record<string, { signature: string; flags: string[]; reportDate?: string }> = {};
       const photoCache: Record<string, { text: string; structuredText: string; isReport: boolean; reportDate: string }> = {};
       try {
-        const raw = await AsyncStorage.getItem("ortho_lab_ocr_patient_cache_v4");
+        const raw = await AsyncStorage.getItem("ortho_lab_ocr_patient_cache_v5");
         if (raw) Object.assign(snapshot, JSON.parse(raw));
       } catch {}
       try {
@@ -290,7 +290,7 @@ export default function Logbook() {
         const reportDate = reportTexts.map(extractLabReportDate).find(Boolean) || "";
         snapshot[patient.id] = { signature, flags: flags.slice(0, 20), reportDate };
         if (!cancelled) setLabFlagsByPatient({ ...snapshot });
-        try { await AsyncStorage.setItem("ortho_lab_ocr_patient_cache_v4", JSON.stringify(snapshot)); } catch {}
+        try { await AsyncStorage.setItem("ortho_lab_ocr_patient_cache_v5", JSON.stringify(snapshot)); } catch {}
       }
     };
     void scan();
