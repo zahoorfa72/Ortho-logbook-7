@@ -932,8 +932,15 @@ export default function Logbook() {
                     .map((result: any) => String(result?.date || result?.reportDate || "").trim())
                     .filter((date: string) => !!date && !/^date not (?:detected|entered)$/i.test(date));
                 } catch {}
-                const datesFromFlags = labLabels
-                  .map(label => label.match(/\s· DATE:\s*(.+)$/)?.[1]?.trim() || "")
+                // Build dates from raw saved scan results, not warning-filtered labels.
+                // This keeps report dates visible when mild WARNING rows are hidden.
+                const rawSavedLabFlags = [
+                  ...(Array.isArray(labFlagsByPatient[item.id]?.flags) ? labFlagsByPatient[item.id].flags : []),
+                  ...String(item.customData?.labOcrPossibleFlags || "").split(/\r?\n/).map(value => value.trim()).filter(Boolean),
+                ];
+                const datesFromFlags = rawSavedLabFlags
+                  .map(label => label.match(/\|\s*Date\s*:\s*([^|]+)/i)?.[1]?.trim()
+                    || label.match(/\s· DATE:\s*(.+)$/i)?.[1]?.trim() || "")
                   .filter(date => !!date && !/^date not (?:detected|entered)$/i.test(date));
                 const dateCandidates = [
                   ...datesFromFlags,
