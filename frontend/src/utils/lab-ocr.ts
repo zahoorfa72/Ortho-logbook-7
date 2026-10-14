@@ -374,7 +374,7 @@ export function parseLabReportRows(text: string, configuredTests: LabTestDefinit
         const resultArea = referenceStart >= 0 ? rest.slice(0, referenceStart) : rest;
         resultRaw = resultNumber(resultArea);
       }
-      unit = testPrefix.configured?.unit || defaultUnitForTest(testPrefix.name);
+      unit = String(testPrefix.configured?.unit || "").trim();
       // Never use a reference interval printed on the report for alerting.
       // Use only the saved range for this patient's sex (M/male or F/female).
       reference = configuredReference(testPrefix.configured, gender);
