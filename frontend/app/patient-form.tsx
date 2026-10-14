@@ -240,6 +240,39 @@ export default function PatientForm() {
           });
         }
       }
+      // Persist newly read reference ranges before future scans. Existing saved
+      // ranges are kept as the source of truth; report ranges only fill missing
+      // sex-specific values, so a later blurry report cannot overwrite them.
+      let savedRangesChanged = false;
+      const genderIsMale = /^\s*(?:m|male|man|men)\s*$/i.test(p.gender);
+      const rangeByName = new Map<string, { min: string; max: string; unit: string }>();
+      for (const candidate of observedCandidates) {
+        const min = Number(String(candidate.min || "").replace(",", "."));
+        const max = Number(String(candidate.max || "").replace(",", "."));
+        if (!candidate.name || !candidate.min || !candidate.max || !Number.isFinite(min) || !Number.isFinite(max) || max <= min) continue;
+        const key = canonical(candidate.name);
+        if (!rangeByName.has(key)) rangeByName.set(key, { min: String(candidate.min), max: String(candidate.max), unit: candidate.unit || "" });
+      }
+      for (const observed of rangeByName.values()) {
+        let definition = configuredLabTests.find(item => canonical(item.name) === canonical(observed.name) ||
+          (isHemoglobin(item.name) && isHemoglobin(observed.name)));
+        if (!definition) {
+          definition = { id: "auto-" + canonical(observed.name), name: observed.name, maleMin: "", maleMax: "", femaleMin: "", femaleMax: "", unit: observed.unit };
+          configuredLabTests.push(definition);
+          savedRangesChanged = true;
+        }
+        const minKey = genderIsMale ? "maleMin" : "femaleMin";
+        const maxKey = genderIsMale ? "maleMax" : "femaleMax";
+        if (!String(definition[minKey] || "").trim() && !String(definition[maxKey] || "").trim()) {
+          definition[minKey] = observed.min;
+          definition[maxKey] = observed.max;
+          if (!String(definition.unit || "").trim() && observed.unit) definition.unit = observed.unit;
+          savedRangesChanged = true;
+        }
+      }
+      if (savedRangesChanged) {
+        try { await AsyncStorage.setItem("ortho_lab_test_definitions_v1", JSON.stringify(configuredLabTests)); } catch {}
+      }
       const testCandidates = [...configuredCandidates, ...commonCandidates, ...observedCandidates].filter((item, index, all) =>
         item.name && all.findIndex(other => canonical(other.name) === canonical(item.name) ||
           (isHemoglobin(other.name) && isHemoglobin(item.name))) === index
@@ -1190,9 +1223,22 @@ export default function PatientForm() {
               const max = Number(String(item.max ?? (range ? range[2] : "")).replace(",", "."));
               const value = Number(String(item.result || "").replace(",", "."));
               const outside = !!range && Number.isFinite(value) && Number.isFinite(min) && Number.isFinite(max) && (value < min || value > max);
-              return <Text key={String(item.test) + "-" + index} style={{ color: outside ? (colors.error || "#B91C1C") : colors.onSurface, marginTop: spacing.xs, fontFamily: outside ? fontFamily.bold : fontFamily.regular }}>
-                {outside ? "ALERT — OUT OF RANGE · " : ""}{String(item.test)}: {String(item.result)}{item.unit ? " " + String(item.unit) : ""}{item.reference ? " · Reference: " + String(item.reference) : ""}{outside ? " · Verify against original report" : ""}
-              </Text>;
+              const updateSavedManualResult = (field: string, nextValue: string) => {
+                const current = [...savedManualLabResults];
+                current[index] = { ...current[index], [field]: nextValue };
+                const nextCustomData = { ...(p.customData || {}), labOcrManualResults: JSON.stringify(current) };
+                setP(previous => ({ ...previous, customData: nextCustomData }));
+              };
+              return <View key={String(item.test) + "-" + index} style={{ marginTop: spacing.sm, paddingTop: spacing.sm, borderTopWidth: index ? 1 : 0, borderColor: colors.border }}>
+                <Text style={{ color: outside ? (colors.error || "#B91C1C") : colors.onSurface, fontFamily: outside ? fontFamily.bold : fontFamily.regular, marginBottom: spacing.xs }}>
+                  {outside ? "ALERT — OUT OF RANGE" : "Saved result"}
+                </Text>
+                <Field label="Test name" value={String(item.test || "")} onChangeText={(value: string) => updateSavedManualResult("test", value)} />
+                <Field label="Result" value={String(item.result || "")} onChangeText={(value: string) => updateSavedManualResult("result", value)} keyboardType="decimal-pad" inputMode="decimal" />
+                <Field label="Unit" value={String(item.unit || "")} onChangeText={(value: string) => updateSavedManualResult("unit", value)} />
+                <Field label="Reference range" value={String(item.reference || "")} onChangeText={(value: string) => updateSavedManualResult("reference", value)} />
+                <Text style={{ color: colors.onSurfaceSecondary, marginTop: spacing.xs, fontSize: fontSize.sm }}>Changes are included when you press Save/Update Record.</Text>
+              </View>;
             })}
           </View>
         ) : null}
