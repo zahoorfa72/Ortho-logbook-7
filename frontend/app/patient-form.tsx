@@ -346,11 +346,31 @@ export default function PatientForm() {
       // Lab analysis is deliberately offline-only. Uncertain rows are shown for
       // human review; the app never guesses a test name or uploads OCR text.
       const onlineHelp: string[] = [];
+      // Do not ask the admin to manually verify a test again once a result for
+      // that patient/test has been saved as manually verified. Compare normalized
+      // test names so small differences in spaces/case do not create repeat prompts.
+      const normalizeReviewTestName = (value: unknown) => String(value || "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "");
+      let alreadyVerifiedNames = new Set<string>();
+      try {
+        const rawSaved = p.customData?.labOcrManualResults;
+        const parsedSaved = rawSaved ? JSON.parse(rawSaved) : [];
+        if (Array.isArray(parsedSaved)) {
+          alreadyVerifiedNames = new Set(parsedSaved
+            .filter((item: any) => item && item.manuallyVerified === true && String(item.result ?? "").trim())
+            .map((item: any) => normalizeReviewTestName(item.test))
+            .filter(Boolean));
+        }
+      } catch {}
+      const pendingManualReviews = missingResultReviews.filter(item =>
+        !alreadyVerifiedNames.has(normalizeReviewTestName(item.test))
+      );
       setShowLabRawText(false);
       setLabOcrText(extracted);
-      setLabManualReviews(missingResultReviews);
+      setLabManualReviews(pendingManualReviews);
       setLabOcrFindings([...candidates, ...uncertain.map(item => "REVIEW: " + item),
-        ...missingResultReviews.map(item => "REVIEW: " + item.test + " result not confidently recognized — admin must verify against the original report")]);
+        ...pendingManualReviews.map(item => "REVIEW: " + item.test + " result not confidently recognized — admin must verify against the original report")]);
       setLabOcrOnlineHelp(onlineHelp);
       const positiveScreening = detectPositiveScreening(extracted);
       setP(prev => ({
