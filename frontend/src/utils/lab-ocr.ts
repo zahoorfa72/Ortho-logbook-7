@@ -558,8 +558,10 @@ export async function recognizeLabText(uri: string, onlineApiKey = ""): Promise<
   // often helps OCR read small printed digits without sending data online.
   let best: any = null;
   let bestSize: { width: number; height: number } | null = null;
+  let originalDimensions: { width: number; height: number } | null = null;
   try {
     const originalSize = await imageSize(uri);
+    originalDimensions = originalSize;
     bestSize = originalSize;
     best = await recognizeText(uri);
     const maxDimension = Math.max(originalSize.width, originalSize.height);
@@ -603,7 +605,7 @@ export async function recognizeLabText(uri: string, onlineApiKey = ""): Promise<
         const candidate = await recognizeText(rotated.uri);
         if (localScore(candidate) > localScore(best)) {
           best = candidate;
-          bestSize = { width: originalSize.height, height: originalSize.width };
+          bestSize = originalDimensions ? { width: originalDimensions.height, height: originalDimensions.width } : bestSize;
         }
       } catch {}
       if (rotatedUri) { try { await FileSystem.deleteAsync(rotatedUri, { idempotent: true }); } catch {} }
