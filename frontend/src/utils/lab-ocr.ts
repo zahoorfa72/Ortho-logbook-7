@@ -285,14 +285,26 @@ function defaultUnitForTest(name: string): string {
 function normalizeLabUnit(testName: string, unit: string): string {
   const value = String(unit || "").trim().replace(/\s+/g, "");
   const test = canonicalTestName(testName);
-  // Hemoglobin is conventionally reported in g/dL. OCR can misread g as R,
-  // d as a, and L as l, I, or 1 (for example, "R/aL" or "R/al").
   if (["hemoglobin", "haemoglobin", "hgb", "hb"].some(name => canonicalTestName(name) === test)) {
-    if (!value || /^(?:g|r|q|9)\/?(?:d|a)\/?[d]?\/?[li1]$/i.test(value) ||
-        /^(?:g|r|q|9)\/(?:d|a)[li1]$/i.test(value) ||
-        /^(?:g|r|q|9)(?:d|a)[li1]$/i.test(value)) return "g/dL";
+    const compact = value.toLowerCase().replace(/[^a-z0-9/]/g, "");
+    // Preserve an explicitly clear alternative unit, but normalize common OCR
+    // confusions (R/aL, R/al, R/dL, g/aL, etc.) to the conventional g/dL.
+    if (!compact || /^(?:g|r|q|9)\/?(?:d|a)\/?d?\/?[li1]$/.test(compact) ||
+        /^(?:g|r|q|9)\/(?:d|a)[li1]$/.test(compact) ||
+        /^(?:g|r|q|9)(?:d|a)[li1]$/.test(compact) ||
+        /^(?:r|q|9)\/(?:a|d)l$/.test(compact)) return "g/dL";
+    if (/^g\/?d\/?l$/.test(compact)) return "g/dL";
+    if (/^mmol\/?l$/.test(compact)) return "mmol/L";
   }
   return value;
+}
+
+function normalizeHemoglobinUnitText(text: string): string {
+  return String(text || "").split(/\r?\n/).map(line => {
+    if (!/\b(?:hemoglobin|haemoglobin|hgb|hb)\b/i.test(line)) return line;
+    return line.replace(/\b(?:r|q|9|g)\s*\/\s*(?:a|d)\s*\/?\s*[lI1]\b/gi, "g/dL")
+      .replace(/\b(?:r|q|9|g)\s*(?:a|d)\s*[lI1]\b/gi, "g/dL");
+  }).join("\n");
 }
 
 function unitFromResultCell(value: string): string {
@@ -552,7 +564,7 @@ export async function recognizeLabText(uri: string, onlineApiKey = ""): Promise<
   } catch {
     best = await recognizeText(uri);
   }
-  let text = String(best?.text || "");
+  let text = normalizeHemoglobinUnitText(String(best?.text || ""));
   let mode: "online" | "offline" = "offline";
   // Optional cloud OCR is attempted only when the admin explicitly saves a key.
   // If it is unavailable or returns less readable text, retain the offline result.
@@ -565,7 +577,7 @@ export async function recognizeLabText(uri: string, onlineApiKey = ""): Promise<
     qualityScore(onlineText) > qualityScore(text) ||
     (isLikelyLabReportText(onlineText) && !isLikelyLabReportText(text))
   )) {
-    text = onlineText;
+    text = normalizeHemoglobinUnitText(onlineText);
     mode = "online";
   }
   let structuredText = "";
@@ -575,5 +587,5 @@ export async function recognizeLabText(uri: string, onlineApiKey = ""): Promise<
   } catch {
     // Raw on-device OCR text remains available if image geometry is unavailable.
   }
-  return { text, structuredText: mode === "online" ? "" : structuredText, mode };
+  return { text: normalizeHemoglobinUnitText(text), structuredText: mode === "online" ? "" : normalizeHemoglobinUnitText(structuredText), mode };
 }
