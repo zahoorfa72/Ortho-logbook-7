@@ -1142,10 +1142,10 @@ export default function PatientForm() {
           </View>
         </Modal>
         <View style={{ marginTop: spacing.md, marginBottom: spacing.md, padding: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md }}>
-          <Pressable onPress={() => setLabDetailsExpanded(value => !value)} accessibilityRole="button" accessibilityLabel={labDetailsExpanded ? "Hide lab result entry" : "Show lab result entry"} style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.sm }}>
+          <Pressable testID="patient-lab-results-toggle" onPress={() => setLabDetailsExpanded(value => !value)} accessibilityRole="button" accessibilityLabel={labDetailsExpanded ? "Hide lab result entry" : "Show lab result entry"} style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.sm }}>
             <View style={{ flex: 1 }}>
               <Text style={styles.section}>Lab results for this patient</Text>
-              <Text style={{ color: colors.onSurfaceSecondary, fontSize: fontSize.xs }}>{savedManualLabResults.length} saved · {labAddedResults.length + labManualReviews.length} pending</Text>
+              <Text style={{ color: colors.onSurfaceSecondary, fontSize: fontSize.xs }}>{savedManualLabResults.length} saved · {labAddedResults.length + labManualReviews.length} pending · Tap to {labDetailsExpanded ? "hide" : "show"}</Text>
             </View>
             <Ionicons name={labDetailsExpanded ? "chevron-up" : "chevron-down"} size={21} color={colors.brandPrimary} />
           </Pressable>
