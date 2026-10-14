@@ -91,9 +91,12 @@ function abnormalLabLabels(patient: Patient, automaticFlags?: string[], includeW
     const statusMatch = line.match(/^(WARNING|ALERT|HIGH|LOW)\s*:\s*/i);
     const status = statusMatch?.[1]?.toUpperCase() || "ALERT";
     const withoutStatus = statusMatch ? line.slice(statusMatch[0].length) : line;
-    const refMatch = withoutStatus.match(/\|\s*Ref\s*:\s*(.+)$/i);
+    const dateMatch = withoutStatus.match(/\|\s*Date\s*:\s*([^|]+)/i);
+    const reportDate = dateMatch?.[1]?.trim() || "";
+    const withoutDate = withoutStatus.replace(/\|\s*Date\s*:\s*[^|]+/i, "").trim();
+    const refMatch = withoutDate.match(/\|\s*Ref\s*:\s*(.+)$/i);
     const reference = refMatch?.[1]?.trim();
-    const core = refMatch ? withoutStatus.slice(0, refMatch.index).trim() : withoutStatus.replace(/\s+—\s*POSSIBLY OUT OF RANGE.*$/i, "").trim();
+    const core = refMatch ? withoutDate.slice(0, refMatch.index).trim() : withoutDate.replace(/\s+—\s*POSSIBLY OUT OF RANGE.*$/i, "").trim();
     const resultMatch = core.match(/[-+]?\d+(?:[.,]\d+)?/);
     const resultText = resultMatch?.[0] || "";
     const first = resultMatch?.index ?? -1;
@@ -101,7 +104,7 @@ function abnormalLabLabels(patient: Patient, automaticFlags?: string[], includeW
     test = test.replace(/^(?:image\s+\d+\s*)/i, "").trim();
     if (!test || /^(?:ref(?:erence)?|normal|range|result|value)$/i.test(test)) test = "Test unclear";
     const unit = resultMatch ? core.slice(first + resultText.length).replace(/[|:;]/g, " ").replace(/\s+/g, " ").trim().slice(0, 12) : "";
-    const label = status + ": " + test + (resultText ? " " + resultText : "") + (unit ? " " + unit : "") + (reference ? " (Ref " + reference + ")" : "");
+    const label = status + ": " + test + (resultText ? " " + resultText : "") + (unit ? " " + unit : "") + (reference ? " (Ref " + reference + ")" : "") + (reportDate ? " · DATE: " + reportDate : "");
     if (!labels.includes(label) && (includeWarnings || status !== "WARNING")) labels.push(label);
   }
 
@@ -130,7 +133,8 @@ function abnormalLabLabels(patient: Patient, automaticFlags?: string[], includeW
     if (severity === "WARNING" && !includeWarnings) continue;
     const label = severity + ": [MANUAL] " + String(item.test).trim() + " " + String(item.result).trim()
       + (item.unit ? " " + String(item.unit).trim() : "")
-      + (item.reference ? " (Ref " + String(item.reference).trim() + ")" : "");
+      + (item.reference ? " (Ref " + String(item.reference).trim() + ")" : "")
+      + (item.date ? " · DATE: " + String(item.date).trim() : "");
     if (!labels.includes(label)) labels.push(label);
   }
   return labels.slice(0, 20);
@@ -157,7 +161,7 @@ export default function Logbook() {
   const [labOcrEnabled, setLabOcrEnabled] = useState(false);
   const [labWarningsEnabled, setLabWarningsEnabled] = useState(true);
   const [labResultsHiddenByPatient, setLabResultsHiddenByPatient] = useState<Record<string, boolean>>({});
-  const [labFlagsByPatient, setLabFlagsByPatient] = useState<Record<string, { signature: string; flags: string[] }>>({});
+  const [labFlagsByPatient, setLabFlagsByPatient] = useState<Record<string, { signature: string; flags: string[]; reportDate?: string }>>({});
 
   useEffect(() => {
     AsyncStorage.getItem("ortho_lab_ocr_enabled").then(value => setLabOcrEnabled(value === "true")).catch(() => setLabOcrEnabled(false));
@@ -708,7 +712,9 @@ export default function Logbook() {
                     {hidden ? <Text style={{ color: tone, fontSize: fontSize.xs }}>Results hidden — warning symbol remains visible</Text> : labLabels.map((label, index) => {
                       const warning = label.startsWith("WARNING:");
                       const labelTone = warning ? (colors.warning || "#B7791F") : (colors.error || "#B91C1C");
-                      return <Text key={label + index} style={{ color: labelTone, fontFamily: fontFamily.bold, fontSize: fontSize.xs }}>{label}</Text>;
+                      const dateMatch = label.match(/\s· DATE: (.+)$/);
+                      const visibleLabel = dateMatch ? label.slice(0, dateMatch.index) : label;
+                      return <Text key={label + index} style={{ color: labelTone, fontFamily: fontFamily.bold, fontSize: fontSize.xs }}>{visibleLabel}{dateMatch ? <Text style={{ color: colors.muted, fontFamily: fontFamily.medium, fontSize: 10 }}> · {dateMatch[1]}</Text> : null}</Text>;
                     })}
                     <Pressable onPress={event => { event.stopPropagation(); void toggleLabResultsHidden(item.id); }} hitSlop={8} accessibilityLabel={hidden ? "Show this patient's lab results" : "Hide this patient's lab results"} style={{ flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 4, paddingVertical: 2 }}>
                       <Ionicons name={hidden ? "eye-outline" : "eye-off-outline"} size={14} color={tone} />
