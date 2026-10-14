@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { router, useFocusEffect } from "expo-router";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { triggerAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-backup";
 import { extractLabReportDate, isLikelyLabReportText, parseLabReportRows, recognizeLabText } from "@/src/utils/lab-ocr";
@@ -15,7 +15,6 @@ import {
   View,
   Modal,
   ScrollView,
-  AppState,
 } from "react-native";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -44,6 +43,17 @@ import {
   type ReminderState,
 } from "@/src/utils/backup-reminder";
 import { buildPatientListHtml, generateAndSharePdf } from "@/src/utils/pdf";
+
+type LabScanStatus = {
+  status: "not-scanned" | "queued" | "scanning" | "success" | "failed" | "stopped";
+  message: string;
+  reportDate?: string;
+  resultCount?: number;
+  updatedAt?: string;
+};
+
+const LAB_SCAN_STATUS_STORAGE_KEY = "ortho_lab_ocr_scan_states_v1";
+const NEW_PATIENT_LAB_SCAN_QUEUE_KEY = "ortho_lab_ocr_new_patient_queue_v1";
 
 type Patient = {
   id: string;
@@ -135,7 +145,7 @@ function abnormalLabLabels(patient: Patient, automaticFlags?: string[], includeW
     const label = resultStatus + ": [MANUAL] " + String(item.test).trim() + " " + String(item.result).trim()
       + (item.unit ? " " + String(item.unit).trim() : "")
       + (item.reference ? " (Ref " + String(item.reference).trim() + ")" : "")
-      + (item.date ? " · DATE: " + String(item.date).trim() : "");
+      + " · DATE: " + String(item.date || item.reportDate || "Date not entered").trim();
     if (!labels.includes(label)) labels.push(label);
   }
   return labels.slice(0, 20);
@@ -163,6 +173,16 @@ export default function Logbook() {
   const [labWarningsEnabled, setLabWarningsEnabled] = useState(true);
   const [labResultsHiddenByPatient, setLabResultsHiddenByPatient] = useState<Record<string, boolean>>({});
   const [labFlagsByPatient, setLabFlagsByPatient] = useState<Record<string, { signature: string; flags: string[]; reportDate?: string }>>({});
+  const [labScanStates, setLabScanStates] = useState<Record<string, LabScanStatus>>({});
+  const [labScanStateLoaded, setLabScanStateLoaded] = useState(false);
+  const labScanStatesRef = useRef<Record<string, LabScanStatus>>({});
+  const latestPatientsRef = useRef<Patient[]>([]);
+  const pendingLabScansRef = useRef<string[]>([]);
+  const runningLabScansRef = useRef<Set<string>>(new Set());
+  const stopLabScansRef = useRef<Set<string>>(new Set());
+  const scanQueueRunningRef = useRef(false);
+  const autoQueuedPatientIdsRef = useRef<Set<string>>(new Set());
+  const requestLabScanRef = useRef<(patientId: string, autoForNewPatient?: boolean) => void>(() => {});
 
   useEffect(() => {
     AsyncStorage.getItem("ortho_lab_ocr_enabled").then(value => setLabOcrEnabled(value === "true")).catch(() => setLabOcrEnabled(false));
@@ -222,149 +242,264 @@ export default function Logbook() {
     queryFn: () => api.get("/patients"),
   });
 
-  // Scan patient photos automatically while the app is open, without opening
-  // Patient Form. OCR text is cached per image, so a new photo does not force
-  // every old report to be scanned again. Two new images are processed in
-  // parallel to reduce waiting while keeping memory use moderate.
+  latestPatientsRef.current = data || [];
+
+  const saveLabScanState = useCallback((patientId: string, nextState: LabScanStatus) => {
+    const next = { ...labScanStatesRef.current, [patientId]: nextState };
+    labScanStatesRef.current = next;
+    setLabScanStates(next);
+    AsyncStorage.setItem(LAB_SCAN_STATUS_STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+  }, []);
+
+  const removeNewPatientQueueEntry = useCallback(async (patientId: string) => {
+    try {
+      const raw = await AsyncStorage.getItem(NEW_PATIENT_LAB_SCAN_QUEUE_KEY);
+      const saved: unknown = raw ? JSON.parse(raw) : [];
+      const next = (Array.isArray(saved) ? saved : []).filter(value => String(value) !== patientId);
+      await AsyncStorage.setItem(NEW_PATIENT_LAB_SCAN_QUEUE_KEY, JSON.stringify(next));
+      autoQueuedPatientIdsRef.current.delete(patientId);
+    } catch {}
+  }, []);
+
   useEffect(() => {
-    if (!labOcrEnabled) return;
     let cancelled = false;
-    let scanInProgress = false;
-    const scan = async () => {
-      if (cancelled || scanInProgress) return;
-      scanInProgress = true;
+    AsyncStorage.getItem(LAB_SCAN_STATUS_STORAGE_KEY).then(raw => {
+      if (cancelled) return;
+      let saved: Record<string, LabScanStatus> = {};
       try {
-      let patientsChanged = false;
-      const snapshot: Record<string, { signature: string; flags: string[]; reportDate?: string }> = {};
-      const photoCache: Record<string, { text: string; structuredText: string; isReport: boolean; reportDate: string; checkedAt?: number }> = {};
-      try {
-        const raw = await AsyncStorage.getItem("ortho_lab_ocr_patient_cache_v7");
-        if (raw) Object.assign(snapshot, JSON.parse(raw));
+        const parsed = raw ? JSON.parse(raw) : {};
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) saved = parsed;
       } catch {}
+      const normalized: Record<string, LabScanStatus> = {};
+      for (const [id, state] of Object.entries(saved)) {
+        if (!state || typeof state !== "object") continue;
+        normalized[id] = (state.status === "scanning" || state.status === "queued")
+          ? { ...state, status: "stopped", message: "Scan did not finish before the app closed. Tap Retry to run it again." }
+          : state;
+      }
+      labScanStatesRef.current = normalized;
+      setLabScanStates(normalized);
+      setLabScanStateLoaded(true);
+    }).catch(() => { if (!cancelled) setLabScanStateLoaded(true); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const runOnePatientLabScan = useCallback(async (patientId: string, forceRetry = true) => {
+    if (runningLabScansRef.current.has(patientId)) return;
+    const patient = latestPatientsRef.current.find(value => value.id === patientId);
+    if (!patient) {
+      saveLabScanState(patientId, { status: "failed", message: "Patient record is not available in the current list.", updatedAt: new Date().toISOString() });
+      return;
+    }
+    if (!labOcrEnabled) {
+      saveLabScanState(patientId, { status: "failed", message: "Lab reader is disabled. Enable Offline Lab Report Reader in Settings, then Retry.", updatedAt: new Date().toISOString() });
+      return;
+    }
+    runningLabScansRef.current.add(patientId);
+    stopLabScansRef.current.delete(patientId);
+    saveLabScanState(patientId, { status: "scanning", message: "Scanning this patient's saved photos…", updatedAt: new Date().toISOString() });
+    try {
+      const photos = [...new Set([...(patient.photos || []), ...((patient as any).photoUri ? [(patient as any).photoUri] : [])])].filter(Boolean);
+      if (!photos.length) {
+        saveLabScanState(patientId, { status: "failed", message: "No saved photos found. Add the lab report photo to this patient, then tap Retry.", updatedAt: new Date().toISOString() });
+        await removeNewPatientQueueEntry(patientId);
+        return;
+      }
+      let photoCache: Record<string, { text: string; structuredText: string; isReport: boolean; reportDate: string; checkedAt?: number }> = {};
+      let configuredTests: import("@/src/utils/lab-ocr").LabTestDefinition[] = [];
+      let onlineOcrKey = "";
+      let warningPercent = 10;
       try {
         const raw = await AsyncStorage.getItem("ortho_lab_ocr_photo_cache_v3");
-        if (raw) Object.assign(photoCache, JSON.parse(raw));
+        if (raw) photoCache = JSON.parse(raw);
       } catch {}
-      let configuredLabTests: import("@/src/utils/lab-ocr").LabTestDefinition[] = [];
-      let onlineOcrKey = "";
-      try { const savedTests = await AsyncStorage.getItem("ortho_lab_test_definitions_v1"); if (savedTests) configuredLabTests = JSON.parse(savedTests); } catch {}
+      try {
+        const raw = await AsyncStorage.getItem("ortho_lab_test_definitions_v1");
+        if (raw) { const value = JSON.parse(raw); if (Array.isArray(value)) configuredTests = value; }
+      } catch {}
       try { onlineOcrKey = (await AsyncStorage.getItem("ortho_lab_online_ocr_api_key_v1")) || ""; } catch {}
-      const persistAndNotify = async (patient: Patient, flags: string[]) => {
-        if (!flags.length) return;
-        const joinedFlags = flags.join("\n");
-        const savedFlags = String(patient.customData?.labOcrPossibleFlags || "").trim();
-        if (savedFlags !== joinedFlags.trim()) {
+      try {
+        const raw = await AsyncStorage.getItem("ortho_lab_warning_threshold_percent_v1");
+        const parsed = Number(raw);
+        if (raw && Number.isInteger(parsed) && parsed >= 1 && parsed <= 100) warningPercent = parsed;
+      } catch {}
+      let unreadableImages = 0;
+      for (let offset = 0; offset < photos.length; offset += 2) {
+        if (stopLabScansRef.current.has(patientId)) return;
+        const batch = photos.slice(offset, offset + 2);
+        const results = await Promise.all(batch.map(async uri => {
+          const key = labPhotoCacheKey(uri);
+          const cached = photoCache[key];
+          if (!forceRetry && cached && cached.checkedAt && Date.now() - cached.checkedAt < 10 * 60 * 1000) {
+            return { uri, ...cached };
+          }
           try {
-            await api.put("/patients/" + patient.id, {
-              ...patient,
-              customData: { ...(patient.customData || {}), labOcrPossibleFlags: joinedFlags, labOcrDetectedAt: new Date().toISOString() },
-            });
-            patientsChanged = true;
-          } catch {
-            // Keep local scan results visible even if automatic persistence is temporarily unavailable.
-          }
-        }
-        const alertFlags = flags.filter(flag => flag.startsWith("ALERT:"));
-        if (!alertFlags.length) return;
-        const now = new Date();
-        const dayKey = now.getFullYear() + "-" + String(now.getMonth() + 1).padStart(2, "0") + "-" + String(now.getDate()).padStart(2, "0");
-        const storageKey = "ortho_lab_alert_daily_counts_v1";
-        try {
-          const rawCounts = await AsyncStorage.getItem(storageKey);
-          const counts = rawCounts ? JSON.parse(rawCounts) : {};
-          const patientDayKey = String(patient.id) + ":" + dayKey;
-          const shown = Number(counts?.[patientDayKey] || 0);
-          if (shown < 2) {
-            counts[patientDayKey] = shown + 1;
-            await AsyncStorage.setItem(storageKey, JSON.stringify(counts));
-            Alert.alert(
-              "Lab alert — " + (patient.name || "Patient"),
-              alertFlags.join("\n") + "\n\nVerify each value, unit, date and reference range against the original report. This is not a diagnosis."
+            const result = await recognizeLabText(uri, onlineOcrKey);
+            const text = String(result?.text || "").trim();
+            const structuredText = result?.mode === "online" ? "" : String(result?.structuredText || "").trim();
+            const combined = text + "\n" + structuredText;
+            const hasNumbers = /[-+]?\d+(?:[.,]\d+)?/.test(combined);
+            const hasLabCue = /\b(?:laboratory|lab report|investigation|test name|test results?|reference range|normal range|biological reference|specimen|hemoglobin|haemoglobin|platelets|glucose|creatinine|hbsag|hcv|hiv|wbc|rbc)\b/i.test(combined);
+            const isReport = !!combined.trim() && (
+              isLikelyLabReportText(text, configuredTests) ||
+              isLikelyLabReportText(structuredText, configuredTests) ||
+              (hasNumbers && hasLabCue)
             );
+            if (!text && !structuredText) unreadableImages += 1;
+            return { uri, text, structuredText, isReport, reportDate: extractLabReportDate(text + "\n" + structuredText), checkedAt: Date.now() };
+          } catch {
+            unreadableImages += 1;
+            return { uri, text: "", structuredText: "", isReport: false, reportDate: "", checkedAt: Date.now() };
           }
-        } catch {
-          // Avoid repeated alert popups if the daily rate-limit cannot be read.
+        }));
+        if (stopLabScansRef.current.has(patientId)) return;
+        for (const result of results) {
+          photoCache[labPhotoCacheKey(result.uri)] = {
+            text: result.text, structuredText: result.structuredText, isReport: result.isReport,
+            reportDate: result.reportDate || extractLabReportDate(result.text + "\n" + result.structuredText),
+            checkedAt: result.checkedAt || Date.now(),
+          };
         }
-      };
-      for (const patient of data || []) {
-        if (cancelled) return;
-        const photos = [...new Set([...(patient.photos || []), ...((patient as any).photoUri ? [(patient as any).photoUri] : [])])].filter(Boolean);
-        if (!photos.length) continue;
-        const signature = photos.join("|") + "|gender:" + String(patient.gender || "") + "|ranges:" + configuredLabTests.map(item => [item.name, item.maleMin, item.maleMax, item.femaleMin, item.femaleMax, item.unit].join(":")).join(";");
-        const now = Date.now();
-        const photosNeedingRetry = photos.filter(uri => {
-          const cached = photoCache[labPhotoCacheKey(uri)];
-          if (!cached) return true;
-          // Periodically re-read all photos; a prior pass may have missed a clear result/date.
-          return !cached.checkedAt || now - cached.checkedAt > 10 * 60 * 1000;
-        });
-        if (snapshot[patient.id]?.signature === signature && photosNeedingRetry.length === 0) {
-          await persistAndNotify(patient, snapshot[patient.id]?.flags || []);
-          continue;
-        }
-
-        const missingPhotos = photosNeedingRetry;
-        for (let offset = 0; offset < missingPhotos.length; offset += 2) {
-          if (cancelled) return;
-          const batch = missingPhotos.slice(offset, offset + 2);
-          const results = await Promise.all(batch.map(async uri => {
-            try {
-              const result = await recognizeLabText(uri, onlineOcrKey);
-              const text = String(result?.text || "").trim();
-              const structuredText = result?.mode === "online" ? "" : String(result?.structuredText || "").trim();
-              const combined = text + "\n" + structuredText;
-              const hasNumbers = /[-+]?\d+(?:[.,]\d+)?/.test(combined);
-              const hasLabCue = /\b(?:laboratory|lab report|investigation|test name|test results?|reference range|normal range|biological reference|specimen|hemoglobin|haemoglobin|platelets|glucose|creatinine|hbsag|hcv|hiv|wbc|rbc)\b/i.test(combined);
-              const isReport = !!combined.trim() && (
-                isLikelyLabReportText(text, configuredLabTests) ||
-                isLikelyLabReportText(structuredText, configuredLabTests) ||
-                (hasNumbers && hasLabCue)
-              );
-              return { uri, text, structuredText, isReport };
-            } catch { return { uri, text: "", structuredText: "", isReport: false }; }
-          }));
-          for (const result of results) {
-            photoCache[labPhotoCacheKey(result.uri)] = {
-              text: result.text,
-              structuredText: result.structuredText,
-              isReport: result.isReport,
-              reportDate: extractLabReportDate(result.text + "\n" + result.structuredText),
-              checkedAt: Date.now(),
-            };
-          }
-          try { await AsyncStorage.setItem("ortho_lab_ocr_photo_cache_v3", JSON.stringify(photoCache)); } catch {}
-        }
-
-        const reportTexts = photos.map(uri => photoCache[labPhotoCacheKey(uri)]).filter(entry => entry?.isReport).map((entry, index) =>
-          "LAB REPORT IMAGE " + (index + 1) + "\n" +
-          (entry.reportDate ? "IMAGE REPORT DATE: " + entry.reportDate + "\n" : "") +
-          (entry.structuredText ? "RECONSTRUCTED TABLE ROWS (test | result | unit | reference range)\n" + entry.structuredText + "\n" : "") +
-          "RAW OCR TEXT FOR REVIEW\n" + entry.text
-        );
-        const datedFlags = reportTexts.flatMap(reportText => {
-          const reportDate = extractLabReportDate(reportText);
-          return parseLabReportRows(reportText, configuredLabTests, patient.gender).map(row =>
-            row.severity + ": " + row.test + " " + row.result + (row.unit ? " " + row.unit : "") +
-            (reportDate ? " | Date: " + reportDate : "") + " | Ref: " + row.reference
-          );
-        });
-        const flags = datedFlags.filter((flag, index, all) => all.indexOf(flag) === index);
-        const reportDate = reportTexts.map(extractLabReportDate).find(Boolean) || "";
-        snapshot[patient.id] = { signature, flags: flags.slice(0, 20), reportDate };
-        await persistAndNotify(patient, flags.slice(0, 20));
-        if (!cancelled) setLabFlagsByPatient({ ...snapshot });
-        try { await AsyncStorage.setItem("ortho_lab_ocr_patient_cache_v7", JSON.stringify(snapshot)); } catch {}
+        await AsyncStorage.setItem("ortho_lab_ocr_photo_cache_v3", JSON.stringify(photoCache)).catch(() => {});
       }
-      if (patientsChanged && !cancelled) queryClient.invalidateQueries({ queryKey: ["patients"] });
-      } finally {
-        scanInProgress = false;
+      if (stopLabScansRef.current.has(patientId)) return;
+
+      const reportPages: Array<{ text: string; reportDate: string }> = [];
+      for (const uri of photos) {
+        const entry = photoCache[labPhotoCacheKey(uri)];
+        if (!entry?.isReport) continue;
+        const reportDate = entry.reportDate || extractLabReportDate(entry.text + "\n" + entry.structuredText) || "";
+        reportPages.push({
+          reportDate,
+          text: "LAB REPORT IMAGE " + (reportPages.length + 1) + "\n" +
+            (reportDate ? "IMAGE REPORT DATE: " + reportDate + "\n" : "") +
+            (entry.structuredText ? "RECONSTRUCTED TABLE ROWS (test | result | unit | reference range)\n" + entry.structuredText + "\n" : "") +
+            "RAW OCR TEXT FOR REVIEW\n" + entry.text,
+        });
       }
-    };
-    void scan();
-    const timer = setInterval(() => { if (AppState.currentState === "active") void scan(); }, 60000);
-    const subscription = AppState.addEventListener("change", state => { if (state === "active") void scan(); });
-    return () => { cancelled = true; clearInterval(timer); subscription.remove(); };
-  }, [labOcrEnabled, data]);
+      if (!reportPages.length) {
+        const emptyFlags: string[] = [];
+        setLabFlagsByPatient(previous => ({ ...previous, [patientId]: { signature: photos.join("|"), flags: emptyFlags } }));
+        try {
+          await api.put("/patients/" + patientId, {
+            ...patient,
+            customData: { ...(patient.customData || {}), labOcrPossibleFlags: "", labOcrDetectedAt: new Date().toISOString(), labOcrReportDate: "" },
+          });
+          queryClient.invalidateQueries({ queryKey: ["patients"] });
+        } catch {}
+        saveLabScanState(patientId, { status: "failed", message: unreadableImages === photos.length
+          ? "The photos could not be read. Check that the report is clear, then Retry."
+          : "No lab report was recognized in these photos. Check the photo, then Retry.", updatedAt: new Date().toISOString() });
+        await removeNewPatientQueueEntry(patientId);
+        return;
+      }
+
+      const flags: string[] = [];
+      for (const page of reportPages) {
+        const reportDate = page.reportDate || extractLabReportDate(page.text) || "Date not detected";
+        for (const row of parseLabReportRows(page.text, configuredTests, patient.gender, warningPercent)) {
+          flags.push(row.severity + ": " + row.test + " " + row.result +
+            (row.unit ? " " + row.unit : "") +
+            " | Date: " + reportDate + " | Ref: " + row.reference);
+        }
+      }
+      const uniqueFlags = flags.filter((flag, i, all) => all.indexOf(flag) === i).slice(0, 20);
+      const availableDates = reportPages.map(page => page.reportDate).filter(Boolean);
+      const reportDateSummary = availableDates.length === 0 ? "Date not detected"
+        : [...new Set(availableDates)].length > 1 ? "Multiple report dates — see each result"
+        : availableDates[0];
+      const signature = photos.join("|") + "|gender:" + String(patient.gender || "") +
+        "|ranges:" + configuredTests.map(item => [item.name,item.maleMin,item.maleMax,item.femaleMin,item.femaleMax,item.unit].join(":")).join(";");
+      setLabFlagsByPatient(previous => ({ ...previous, [patientId]: { signature, flags: uniqueFlags, reportDate: reportDateSummary } }));
+      try {
+        const existingCustomData = patient.customData || {};
+        const updated = await api.put("/patients/" + patientId, {
+          ...patient,
+          customData: {
+            ...existingCustomData,
+            labOcrPossibleFlags: uniqueFlags.join("\n"),
+            labOcrDetectedAt: new Date().toISOString(),
+            labOcrReportDate: reportDateSummary,
+          },
+        });
+        void updated;
+        queryClient.invalidateQueries({ queryKey: ["patients"] });
+      } catch (error: any) {
+        saveLabScanState(patientId, { status: "failed", message: "OCR read the report, but results could not be saved automatically. Retry or save the results from Patient Form.", reportDate: reportDateSummary, resultCount: uniqueFlags.length, updatedAt: new Date().toISOString() });
+        await removeNewPatientQueueEntry(patientId);
+        return;
+      }
+      let photoSnapshot: Record<string, any> = {};
+      try {
+        const raw = await AsyncStorage.getItem("ortho_lab_ocr_patient_cache_v7");
+        if (raw) photoSnapshot = JSON.parse(raw);
+      } catch {}
+      photoSnapshot[patientId] = { signature, flags: uniqueFlags, reportDate: reportDateSummary };
+      await AsyncStorage.setItem("ortho_lab_ocr_patient_cache_v7", JSON.stringify(photoSnapshot)).catch(() => {});
+      const message = unreadableImages
+        ? "Scan completed with " + unreadableImages + " unreadable photo(s). Verify those photos manually."
+        : uniqueFlags.length
+          ? "Scan successful — " + uniqueFlags.length + " abnormal result(s) flagged. Verify them against the original report."
+          : "Scan successful — no out-of-range result was flagged against the saved reference ranges. This does not prove every result is normal.";
+      saveLabScanState(patientId, { status: "success", message, reportDate: reportDateSummary, resultCount: uniqueFlags.length, updatedAt: new Date().toISOString() });
+      await removeNewPatientQueueEntry(patientId);
+    } catch (error: any) {
+      if (!stopLabScansRef.current.has(patientId)) {
+        saveLabScanState(patientId, { status: "failed", message: error?.message || "The lab scan failed. Check the photo and tap Retry.", updatedAt: new Date().toISOString() });
+        await removeNewPatientQueueEntry(patientId);
+      }
+    } finally {
+      runningLabScansRef.current.delete(patientId);
+      if (activeLabScanRef.current === patientId) activeLabScanRef.current = null;
+    }
+  }, [labOcrEnabled, queryClient, removeNewPatientQueueEntry, saveLabScanState]);
+
+  const drainLabScanQueue = useCallback(async () => {
+    if (scanQueueRunningRef.current) return;
+    scanQueueRunningRef.current = true;
+    try {
+      while (pendingLabScansRef.current.length) {
+        const patientId = pendingLabScansRef.current.shift()!;
+        if (stopLabScansRef.current.has(patientId)) continue;
+        activeLabScanRef.current = patientId;
+        await runOnePatientLabScan(patientId, true);
+      }
+    } finally {
+      scanQueueRunningRef.current = false;
+      if (pendingLabScansRef.current.length) void drainLabScanQueue();
+    }
+  }, [runOnePatientLabScan]);
+
+  const requestLabScan = useCallback((patientId: string, autoForNewPatient = false) => {
+    stopLabScansRef.current.delete(patientId);
+    if (runningLabScansRef.current.has(patientId) || pendingLabScansRef.current.includes(patientId)) return;
+    if (autoForNewPatient) autoQueuedPatientIdsRef.current.add(patientId);
+    pendingLabScansRef.current.push(patientId);
+    saveLabScanState(patientId, { status: "queued", message: autoForNewPatient ? "New patient: waiting to scan saved photos…" : "Retry requested — waiting to scan this patient's photos…", updatedAt: new Date().toISOString() });
+    void drainLabScanQueue();
+  }, [drainLabScanQueue, saveLabScanState]);
+  requestLabScanRef.current = requestLabScan;
+
+  const stopLabScan = useCallback((patientId: string) => {
+    stopLabScansRef.current.add(patientId);
+    pendingLabScansRef.current = pendingLabScansRef.current.filter(id => id !== patientId);
+    saveLabScanState(patientId, { status: "stopped", message: "Scan stopped by administrator. Tap Retry to continue.", updatedAt: new Date().toISOString() });
+    void removeNewPatientQueueEntry(patientId);
+  }, [removeNewPatientQueueEntry, saveLabScanState]);
+
+  useEffect(() => {
+    if (!labScanStateLoaded || !labOcrEnabled || isLoading || !Array.isArray(data)) return;
+    AsyncStorage.getItem(NEW_PATIENT_LAB_SCAN_QUEUE_KEY).then(raw => {
+      let queuedIds: string[] = [];
+      try { const parsed = raw ? JSON.parse(raw) : []; if (Array.isArray(parsed)) queuedIds = parsed.map(String); } catch {}
+      const patientIds = new Set((data || []).map(patient => patient.id));
+      for (const patientId of queuedIds) {
+        if (!patientIds.has(patientId) || autoQueuedPatientIdsRef.current.has(patientId)) continue;
+        requestLabScanRef.current(patientId, true);
+      }
+    }).catch(() => {});
+  }, [labScanStateLoaded, labOcrEnabled, isLoading, data]);
+
   const toggleLabResultsHidden = async (id: string) => {
     const next = { ...labResultsHiddenByPatient, [id]: !labResultsHiddenByPatient[id] };
     setLabResultsHiddenByPatient(next);
@@ -771,29 +906,55 @@ export default function Logbook() {
               ) : null}
               {(() => {
                 const labLabels = abnormalLabLabels(item, labFlagsByPatient[item.id]?.flags, labWarningsEnabled);
-                if (!labLabels.length) return null;
+                const status = labScanStates[item.id] || { status: "not-scanned" as const, message: "Older patient — not scanned automatically. An administrator can tap Retry when needed." };
                 const hidden = labResultsHiddenByPatient[item.id] === true;
                 const hasAlert = labLabels.some(label => label.startsWith("ALERT:"));
                 const hasWarning = labLabels.some(label => label.startsWith("WARNING:"));
-                const tone = hasAlert ? (colors.error || "#B91C1C") : hasWarning ? (colors.warning || "#B7791F") : colors.brandPrimary;
-                return <View style={{ marginTop: spacing.xs, paddingVertical: 4, paddingHorizontal: spacing.sm, borderRadius: radius.sm, borderWidth: 1, borderColor: tone, backgroundColor: tone + "12" }}>
-                  <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 4 }}>
-                    <Ionicons name={hasAlert ? "alert-circle" : hasWarning ? "warning" : "flask-outline"} size={14} color={tone} />
-                    <Text style={{ color: tone, fontFamily: fontFamily.bold, fontSize: fontSize.xs }}>{hasAlert ? "LAB ALERT" : hasWarning ? "LAB WARNING" : "LAB RESULTS"}</Text>
-                    {hidden ? <Text style={{ color: tone, fontSize: fontSize.xs }}>Results hidden — warning symbol remains visible</Text> : labLabels.map((label, index) => {
-                      const warning = label.startsWith("WARNING:");
-                      const alert = label.startsWith("ALERT:");
-                      const labelTone = warning ? (colors.warning || "#B7791F") : (colors.error || "#B91C1C");
-                      const dateMatch = label.match(/\s· DATE: (.+)$/);
-                      const visibleLabel = dateMatch ? label.slice(0, dateMatch.index) : label;
-                      return <Text key={label + index} style={{ color: labelTone, fontFamily: fontFamily.bold, fontSize: fontSize.xs }}>{visibleLabel}{dateMatch ? <Text style={{ color: colors.muted, fontFamily: fontFamily.medium, fontSize: 10 }}> · {dateMatch[1]}</Text> : null}</Text>;
-                    })}
-                    <Pressable onPress={event => { event.stopPropagation(); void toggleLabResultsHidden(item.id); }} hitSlop={8} accessibilityLabel={hidden ? "Show this patient's lab results" : "Hide this patient's lab results"} style={{ flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 4, paddingVertical: 2 }}>
-                      <Ionicons name={hidden ? "eye-outline" : "eye-off-outline"} size={14} color={tone} />
-                      <Text style={{ color: tone, fontFamily: fontFamily.semibold, fontSize: fontSize.xs }}>{hidden ? "Show" : "Hide"}</Text>
-                    </Pressable>
+                const tone = hasAlert ? (colors.error || "#B91C1C") : hasWarning ? (colors.warning || "#B7791F")
+                  : status.status === "failed" ? (colors.error || "#B91C1C")
+                  : status.status === "success" ? "#15803D" : colors.brandPrimary;
+                const statusLabel = status.status === "queued" ? "WAITING TO SCAN"
+                  : status.status === "scanning" ? "SCANNING"
+                  : status.status === "success" ? "SCAN SUCCESSFUL"
+                  : status.status === "failed" ? "SCAN FAILED"
+                  : status.status === "stopped" ? "SCAN STOPPED" : "NOT SCANNED";
+                const canStop = status.status === "queued" || status.status === "scanning";
+                const dateMatchExists = labLabels.some(label => /\s· DATE:\s*/.test(label));
+                return <View style={{ marginTop: spacing.xs, paddingVertical: spacing.sm, paddingHorizontal: spacing.sm, borderRadius: radius.sm, borderWidth: 1, borderColor: tone, backgroundColor: tone + "10" }}>
+                  <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
+                    {status.status === "scanning" || status.status === "queued"
+                      ? <ActivityIndicator size="small" color={tone} />
+                      : <Ionicons name={hasAlert ? "alert-circle" : hasWarning ? "warning" : status.status === "success" ? "checkmark-circle" : status.status === "failed" ? "close-circle" : status.status === "stopped" ? "pause-circle" : "flask-outline"} size={15} color={tone} />}
+                    <Text style={{ color: tone, fontFamily: fontFamily.bold, fontSize: fontSize.xs }}>
+                      {hasAlert ? "LAB ALERT" : hasWarning ? "LAB WARNING" : labLabels.length ? "LAB RESULTS" : "LAB SCAN"} · {statusLabel}
+                    </Text>
+                    {user?.role === "admin" ? (canStop
+                      ? <Pressable onPress={event => { event.stopPropagation(); stopLabScan(item.id); }} hitSlop={8} style={{ paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, borderWidth: 1, borderColor: tone }}>
+                          <Text style={{ color: tone, fontFamily: fontFamily.semibold, fontSize: fontSize.xs }}>Stop</Text>
+                        </Pressable>
+                      : <Pressable onPress={event => { event.stopPropagation(); requestLabScan(item.id, false); }} hitSlop={8} style={{ paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, borderWidth: 1, borderColor: tone }}>
+                          <Text style={{ color: tone, fontFamily: fontFamily.semibold, fontSize: fontSize.xs }}>Retry</Text>
+                        </Pressable>) : null}
                   </View>
-                  {!hidden ? <Text style={{ color: colors.muted, fontSize: 10, marginTop: 1 }}>Verify against original report</Text> : null}
+                  {status.message ? <Text style={{ color: status.status === "failed" ? tone : colors.onSurfaceSecondary, fontSize: 10, marginTop: 4 }}>{status.message}</Text> : null}
+                  {status.reportDate ? <Text style={{ color: colors.muted, fontSize: 10, marginTop: 2 }}>Report date: {status.reportDate}</Text> : null}
+                  {labLabels.length ? <View style={{ marginTop: spacing.xs }}>
+                    <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 4 }}>
+                      {hidden ? <Text style={{ color: tone, fontSize: fontSize.xs }}>Results hidden — status indicator remains visible</Text> : labLabels.map((label, index) => {
+                        const warning = label.startsWith("WARNING:");
+                        const labelTone = warning ? (colors.warning || "#B7791F") : (colors.error || "#B91C1C");
+                        const dateMatch = label.match(/\s· DATE:\s*(.+)$/);
+                        const visibleLabel = dateMatch ? label.slice(0, dateMatch.index) : label;
+                        return <Text key={label + index} style={{ color: labelTone, fontFamily: fontFamily.bold, fontSize: fontSize.xs }}>{visibleLabel} · {dateMatch ? dateMatch[1] : "Date not detected"}</Text>;
+                      })}
+                      <Pressable onPress={event => { event.stopPropagation(); void toggleLabResultsHidden(item.id); }} hitSlop={8} accessibilityLabel={hidden ? "Show this patient's lab results" : "Hide this patient's lab results"} style={{ flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 4, paddingVertical: 2 }}>
+                        <Ionicons name={hidden ? "eye-outline" : "eye-off-outline"} size={14} color={tone} />
+                        <Text style={{ color: tone, fontFamily: fontFamily.semibold, fontSize: fontSize.xs }}>{hidden ? "Show results" : "Hide results"}</Text>
+                      </Pressable>
+                    </View>
+                    {!hidden ? <Text style={{ color: colors.muted, fontSize: 10, marginTop: 1 }}>Verify abnormal flags against the original report; this is not a diagnosis.</Text> : null}
+                  </View> : null}
+                  {!dateMatchExists && labLabels.length === 0 && status.status === "success" ? <Text style={{ color: colors.muted, fontSize: 10, marginTop: 2 }}>No abnormal result row to display. Report date: {status.reportDate || "Date not detected"}</Text> : null}
                 </View>;
               })()}
 

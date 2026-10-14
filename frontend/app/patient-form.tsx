@@ -122,6 +122,7 @@ export default function PatientForm() {
   const [labOcrFindings, setLabOcrFindings] = useState<string[]>([]);
   const [labManualReviews, setLabManualReviews] = useState<Array<{ test: string; unit: string; result: string; reference: string; photoUri: string; reportDate?: string; min?: number; max?: number }>>([]);
   const [labTestTemplates, setLabTestTemplates] = useState<import("@/src/utils/lab-ocr").LabTestDefinition[]>([]);
+  const [labDetailsExpanded, setLabDetailsExpanded] = useState(false);
   const [labAddedResults, setLabAddedResults] = useState<Array<{ test: string; unit: string; result: string; reference: string; photoUri: string; reportDate?: string; min?: number; max?: number }>>([]);
   const [manualTestName, setManualTestName] = useState("");
   const [manualTestUnit, setManualTestUnit] = useState("");
@@ -901,7 +902,17 @@ export default function PatientForm() {
       const payload = { ...p, customData };
       return isEdit ? api.put("/patients/" + id, payload) : api.post("/patients", payload);
     },
-    onSuccess: () => {
+    onSuccess: async (savedPatient: Patient) => {
+      if (!isEdit && savedPatient?.id) {
+        try {
+          const queueKey = "ortho_lab_ocr_new_patient_queue_v1";
+          const rawQueue = await AsyncStorage.getItem(queueKey);
+          let queued: string[] = [];
+          try { const parsed = rawQueue ? JSON.parse(rawQueue) : []; if (Array.isArray(parsed)) queued = parsed.map(String); } catch {}
+          if (!queued.includes(String(savedPatient.id))) queued.push(String(savedPatient.id));
+          await AsyncStorage.setItem(queueKey, JSON.stringify(queued));
+        } catch {}
+      }
       void checkAndSendImmediateLowStockAlerts().catch(() => {});
       qc.invalidateQueries({ queryKey: ["patients"] });
       qc.invalidateQueries({ queryKey: ["inventory"] });
@@ -1131,7 +1142,14 @@ export default function PatientForm() {
           </View>
         </Modal>
         <View style={{ marginTop: spacing.md, marginBottom: spacing.md, padding: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md }}>
-          <Text style={styles.section}>Lab results for this patient</Text>
+          <Pressable onPress={() => setLabDetailsExpanded(value => !value)} accessibilityRole="button" accessibilityLabel={labDetailsExpanded ? "Hide lab result entry" : "Show lab result entry"} style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.sm }}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.section}>Lab results for this patient</Text>
+              <Text style={{ color: colors.onSurfaceSecondary, fontSize: fontSize.xs }}>{savedManualLabResults.length} saved · {labAddedResults.length + labManualReviews.length} pending</Text>
+            </View>
+            <Ionicons name={labDetailsExpanded ? "chevron-up" : "chevron-down"} size={21} color={colors.brandPrimary} />
+          </Pressable>
+          {labDetailsExpanded ? <View>
           <Text style={styles.hint}>Choose an admin-defined test or add a patient-specific test. Enter the measured result and report date. Saved reference ranges are used when available; these entries are saved with this patient record.</Text>
           {labTestTemplates.length ? <View style={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.xs, marginTop: spacing.xs }}>
             {labTestTemplates.map(template => <Pressable key={template.id} onPress={() => {
@@ -1183,6 +1201,7 @@ export default function PatientForm() {
             {savedManualLabResults.map((item: any, index: number) => <Text key={String(item.test) + "-" + index} style={{ color: colors.onSurface, fontSize: fontSize.sm, marginTop: spacing.xs }}>
               {String(item.test || "Test")}: {String(item.result || "")}{item.unit ? " " + String(item.unit) : ""}{item.date ? " · " + String(item.date) : item.reportDate ? " · " + String(item.reportDate) : ""}{item.severity ? " · " + String(item.severity) : ""}
             </Text>)}
+          </View> : null}
           </View> : null}
         </View>
         {labOcrEnabled ? (
