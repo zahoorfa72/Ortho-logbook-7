@@ -246,7 +246,7 @@ export default function Logbook() {
         if (cancelled) return;
         const photos = [...new Set([...(patient.photos || []), ...((patient as any).photoUri ? [(patient as any).photoUri] : [])])].filter(Boolean);
         if (!photos.length) continue;
-        const signature = photos.join("|");
+        const signature = photos.join("|") + "|gender:" + String(patient.gender || "") + "|ranges:" + configuredLabTests.map(item => [item.name, item.maleMin, item.maleMax, item.femaleMin, item.femaleMax, item.unit].join(":")).join(";");
         if (snapshot[patient.id]?.signature === signature) continue;
 
         const missingPhotos = photos.filter(uri => !photoCache[labPhotoCacheKey(uri)]);
