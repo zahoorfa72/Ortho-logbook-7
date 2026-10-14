@@ -863,7 +863,7 @@ export default function PatientForm() {
             min,
             max,
             severity,
-            date: item.reportDate || item.date || "",
+            date: item.reportDate || "",
             manuallyVerified: true,
           };
         });
