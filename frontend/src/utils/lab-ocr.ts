@@ -328,6 +328,8 @@ function classifyDeviation(resultRaw: string, reference: ReferenceInterval, warn
   const excursionPercent = boundary === 0
     ? (result === boundary ? 0 : Number.POSITIVE_INFINITY)
     : Math.abs(result - boundary) / Math.abs(boundary) * 100;
+  // Ignore tiny deviations (up to and including 1%) to avoid noisy false alerts.
+  if (excursionPercent <= 1) return null;
   return excursionPercent <= Math.max(1, Math.min(100, warningPercent)) ? "WARNING" : "ALERT";
 }
 
@@ -362,25 +364,20 @@ export function parseLabReportRows(text: string, configuredTests: LabTestDefinit
       let reference: ReferenceInterval | null = null;
 
       if (structured) {
-        // The measured result must come from the result column only. If OCR
-        // placed "M (Male)" or a reference interval in that cell, reject it
-        // instead of mistaking a range limit for the patient's result.
+        // OCR is trusted only for the test label and measured result. Units and
+        // reference intervals are taken from the saved test definition because
+        // OCR commonly mixes the male and female intervals or reads them as results.
         resultRaw = resultNumber(cells[1]);
-        unit = cells[2] || unitFromResultCell(cells[1]) || testPrefix.configured?.unit || defaultUnitForTest(testPrefix.name);
-        reference = extractReferenceInterval(cells.slice(3).join(" | "), gender);
       } else {
         const rest = line.slice(testPrefix.end).replace(/^\s*[:|\-]+\s*/, "");
         const referenceStart = firstReferenceStart(rest);
         const resultArea = referenceStart >= 0 ? rest.slice(0, referenceStart) : rest;
         resultRaw = resultNumber(resultArea);
-        reference = referenceStart >= 0 ? extractReferenceInterval(rest.slice(referenceStart), gender) : null;
-        const resultEnd = resultRaw ? resultArea.indexOf(resultRaw) + resultRaw.length : 0;
-        unit = resultRaw ? (unitFromResultCell(resultArea) || resultArea.slice(resultEnd).trim() || testPrefix.configured?.unit || defaultUnitForTest(testPrefix.name)) : "";
       }
-
-      // A saved sex-specific range is a fallback only when the report does not
-      // provide an unambiguous applicable range and the patient's sex is known.
-      if (!reference) reference = configuredReference(testPrefix.configured, gender);
+      unit = testPrefix.configured?.unit || defaultUnitForTest(testPrefix.name);
+      // Never use a reference interval printed on the report for alerting.
+      // Use only the saved range for this patient's sex (M/male or F/female).
+      reference = configuredReference(testPrefix.configured, gender);
       if (!resultRaw || !reference) continue;
 
       const severity = classifyDeviation(resultRaw, reference, warningPercent);
