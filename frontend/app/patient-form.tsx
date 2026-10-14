@@ -221,6 +221,9 @@ export default function PatientForm() {
         { name: "Creatinine", unit: "mg/dL" }, { name: "Glucose", unit: "mg/dL" }
       ].map(item => ({ ...item, min: "", max: "" }));
       const observedCandidates: Array<{ name: string; unit: string; min: string; max: string }> = [];
+      // OCR may identify test names, but it must never teach or overwrite saved
+      // reference ranges. The patient's saved sex-specific range and saved unit
+      // are the only sources used for classification.
       for (const page of extracted.split(/(?=LAB REPORT IMAGE\s+\d+)/i)) {
         const marker = "RECONSTRUCTED TABLE ROWS (test | result | unit | reference range)";
         const rawMarker = "RAW OCR TEXT FOR REVIEW";
@@ -231,47 +234,17 @@ export default function PatientForm() {
         for (const line of section.split(/\r?\n/)) {
           const cells = line.split("|").map(cell => cell.trim());
           if (cells.length < 2 || !hasKnownLabTestName(cells[0], configuredLabTests)) continue;
-          const range = cells.slice(3).join(" ").match(/([-+]?\d+(?:[.,]\d+)?)\s*(?:-|–|—|to)\s*([-+]?\d+(?:[.,]\d+)?)/i);
+          const configured = configuredLabTests.find(item => canonical(item.name) === canonical(cells[0]) ||
+            (isHemoglobin(item.name) && isHemoglobin(cells[0])));
+          const common = commonCandidates.find(item => canonical(item.name) === canonical(cells[0]) ||
+            (isHemoglobin(item.name) && isHemoglobin(cells[0])));
           observedCandidates.push({
-            name: cells[0],
-            unit: cells[2] || "",
-            min: range ? range[1] : "",
-            max: range ? range[2] : "",
+            name: configured?.name || common?.name || cells[0],
+            unit: configured?.unit || common?.unit || "",
+            min: configured ? String(genderIsMale ? configured.maleMin : configured.femaleMin) : "",
+            max: configured ? String(genderIsMale ? configured.maleMax : configured.femaleMax) : "",
           });
         }
-      }
-      // Persist newly read reference ranges before future scans. Existing saved
-      // ranges are kept as the source of truth; report ranges only fill missing
-      // sex-specific values, so a later blurry report cannot overwrite them.
-      let savedRangesChanged = false;
-      const genderIsMale = /^\s*(?:m|male|man|men)\s*$/i.test(p.gender);
-      const rangeByName = new Map<string, { name: string; min: string; max: string; unit: string }>();
-      for (const candidate of observedCandidates) {
-        const min = Number(String(candidate.min || "").replace(",", "."));
-        const max = Number(String(candidate.max || "").replace(",", "."));
-        if (!candidate.name || !candidate.min || !candidate.max || !Number.isFinite(min) || !Number.isFinite(max) || max <= min) continue;
-        const key = canonical(candidate.name);
-        if (!rangeByName.has(key)) rangeByName.set(key, { name: candidate.name, min: String(candidate.min), max: String(candidate.max), unit: candidate.unit || "" });
-      }
-      for (const observed of rangeByName.values()) {
-        let definition = configuredLabTests.find(item => canonical(item.name) === canonical(observed.name) ||
-          (isHemoglobin(item.name) && isHemoglobin(observed.name)));
-        if (!definition) {
-          definition = { id: "auto-" + canonical(observed.name), name: observed.name, maleMin: "", maleMax: "", femaleMin: "", femaleMax: "", unit: observed.unit };
-          configuredLabTests.push(definition);
-          savedRangesChanged = true;
-        }
-        const minKey = genderIsMale ? "maleMin" : "femaleMin";
-        const maxKey = genderIsMale ? "maleMax" : "femaleMax";
-        if (!String(definition[minKey] || "").trim() && !String(definition[maxKey] || "").trim()) {
-          definition[minKey] = observed.min;
-          definition[maxKey] = observed.max;
-          if (!String(definition.unit || "").trim() && observed.unit) definition.unit = observed.unit;
-          savedRangesChanged = true;
-        }
-      }
-      if (savedRangesChanged) {
-        try { await AsyncStorage.setItem("ortho_lab_test_definitions_v1", JSON.stringify(configuredLabTests)); } catch {}
       }
       const testCandidates = [...configuredCandidates, ...commonCandidates, ...observedCandidates].filter((item, index, all) =>
         item.name && all.findIndex(other => canonical(other.name) === canonical(item.name) ||
