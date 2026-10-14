@@ -179,6 +179,7 @@ export default function Logbook() {
   const latestPatientsRef = useRef<Patient[]>([]);
   const pendingLabScansRef = useRef<string[]>([]);
   const runningLabScansRef = useRef<Set<string>>(new Set());
+  const activeLabScanRef = useRef<string | null>(null);
   const stopLabScansRef = useRef<Set<string>>(new Set());
   const scanQueueRunningRef = useRef(false);
   const autoQueuedPatientIdsRef = useRef<Set<string>>(new Set());
@@ -296,7 +297,6 @@ export default function Logbook() {
       return;
     }
     runningLabScansRef.current.add(patientId);
-    stopLabScansRef.current.delete(patientId);
     saveLabScanState(patientId, { status: "scanning", message: "Scanning this patient's saved photos…", updatedAt: new Date().toISOString() });
     try {
       const photos = [...new Set([...(patient.photos || []), ...((patient as any).photoUri ? [(patient as any).photoUri] : [])])].filter(Boolean);
