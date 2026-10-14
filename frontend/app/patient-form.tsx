@@ -220,6 +220,7 @@ export default function PatientForm() {
         { name: "Neutrophils", unit: "%" }, { name: "Lymphocytes", unit: "%" },
         { name: "Creatinine", unit: "mg/dL" }, { name: "Glucose", unit: "mg/dL" }
       ].map(item => ({ ...item, min: "", max: "" }));
+      const genderIsMale = /^\s*(?:m|male|man|men)\s*$/i.test(p.gender);
       const observedCandidates: Array<{ name: string; unit: string; min: string; max: string }> = [];
       // OCR may identify test names, but it must never teach or overwrite saved
       // reference ranges. The patient's saved sex-specific range and saved unit
