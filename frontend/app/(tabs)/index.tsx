@@ -75,9 +75,9 @@ function ordinalShort(n: number) {
 }
 
 function abnormalLabLabels(patient: Patient, automaticFlags?: string[], includeWarnings = true): string[] {
-  const saved = String(automaticFlags !== undefined
-    ? automaticFlags.join("\n")
-    : patient.customData?.labOcrPossibleFlags || "").trim();
+  const cachedFlags = Array.isArray(automaticFlags) ? automaticFlags : [];
+  const persistedFlags = String(patient.customData?.labOcrPossibleFlags || "").split(/\r?\n/).map(value => value.trim()).filter(Boolean);
+  const saved = [...cachedFlags, ...persistedFlags].filter((value, index, all) => all.indexOf(value) === index).join("\n").trim();
   const labels: string[] = [];
   for (const raw of saved.split(/\r?\n/)) {
     const line = raw.trim();
