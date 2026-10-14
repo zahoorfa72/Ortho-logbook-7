@@ -234,6 +234,7 @@ export default function Logbook() {
       if (cancelled || scanInProgress) return;
       scanInProgress = true;
       try {
+      let patientsChanged = false;
       const snapshot: Record<string, { signature: string; flags: string[]; reportDate?: string }> = {};
       const photoCache: Record<string, { text: string; structuredText: string; isReport: boolean; reportDate: string; checkedAt?: number }> = {};
       try {
@@ -248,6 +249,43 @@ export default function Logbook() {
       let onlineOcrKey = "";
       try { const savedTests = await AsyncStorage.getItem("ortho_lab_test_definitions_v1"); if (savedTests) configuredLabTests = JSON.parse(savedTests); } catch {}
       try { onlineOcrKey = (await AsyncStorage.getItem("ortho_lab_online_ocr_api_key_v1")) || ""; } catch {}
+      const persistAndNotify = async (patient: Patient, flags: string[]) => {
+        if (!flags.length) return;
+        const joinedFlags = flags.join("\n");
+        const savedFlags = String(patient.customData?.labOcrPossibleFlags || "").trim();
+        if (savedFlags !== joinedFlags.trim()) {
+          try {
+            await api.put("/patients/" + patient.id, {
+              ...patient,
+              customData: { ...(patient.customData || {}), labOcrPossibleFlags: joinedFlags, labOcrDetectedAt: new Date().toISOString() },
+            });
+            patientsChanged = true;
+          } catch {
+            // Keep local scan results visible even if automatic persistence is temporarily unavailable.
+          }
+        }
+        const alertFlags = flags.filter(flag => flag.startsWith("ALERT:"));
+        if (!alertFlags.length) return;
+        const now = new Date();
+        const dayKey = now.getFullYear() + "-" + String(now.getMonth() + 1).padStart(2, "0") + "-" + String(now.getDate()).padStart(2, "0");
+        const storageKey = "ortho_lab_alert_daily_counts_v1";
+        try {
+          const rawCounts = await AsyncStorage.getItem(storageKey);
+          const counts = rawCounts ? JSON.parse(rawCounts) : {};
+          const patientDayKey = String(patient.id) + ":" + dayKey;
+          const shown = Number(counts?.[patientDayKey] || 0);
+          if (shown < 2) {
+            counts[patientDayKey] = shown + 1;
+            await AsyncStorage.setItem(storageKey, JSON.stringify(counts));
+            Alert.alert(
+              "Lab alert — " + (patient.name || "Patient"),
+              alertFlags.join("\n") + "\n\nVerify each value, unit, date and reference range against the original report. This is not a diagnosis."
+            );
+          }
+        } catch {
+          // Avoid repeated alert popups if the daily rate-limit cannot be read.
+        }
+      };
       for (const patient of data || []) {
         if (cancelled) return;
         const photos = [...new Set([...(patient.photos || []), ...((patient as any).photoUri ? [(patient as any).photoUri] : [])])].filter(Boolean);
@@ -260,7 +298,10 @@ export default function Logbook() {
           // Periodically re-read all photos; a prior pass may have missed a clear result/date.
           return !cached.checkedAt || now - cached.checkedAt > 10 * 60 * 1000;
         });
-        if (snapshot[patient.id]?.signature === signature && photosNeedingRetry.length === 0) continue;
+        if (snapshot[patient.id]?.signature === signature && photosNeedingRetry.length === 0) {
+          await persistAndNotify(patient, snapshot[patient.id]?.flags || []);
+          continue;
+        }
 
         const missingPhotos = photosNeedingRetry;
         for (let offset = 0; offset < missingPhotos.length; offset += 2) {
@@ -310,9 +351,11 @@ export default function Logbook() {
         const flags = datedFlags.filter((flag, index, all) => all.indexOf(flag) === index);
         const reportDate = reportTexts.map(extractLabReportDate).find(Boolean) || "";
         snapshot[patient.id] = { signature, flags: flags.slice(0, 20), reportDate };
+        await persistAndNotify(patient, flags.slice(0, 20));
         if (!cancelled) setLabFlagsByPatient({ ...snapshot });
         try { await AsyncStorage.setItem("ortho_lab_ocr_patient_cache_v7", JSON.stringify(snapshot)); } catch {}
       }
+      if (patientsChanged && !cancelled) queryClient.invalidateQueries({ queryKey: ["patients"] });
       } finally {
         scanInProgress = false;
       }
