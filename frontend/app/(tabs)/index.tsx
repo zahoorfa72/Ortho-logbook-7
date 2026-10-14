@@ -706,11 +706,10 @@ export default function Logbook() {
                 const hidden = labResultsHiddenByPatient[item.id] === true;
                 const hasAlert = labLabels.some(label => label.startsWith("ALERT:"));
                 const hasWarning = labLabels.some(label => label.startsWith("WARNING:"));
-                const hasAbnormal = hasAlert || hasWarning;
                 const tone = hasAlert ? (colors.error || "#B91C1C") : hasWarning ? (colors.warning || "#B7791F") : colors.brandPrimary;
                 return <View style={{ marginTop: spacing.xs, paddingVertical: 4, paddingHorizontal: spacing.sm, borderRadius: radius.sm, borderWidth: 1, borderColor: tone, backgroundColor: tone + "12" }}>
                   <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 4 }}>
-                    <Ionicons name={hasAlert ? "alert-circle" : "warning"} size={14} color={tone} />
+                    <Ionicons name={hasAlert ? "alert-circle" : hasWarning ? "warning" : "flask-outline"} size={14} color={tone} />
                     <Text style={{ color: tone, fontFamily: fontFamily.bold, fontSize: fontSize.xs }}>{hasAlert ? "LAB ALERT" : hasWarning ? "LAB WARNING" : "LAB RESULTS"}</Text>
                     {hidden ? <Text style={{ color: tone, fontSize: fontSize.xs }}>Results hidden — warning symbol remains visible</Text> : labLabels.map((label, index) => {
                       const warning = label.startsWith("WARNING:");
