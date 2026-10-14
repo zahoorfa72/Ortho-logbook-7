@@ -113,20 +113,40 @@ function oldLabResultLabels(patient: Patient, days: number): string[] {
   if (!Number.isFinite(days) || days < 1) return [];
   const addedDate = parseLabDate(String(patient.date || ""));
   if (!addedDate) return [];
-  const lines = String(patient.customData?.labOcrPossibleFlags || "").split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+  const addedDay = new Date(addedDate.getFullYear(), addedDate.getMonth(), addedDate.getDate()).getTime();
   const stale: string[] = [];
+  const addIfOld = (testName: string, result: string, rawDate: string) => {
+    const reportDate = parseLabDate(String(rawDate || "").trim());
+    if (!reportDate) return;
+    const reportDay = new Date(reportDate.getFullYear(), reportDate.getMonth(), reportDate.getDate()).getTime();
+    const ageDays = Math.floor((addedDay - reportDay) / 86400000);
+    if (ageDays >= days) {
+      const resultText = String(result || "").trim();
+      stale.push("OLD RESULT: " + (testName.trim() || "Lab test")
+        + (resultText ? " " + resultText : "")
+        + " · Report date " + String(rawDate).trim()
+        + " is " + ageDays + " days before patient date");
+    }
+  };
+  const lines = String(patient.customData?.labOcrPossibleFlags || "").split(/\r?\n/).map(x => x.trim()).filter(Boolean);
   for (const line of lines) {
     const match = line.match(/\|\s*Date\s*:\s*([^|]+)/i) || line.match(/\s· DATE:\s*(.+)$/i);
     if (!match) continue;
-    const reportDate = parseLabDate(match[1].trim());
-    if (!reportDate) continue;
-    const ageDays = Math.floor((new Date(addedDate.getFullYear(), addedDate.getMonth(), addedDate.getDate()).getTime() - new Date(reportDate.getFullYear(), reportDate.getMonth(), reportDate.getDate()).getTime()) / 86400000);
-    if (ageDays >= days) {
-      const testName = line.replace(/^(?:WARNING|ALERT|HIGH|LOW)\s*:\s*/i, "").split(/[|:]/)[0].trim();
-      stale.push("OLD RESULT: " + testName + " · Report date " + match[1].trim() + " is " + ageDays + " days before patient date");
-    }
+    const withoutStatus = line.replace(/^(?:WARNING|ALERT|HIGH|LOW)\s*:\s*/i, "");
+    const testName = withoutStatus.split(/[|:]/)[0].trim();
+    const resultMatch = withoutStatus.match(/[-+]?\d+(?:[.,]\d+)?/);
+    addIfOld(testName, resultMatch?.[0] || "", match[1].trim());
   }
-  return [...new Set(stale)];
+  try {
+    const manual = patient.customData?.labOcrManualResults ? JSON.parse(patient.customData.labOcrManualResults) : [];
+    if (Array.isArray(manual)) {
+      for (const item of manual) {
+        if (!item || !String(item.test || "").trim()) continue;
+        addIfOld(String(item.test), String(item.result ?? ""), String(item.date || item.reportDate || ""));
+      }
+    }
+  } catch {}
+  return [...new Set(stale)].slice(0, 20);
 }
 
 function abnormalLabLabels(patient: Patient, automaticFlags?: string[], includeWarnings = true): string[] {
@@ -1018,11 +1038,12 @@ export default function Logbook() {
                     </Pressable> : null}
                   </View>
                   {!hidden ? <>
-                    {reportDateDisplay ? <Text testID={\`lab-report-date-\${item.id}\`} style={{ color: colors.muted, fontSize: 10, marginTop: 2 }}>Report date: {reportDateDisplay}</Text> : null}
+                    {reportDateDisplay ? <Text testID={"lab-report-date-" + item.id} style={{ color: colors.muted, fontSize: 10, marginTop: 2 }}>Report date: {reportDateDisplay}</Text> : null}
                     {allDisplayLabLabels.length ? <View style={{ marginTop: 3, flexDirection: "row", flexWrap: "wrap", gap: 4 }}>
                       {allDisplayLabLabels.map((label, index) => {
-                        const warning = label.startsWith("WARNING:");\n                        const oldResult = label.startsWith("OLD RESULT:");
-                        const labelTone = warning ? (colors.warning || "#B7791F") : (colors.error || "#B91C1C");
+                        const warning = label.startsWith("WARNING:");
+                        const oldResult = label.startsWith("OLD RESULT:");
+                        const labelTone = oldResult ? (colors.muted || "#64748B") : warning ? (colors.warning || "#B7791F") : (colors.error || "#B91C1C");
                         const dateMatch = label.match(/\s· DATE:\s*(.+)$/);
                         const visibleLabel = dateMatch ? label.slice(0, dateMatch.index) : label;
                         const compactLabel = visibleLabel.length > 92 ? visibleLabel.slice(0, 89) + "…" : visibleLabel;
