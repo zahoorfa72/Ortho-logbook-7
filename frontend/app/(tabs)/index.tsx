@@ -287,7 +287,7 @@ export default function Logbook() {
 
   const runOnePatientLabScan = useCallback(async (patientId: string, forceRetry = true) => {
     if (runningLabScansRef.current.has(patientId)) return;
-    const patient = latestPatientsRef.current.find(value => value.id === patientId);
+    let patient = latestPatientsRef.current.find(value => value.id === patientId);
     if (!patient) {
       saveLabScanState(patientId, { status: "failed", message: "Patient record is not available in the current list.", updatedAt: new Date().toISOString() });
       return;
@@ -299,6 +299,11 @@ export default function Logbook() {
     runningLabScansRef.current.add(patientId);
     saveLabScanState(patientId, { status: "scanning", message: "Scanning this patient's saved photos…", updatedAt: new Date().toISOString() });
     try {
+      // The patient-list endpoint omits photo URIs, so load the full patient record before scanning.
+      try {
+        const fullPatient = await api.get<Patient>("/patients/" + patientId);
+        if (fullPatient?.id) patient = { ...patient, ...fullPatient };
+      } catch {}
       const photos = [...new Set([...(patient.photos || []), ...((patient as any).photoUri ? [(patient as any).photoUri] : [])])].filter(Boolean);
       if (!photos.length) {
         saveLabScanState(patientId, { status: "failed", message: "No saved photos found. Add the lab report photo to this patient, then tap Retry.", updatedAt: new Date().toISOString() });
@@ -386,6 +391,13 @@ export default function Logbook() {
             customData: { ...(patient.customData || {}), labOcrPossibleFlags: "", labOcrDetectedAt: new Date().toISOString(), labOcrReportDate: "" },
           });
           queryClient.invalidateQueries({ queryKey: ["patients"] });
+        } catch {}
+        try {
+          let snapshot: Record<string, any> = {};
+          const raw = await AsyncStorage.getItem("ortho_lab_ocr_patient_cache_v7");
+          if (raw) snapshot = JSON.parse(raw);
+          snapshot[patientId] = { signature: photos.join("|"), flags: [], reportDate: "" };
+          await AsyncStorage.setItem("ortho_lab_ocr_patient_cache_v7", JSON.stringify(snapshot));
         } catch {}
         saveLabScanState(patientId, { status: "failed", message: unreadableImages === photos.length
           ? "The photos could not be read. Check that the report is clear, then Retry."
