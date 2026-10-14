@@ -587,6 +587,28 @@ export async function recognizeLabText(uri: string, onlineApiKey = ""): Promise<
   } catch {
     best = await recognizeText(uri);
   }
+  const localScore = (value: any) => {
+    const text = String(value?.text || "");
+    return text.length + (text.match(/\d+(?:[.,]\d+)?/g) || []).length * 8 +
+      (text.match(/\b(?:result|reference|range|hemoglobin|haemoglobin|platelets|glucose|creatinine)\b/gi) || []).length * 12;
+  };
+  // If the first read is weak, retry sideways images at both orientations and
+  // keep the OCR pass that reads the most text/numbers/lab terms.
+  if (localScore(best) < 180 || (String(best?.text || "").match(/\d+(?:[.,]\d+)?/g) || []).length < 3) {
+    for (const degrees of [90, 270]) {
+      let rotatedUri = "";
+      try {
+        const rotated = await ImageManipulator.manipulateAsync(uri, [{ rotate: degrees }], { compress: 1, format: ImageManipulator.SaveFormat.PNG });
+        rotatedUri = rotated.uri;
+        const candidate = await recognizeText(rotated.uri);
+        if (localScore(candidate) > localScore(best)) {
+          best = candidate;
+          bestSize = { width: originalSize.height, height: originalSize.width };
+        }
+      } catch {}
+      if (rotatedUri) { try { await FileSystem.deleteAsync(rotatedUri, { idempotent: true }); } catch {} }
+    }
+  }
   let text = normalizeHemoglobinUnitText(String(best?.text || ""));
   let mode: "online" | "offline" = "offline";
   // Optional cloud OCR is attempted only when the admin explicitly saves a key.

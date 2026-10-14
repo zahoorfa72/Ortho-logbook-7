@@ -305,7 +305,7 @@ export default function PatientForm() {
         return { test: test.name, unit: test.unit || "", result: "", reference: range, photoUri: reviewSourcePhotos[0] || "", reportDate: reportDate || undefined, min: validRange ? min : undefined, max: validRange ? max : undefined };
       });
       const candidates: string[] = parsedRows
-        .filter(row => row.severity === "ALERT" || labWarningsEnabled)
+        .filter(row => row.severity === "ALERT" || (row.severity === "WARNING" && labWarningsEnabled))
         .map(row => row.severity + ": " + row.test + " " + row.result + (row.unit ? " " + row.unit : "") + " | Ref: " + row.reference);
       const uncertain: string[] = [];
       const seenReviewLines = new Set<string>();
@@ -319,13 +319,13 @@ export default function PatientForm() {
         const rawAt = page.indexOf(rawMarker);
         if (at < 0) continue;
         const section = page.slice(at + marker.length, rawAt >= 0 ? rawAt : undefined);
-        for (const rawLine of section.split(/\\r?\\n/)) {
-          const line = rawLine.replace(/\\s+/g, " ").trim();
+        for (const rawLine of section.split(/\r?\n/)) {
+          const line = rawLine.replace(/\s+/g, " ").trim();
           if (!line || !line.includes("|")) continue;
           const cells = line.split("|").map(cell => cell.trim());
           if (cells.length < 2 || !/[a-z]{2,}/i.test(cells[0])) continue;
           const knownTest = hasKnownLabTestName(cells[0], configuredLabTests);
-          const resultLooksNumeric = /^\\s*[<>≤≥]?\\s*[-+]?\\d+(?:[.,]\\d+)?(?:\\s|$)/.test(cells[1] || "");
+          const resultLooksNumeric = /^\s*[<>≤≥]?\s*[-+]?\d+(?:[.,]\d+)?(?:\s|$)/.test(cells[1] || "");
           let reason = "";
           // Ignore header/logo noise that OCR mistakenly placed in the test-name
           // column (e.g. "SASINS") when that row has no numeric patient result.
@@ -338,12 +338,12 @@ export default function PatientForm() {
             const testName = cells[0];
             const saved = configuredLabTests.find(item => item.name.toLowerCase() === testName.toLowerCase()) ||
               configuredLabTests.find(item => testName.toLowerCase().startsWith(item.name.toLowerCase()));
-            const sex = /^\\s*(?:m|male|man|men)\\s*$/i.test(p.gender) ? "male" :
-              /^\\s*(?:f|female|woman|women)\\s*$/i.test(p.gender) ? "female" : "";
+            const sex = /^\s*(?:m|male|man|men)\s*$/i.test(p.gender) ? "male" :
+              /^\s*(?:f|female|woman|women)\s*$/i.test(p.gender) ? "female" : "";
             const savedRangeExists = !!saved && !!sex &&
               String(sex === "male" ? saved.maleMin : saved.femaleMin).trim() !== "" &&
               String(sex === "male" ? saved.maleMax : saved.femaleMax).trim() !== "";
-            const reportRangeExists = /[-+]?\\d+(?:[.,]\\d+)?\\s*(?:-|–|—|\\bto\\b)\\s*[-+]?\\d+(?:[.,]\\d+)?/i.test(cells.slice(3).join(" "));
+            const reportRangeExists = /[-+]?\d+(?:[.,]\d+)?\s*(?:-|–|—|\bto\b)\s*[-+]?\d+(?:[.,]\d+)?/i.test(cells.slice(3).join(" "));
             if (!reportRangeExists && !savedRangeExists) reason = "Check reference range (not readable and no saved range is available for this patient's sex)";
           }
           if (reason && !seenReviewLines.has(line.toLowerCase())) {
@@ -841,7 +841,7 @@ export default function PatientForm() {
       const reviewedLabResults = labManualReviews
         .filter(item => String(item.result || "").trim())
         .map(item => {
-          const range = String(item.reference || "").match(/([-+]?\\d+(?:[.,]\\d+)?)\\s*(?:-|–|—|to)\\s*([-+]?\\d+(?:[.,]\\d+)?)/i);
+          const range = String(item.reference || "").match(/([-+]?\d+(?:[.,]\d+)?)\s*(?:-|–|—|to)\s*([-+]?\d+(?:[.,]\d+)?)/i);
           const min = item.min ?? (range ? Number(range[1].replace(",", ".")) : undefined);
           const max = item.max ?? (range ? Number(range[2].replace(",", ".")) : undefined);
           const value = Number(String(item.result).replace(",", "."));
@@ -858,6 +858,7 @@ export default function PatientForm() {
             min,
             max,
             severity,
+            date: item.reportDate || item.date || "",
             manuallyVerified: true,
           };
         });
@@ -1234,7 +1235,7 @@ export default function PatientForm() {
                   {String(item.severity || "ALERT").toUpperCase()} — OUT OF RANGE
                 </Text>
                 <Field label="Test name" value={String(item.test || "")} onChangeText={(value: string) => updateSavedManualResult("test", value)} />
-                <Field label="Result" value={String(item.result || "")} onChangeText={(value: string) => updateSavedManualResult("result", value)} keyboardType="decimal-pad" inputMode="decimal" />
+                <Field label="Result" value={String(item.result || "")} onChangeText={(value: string) => updateSavedManualResult("result", value)} keyboardType="decimal-pad" inputMode="decimal" selectTextOnFocus />
                 <Field label="Unit" value={String(item.unit || "")} onChangeText={(value: string) => updateSavedManualResult("unit", value)} />
                 <Field label="Reference range" value={String(item.reference || "")} onChangeText={(value: string) => updateSavedManualResult("reference", value)} />
                 <Text style={{ color: colors.onSurfaceSecondary, marginTop: spacing.xs, fontSize: fontSize.sm }}>Changes are included when you press Save/Update Record.</Text>

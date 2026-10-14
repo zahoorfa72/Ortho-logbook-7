@@ -168,7 +168,7 @@ export default function Logbook() {
     AsyncStorage.getItem("ortho_lab_ocr_enabled").then(value => setLabOcrEnabled(value === "true")).catch(() => setLabOcrEnabled(false));
     AsyncStorage.getItem("ortho_lab_warnings_enabled").then(value => setLabWarningsEnabled(value !== "false")).catch(() => setLabWarningsEnabled(true));
     AsyncStorage.getItem("ortho_lab_results_hidden_by_patient_v1").then(raw => { if (raw) { try { const parsed = JSON.parse(raw); if (parsed && typeof parsed === "object") setLabResultsHiddenByPatient(parsed); } catch {} } }).catch(() => {});
-    AsyncStorage.getItem("ortho_lab_ocr_patient_cache_v6").then(raw => {
+    AsyncStorage.getItem("ortho_lab_ocr_patient_cache_v7").then(raw => {
       if (!raw) return;
       try {
         const parsed = JSON.parse(raw);
@@ -237,11 +237,11 @@ export default function Logbook() {
       const snapshot: Record<string, { signature: string; flags: string[]; reportDate?: string }> = {};
       const photoCache: Record<string, { text: string; structuredText: string; isReport: boolean; reportDate: string; checkedAt?: number }> = {};
       try {
-        const raw = await AsyncStorage.getItem("ortho_lab_ocr_patient_cache_v6");
+        const raw = await AsyncStorage.getItem("ortho_lab_ocr_patient_cache_v7");
         if (raw) Object.assign(snapshot, JSON.parse(raw));
       } catch {}
       try {
-        const raw = await AsyncStorage.getItem("ortho_lab_ocr_photo_cache_v2");
+        const raw = await AsyncStorage.getItem("ortho_lab_ocr_photo_cache_v3");
         if (raw) Object.assign(photoCache, JSON.parse(raw));
       } catch {}
       let configuredLabTests: import("@/src/utils/lab-ocr").LabTestDefinition[] = [];
@@ -257,8 +257,8 @@ export default function Logbook() {
         const photosNeedingRetry = photos.filter(uri => {
           const cached = photoCache[labPhotoCacheKey(uri)];
           if (!cached) return true;
-          // Successful report OCR is reused. Unreadable/non-report photos are retried after 15 minutes.
-          return !cached.isReport && (!cached.checkedAt || now - cached.checkedAt > 15 * 60 * 1000);
+          // Periodically re-read all photos; a prior pass may have missed a clear result/date.
+          return !cached.checkedAt || now - cached.checkedAt > 10 * 60 * 1000;
         });
         if (snapshot[patient.id]?.signature === signature && photosNeedingRetry.length === 0) continue;
 
@@ -271,8 +271,15 @@ export default function Logbook() {
               const result = await recognizeLabText(uri, onlineOcrKey);
               const text = String(result?.text || "").trim();
               const structuredText = result?.mode === "online" ? "" : String(result?.structuredText || "").trim();
-              return { uri, text, structuredText, isReport: !!(text || structuredText) &&
-                (isLikelyLabReportText(text, configuredLabTests) || isLikelyLabReportText(structuredText, configuredLabTests)) };
+              const combined = text + "\n" + structuredText;
+              const hasNumbers = /[-+]?\d+(?:[.,]\d+)?/.test(combined);
+              const hasLabCue = /\b(?:laboratory|lab report|investigation|test name|test results?|reference range|normal range|biological reference|specimen|hemoglobin|haemoglobin|platelets|glucose|creatinine|hbsag|hcv|hiv|wbc|rbc)\b/i.test(combined);
+              const isReport = !!combined.trim() && (
+                isLikelyLabReportText(text, configuredLabTests) ||
+                isLikelyLabReportText(structuredText, configuredLabTests) ||
+                (hasNumbers && hasLabCue)
+              );
+              return { uri, text, structuredText, isReport };
             } catch { return { uri, text: "", structuredText: "", isReport: false }; }
           }));
           for (const result of results) {
@@ -284,7 +291,7 @@ export default function Logbook() {
               checkedAt: Date.now(),
             };
           }
-          try { await AsyncStorage.setItem("ortho_lab_ocr_photo_cache_v2", JSON.stringify(photoCache)); } catch {}
+          try { await AsyncStorage.setItem("ortho_lab_ocr_photo_cache_v3", JSON.stringify(photoCache)); } catch {}
         }
 
         const reportTexts = photos.map(uri => photoCache[labPhotoCacheKey(uri)]).filter(entry => entry?.isReport).map((entry, index) =>
@@ -304,7 +311,7 @@ export default function Logbook() {
         const reportDate = reportTexts.map(extractLabReportDate).find(Boolean) || "";
         snapshot[patient.id] = { signature, flags: flags.slice(0, 20), reportDate };
         if (!cancelled) setLabFlagsByPatient({ ...snapshot });
-        try { await AsyncStorage.setItem("ortho_lab_ocr_patient_cache_v6", JSON.stringify(snapshot)); } catch {}
+        try { await AsyncStorage.setItem("ortho_lab_ocr_patient_cache_v7", JSON.stringify(snapshot)); } catch {}
       }
       } finally {
         scanInProgress = false;
