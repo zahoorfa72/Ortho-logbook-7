@@ -306,7 +306,12 @@ export default function PatientForm() {
       });
       const candidates: string[] = parsedRows
         .filter(row => row.severity === "ALERT" || (row.severity === "WARNING" && labWarningsEnabled))
-        .map(row => row.severity + ": " + row.test + " " + row.result + (row.unit ? " " + row.unit : "") + " | Ref: " + row.reference);
+        .map(row => {
+          const matchingPage = extracted.split(/(?=LAB REPORT IMAGE\s+\d+)/i).find(page => canonical(page).includes(canonical(row.test)));
+          const reportDate = extractLabReportDate(matchingPage || extracted);
+          return row.severity + ": " + row.test + " " + row.result + (row.unit ? " " + row.unit : "") +
+            (reportDate ? " | Date: " + reportDate : "") + " | Ref: " + row.reference;
+        });
       const uncertain: string[] = [];
       const seenReviewLines = new Set<string>();
       // Only generate review suggestions from reconstructed table rows. Raw OCR
@@ -1162,7 +1167,7 @@ export default function PatientForm() {
                     const abnormal = hasRange && (value < (min as number) || value > (max as number));
                     const boundary = hasRange ? (value < (min as number) ? (min as number) : (max as number)) : 0;
                     const excursion = abnormal && boundary !== 0 ? Math.abs(value - boundary) / Math.abs(boundary) * 100 : abnormal ? 100 : 0;
-                    const severity = abnormal ? (excursion <= labWarningThreshold ? "WARNING" : "ALERT") : "";
+                    const severity = abnormal && excursion > 1 ? (excursion <= labWarningThreshold ? "WARNING" : "ALERT") : "";
                     return { test: item.test, result: item.result.trim(), unit: item.unit, reference: item.reference, date: item.reportDate || "", min, max, severity, manuallyVerified: true };
                   });
                   if (!manual.length) {
