@@ -300,10 +300,15 @@ function normalizeLabUnit(testName: string, unit: string): string {
 }
 
 function normalizeHemoglobinUnitText(text: string): string {
-  return String(text || "").split(/\r?\n/).map(line => {
+  // These OCR strings are not valid lab units. Normalize them even when the OCR
+  // engine puts the unit on a separate line from the test name.
+  const normalized = String(text || "")
+    .replace(/\b(?:r|q|9)\s*\/\s*(?:a|d)\s*\/?\s*[lI1]\b/gi, "g/dL")
+    .replace(/\b(?:r|q|9)\s*(?:a|d)\s*[lI1]\b/gi, "g/dL");
+  return normalized.split(/\r?\n/).map(line => {
     if (!/\b(?:hemoglobin|haemoglobin|hgb|hb)\b/i.test(line)) return line;
-    return line.replace(/\b(?:r|q|9|g)\s*\/\s*(?:a|d)\s*\/?\s*[lI1]\b/gi, "g/dL")
-      .replace(/\b(?:r|q|9|g)\s*(?:a|d)\s*[lI1]\b/gi, "g/dL");
+    return line.replace(/\bg\s*\/\s*a\s*\/?\s*[lI1]\b/gi, "g/dL")
+      .replace(/\bg\s*a\s*[lI1]\b/gi, "g/dL");
   }).join("\n");
 }
 
