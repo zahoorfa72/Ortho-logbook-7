@@ -76,29 +76,27 @@ function ordinalShort(n: number) {
 
 function abnormalLabLabels(patient: Patient, automaticFlags?: string[], includeWarnings = true): string[] {
   const saved = String(automaticFlags !== undefined
-    ? automaticFlags.join("\\n")
+    ? automaticFlags.join("\n")
     : patient.customData?.labOcrPossibleFlags || "").trim();
   const labels: string[] = [];
-  // Keep automatic OCR findings, then independently evaluate saved manual reviews.
-  // This ensures verified results still appear on the patient list after leaving the form.
-  for (const raw of saved.split(/\\r?\\n/)) {
+  for (const raw of saved.split(/\r?\n/)) {
     const line = raw.trim();
     if (!line) continue;
-    const statusMatch = line.match(/^(WARNING|ALERT|HIGH|LOW)\\s*:\\s*/i);
+    const statusMatch = line.match(/^(WARNING|ALERT|HIGH|LOW)\s*:\s*/i);
     const status = statusMatch?.[1]?.toUpperCase() || "ALERT";
     const withoutStatus = statusMatch ? line.slice(statusMatch[0].length) : line;
-    const refMatch = withoutStatus.match(/\\|\\s*Ref\\s*:\\s*(.+)$/i);
+    const refMatch = withoutStatus.match(/\|\s*Ref\s*:\s*(.+)$/i);
     const reference = refMatch?.[1]?.trim();
-    const core = refMatch ? withoutStatus.slice(0, refMatch.index).trim() : withoutStatus.replace(/\\s+—\\s*POSSIBLY OUT OF RANGE.*$/i, "").trim();
-    const resultMatch = core.match(/[-+]?\\d+(?:[.,]\\d+)?/);
+    const core = refMatch ? withoutStatus.slice(0, refMatch.index).trim() : withoutStatus.replace(/\s+—\s*POSSIBLY OUT OF RANGE.*$/i, "").trim();
+    const resultMatch = core.match(/[-+]?\d+(?:[.,]\d+)?/);
     const resultText = resultMatch?.[0] || "";
     const first = resultMatch?.index ?? -1;
-    let test = first > 0 ? core.slice(0, first).replace(/^[\\s:|•-]+|[\\s:|•-]+$/g, "").trim() : "";
-    test = test.replace(/^(?:image\\s+\\d+\\s*)/i, "").trim();
+    let test = first > 0 ? core.slice(0, first).replace(/^[\s:|•-]+|[\s:|•-]+$/g, "").trim() : "";
+    test = test.replace(/^(?:image\s+\d+\s*)/i, "").trim();
     if (!test || /^(?:ref(?:erence)?|normal|range|result|value)$/i.test(test)) test = "Test unclear";
-    const unit = resultMatch ? core.slice(first + resultText.length).replace(/[|:;]/g, " ").replace(/\\s+/g, " ").trim().slice(0, 12) : "";
+    const unit = resultMatch ? core.slice(first + resultText.length).replace(/[|:;]/g, " ").replace(/\s+/g, " ").trim().slice(0, 12) : "";
     const label = status + ": " + test + (resultText ? " " + resultText : "") + (unit ? " " + unit : "") + (reference ? " (Ref " + reference + ")" : "");
-    if (!labels.includes(label)) labels.push(label);
+    if (!labels.includes(label) && (includeWarnings || status !== "WARNING")) labels.push(label);
   }
 
   let manual: any[] = [];
@@ -109,10 +107,10 @@ function abnormalLabLabels(patient: Patient, automaticFlags?: string[], includeW
   for (const item of manual) {
     if (!item || !String(item.test || "").trim() || !String(item.result ?? "").trim()) continue;
     const value = Number(String(item.result).replace(",", "."));
-    const range = String(item.reference || "").match(/^\\s*([-+]?\\d+(?:[.,]\\d+)?)\\s*(?:-|–|—|to)\\s*([-+]?\\d+(?:[.,]\\d+)?)\\s*$/i)
-      || String(item.reference || "").match(/([-+]?\\d+(?:[.,]\\d+)?)\\s*(?:-|–|—|to)\\s*([-+]?\\d+(?:[.,]\\d+)?)/i);
-    const min = Number.isFinite(Number(item.min)) ? Number(item.min) : range ? Number(range[1].replace(",", ".")) : NaN;
-    const max = Number.isFinite(Number(item.max)) ? Number(item.max) : range ? Number(range[2].replace(",", ".")) : NaN;
+    const range = String(item.reference || "").match(/^\s*([-+]?\d+(?:[.,]\d+)?)\s*(?:-|–|—|to)\s*([-+]?\d+(?:[.,]\d+)?)\s*$/i)
+      || String(item.reference || "").match(/([-+]?\d+(?:[.,]\d+)?)\s*(?:-|–|—|to)\s*([-+]?\d+(?:[.,]\d+)?)/i);
+    const min = item.min !== undefined && item.min !== null && item.min !== "" ? Number(item.min) : range ? Number(range[1].replace(",", ".")) : NaN;
+    const max = item.max !== undefined && item.max !== null && item.max !== "" ? Number(item.max) : range ? Number(range[2].replace(",", ".")) : NaN;
     const hasRange = Number.isFinite(value) && Number.isFinite(min) && Number.isFinite(max) && max > min;
     const outside = hasRange && (value < min || value > max);
     let severity = String(item.severity || "").toUpperCase();
@@ -122,8 +120,6 @@ function abnormalLabLabels(patient: Patient, automaticFlags?: string[], includeW
       const deviation = Math.abs(value - boundary) / Math.max(Math.abs(boundary), 0.000001) * 100;
       severity = deviation <= 10 ? "WARNING" : "ALERT";
     }
-    // Only display manual entries as alerts when a valid range proves they are outside,
-    // or a saved explicit severity exists. Do not infer abnormality from a missing range.
     if (!severity || (!outside && !item.severity)) continue;
     if (severity === "WARNING" && !includeWarnings) continue;
     const label = severity + ": [MANUAL] " + String(item.test).trim() + " " + String(item.result).trim()
@@ -131,9 +127,8 @@ function abnormalLabLabels(patient: Patient, automaticFlags?: string[], includeW
       + (item.reference ? " (Ref " + String(item.reference).trim() + ")" : "");
     if (!labels.includes(label)) labels.push(label);
   }
-  return labels.filter(label => includeWarnings || !label.startsWith("WARNING:")).slice(0, 20);
+  return labels.slice(0, 20);
 }
-
 export default function Logbook() {
   const styles = useStyles();
   const { colors, branding } = useTheme();
@@ -162,7 +157,7 @@ export default function Logbook() {
     AsyncStorage.getItem("ortho_lab_ocr_enabled").then(value => setLabOcrEnabled(value === "true")).catch(() => setLabOcrEnabled(false));
     AsyncStorage.getItem("ortho_lab_warnings_enabled").then(value => setLabWarningsEnabled(value !== "false")).catch(() => setLabWarningsEnabled(true));
     AsyncStorage.getItem("ortho_lab_results_hidden_by_patient_v1").then(raw => { if (raw) { try { const parsed = JSON.parse(raw); if (parsed && typeof parsed === "object") setLabResultsHiddenByPatient(parsed); } catch {} } }).catch(() => {});
-    AsyncStorage.getItem("ortho_lab_ocr_patient_cache_v3").then(raw => {
+    AsyncStorage.getItem("ortho_lab_ocr_patient_cache_v4").then(raw => {
       if (!raw) return;
       try {
         const parsed = JSON.parse(raw);
@@ -224,7 +219,7 @@ export default function Logbook() {
     const scan = async () => {
       const snapshot: Record<string, { signature: string; flags: string[] }> = {};
       try {
-        const raw = await AsyncStorage.getItem("ortho_lab_ocr_patient_cache_v3");
+        const raw = await AsyncStorage.getItem("ortho_lab_ocr_patient_cache_v4");
         if (raw) Object.assign(snapshot, JSON.parse(raw));
       } catch {}
       let configuredLabTests: import("@/src/utils/lab-ocr").LabTestDefinition[] = [];
@@ -241,8 +236,14 @@ export default function Logbook() {
           try {
             const result = await recognizeLabText(uri);
             const text = String(result?.text || "").trim();
-            if (!text) continue;
-            if (isLikelyLabReportText(text, configuredLabTests)) reportTexts.push(text);
+            const structuredText = result?.mode === "online" ? "" : String(result?.structuredText || "").trim();
+            if (!text && !structuredText) continue;
+            const isReport = isLikelyLabReportText(text, configuredLabTests) || isLikelyLabReportText(structuredText, configuredLabTests);
+            if (isReport) {
+              reportTexts.push("LAB REPORT IMAGE " + (reportTexts.length + 1) + "\n" +
+                (structuredText ? "RECONSTRUCTED TABLE ROWS (test | result | unit | reference range)\n" + structuredText + "\n" : "") +
+                "RAW OCR TEXT FOR REVIEW\n" + text);
+            }
           } catch {}
         }
         const flags = reportTexts.flatMap(reportText =>
@@ -252,7 +253,7 @@ export default function Logbook() {
         ).filter((flag, index, all) => all.indexOf(flag) === index);
         snapshot[patient.id] = { signature, flags: flags.slice(0, 20) };
         if (!cancelled) setLabFlagsByPatient({ ...snapshot });
-        try { await AsyncStorage.setItem("ortho_lab_ocr_patient_cache_v3", JSON.stringify(snapshot)); } catch {}
+        try { await AsyncStorage.setItem("ortho_lab_ocr_patient_cache_v4", JSON.stringify(snapshot)); } catch {}
       }
     };
     void scan();
