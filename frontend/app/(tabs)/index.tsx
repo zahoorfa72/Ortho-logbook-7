@@ -3,7 +3,7 @@ import { router, useFocusEffect } from "expo-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { triggerAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-backup";
-import { isLikelyLabReportText, parseLabReportRows, recognizeLabText } from "@/src/utils/lab-ocr";
+import { extractLabReportDate, isLikelyLabReportText, parseLabReportRows, recognizeLabText } from "@/src/utils/lab-ocr";
 import {
   ActivityIndicator,
   Alert,
@@ -67,6 +67,12 @@ type Patient = {
   totalOperations?: number;
   implants?: { id:string; inventoryId:string; name:string; category:string; size:string; quantity:number }[];
 };
+
+function labPhotoCacheKey(uri: string): string {
+  let hash = 2166136261;
+  for (let i = 0; i < uri.length; i++) hash = Math.imul(hash ^ uri.charCodeAt(i), 16777619);
+  return "photo-" + (hash >>> 0).toString(16);
+}
 
 function ordinalShort(n: number) {
   const s = ["th", "st", "nd", "rd"];
@@ -211,16 +217,23 @@ export default function Logbook() {
     queryFn: () => api.get("/patients"),
   });
 
-  // Background scan existing patient-file pictures. There is no upload/selection
-  // step: OCR is local on the device, and only lab-like text rows are evaluated.
+  // Scan patient photos automatically while the app is open, without opening
+  // Patient Form. OCR text is cached per image, so a new photo does not force
+  // every old report to be scanned again. Two new images are processed in
+  // parallel to reduce waiting while keeping memory use moderate.
   useEffect(() => {
     if (!labOcrEnabled) return;
     let cancelled = false;
     const scan = async () => {
-      const snapshot: Record<string, { signature: string; flags: string[] }> = {};
+      const snapshot: Record<string, { signature: string; flags: string[]; reportDate?: string }> = {};
+      const photoCache: Record<string, { text: string; structuredText: string; isReport: boolean; reportDate: string }> = {};
       try {
         const raw = await AsyncStorage.getItem("ortho_lab_ocr_patient_cache_v4");
         if (raw) Object.assign(snapshot, JSON.parse(raw));
+      } catch {}
+      try {
+        const raw = await AsyncStorage.getItem("ortho_lab_ocr_photo_cache_v1");
+        if (raw) Object.assign(photoCache, JSON.parse(raw));
       } catch {}
       let configuredLabTests: import("@/src/utils/lab-ocr").LabTestDefinition[] = [];
       try { const savedTests = await AsyncStorage.getItem("ortho_lab_test_definitions_v1"); if (savedTests) configuredLabTests = JSON.parse(savedTests); } catch {}
@@ -230,28 +243,47 @@ export default function Logbook() {
         if (!photos.length) continue;
         const signature = photos.join("|");
         if (snapshot[patient.id]?.signature === signature) continue;
-        const reportTexts: string[] = [];
-        for (const uri of photos) {
+
+        const missingPhotos = photos.filter(uri => !photoCache[labPhotoCacheKey(uri)]);
+        for (let offset = 0; offset < missingPhotos.length; offset += 2) {
           if (cancelled) return;
-          try {
-            const result = await recognizeLabText(uri);
-            const text = String(result?.text || "").trim();
-            const structuredText = result?.mode === "online" ? "" : String(result?.structuredText || "").trim();
-            if (!text && !structuredText) continue;
-            const isReport = isLikelyLabReportText(text, configuredLabTests) || isLikelyLabReportText(structuredText, configuredLabTests);
-            if (isReport) {
-              reportTexts.push("LAB REPORT IMAGE " + (reportTexts.length + 1) + "\n" +
-                (structuredText ? "RECONSTRUCTED TABLE ROWS (test | result | unit | reference range)\n" + structuredText + "\n" : "") +
-                "RAW OCR TEXT FOR REVIEW\n" + text);
-            }
-          } catch {}
+          const batch = missingPhotos.slice(offset, offset + 2);
+          const results = await Promise.all(batch.map(async uri => {
+            try {
+              const result = await recognizeLabText(uri);
+              const text = String(result?.text || "").trim();
+              const structuredText = result?.mode === "online" ? "" : String(result?.structuredText || "").trim();
+              return { uri, text, structuredText, isReport: !!(text || structuredText) &&
+                (isLikelyLabReportText(text, configuredLabTests) || isLikelyLabReportText(structuredText, configuredLabTests)) };
+            } catch { return { uri, text: "", structuredText: "", isReport: false }; }
+          }));
+          for (const result of results) {
+            photoCache[labPhotoCacheKey(result.uri)] = {
+              text: result.text,
+              structuredText: result.structuredText,
+              isReport: result.isReport,
+              reportDate: extractLabReportDate(result.text + "\n" + result.structuredText),
+            };
+          }
+          try { await AsyncStorage.setItem("ortho_lab_ocr_photo_cache_v1", JSON.stringify(photoCache)); } catch {}
         }
-        const flags = reportTexts.flatMap(reportText =>
-          parseLabReportRows(reportText, configuredLabTests, patient.gender).map(row =>
-            row.severity + ": " + row.test + " " + row.result + (row.unit ? " " + row.unit : "") + " | Ref: " + row.reference
-          )
-        ).filter((flag, index, all) => all.indexOf(flag) === index);
-        snapshot[patient.id] = { signature, flags: flags.slice(0, 20) };
+
+        const reportTexts = photos.map(uri => photoCache[labPhotoCacheKey(uri)]).filter(entry => entry?.isReport).map((entry, index) =>
+          "LAB REPORT IMAGE " + (index + 1) + "\n" +
+          (entry.reportDate ? "IMAGE REPORT DATE: " + entry.reportDate + "\n" : "") +
+          (entry.structuredText ? "RECONSTRUCTED TABLE ROWS (test | result | unit | reference range)\n" + entry.structuredText + "\n" : "") +
+          "RAW OCR TEXT FOR REVIEW\n" + entry.text
+        );
+        const datedFlags = reportTexts.flatMap(reportText => {
+          const reportDate = extractLabReportDate(reportText);
+          return parseLabReportRows(reportText, configuredLabTests, patient.gender).map(row =>
+            row.severity + ": " + row.test + " " + row.result + (row.unit ? " " + row.unit : "") +
+            (reportDate ? " | Date: " + reportDate : "") + " | Ref: " + row.reference
+          );
+        });
+        const flags = datedFlags.filter((flag, index, all) => all.indexOf(flag) === index);
+        const reportDate = reportTexts.map(extractLabReportDate).find(Boolean) || "";
+        snapshot[patient.id] = { signature, flags: flags.slice(0, 20), reportDate };
         if (!cancelled) setLabFlagsByPatient({ ...snapshot });
         try { await AsyncStorage.setItem("ortho_lab_ocr_patient_cache_v4", JSON.stringify(snapshot)); } catch {}
       }
@@ -259,7 +291,6 @@ export default function Logbook() {
     void scan();
     return () => { cancelled = true; };
   }, [labOcrEnabled, data]);
-
   const toggleLabResultsHidden = async (id: string) => {
     const next = { ...labResultsHiddenByPatient, [id]: !labResultsHiddenByPatient[id] };
     setLabResultsHiddenByPatient(next);
