@@ -340,7 +340,7 @@ function classifyDeviation(resultRaw: string, reference: ReferenceInterval, warn
  */
 export function extractLabReportDate(text: string): string {
   const source = String(text || "").replace(/\s+/g, " ");
-  const labelled = /\b(?:image\s+report\s+date|report(?:ing)?\s+date|date\s+of\s+report|collection\s+date|date\s+of\s+collection|sample\s+date|specimen\s+date|test\s+date|collected\s+on|tested\s+on)\b\s*[:=\-]?\s*(\d{1,4}[\/.-]\d{1,2}[\/.-]\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{2,4})/i.exec(source);
+  const labelled = /\b(?:image\s+report\s+date|report(?:ing)?\s+date|date\s+of\s+report|collection\s+date|date\s+of\s+collection|sample\s+date|specimen\s+date|test\s+date|collected\s+on|tested\s+on|date)\b\s*[:=\-]?\s*(?!of\s+birth)(\d{1,4}[\/.-]\d{1,2}[\/.-]\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{2,4})/i.exec(source);
   if (!labelled) return "";
   const value = labelled[1].replace(/\s+/g, " ").trim();
   const numeric = /^(\d{1,4})[\/.-](\d{1,2})[\/.-](\d{2,4})$/.exec(value);

@@ -300,7 +300,7 @@ export default function PatientForm() {
         const max = Number(String(test.max ?? "").replace(",", "."));
         const validRange = String(test.min ?? "").trim() !== "" && String(test.max ?? "").trim() !== "" && Number.isFinite(min) && Number.isFinite(max);
         const range = validRange ? String(test.min) + "–" + String(test.max) : "";
-        const matchingPage = extracted.split(/(?=LAB REPORT IMAGE\\s+\\d+)/i).find(page => canonical(page).includes(canonical(test.name)));
+        const matchingPage = extracted.split(/(?=LAB REPORT IMAGE\s+\d+)/i).find(page => canonical(page).includes(canonical(test.name)));
         const reportDate = extractLabReportDate(matchingPage || extracted);
         return { test: test.name, unit: test.unit || "", result: "", reference: range, photoUri: reviewSourcePhotos[0] || "", reportDate: reportDate || undefined, min: validRange ? min : undefined, max: validRange ? max : undefined };
       });
@@ -312,7 +312,7 @@ export default function PatientForm() {
       // Only generate review suggestions from reconstructed table rows. Raw OCR
       // includes headings, reference ranges, and normal rows, so scanning every
       // raw line produced false "could not match" warnings even for clear reports.
-      for (const page of extracted.split(/(?=LAB REPORT IMAGE\\s+\\d+)/i)) {
+      for (const page of extracted.split(/(?=LAB REPORT IMAGE\s+\d+)/i)) {
         const marker = "RECONSTRUCTED TABLE ROWS (test | result | unit | reference range)";
         const rawMarker = "RAW OCR TEXT FOR REVIEW";
         const at = page.indexOf(marker);
@@ -849,7 +849,7 @@ export default function PatientForm() {
           const abnormal = hasRange && (value < (min as number) || value > (max as number));
           const boundary = hasRange ? (value < (min as number) ? (min as number) : (max as number)) : 0;
           const excursion = abnormal && boundary !== 0 ? Math.abs(value - boundary) / Math.max(Math.abs(boundary), 0.000001) * 100 : abnormal ? 100 : 0;
-          const severity = abnormal ? (excursion <= labWarningThreshold ? "WARNING" : "ALERT") : "";
+          const severity = abnormal && excursion > 1 ? (excursion <= labWarningThreshold ? "WARNING" : "ALERT") : "";
           return {
             test: item.test,
             result: String(item.result).trim(),
@@ -1170,9 +1170,7 @@ export default function PatientForm() {
                   }
                   setP(previous => ({ ...previous, customData: { ...(previous.customData || {}), labOcrManualResults: JSON.stringify(manual) } }));
                   const abnormal = manual.filter(item => item.severity);
-                  const findings = manual.map(item => item.severity
-                    ? item.severity + ": " + item.test + " " + item.result + (item.unit ? " " + item.unit : "") + " | Ref: " + (item.reference || "not available")
-                    : "VERIFIED: " + item.test + " " + item.result + (item.unit ? " " + item.unit : "") + (item.reference ? " | Ref: " + item.reference : ""));
+                  const findings = manual.filter(item => item.severity).map(item => item.severity + ": " + item.test + " " + item.result + (item.unit ? " " + item.unit : "") + (item.date ? " | Date: " + item.date : "") + " | Ref: " + (item.reference || "not available"));
                   setLabOcrFindings(previous => [...previous.filter(row => !/^(?:WARNING|ALERT|VERIFIED):/.test(row)), ...findings]);
                   if (abnormal.length) {
                     const alertItems = abnormal.map(item => item.severity + ": " + item.test + " = " + item.result + (item.unit ? " " + item.unit : "") + " (reference " + (item.reference || "not available") + ")");
@@ -1189,11 +1187,25 @@ export default function PatientForm() {
             </View> : null}
           </View>
         ) : null}
-        {savedManualLabResults.length > 0 ? (
+        {savedManualLabResults.some((item: any) => {
+          const range = String(item.reference || "").match(/([-+]?\d+(?:[.,]\d+)?)\s*(?:-|–|—|to)\s*([-+]?\d+(?:[.,]\d+)?)/i);
+          const min = Number(String(item.min ?? (range ? range[1] : "")).replace(",", "."));
+          const max = Number(String(item.max ?? (range ? range[2] : "")).replace(",", "."));
+          const value = Number(String(item.result || "").replace(",", "."));
+          const deviation = value < min ? Math.abs(value - min) / Math.max(Math.abs(min), 0.000001) * 100 : Math.abs(value - max) / Math.max(Math.abs(max), 0.000001) * 100;
+          return Number.isFinite(value) && Number.isFinite(min) && Number.isFinite(max) && max > min && (value < min || value > max) && deviation > 1;
+        }) ? (
           <View style={{ marginTop: spacing.md, padding: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md }}>
-            <Text style={styles.section}>Manually verified lab results</Text>
-            <Text style={styles.hint}>These values are stored with this patient record. Confirm them against the original laboratory report.</Text>
-            {savedManualLabResults.map((item: any, index: number) => {
+            <Text style={styles.section}>Abnormal manually verified lab results</Text>
+            <Text style={styles.hint}>Only results outside the saved reference range by more than 1% are shown here.</Text>
+            {savedManualLabResults.filter((item: any) => {
+              const range = String(item.reference || "").match(/([-+]?\d+(?:[.,]\d+)?)\s*(?:-|–|—|to)\s*([-+]?\d+(?:[.,]\d+)?)/i);
+              const min = Number(String(item.min ?? (range ? range[1] : "")).replace(",", "."));
+              const max = Number(String(item.max ?? (range ? range[2] : "")).replace(",", "."));
+              const value = Number(String(item.result || "").replace(",", "."));
+              const deviation = value < min ? Math.abs(value - min) / Math.max(Math.abs(min), 0.000001) * 100 : Math.abs(value - max) / Math.max(Math.abs(max), 0.000001) * 100;
+              return Number.isFinite(value) && Number.isFinite(min) && Number.isFinite(max) && max > min && (value < min || value > max) && deviation > 1;
+            }).map((item: any, index: number) => {
               const range = String(item.reference || "").match(/([-+]?\d+(?:[.,]\d+)?)\s*(?:-|–|—|to)\s*([-+]?\d+(?:[.,]\d+)?)/i);
               const min = Number(String(item.min ?? (range ? range[1] : "")).replace(",", "."));
               const max = Number(String(item.max ?? (range ? range[2] : "")).replace(",", "."));
@@ -1219,7 +1231,7 @@ export default function PatientForm() {
               };
               return <View key={String(item.test) + "-" + index} style={{ marginTop: spacing.sm, paddingTop: spacing.sm, borderTopWidth: index ? 1 : 0, borderColor: colors.border }}>
                 <Text style={{ color: outside ? (colors.error || "#B91C1C") : colors.onSurface, fontFamily: outside ? fontFamily.bold : fontFamily.regular, marginBottom: spacing.xs }}>
-                  {outside ? "ALERT — OUT OF RANGE" : "Saved result"}
+                  {String(item.severity || "ALERT").toUpperCase()} — OUT OF RANGE
                 </Text>
                 <Field label="Test name" value={String(item.test || "")} onChangeText={(value: string) => updateSavedManualResult("test", value)} />
                 <Field label="Result" value={String(item.result || "")} onChangeText={(value: string) => updateSavedManualResult("result", value)} keyboardType="decimal-pad" inputMode="decimal" />
