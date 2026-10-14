@@ -346,9 +346,10 @@ export function extractLabReportDate(text: string): string {
   const numeric = /^(\d{1,4})[\/.-](\d{1,2})[\/.-](\d{2,4})$/.exec(value);
   if (numeric) {
     const first = Number(numeric[1]), second = Number(numeric[2]), third = Number(numeric[3]);
-    const day = numeric[1].length === 4 ? second : first;
-    const month = numeric[1].length === 4 ? first : second;
-    if (day < 1 || day > 31 || month < 1 || month > 12 || third < 0 || third > 9999) return "";
+    const year = numeric[1].length === 4 ? first : third;
+    const month = second;
+    const day = numeric[1].length === 4 ? third : first;
+    if (day < 1 || day > 31 || month < 1 || month > 12 || year < 0 || year > 9999) return "";
   }
   return value;
 }
