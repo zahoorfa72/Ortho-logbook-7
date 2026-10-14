@@ -191,7 +191,7 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
   const fields = Array.isArray(branding.pdfPatientFields) && branding.pdfPatientFields.length
     ? branding.pdfPatientFields
     : ["date","mrNo","name","gender","age","diagnosis","procedure"];
-  const labels: Record<string,string> = {date:"Date",mrNo:"MR No",name:"Patient",gender:"Gender",age:"Age",address:"Address",diagnosis:"Diagnosis",procedure:"Procedure",procedureII:String((branding as any).procedureSecondLabel||"Procedure 2"),implants:"Implants",fileName:"File Name",hcvPlus:"HCV+",hbaSg:"HbAsg",hiv:"HIV"};
+  const labels: Record<string,string> = {date:"Date",mrNo:"MR No",name:"Patient",gender:"Gender",age:"Age",address:"Address",diagnosis:"Diagnosis",procedure:"Procedure",procedureII:String((branding as any).procedureSecondLabel||"Procedure 2"),implants:"Implants",fileName:"File Name",hcvPlus:"HCV+",hbaSg:"HbAsg",hiv:"HIV",labOcrManualResults:"Manually Verified Lab Results"};
   // Custom field keys include a stable unique suffix (for example description_bcf286b5).
   // Use a readable label in every PDF location instead of exposing the storage key.
   const fieldLabel = (key: string) => labels[key] || key.replace(/_[a-f0-9]{6,}$/i, "").replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
@@ -221,7 +221,24 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
   // so it must not also appear as a separate Main Entry column.
   const infectionKeys = new Set(["hcvPlus","hbaSg","hiv"]);
   const mainFields = fields.filter((k:string) => !hierarchyChildFields.has(String(k)) && !infectionKeys.has(String(k)));
+  const manualLabResultsText = (p: Patient) => {
+    try {
+      const saved = JSON.parse(String((p.customData || {}).labOcrManualResults || "[]"));
+      if (!Array.isArray(saved)) return "";
+      return saved.filter((item:any) => item && String(item.test || "").trim() && String(item.result || "").trim())
+        .map((item:any) => {
+          const range = String(item.reference || "").match(/([-+]?\d+(?:[.,]\d+)?)\s*(?:-|–|—|to)\s*([-+]?\d+(?:[.,]\d+)?)/i);
+          const min = Number(String(item.min ?? (range ? range[1] : "")).replace(",", "."));
+          const max = Number(String(item.max ?? (range ? range[2] : "")).replace(",", "."));
+          const result = Number(String(item.result).replace(",", "."));
+          const outside = !!range && Number.isFinite(result) && Number.isFinite(min) && Number.isFinite(max) && (result < min || result > max);
+          return (outside ? "ALERT — " : "") + String(item.test) + ": " + String(item.result) + (item.unit ? " " + String(item.unit) : "") + (item.reference ? " (Ref: " + String(item.reference) + ")" : "");
+        }).join(" | ");
+    } catch { return ""; }
+  };
+  const hasManualLabResults = patients.some(p => !!manualLabResultsText(p));
   const value = (p: Patient, key: string) => {
+    if(key === "labOcrManualResults") return manualLabResultsText(p);
     if(key === "gender") return p.gender || "";
     if(key === "age") return p.age || "";
     if(key === "address") return p.address || "";
@@ -276,10 +293,10 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
         const styled=raw;
         const infectionAfterDiagnosis = k === "diagnosis" ? infectionLines : "";
         return "<td>"+styled+headingLines+subLines+infectionAfterDiagnosis+(k===mainFields[0]?badge:"")+"</td>";
-      }).join("")+"</tr>";
+      }).join("")+(hasManualLabResults ? "<td>"+escapeHtml(manualLabResultsText(p)||"—")+"</td>" : "")+"</tr>";
     });
     if(!rows) rows='<tr><td colspan="'+(mainFields.length+1)+'"><div class="empty">No patients recorded.</div></td></tr>';
-    const heads=mainFields.map(k=>"<th>"+escapeHtml(fieldLabel(k))+"</th>").join("");
+    const heads=mainFields.map(k=>"<th>"+escapeHtml(fieldLabel(k))+"</th>").join("")+(hasManualLabResults ? "<th>Manually Verified Lab Results</th>" : "");
     const pageHeader = start === 0 ? header(branding,'Patient List — '+patients.length+' record'+(patients.length===1?'':'s')+(fromDate||toDate?' — '+(fromDate||'Start')+' to '+(toDate||'End'):''), "patientList") : "";
     pageTables.push('<section class="listPage">'+pageHeader+'<table><thead><tr><th class="indexHead">#</th>'+heads+'</tr></thead><tbody>'+rows+'</tbody></table></section>');
   }
