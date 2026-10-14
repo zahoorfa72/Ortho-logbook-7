@@ -934,8 +934,9 @@ export default function Logbook() {
                 } catch {}
                 // Build dates from raw saved scan results, not warning-filtered labels.
                 // This keeps report dates visible when mild WARNING rows are hidden.
+                const cachedLabFlags = labFlagsByPatient[item.id]?.flags;
                 const rawSavedLabFlags = [
-                  ...(Array.isArray(labFlagsByPatient[item.id]?.flags) ? labFlagsByPatient[item.id].flags : []),
+                  ...(Array.isArray(cachedLabFlags) ? cachedLabFlags : []),
                   ...String(item.customData?.labOcrPossibleFlags || "").split(/\r?\n/).map(value => value.trim()).filter(Boolean),
                 ];
                 const datesFromFlags = rawSavedLabFlags
