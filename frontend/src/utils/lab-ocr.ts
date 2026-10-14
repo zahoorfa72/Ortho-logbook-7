@@ -333,6 +333,26 @@ function classifyDeviation(resultRaw: string, reference: ReferenceInterval, warn
   return excursionPercent <= Math.max(1, Math.min(100, warningPercent)) ? "WARNING" : "ALERT";
 }
 
+
+/**
+ * Extract only an explicitly labelled laboratory report/sample/test date.
+ * Never fall back to the patient's operation/file date or an unlabelled DOB.
+ */
+export function extractLabReportDate(text: string): string {
+  const source = String(text || "").replace(/\s+/g, " ");
+  const labelled = /\b(?:report(?:ing)?\s+date|date\s+of\s+report|collection\s+date|date\s+of\s+collection|sample\s+date|specimen\s+date|test\s+date|collected\s+on|tested\s+on)\b\s*[:=\-]?\s*(\d{1,4}[\/.-]\d{1,2}[\/.-]\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{2,4})/i.exec(source);
+  if (!labelled) return "";
+  const value = labelled[1].replace(/\s+/g, " ").trim();
+  const numeric = /^(\d{1,4})[\/.-](\d{1,2})[\/.-](\d{2,4})$/.exec(value);
+  if (numeric) {
+    const first = Number(numeric[1]), second = Number(numeric[2]), third = Number(numeric[3]);
+    const day = numeric[1].length === 4 ? second : first;
+    const month = numeric[1].length === 4 ? first : second;
+    if (day < 1 || day > 31 || month < 1 || month > 12 || third < 0 || third > 9999) return "";
+  }
+  return value;
+}
+
 export function parseLabReportRows(text: string, configuredTests: LabTestDefinition[] = [], gender = "", warningPercent = 10): ParsedLabRow[] {
   const rows: ParsedLabRow[] = [];
   const seen = new Set<string>();
