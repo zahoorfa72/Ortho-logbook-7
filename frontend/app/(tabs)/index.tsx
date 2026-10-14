@@ -1019,8 +1019,8 @@ export default function Logbook() {
                   </View>
                   {!hidden ? <>
                     {reportDateDisplay ? <Text testID={\`lab-report-date-\${item.id}\`} style={{ color: colors.muted, fontSize: 10, marginTop: 2 }}>Report date: {reportDateDisplay}</Text> : null}
-                    {labLabels.length ? <View style={{ marginTop: 3, flexDirection: "row", flexWrap: "wrap", gap: 4 }}>
-                      {labLabels.map((label, index) => {
+                    {allDisplayLabLabels.length ? <View style={{ marginTop: 3, flexDirection: "row", flexWrap: "wrap", gap: 4 }}>
+                      {allDisplayLabLabels.map((label, index) => {
                         const warning = label.startsWith("WARNING:");\n                        const oldResult = label.startsWith("OLD RESULT:");
                         const labelTone = warning ? (colors.warning || "#B7791F") : (colors.error || "#B91C1C");
                         const dateMatch = label.match(/\s· DATE:\s*(.+)$/);
