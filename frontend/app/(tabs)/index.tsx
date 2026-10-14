@@ -94,6 +94,11 @@ function ordinalShort(n: number) {
 const LAB_OLD_RESULT_DAYS_KEY = "ortho_lab_old_result_days_v1";
 function parseLabDate(value: string): Date | null {
   const text = String(value || "").trim();
+  let iso = /^(\d{4})-(\d{1,2})-(\d{1,2})(?:T.*)?$/.exec(text);
+  if (iso) {
+    const date = new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
+    return date.getFullYear() === Number(iso[1]) && date.getMonth() === Number(iso[2]) - 1 && date.getDate() === Number(iso[3]) ? date : null;
+  }
   let m = /^(\d{1,2})[-/. ]([A-Za-z]{3})[-/. ](\d{4})$/.exec(text);
   if (m) {
     const months: Record<string, number> = { jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11 };
@@ -1052,6 +1057,7 @@ export default function Logbook() {
                     </View> : null}
                   </> : null}
                 </View>;
+              })()}
 
               {((item.implants && item.implants.length) || item.implant || item.implantII) ? (
                 <View style={styles.implantRow}>
