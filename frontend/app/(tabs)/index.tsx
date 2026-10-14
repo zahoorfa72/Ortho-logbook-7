@@ -906,8 +906,34 @@ export default function Logbook() {
               ) : null}
               {(() => {
                 const labLabels = abnormalLabLabels(item, labFlagsByPatient[item.id]?.flags, labWarningsEnabled);
-                const status = labScanStates[item.id] || { status: "not-scanned" as const, message: "Older patient — not scanned automatically. An administrator can tap Retry when needed." };
+                const persistedReportDate = String(item.customData?.labOcrReportDate || "").trim();
+                const persistedScanAt = String(item.customData?.labOcrDetectedAt || "").trim();
+                const savedScanExists = !!persistedScanAt && !!persistedReportDate;
+                const status: LabScanStatus = labScanStates[item.id] || (savedScanExists
+                  ? { status: "success", message: "Scan result and report date restored from this patient record.", reportDate: persistedReportDate, updatedAt: persistedScanAt }
+                  : { status: "not-scanned", message: "Older patient — not scanned automatically. An administrator can tap Retry when needed." });
                 const hidden = labResultsHiddenByPatient[item.id] === true;
+                let manualReportDates: string[] = [];
+                try {
+                  const savedManual = item.customData?.labOcrManualResults ? JSON.parse(item.customData.labOcrManualResults) : [];
+                  if (Array.isArray(savedManual)) manualReportDates = savedManual
+                    .map((result: any) => String(result?.date || result?.reportDate || "").trim())
+                    .filter((date: string) => !!date && !/^date not (?:detected|entered)$/i.test(date));
+                } catch {}
+                const datesFromFlags = labLabels
+                  .map(label => label.match(/\s· DATE:\s*(.+)$/)?.[1]?.trim() || "")
+                  .filter(date => !!date && !/^date not (?:detected|entered)$/i.test(date));
+                const dateCandidates = [
+                  ...datesFromFlags,
+                  ...manualReportDates,
+                  ...(persistedReportDate && !/^(?:date not detected|multiple report dates — see each result)$/i.test(persistedReportDate) ? [persistedReportDate] : []),
+                  ...(status.reportDate && !/^(?:date not detected|multiple report dates — see each result)$/i.test(status.reportDate) ? [status.reportDate] : []),
+                ];
+                const uniqueReportDates = [...new Set(dateCandidates)];
+                const reportDateDisplay = uniqueReportDates.length
+                  ? uniqueReportDates.join(", ")
+                  : status.reportDate || persistedReportDate;
+                const reportDateLabel = uniqueReportDates.length > 1 ? "Report dates: " : "Report date: ";
                 const hasAlert = labLabels.some(label => label.startsWith("ALERT:"));
                 const hasWarning = labLabels.some(label => label.startsWith("WARNING:"));
                 const tone = hasAlert ? (colors.error || "#B91C1C") : hasWarning ? (colors.warning || "#B7791F")
@@ -937,7 +963,7 @@ export default function Logbook() {
                         </Pressable>) : null}
                   </View>
                   {status.message ? <Text style={{ color: status.status === "failed" ? tone : colors.onSurfaceSecondary, fontSize: 10, marginTop: 4 }}>{status.message}</Text> : null}
-                  {status.reportDate ? <Text style={{ color: colors.muted, fontSize: 10, marginTop: 2 }}>Report date: {status.reportDate}</Text> : null}
+                  {reportDateDisplay ? <Text testID={`lab-report-date-${item.id}`} style={{ color: colors.muted, fontSize: 10, marginTop: 2 }}>{reportDateLabel}{reportDateDisplay}</Text> : status.status === "success" ? <Text testID={`lab-report-date-${item.id}`} style={{ color: colors.muted, fontSize: 10, marginTop: 2 }}>Report date: Date not detected</Text> : null}
                   {labLabels.length ? <View style={{ marginTop: spacing.xs }}>
                     <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 4 }}>
                       {hidden ? <Text style={{ color: tone, fontSize: fontSize.xs }}>Results hidden — status indicator remains visible</Text> : labLabels.map((label, index) => {
@@ -954,7 +980,7 @@ export default function Logbook() {
                     </View>
                     {!hidden ? <Text style={{ color: colors.muted, fontSize: 10, marginTop: 1 }}>Verify abnormal flags against the original report; this is not a diagnosis.</Text> : null}
                   </View> : null}
-                  {!dateMatchExists && labLabels.length === 0 && status.status === "success" ? <Text style={{ color: colors.muted, fontSize: 10, marginTop: 2 }}>No abnormal result row to display. Report date: {status.reportDate || "Date not detected"}</Text> : null}
+                  {!dateMatchExists && labLabels.length === 0 && status.status === "success" ? <Text style={{ color: colors.muted, fontSize: 10, marginTop: 2 }}>No abnormal result row to display. Normal results stay hidden; verify the original report if needed.</Text> : null}
                 </View>;
               })()}
 
