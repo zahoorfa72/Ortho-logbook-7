@@ -348,61 +348,8 @@ export function extractLabReportDate(text: string): string {
     // date is more dangerous than asking an administrator to confirm it.
     const token = String(raw || "").toLowerCase().trim();
     // OCR can read the O in Oct as zero (06-0ct-2026). Correct only this month token.
-    const monthToken = token.replace(/^0(?=ct(?:ober)?$)/, "o").replace(/[|!]/g, "t");
-    const cleaned = monthToken.replace(/[^a-z]/g, "");
-    if (cleaned.length < 3) return -1;
-    return months.findIndex(name => name.toLowerCase() === cleaned.slice(0, 3));
-  };
-  const normalize = (raw: string): string => {
-    const value = String(raw || "").trim().replace(/[,]/g, "").replace(/\s+/g, " ");
-    let m = /^(\d{1,2})[-\/. ]([A-Za-z0-9|!]{3,9})[-\/. ](\d{2,4})$/i.exec(value);
-    if (m) {
-      const month = monthNumber(m[2]);
-      let yearText = m[3];
-      let year = Number(yearText); if (yearText.length === 2) year += year >= 50 ? 1900 : 2000;
-      const day = Number(m[1]);
-      if (month >= 0 && day >= 1 && day <= 31 && year >= 1900 && year <= 2200) {
-        const check = new Date(year, month, day);
-        if (check.getFullYear() === year && check.getMonth() === month && check.getDate() === day)
-          return String(day).padStart(2, "0") + "-" + months[month] + "-" + year;
-      }
-      return "";
-    }
-    // Support ISO year-first dates as well as day-first numeric lab dates.
-    m = /^(\\d{4})[\\/. -](\\d{1,2})[\\/. -](\\d{1,2})$/.exec(value);
-    if (m) {
-      const year = Number(m[1]), month = Number(m[2]), day = Number(m[3]);
-      if (day >= 1 && day <= 31 && month >= 1 && month <= 12 && year >= 1900 && year <= 2200) {
-        const check = new Date(year, month - 1, day);
-        if (check.getFullYear() === year && check.getMonth() === month - 1 && check.getDate() === day)
-          return String(day).padStart(2, "0") + "-" + months[month - 1] + "-" + year;
-      }
-      return "";
-    }
-    m = /^(\\d{1,2})[\\/. -](\\d{1,2})[\\/. -](\\d{4})$/.exec(value);
-    if (m) {
-      const day = Number(m[1]), month = Number(m[2]), year = Number(m[3]);
-      if (day >= 1 && day <= 31 && month >= 1 && month <= 12 && year >= 1900 && year <= 2200) {
-        const check = new Date(year, month - 1, day);
-        if (check.getFullYear() === year && check.getMonth() === month - 1 && check.getDate() === day)
-          return String(day).padStart(2, "0") + "-" + months[month - 1] + "-" + year;
-      }
-      return "";
-    }
-    m = /^([A-Za-z0-9|!]{3,9})[-\/. ](\d{1,2})[-\/. ](\d{4})$/i.exec(value)
-      || /^([A-Za-z0-9|!]{3,9})\s+(\d{1,2}),?\s+(\d{4})$/i.exec(value);
-    if (m) {
-      const month = monthNumber(m[1]), day = Number(m[2]), year = Number(m[3]);
-      if (month >= 0 && day >= 1 && day <= 31 && year >= 1900 && year <= 2200) {
-        const check = new Date(year, month, day);
-        if (check.getFullYear() === year && check.getMonth() === month && check.getDate() === day)
-          return String(day).padStart(2, "0") + "-" + months[month] + "-" + year;
-      }
-    }
-    return "";
-  };
-  const monthToken = "(?:[A-Za-z0-9|!]{3,9})";
-  const dateToken = "(?:\\d{1,2}[-\\/. ]" + monthToken + "[-\\/. ]\\d{2,4}|\\d{1,2}[-\\/. ]\\d{1,2}[-\\/. ]\\d{4}|" + monthToken + "\\s+\\d{1,2},?\\s+\\d{4})";
+    const monthToken = "(?:[A-Za-z0-9|!]{3,9})";
+  const dateToken = "(?:\\d{1,2}[-\\/. ]" + monthToken + "[-\\/. ]\\d{2,4}|\\d{4}[-\\/. ]\\d{1,2}[-\\/. ]\\d{1,2}|\\d{1,2}[-\\/. ]\\d{1,2}[-\\/. ]\\d{4}|" + monthToken + "\\s+\\d{1,2},?\\s+\\d{4})";
   const tokenPattern = new RegExp(dateToken, "gi");
   const candidates: Array<{ date: string; rank: number; index: number }> = [];
   let match: RegExpExecArray | null;

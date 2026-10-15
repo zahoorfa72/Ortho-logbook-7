@@ -93,7 +93,7 @@ async function makePdf(schedule: LowStockSchedule = "weekly", fromDate?: string,
     if (!value) return null;
     const parsed = new Date(value);
     if (Number.isFinite(parsed.getTime())) return parsed;
-    const match = /^(\\d{1,2})[-\\/. ]([A-Za-z]{3,9})[-\\/. ](\\d{2,4})$/.exec(value);
+    const match = /^(\d{1,2})[-\/. ]([A-Za-z]{3,9})[-\/. ](\d{2,4})$/.exec(value);
     if (!match) return null;
     const month = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"].indexOf(match[2].slice(0,3).toLowerCase());
     let year = Number(match[3]);
