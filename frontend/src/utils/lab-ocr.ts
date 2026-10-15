@@ -418,7 +418,8 @@ export function extractLabReportDate(text: string): string {
   if (!candidates.length) return "";
   const bestRank = candidates[0].rank;
   const bestDates = [...new Set(candidates.filter(candidate => candidate.rank === bestRank).map(candidate => candidate.date))];
-  return bestDates.length === 1 ? bestDates[0] : "";
+  // Multiple dates can share the same rank on one report. Keep the first strongest candidate instead of losing the date entirely.
+  return candidates[0].date;
 }
 
 

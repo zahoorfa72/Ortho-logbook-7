@@ -1,0 +1,35 @@
+export function buildPerspectiveWarpHtml(rawBase64: string): string {
+  const base64 = String(rawBase64 || "").replace(/[^A-Za-z0-9+/=]/g, "");
+  return String.raw`<!doctype html>
+<html><head><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<style>
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;background:#141414;color:#fff;font:15px Arial,sans-serif}
+body{display:flex;flex-direction:column;overflow:hidden}.note{padding:9px 12px;color:#eee;font-size:13px;line-height:1.35}
+.stage{flex:1;min-height:240px;display:flex;align-items:center;justify-content:center;overflow:hidden}
+canvas{max-width:100%;max-height:100%;width:auto;height:auto;touch-action:none}
+.controls{display:flex;gap:8px;padding:10px 12px;background:#202020}
+button{flex:1;border:0;border-radius:9px;padding:13px 8px;font-weight:700;font-size:14px;color:#fff;background:#3b82f6}
+button.secondary{background:#454545}button:disabled{opacity:.55}
+</style></head><body>
+<div class="note">Drag each blue corner onto the four corners of the paper. Then tap <b>Correct perspective</b>. The original photo will not be replaced until you save changes.</div>
+<div class="stage"><canvas id="preview"></canvas></div>
+<div class="controls"><button class="secondary" id="reset">Reset corners</button><button id="apply">Correct perspective</button></div>
+<script>
+(function(){
+var img=new Image(),canvas=document.getElementById("preview"),ctx=canvas.getContext("2d"),points=[],active=-1;
+img.onload=function(){canvas.width=img.naturalWidth;canvas.height=img.naturalHeight;var w=canvas.width,h=canvas.height,i=Math.max(12,Math.min(w,h)*.035);points=[{x:i,y:i},{x:w-i,y:i},{x:w-i,y:h-i},{x:i,y:h-i}];draw();};
+img.onerror=function(){window.ReactNativeWebView&&window.ReactNativeWebView.postMessage(JSON.stringify({type:"error",message:"The selected photo could not be opened."}));};
+img.src="data:image/jpeg;base64,__BASE64__";
+function draw(){if(!img.naturalWidth)return;ctx.clearRect(0,0,canvas.width,canvas.height);ctx.drawImage(img,0,0);ctx.save();ctx.fillStyle="rgba(37,99,235,.18)";ctx.strokeStyle="#3b82f6";ctx.lineWidth=Math.max(5,canvas.width*.0025);ctx.beginPath();ctx.moveTo(points[0].x,points[0].y);for(var i=1;i<4;i++)ctx.lineTo(points[i].x,points[i].y);ctx.closePath();ctx.fill();ctx.stroke();var r=Math.max(22,canvas.width*.012);points.forEach(function(p,i){ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.fillStyle="#2563eb";ctx.fill();ctx.lineWidth=Math.max(5,canvas.width*.002);ctx.strokeStyle="#fff";ctx.stroke();ctx.fillStyle="#fff";ctx.font="bold "+Math.max(22,canvas.width*.012)+"px Arial";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(String(i+1),p.x,p.y);});ctx.restore();}
+function pointFromEvent(e){var r=canvas.getBoundingClientRect();return{x:(e.clientX-r.left)*canvas.width/r.width,y:(e.clientY-r.top)*canvas.height/r.height};}
+canvas.addEventListener("pointerdown",function(e){var q=pointFromEvent(e),best=Infinity;active=-1;points.forEach(function(p,i){var d=Math.hypot(p.x-q.x,p.y-q.y);if(d<best){best=d;active=i;}});if(best>Math.max(100,canvas.width*.07))active=-1;if(active>=0){canvas.setPointerCapture(e.pointerId);e.preventDefault();}});
+canvas.addEventListener("pointermove",function(e){if(active<0)return;var q=pointFromEvent(e);points[active]={x:Math.max(0,Math.min(canvas.width,q.x)),y:Math.max(0,Math.min(canvas.height,q.y))};draw();e.preventDefault();});
+function finish(){active=-1;}canvas.addEventListener("pointerup",finish);canvas.addEventListener("pointercancel",finish);
+document.getElementById("reset").onclick=function(){var w=canvas.width,h=canvas.height,i=Math.max(12,Math.min(w,h)*.035);points=[{x:i,y:i},{x:w-i,y:i},{x:w-i,y:h-i},{x:i,y:h-i}];draw();};
+function distance(a,b){return Math.hypot(a.x-b.x,a.y-b.y);}
+function sourcePoint(u,v,p){var dx1=p[1].x-p[2].x,dx2=p[3].x-p[2].x,dx3=p[0].x-p[1].x+p[2].x-p[3].x,dy1=p[1].y-p[2].y,dy2=p[3].y-p[2].y,dy3=p[0].y-p[1].y+p[2].y-p[3].y,den=dx1*dy2-dx2*dy1,g=0,h=0;if(Math.abs(dx3)>.0001||Math.abs(dy3)>.0001){if(Math.abs(den)<.0001)throw new Error("These corners are invalid. Move them so the paper forms a clear quadrilateral.");g=(dx3*dy2-dx2*dy3)/den;h=(dx1*dy3-dx3*dy1)/den;}var a=p[1].x-p[0].x+g*p[1].x,b=p[3].x-p[0].x+h*p[3].x,c=p[0].x,d=p[1].y-p[0].y+g*p[1].y,e=p[3].y-p[0].y+h*p[3].y,f=p[0].y,z=g*u+h*v+1;if(Math.abs(z)<.0001)throw new Error("These corners are invalid. Adjust the four corners.");return{x:(a*u+b*v+c)/z,y:(d*u+e*v+f)/z};}
+function drawTriangle(out,src,dst){var x1=src[0].x,y1=src[0].y,x2=src[1].x,y2=src[1].y,x3=src[2].x,y3=src[2].y,X1=dst[0].x,Y1=dst[0].y,X2=dst[1].x,Y2=dst[1].y,X3=dst[2].x,Y3=dst[2].y,den=x1*(y2-y3)+x2*(y3-y1)+x3*(y1-y2);if(Math.abs(den)<.0001)return;var a=(X1*(y2-y3)+X2*(y3-y1)+X3*(y1-y2))/den,c=(X1*(x3-x2)+X2*(x1-x3)+X3*(x2-x1))/den,e=(X1*(x2*y3-x3*y2)+X2*(x3*y1-x1*y3)+X3*(x1*y2-x2*y1))/den,b=(Y1*(y2-y3)+Y2*(y3-y1)+Y3*(y1-y2))/den,d=(Y1*(x3-x2)+Y2*(x1-x3)+Y3*(x2-x1))/den,f=(Y1*(x2*y3-x3*y2)+Y2*(x3*y1-x1*y3)+Y3*(x1*y2-x2*y1))/den;out.save();out.beginPath();out.moveTo(X1,Y1);out.lineTo(X2,Y2);out.lineTo(X3,Y3);out.closePath();out.clip();out.setTransform(a,b,c,d,e,f);out.drawImage(img,0,0);out.restore();}
+document.getElementById("apply").onclick=function(){var btn=this;btn.disabled=true;btn.textContent="Correcting…";try{var top=distance(points[0],points[1]),bottom=distance(points[3],points[2]),left=distance(points[0],points[3]),right=distance(points[1],points[2]),ow=Math.round((top+bottom)/2),oh=Math.round((left+right)/2);if(ow<80||oh<80)throw new Error("The selected paper area is too small. Widen the corners and try again.");var scale=Math.min(1,2800/Math.max(ow,oh));ow=Math.max(1,Math.round(ow*scale));oh=Math.max(1,Math.round(oh*scale));var out=document.createElement("canvas");out.width=ow;out.height=oh;var o=out.getContext("2d"),n=24,grid=[];for(var y=0;y<=n;y++){grid[y]=[];for(var x=0;x<=n;x++)grid[y][x]=sourcePoint(x/n,y/n,points);}for(var gy=0;gy<n;gy++)for(var gx=0;gx<n;gx++){var u=gx/n,v=gy/n,u1=(gx+1)/n,v1=(gy+1)/n,s00=grid[gy][gx],s10=grid[gy][gx+1],s11=grid[gy+1][gx+1],s01=grid[gy+1][gx],d00={x:u*ow,y:v*oh},d10={x:u1*ow,y:v*oh},d11={x:u1*ow,y:v1*oh},d01={x:u*ow,y:v1*oh};drawTriangle(o,[s00,s10,s11],[d00,d10,d11]);drawTriangle(o,[s00,s11,s01],[d00,d11,d01]);}var data=out.toDataURL("image/jpeg",.96);if(!data||data.length<1000)throw new Error("The corrected image could not be created. Please try again.");window.ReactNativeWebView&&window.ReactNativeWebView.postMessage(JSON.stringify({type:"done",dataUrl:data}));}catch(err){btn.disabled=false;btn.textContent="Correct perspective";window.ReactNativeWebView&&window.ReactNativeWebView.postMessage(JSON.stringify({type:"error",message:String(err&&err.message||err)}));}};
+})();
+</script></body></html>`.replace("__BASE64__", base64);
+}

@@ -9,10 +9,12 @@ import * as FileSystem from "expo-file-system/legacy";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { extractLabReportDate, hasKnownLabTestName, isLabMetadataLine, isLikelyLabReportText, parseLabReportRows, recognizeLabText } from "@/src/utils/lab-ocr";
 import { scanPatientDocuments } from "@/src/utils/document-scanner";
+import { buildPerspectiveWarpHtml } from "@/src/utils/perspective-warp";
 import { Dimensions } from "react-native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AppState, Image, InteractionManager, Modal, Pressable, ScrollView, Text, View } from "react-native";
 import Ionicons from "@react-native-vector-icons/ionicons";
+import { WebView } from "react-native-webview";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -139,6 +141,8 @@ export default function PatientForm() {
   const [editingPhotoOriginal, setEditingPhotoOriginal] = useState<string | null>(null);
   const [editingPhotoUri, setEditingPhotoUri] = useState<string | null>(null);
   const [photoBusy, setPhotoBusy] = useState(false);
+  const [perspectiveMode, setPerspectiveMode] = useState(false);
+  const [perspectiveHtml, setPerspectiveHtml] = useState("");
   const [imagePickerReady, setImagePickerReady] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
@@ -224,6 +228,27 @@ export default function PatientForm() {
       const reviewSourcePhotos = [...new Set(recognizedPhotoUris)];
       const canonical = (value: string) => String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
       const isHemoglobin = (value: string) => ["hemoglobin", "haemoglobin", "hgb", "hb"].includes(canonical(value));
+      const reportDateForTest = (testName: string) => {
+        const pages = extracted.split(/(?=LAB REPORT IMAGE\s+\d+)/i).filter(page => /LAB REPORT IMAGE\s+\d+/i.test(page));
+        const aliases = isHemoglobin(testName) ? ["hemoglobin", "haemoglobin", "hgb", "hb"] : [String(testName || "")];
+        const cellMatches = (value: string) => {
+          const normalized = canonical(value);
+          return aliases.some(alias => {
+            const aliasKey = canonical(alias);
+            return normalized === aliasKey || (aliasKey.length >= 4 && normalized.startsWith(aliasKey));
+          });
+        };
+        const rawLineMatches = (line: string) => aliases.some(alias => {
+          const aliasKey = canonical(alias);
+          if (!aliasKey) return false;
+          if (aliasKey.length >= 4) return canonical(line).includes(aliasKey);
+          return line.split(/[^a-z0-9]+/i).some(token => canonical(token) === aliasKey);
+        });
+        const matchingPage = pages.find(page => page.split(/\r?\n/).some(line =>
+          line.includes("|") && cellMatches(line.split("|")[0])
+        )) || pages.find(page => page.split(/\r?\n/).some(rawLineMatches)) || "";
+        return extractLabReportDate(matchingPage) || extractLabReportDate(extracted);
+      };
       const configuredCandidates = configuredLabTests.map(item => ({
         name: String(item.name || "").trim(), unit: String(item.unit || ""),
         min: /^\s*(?:m|male|man|men)\s*$/i.test(p.gender) ? item.maleMin : item.femaleMin,
@@ -318,15 +343,13 @@ export default function PatientForm() {
         const max = Number(String(test.max ?? "").replace(",", "."));
         const validRange = String(test.min ?? "").trim() !== "" && String(test.max ?? "").trim() !== "" && Number.isFinite(min) && Number.isFinite(max);
         const range = validRange ? String(test.min) + "–" + String(test.max) : "";
-        const matchingPage = extracted.split(/(?=LAB REPORT IMAGE\s+\d+)/i).find(page => canonical(page).includes(canonical(test.name)));
-        const reportDate = extractLabReportDate(matchingPage || "") || extractLabReportDate(extracted);
+        const reportDate = reportDateForTest(test.name);
         return { test: test.name, unit: test.unit || "", result: "", reference: range, photoUri: reviewSourcePhotos[0] || "", reportDate: reportDate || undefined, min: validRange ? min : undefined, max: validRange ? max : undefined };
       });
       const candidates: string[] = parsedRows
         .filter(row => row.severity === "ALERT" || (row.severity === "WARNING" && labWarningsEnabled))
         .map(row => {
-          const matchingPage = extracted.split(/(?=LAB REPORT IMAGE\s+\d+)/i).find(page => canonical(page).includes(canonical(row.test)));
-          const reportDate = extractLabReportDate(matchingPage || "") || extractLabReportDate(extracted);
+          const reportDate = reportDateForTest(row.test);
           return row.severity + ": " + row.test + " " + row.result + (row.unit ? " " + row.unit : "") +
             (reportDate ? " | Date: " + reportDate : "") + " | Ref: " + row.reference;
         });
@@ -812,10 +835,62 @@ export default function PatientForm() {
   const loadEditingPhotoDimensions = (uri: string) => {
     Image.getSize(uri, (width, height) => setEditingPhotoDimensions({ width, height }), () => setEditingPhotoDimensions(null));
   };
+  const openPerspectiveEditor = async () => {
+    if (!editingPhotoUri || photoBusy) return;
+    setPhotoBusy(true);
+    try {
+      const dimensions = await new Promise<{ width: number; height: number }>((resolve, reject) =>
+        Image.getSize(editingPhotoUri, (width, height) => resolve({ width, height }), reject));
+      const actions: any[] = [];
+      if (Math.max(dimensions.width, dimensions.height) > 2800) {
+        actions.push(dimensions.width >= dimensions.height ? { resize: { width: 2800 } } : { resize: { height: 2800 } });
+      }
+      const prepared = await ImageManipulator.manipulateAsync(editingPhotoUri, actions, {
+        compress: 0.96, format: ImageManipulator.SaveFormat.JPEG, base64: true,
+      });
+      if (!prepared.base64) throw new Error("Could not prepare this photo for perspective correction.");
+      setPerspectiveHtml(buildPerspectiveWarpHtml(prepared.base64));
+      setPerspectiveMode(true);
+    } catch (e: any) {
+      toast("Could not open perspective correction. " + String(e?.message || e || "Please try again."), "error");
+    } finally {
+      setPhotoBusy(false);
+    }
+  };
+  const handlePerspectiveMessage = async (event: any) => {
+    let message: any;
+    try { message = JSON.parse(String(event?.nativeEvent?.data || "{}")); } catch { return; }
+    if (message?.type === "error") {
+      toast(String(message.message || "Perspective correction failed."), "error");
+      return;
+    }
+    if (message?.type !== "done") return;
+    setPhotoBusy(true);
+    try {
+      const match = String(message.dataUrl || "").match(/^data:image\/jpeg;base64,([\s\S]+)$/);
+      if (!match?.[1]) throw new Error("The corrected image data was empty.");
+      const directory = String(FileSystem.cacheDirectory || FileSystem.documentDirectory || "");
+      if (!directory) throw new Error("Photo storage is not available.");
+      const destination = directory + "patient-perspective-" + Date.now() + ".jpg";
+      await FileSystem.writeAsStringAsync(destination, match[1], { encoding: FileSystem.EncodingType.Base64 });
+      setEditingPhotoUri(destination);
+      loadEditingPhotoDimensions(destination);
+      setCropRect(null);
+      setPerspectiveMode(false);
+      setPerspectiveHtml("");
+      toast("Perspective correction applied to this existing patient photo. Tap Save changes to keep it.", "success");
+    } catch (e: any) {
+      toast("Could not save the corrected preview. " + String(e?.message || e || "Please try again."), "error");
+    } finally {
+      setPhotoBusy(false);
+    }
+  };
   const openPhotoEditor = (idx: number) => {
     const uri = p.photos[idx];
     if (!uri) return;
     setSelectedPhoto(null);
+    setPerspectiveMode(false);
+    setPerspectiveHtml("");
     setEditingPhotoIndex(idx);
     setEditingPhotoOriginal(uri);
     setEditingPhotoUri(uri);
@@ -827,6 +902,8 @@ export default function PatientForm() {
   };
   const closePhotoEditor = () => {
     if (photoBusy) return;
+    setPerspectiveMode(false);
+    setPerspectiveHtml("");
     setEditingPhotoIndex(null);
     setEditingPhotoOriginal(null);
     setEditingPhotoUri(null);
@@ -990,7 +1067,7 @@ export default function PatientForm() {
             min,
             max,
             severity,
-            date: extractLabReportDate(item.reportDate || "") || item.reportDate || "",
+            date: extractLabReportDate(item.reportDate || "") || item.reportDate || extractLabReportDate(labOcrText) || ""
             manuallyVerified: true,
           };
         });
@@ -1192,6 +1269,32 @@ export default function PatientForm() {
         <Modal visible={editingPhotoIndex !== null} transparent animationType="fade" onRequestClose={closePhotoEditor}>
           <View style={styles.photoEditOverlay}>
             <View style={styles.photoEditCard}>
+              {perspectiveMode ? (
+                <View style={{ minHeight: 530, flexShrink: 1 }}>
+                  <View style={styles.photoEditHeader}>
+                    <View>
+                      <Text style={styles.photoEditTitle}>Correct Existing Document</Text>
+                      <Text style={styles.photoEditHint}>Move all four corners to the paper edges, then apply the correction.</Text>
+                    </View>
+                    <Pressable onPress={() => { setPerspectiveMode(false); setPerspectiveHtml(""); }} disabled={photoBusy} style={styles.photoEditIconButton}>
+                      <Ionicons name="close" size={22} color={colors.onSurface} />
+                    </Pressable>
+                  </View>
+                  <WebView
+                    source={{ html: perspectiveHtml }}
+                    originWhitelist={["*"]}
+                    javaScriptEnabled
+                    scrollEnabled={false}
+                    style={{ height: 430, backgroundColor: "#141414", borderRadius: radius.md, marginBottom: spacing.sm }}
+                    onMessage={handlePerspectiveMessage}
+                  />
+                  <Text style={{ color: colors.muted, fontSize: fontSize.xs, marginBottom: spacing.sm }}>Works on this saved patient image. The original is kept unless you tap Save changes.</Text>
+                  <Pressable style={styles.photoCancelButton} disabled={photoBusy} onPress={() => { setPerspectiveMode(false); setPerspectiveHtml(""); }}>
+                    <Text style={styles.photoCancelText}>Back to photo editor</Text>
+                  </Pressable>
+                </View>
+              ) : (
+                <>
               <View style={styles.photoEditHeader}>
                 <View>
                   <Text style={styles.photoEditTitle}>Edit Patient Photo</Text>
@@ -1254,29 +1357,7 @@ export default function PatientForm() {
                   <Ionicons name="crop-outline" size={20} color={colors.onSurface} />
                   <Text style={styles.photoToolText}>Apply Free Crop</Text>
                 </Pressable>
-                <Pressable style={styles.photoTool} disabled={photoBusy} onPress={async () => {
-                  setPhotoBusy(true);
-                  try {
-                    const scanned = await scanPatientDocuments();
-                    if (!scanned.length) return;
-                    // Use the first corrected page for the photo being edited and
-                    // preserve every other page from the same multi-page scan.
-                    const extraPages: string[] = [];
-                    for (const uri of scanned.slice(1)) extraPages.push(await persistPhoto(uri));
-                    if (extraPages.length) {
-                      setP(previous => ({ ...previous, photos: [...previous.photos, ...extraPages] }));
-                    }
-                    setEditingPhotoUri(scanned[0]);
-                    loadEditingPhotoDimensions(scanned[0]);
-                    setCropRect(null);
-                    toast(scanned.length === 1
-                      ? "Perspective-corrected scan ready. Save photo to keep it."
-                      : "First corrected page ready; " + extraPages.length + " additional page(s) added. Save changes to keep the edited page.",
-                      "success");
-                  } catch (e: any) {
-                    toast("Perspective scan failed. " + String(e?.message || e || "Please try again."), "error");
-                  } finally { setPhotoBusy(false); }
-                }}>
+                <Pressable style={styles.photoTool} disabled={photoBusy} onPress={openPerspectiveEditor}>
                   <Ionicons name="scan-outline" size={20} color={colors.brandPrimary} />
                   <Text style={styles.photoToolText}>Perspective Scan</Text>
                 </Pressable>
@@ -1299,6 +1380,8 @@ export default function PatientForm() {
                   <Text style={styles.photoSaveText}>{photoBusy ? "Working…" : "Save changes"}</Text>
                 </Pressable>
               </View>
+                </>
+              )}
             </View>
           </View>
         </Modal>
@@ -1412,7 +1495,7 @@ export default function PatientForm() {
                     const boundary = hasRange ? (value < (min as number) ? (min as number) : (max as number)) : 0;
                     const excursion = abnormal && boundary !== 0 ? Math.abs(value - boundary) / Math.abs(boundary) * 100 : abnormal ? 100 : 0;
                     const severity = abnormal && excursion > 1 ? (excursion <= labWarningThreshold ? "WARNING" : "ALERT") : "";
-                    return { test: item.test, result: item.result.trim(), unit: item.unit, reference: item.reference, date: extractLabReportDate(item.reportDate || "") || item.reportDate || "", min, max, severity, manuallyVerified: true };
+                    return { test: item.test, result: item.result.trim(), unit: item.unit, reference: item.reference, date: extractLabReportDate(item.reportDate || "") || item.reportDate || extractLabReportDate(labOcrText) || "" min, max, severity, manuallyVerified: true };
                   });
                   if (!manual.length) {
                     toast("Enter at least one lab result before applying manual review.", "error");
