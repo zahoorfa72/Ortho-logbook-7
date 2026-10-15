@@ -389,7 +389,7 @@ export function extractLabReportDate(text: string): string {
     return "";
   };
   const monthToken = "(?:[A-Za-z0-9|!]{3,9})";
-  const dateToken = "(?:\\\\d{1,2}[-\\\\/. ]" + monthToken + "[-\\\\/. ]\\\\d{2,4}|\\\\d{1,2}[-\\\\/. ]\\\\d{1,2}[-\\\\/. ]\\\\d{4}|" + monthToken + "\\\\s+\\\\d{1,2},?\\\\s+\\\\d{4})";
+  const dateToken = "(?:\\d{1,2}[-\\/. ]" + monthToken + "[-\\/. ]\\d{2,4}|\\d{1,2}[-\\/. ]\\d{1,2}[-\\/. ]\\d{4}|" + monthToken + "\\s+\\d{1,2},?\\s+\\d{4})";
   const tokenPattern = new RegExp(dateToken, "gi");
   const candidates: Array<{ date: string; rank: number; index: number }> = [];
   let match: RegExpExecArray | null;
