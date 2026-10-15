@@ -339,8 +339,8 @@ function classifyDeviation(resultRaw: string, reference: ReferenceInterval, warn
  * Never fall back to the patient's operation/file date or an unlabelled DOB.
  */
 export function extractLabReportDate(text: string): string {
-  // OCR frequently splits punctuation or confuses O/0 and I/1 in printed dates.
-  // Normalize whitespace first, then inspect every complete date-like token.
+  // Normalize whitespace, but never guess digits or month names from uncertain OCR.
+  // If the printed date is unclear, the patient card asks an administrator to confirm it.
   const source = String(text || "").replace(/[\t\r\n]+/g, " ").replace(/\s+/g, " ");
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const monthNumber = (raw: string): number => {
@@ -349,7 +349,7 @@ export function extractLabReportDate(text: string): string {
     const cleaned = String(raw || "").toLowerCase().replace(/[^a-z]/g, "");
     if (cleaned.length < 3) return -1;
     return months.findIndex(name => name.toLowerCase() === cleaned.slice(0, 3));
-  };;
+  };
   const normalize = (raw: string): string => {
     const value = String(raw || "").trim().replace(/[,]/g, "").replace(/\s+/g, " ");
     let m = /^(\d{1,2})[-\/. ]([A-Za-z0-9|!]{3,9})[-\/. ](\d{2,4})$/i.exec(value);
