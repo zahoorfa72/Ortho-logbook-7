@@ -83,51 +83,104 @@ async function makePdf(schedule: LowStockSchedule = "weekly", fromDate?: string,
   const period = getPeriod(schedule, now, fromDate, toDate);
   const inventory = await api.get<any[]>("/inventory");
   const all = Array.isArray(inventory) ? inventory : [];
-  // Apply the report window using parsed timestamps, not SQLite text comparison:
-  // older installations may have movement timestamps in different date formats.
-  const candidateRows = db.getAllSync<any>(
-    "SELECT m.inventory_id, m.quantity_after, m.created_at, i.name, i.quantity, i.minimum_stock, i.unit, i.category, i.category_id, i.size, i.low_stock_since FROM inventory_movements m INNER JOIN inventory i ON i.id=m.inventory_id WHERE m.quantity_after<=i.minimum_stock ORDER BY m.created_at DESC",
-  );
   const parseMovementDate = (raw: unknown): Date | null => {
     const value = String(raw ?? "").trim();
     if (!value) return null;
+    if (/[zZ]|[+-]\d{2}:?\d{2}$/.test(value)) {
+      const zoned = new Date(value);
+      if (Number.isFinite(zoned.getTime())) return zoned;
+    }
+    const isoMatch = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[T\s](\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?)?$/.exec(value);
+    if (isoMatch) {
+      const year = Number(isoMatch[1]), month = Number(isoMatch[2]), day = Number(isoMatch[3]);
+      const date = new Date(year, month - 1, day, Number(isoMatch[4] || 0), Number(isoMatch[5] || 0), Number(isoMatch[6] || 0), Number(String(isoMatch[7] || "0").padEnd(3, "0")));
+      if (date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day) return date;
+    }
+    const named = /^(\d{1,2})[-/. ]([A-Za-z0-9|!]{3,9})[-/. ](\d{2,4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/.exec(value);
+    if (named) {
+      const months = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"];
+      const token = named[2].toLowerCase().replace(/[|!]/g, "t").replace(/^0(?=ct)/, "o").replace(/[^a-z]/g, "");
+      const month = months.indexOf(token.slice(0, 3));
+      let year = Number(named[3]);
+      if (named[3].length === 2) year += year >= 50 ? 1900 : 2000;
+      const day = Number(named[1]);
+      if (month >= 0 && year >= 1900 && year <= 2200) {
+        const date = new Date(year, month, day, Number(named[4] || 0), Number(named[5] || 0), Number(named[6] || 0));
+        if (date.getFullYear() === year && date.getMonth() === month && date.getDate() === day) return date;
+      }
+    }
     const parsed = new Date(value);
-    if (Number.isFinite(parsed.getTime())) return parsed;
-    const match = /^(\d{1,2})[-\/. ]([A-Za-z]{3,9})[-\/. ](\d{2,4})$/.exec(value);
-    if (!match) return null;
-    const month = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"].indexOf(match[2].slice(0,3).toLowerCase());
-    let year = Number(match[3]);
-    if (match[3].length === 2) year += year >= 50 ? 1900 : 2000;
-    const day = Number(match[1]);
-    if (month < 0 || year < 1900 || year > 2200) return null;
-    const date = new Date(year, month, day);
-    return date.getFullYear() === year && date.getMonth() === month && date.getDate() === day ? date : null;
+    return Number.isFinite(parsed.getTime()) ? parsed : null;
   };
-  const rows = candidateRows.filter((row: any) => {
-    const eventDate = parseMovementDate(row.created_at);
-    return !!eventDate && eventDate.getTime() >= period.start.getTime() && eventDate.getTime() <= period.end.getTime();
-  });
-  // Only include low-stock events inside the selected reporting window; do not
-  // accidentally turn a weekly report into a lifetime/current-stock report.
+
+  // Include only movements that newly cross the minimum threshold or reach zero.
+  const movementRows = db.getAllSync<any>(
+    "SELECT m.inventory_id, m.type, m.amount, m.quantity_after, m.created_at, i.name, i.minimum_stock, i.unit, i.category, i.category_id, i.size, i.low_stock_since FROM inventory_movements m INNER JOIN inventory i ON i.id=m.inventory_id",
+  );
+  const parsedMovements = movementRows
+    .map((row: any) => ({ row, date: parseMovementDate(row.created_at) }))
+    .filter((entry: any) => !!entry.date)
+    .sort((a: any, b: any) => a.date.getTime() - b.date.getTime());
+  const byInventory = new Map<string, any[]>();
+  for (const entry of parsedMovements) {
+    const id = String(entry.row.inventory_id || "");
+    if (!id) continue;
+    const list = byInventory.get(id) || [];
+    list.push(entry);
+    byInventory.set(id, list);
+  }
   const latestById = new Map<string, any>();
-  for (const row of rows) {
-    const id = String(row.inventory_id || "");
+  for (const [id, entries] of byInventory) {
+    let previousQuantity: number | null = null;
+    for (const entry of entries) {
+      const row = entry.row;
+      const quantity = Number(row.quantity_after);
+      const minimum = Number(row.minimum_stock);
+      if (!Number.isFinite(quantity) || !Number.isFinite(minimum)) {
+        previousQuantity = Number.isFinite(quantity) ? quantity : previousQuantity;
+        continue;
+      }
+      const crossedMinimum = quantity <= minimum && (previousQuantity === null || previousQuantity > minimum);
+      const newlyZero = quantity <= 0 && (previousQuantity === null || previousQuantity > 0);
+      const inPeriod = entry.date.getTime() >= period.start.getTime() && entry.date.getTime() <= period.end.getTime();
+      if (inPeriod && (crossedMinimum || newlyZero)) {
+        const base = all.find((item: any) => String(item.id) === id) || {};
+        latestById.set(id, {
+          ...base, id,
+          name: String(row.name || base.name || "Inventory item"),
+          quantity, minimumStock: minimum, minimum_stock: minimum,
+          unit: row.unit || base.unit, category: row.category || base.category,
+          category_id: row.category_id || base.category_id, size: row.size || base.size,
+          lowStockEventAt: row.created_at,
+          lowStockEventType: newlyZero ? "OUT OF STOCK" : "LOW STOCK",
+        });
+      }
+      previousQuantity = quantity;
+    }
+  }
+  // Legacy installations may have low_stock_since but no movement history.
+  // Include them only when the saved low-stock date falls inside the window.
+  for (const item of all) {
+    const id = String(item?.id || "");
     if (!id || latestById.has(id)) continue;
-    const base = all.find((item:any) => String(item.id) === id) || {};
-    latestById.set(id, {
-      ...base, id, name: String(row.name || base.name || "Inventory item"),
-      quantity: Number(row.quantity_after), minimumStock: Number(row.minimum_stock),
-      minimum_stock: Number(row.minimum_stock), unit: row.unit || base.unit,
-      category: row.category || base.category, category_id: row.category_id || base.category_id,
-      size: row.size || base.size, lowStockEventAt: row.created_at,
-    });
+    const quantity = Number(item.quantity);
+    const minimum = Number(item.minimumStock ?? item.minimum_stock);
+    const since = parseMovementDate(item.lowStockSince ?? item.low_stock_since);
+    if (Number.isFinite(quantity) && Number.isFinite(minimum) && quantity <= minimum &&
+        since && since.getTime() >= period.start.getTime() && since.getTime() <= period.end.getTime()) {
+      latestById.set(id, {
+        ...item, id, quantity, minimumStock: minimum, minimum_stock: minimum,
+        lowStockEventAt: item.lowStockSince ?? item.low_stock_since,
+        lowStockEventType: quantity <= 0 ? "OUT OF STOCK" : "LOW STOCK",
+      });
+    }
   }
   const low = [...latestById.values()];
-  if (!low.length) throw new Error(`No low-stock events were recorded from ${period.start.toLocaleDateString()} to ${period.end.toLocaleDateString()}.`);
+  if (!low.length) throw new Error(\`No new low-stock events were recorded from ${period.start.toLocaleDateString()} to ${period.end.toLocaleDateString()}.\`);
   const saved = await storage.getItem<string>("ortho_branding", "");
   let branding: any = defaultBranding;
   if (saved) { try { branding = { ...defaultBranding, ...(typeof saved === "string" ? JSON.parse(saved) : saved) }; } catch {} }
-  const title = `Low Stock Report (${period.start.toLocaleDateString()} – ${period.end.toLocaleDateString()})`;
+  const title = \`Low Stock Report (${period.start.toLocaleDateString()} – ${period.end.toLocaleDateString()})\`;
   const html = buildInventoryHtml(branding, low, true, title);
   const file = await Print.printToFileAsync({ html, base64: false });
   return { uri: file.uri, count: low.length, periodStart: iso(period.start), periodEnd: iso(period.end), periodKey: period.key };

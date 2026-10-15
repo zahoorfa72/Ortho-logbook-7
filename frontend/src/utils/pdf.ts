@@ -35,6 +35,8 @@ type InventoryItem = {
   category?: string;
   size?: string;
   lowStockTriggeredAt?: string;
+  lowStockEventAt?: string;
+  lowStockEventType?: string;
 };
 
 type StatsData = {
@@ -603,6 +605,7 @@ export function buildInventoryHtml(
           <td>
             <strong>${escapeHtml(formatInventoryLabel(i.category, i.name, i.size))}</strong>
             ${low ? '<div style="color:#A24B00;font-size:10px;font-weight:800;margin-top:3px">THIS ITEM IS LOW STOCK</div>' : ""}
+            ${i.lowStockEventAt ? '<div style="color:#555;font-size:9px;margin-top:3px">Event: ' + escapeHtml(new Date(i.lowStockEventAt).toLocaleString()) + (i.lowStockEventType ? ' · ' + escapeHtml(i.lowStockEventType) : '') + '</div>' : ""}
           </td>
           <td style="text-align:right">${i.quantity} ${escapeHtml(i.unit || "pcs")}</td>
           <td style="text-align:right">${i.minimumStock}</td>

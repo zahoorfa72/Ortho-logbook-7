@@ -240,7 +240,10 @@ function resultNumber(text: string): string | null {
   // F/M (including OCR forms iF/iM) may be a sex marker, not a unit.
   // Remove a trailing standalone marker while preserving the numeric result;
   // the patient's gender is used separately to select the reference range.
-  const withoutSexMarker = value.replace(/(?:^|\s)(?:i?[fm])\s*$/i, "").trim();
+  const withoutSexMarker = value
+    .replace(/^\s*(?:i?[fm])\s+(?=[<>≤≥]?\s*[-+]?\d)/i, "")
+    .replace(/(?:^|\s)(?:i?[fm])\s*$/i, "")
+    .trim();
 
   // A result cell should contain one measured scalar, optionally followed by
   // a unit or H/L flag. Never take the first number from a cell that also
@@ -339,31 +342,29 @@ function classifyDeviation(resultRaw: string, reference: ReferenceInterval, warn
  * Never fall back to the patient's operation/file date or an unlabelled DOB.
  */
 export function extractLabReportDate(text: string): string {
-  // Accept common lab-report formats while refusing to guess between DOB and report dates.
   const source = String(text || "").replace(/[\t\r]+/g, " ").split("\n").map(line => line.replace(/\s+/g, " ").trim()).join("\n");
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const monthIndex = (raw: string): number => {
-    const token = String(raw || "").toLowerCase().trim()
-      .replace(/^0(?=ct(?:ober)?$)/, "o")
-      .replace(/[|!]/g, "t")
-      .replace(/\.$/, "");
+    const token = String(raw || "").toLowerCase().trim().replace(/[|!]/g, "t").replace(/^0(?=ct(?:ober)?$)/, "o").replace(/\.$/, "");
     const cleaned = token.replace(/[^a-z]/g, "");
-    if (cleaned.length < 3) return -1;
-    return months.findIndex(name => name.toLowerCase() === cleaned.slice(0, 3));
+    return cleaned.length < 3 ? -1 : months.findIndex(name => name.toLowerCase() === cleaned.slice(0, 3));
   };
   const normalize = (raw: string): string => {
-    const value = String(raw || "").trim().replace(/,/g, "").replace(/\s+/g, " ");
-    let match = /^(\d{4})[-\/. ](\d{1,2})[-\/. ](\d{1,2})$/.exec(value);
+    let value = String(raw || "").trim().replace(/,/g, "").replace(/\s+/g, " ");
+    value = value.replace(/(^|[-/. ])([0-9OoIl|!]+)(?=$|[-/. ])/g, (whole, separator, token) => {
+      if (!/\d/.test(token)) return whole;
+      return separator + token.replace(/[Oo]/g, "0").replace(/[Il|!]/g, "1");
+    });
+    let match = /^(\d{4})[-/. ](\d{1,2})[-/. ](\d{1,2})$/.exec(value);
     if (match) {
       const year = Number(match[1]), month = Number(match[2]), day = Number(match[3]);
       if (year >= 1900 && year <= 2200 && month >= 1 && month <= 12 && day >= 1 && day <= 31) {
         const check = new Date(year, month - 1, day);
-        if (check.getFullYear() === year && check.getMonth() === month - 1 && check.getDate() === day)
-          return String(day).padStart(2, "0") + "-" + months[month - 1] + "-" + year;
+        if (check.getFullYear() === year && check.getMonth() === month - 1 && check.getDate() === day) return String(day).padStart(2, "0") + "-" + months[month - 1] + "-" + year;
       }
       return "";
     }
-    match = /^(\d{1,2})[-\/. ]([A-Za-z0-9|!]{3,9})[-\/. ](\d{2,4})$/i.exec(value);
+    match = /^(\d{1,2})[-/. ]([A-Za-z0-9|!]{3,9})[-/. ](\d{2,4})$/.exec(value);
     if (match) {
       const month = monthIndex(match[2]);
       let year = Number(match[3]);
@@ -371,59 +372,55 @@ export function extractLabReportDate(text: string): string {
       const day = Number(match[1]);
       if (month >= 0 && day >= 1 && day <= 31 && year >= 1900 && year <= 2200) {
         const check = new Date(year, month, day);
-        if (check.getFullYear() === year && check.getMonth() === month && check.getDate() === day)
-          return String(day).padStart(2, "0") + "-" + months[month] + "-" + year;
+        if (check.getFullYear() === year && check.getMonth() === month && check.getDate() === day) return String(day).padStart(2, "0") + "-" + months[month] + "-" + year;
       }
       return "";
     }
-    match = /^(\d{1,2})[\/. -](\d{1,2})[\/. -](\d{4})$/.exec(value);
+    match = /^(\d{1,2})[/. -](\d{1,2})[/. -](\d{4})$/.exec(value);
     if (match) {
       const day = Number(match[1]), month = Number(match[2]), year = Number(match[3]);
       if (day >= 1 && day <= 31 && month >= 1 && month <= 12 && year >= 1900 && year <= 2200) {
         const check = new Date(year, month - 1, day);
-        if (check.getFullYear() === year && check.getMonth() === month - 1 && check.getDate() === day)
-          return String(day).padStart(2, "0") + "-" + months[month - 1] + "-" + year;
+        if (check.getFullYear() === year && check.getMonth() === month - 1 && check.getDate() === day) return String(day).padStart(2, "0") + "-" + months[month - 1] + "-" + year;
       }
       return "";
     }
-    match = /^([A-Za-z0-9|!]{3,9})[-\/. ](\d{1,2})[-\/. ](\d{4})$/i.exec(value)
-      || /^([A-Za-z0-9|!]{3,9})\s+(\d{1,2}),?\s+(\d{4})$/i.exec(value);
+    match = /^([A-Za-z0-9|!]{3,9})[-/. ](\d{1,2})[-/. ](\d{4})$/.exec(value) || /^([A-Za-z0-9|!]{3,9})\s+(\d{1,2}),?\s+(\d{4})$/.exec(value);
     if (match) {
       const month = monthIndex(match[1]), day = Number(match[2]), year = Number(match[3]);
       if (month >= 0 && day >= 1 && day <= 31 && year >= 1900 && year <= 2200) {
         const check = new Date(year, month, day);
-        if (check.getFullYear() === year && check.getMonth() === month && check.getDate() === day)
-          return String(day).padStart(2, "0") + "-" + months[month] + "-" + year;
+        if (check.getFullYear() === year && check.getMonth() === month && check.getDate() === day) return String(day).padStart(2, "0") + "-" + months[month] + "-" + year;
       }
     }
     return "";
   };
   const monthToken = "(?:[A-Za-z0-9|!]{3,9})";
-  const dateToken = "(?:\\d{4}[-\\/. ]\\d{1,2}[-\\/. ]\\d{1,2}|\\d{1,2}[-\\/. ]" + monthToken + "[-\\/. ]\\d{2,4}|\\d{1,2}[-\\/. ]\\d{1,2}[-\\/. ]\\d{4}|" + monthToken + "\\s+\\d{1,2},?\\s+\\d{4})";
+  const dateToken = "(?:\\d{4}[-/. ]\\d{1,2}[-/. ]\\d{1,2}|[0-9OoIl|!]{1,2}[-/. ]" + monthToken + "[-/. ][0-9OoIl|!]{2,4}|\\d{1,2}[-/. ]\\d{1,2}[-/. ]\\d{4}|" + monthToken + "\\s+[0-9OoIl|!]{1,2},?\\s+\\d{4})";
   const tokenPattern = new RegExp(dateToken, "gi");
   const candidates: Array<{ date: string; rank: number; index: number }> = [];
   let match: RegExpExecArray | null;
   while ((match = tokenPattern.exec(source)) !== null) {
     const normalized = normalize(match[0]);
     if (!normalized) continue;
-    const before = source.slice(Math.max(0, match.index - 120), match.index).toLowerCase();
-    const after = source.slice(match.index + match[0].length, Math.min(source.length, match.index + match[0].length + 45)).toLowerCase();
-    if (/(?:date\s*of\s*birth|birth\s*date|d\.?\s*o\.?\s*b\.?|dob)\s*[:=\-]?\s*[^\n|;]{0,70}$/.test(before)) continue;
-    if (/^\s*(?:of\s*birth|of\s*birthplace)\b/.test(after)) continue;
-    const near = before.slice(-100);
+    const before = source.slice(Math.max(0, match.index - 140), match.index).toLowerCase();
+    const after = source.slice(match.index + match[0].length, Math.min(source.length, match.index + match[0].length + 70)).toLowerCase();
+    const context = before.slice(-120) + " " + after;
+    if (/(?:date\s*of\s*birth|birth\s*date|\bd\.?\s*o\.?\s*b\.?\b|\bdob\b|operation\s*date|surgery\s*date|admission\s*date|discharge\s*date)\s*[:= -]?\s*[^|\n;]{0,70}$/.test(before) || /^\s*(?:of\s*birth|of\s*surgery|of\s*operation)\b/.test(after)) continue;
     let rank = 1;
-    if (/(?:image\s+report\s+date|report(?:ing)?\s+date|date\s+of\s+report|collection\s+date|date\s+of\s+collection|sample\s+date|specimen\s+date|test\s+date|collected\s+on|tested\s+on|received\s+on|verified\s+on|printed\s+on)\s*[:=\-]?\s*[^\n|;]{0,60}$/.test(near)) rank = 4;
-    else if (/(?:^|[\s|,])date\s*[:=\-]?\s*[^\n|;]{0,60}$/.test(near)) rank = 3;
+    if (/(?:lab(?:oratory)?\s*)?(?:report|reporting|result)\s*date|date\s*of\s*(?:report|result)|report\s*generated|reported\s*on/.test(context)) rank = 6;
+    else if (/(?:collection\s*date|date\s*of\s*collection|sample\s*date|specimen\s*date|collected\s*on|sample\s*collected|specimen\s*collected|received\s*on|verified\s*on|tested\s*on|test\s*date)/.test(context)) rank = 5;
+    else if (/(?:^|[\s|,])date\s*[:= -]?\s*[^|\n;]{0,70}$/.test(before)) rank = 4;
+    else if (/\b(?:dob|birth|operation|surgery|admission|discharge)\b/.test(context)) continue;
     candidates.push({ date: normalized, rank, index: match.index });
   }
   candidates.sort((a, b) => b.rank - a.rank || a.index - b.index);
   if (!candidates.length) return "";
   const bestRank = candidates[0].rank;
   const bestDates = [...new Set(candidates.filter(candidate => candidate.rank === bestRank).map(candidate => candidate.date))];
-  // Prefer an explicitly labelled report/sample/test date. If several equally
-  // plausible dates remain, request admin confirmation rather than guessing.
   return bestDates.length === 1 ? bestDates[0] : "";
 }
+
 
 export function parseLabReportRows(text: string, configuredTests: LabTestDefinition[] = [], gender = "", warningPercent = 10, includeNormal = false): ParsedLabRow[] {
   const rows: ParsedLabRow[] = [];
