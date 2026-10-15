@@ -1023,22 +1023,6 @@ export default function Logbook() {
                   ? { status: "success", message: "", reportDate: persistedReportDate, updatedAt: persistedScanAt }
                   : { status: "not-scanned", message: "", reportDate: "", updatedAt: "" });
                 const hidden = labResultsHiddenByPatient[item.id] === true;
-                let manualReportDates: string[] = [];
-                try {
-                  const savedManual = item.customData?.labOcrManualResults ? JSON.parse(item.customData.labOcrManualResults) : [];
-                  if (Array.isArray(savedManual)) manualReportDates = savedManual
-                    .map((result: any) => String(result?.date || result?.reportDate || "").trim())
-                    .filter((date: string) => !!date && !/^date not (?:detected|entered)$/i.test(date));
-                } catch {}
-                const cachedLabFlags = labFlagsByPatient[item.id]?.flags;
-                const rawSavedLabFlags = [
-                  ...(Array.isArray(cachedLabFlags) ? cachedLabFlags : []),
-                  ...String(item.customData?.labOcrPossibleFlags || "").split(/\r?\n/).map(value => value.trim()).filter(Boolean),
-                ];
-                const datesFromFlags = rawSavedLabFlags
-                  .map(label => label.match(/\|\s*Date\s*:\s*([^|]+)/i)?.[1]?.trim()
-                    || label.match(/\s· DATE:\s*(.+)$/i)?.[1]?.trim() || "")
-                  .filter(date => !!date && !/^date not (?:detected|entered)$/i.test(date));
                 const allDisplayLabLabels = [...labLabels, ...oldResultLabels];
                 const datesFromDisplayedResults = allDisplayLabLabels
                   .map(label => label.match(/\s· DATE:\s*(.+)$/i)?.[1]?.trim()
