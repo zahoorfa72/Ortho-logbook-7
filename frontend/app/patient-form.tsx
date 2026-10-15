@@ -1208,9 +1208,9 @@ export default function PatientForm() {
                     <View pointerEvents="none" style={styles.cropOutline} />
                     {[
                       { key: "nw", style: { left: -9, top: -9 } },
-                      { key: "n", style: { left: "50%", top: -5, marginLeft: -14 } },
+                      { key: "n", style: { left: "50%" as const, top: -5, marginLeft: -14 } },
                       { key: "ne", style: { right: -9, top: -9 } },
-                      { key: "e", style: { right: -5, top: "50%", marginTop: -14 } },
+                      { key: "e", style: { right: -5, top: "50%" as const, marginTop: -14 } },
                       { key: "se", style: { right: -9, bottom: -9 } },
                       { key: "s", style: { left: "50%", bottom: -5, marginLeft: -14 } },
                       { key: "sw", style: { left: -9, bottom: -9 } },
