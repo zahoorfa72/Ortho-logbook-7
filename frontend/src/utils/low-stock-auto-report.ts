@@ -275,8 +275,10 @@ export async function checkAndSendImmediateLowStockAlerts(): Promise<string> {
   // First run establishes a baseline so existing low stock is not falsely reported.
   const hasGmailBaseline = Array.isArray(state.activeLowStockGmailIds);
   const hasWhatsAppBaseline = Array.isArray(state.activeLowStockWhatsAppIds);
-  const gmailNew = gmailOn && hasGmailBaseline ? low.filter((item: any) => thresholdKeys(item).some(key => !gmailActive.has(key))) : [];
-  const whatsappNew = whatsappOn && hasWhatsAppBaseline ? low.filter((item: any) => thresholdKeys(item).some(key => !whatsappActive.has(key))) : [];
+  const gmailNew = gmailOn && hasGmailBaseline ? low.filter((item: any) => Number(item.quantity) > 0 && !gmailActive.has(String(item.id) + ":minimum")) : [];
+  const whatsappNew = whatsappOn && hasWhatsAppBaseline ? low.filter((item: any) => Number(item.quantity) > 0 && !whatsappActive.has(String(item.id) + ":minimum")) : [];
+  const gmailZeroNew = gmailOn ? low.filter((item: any) => Number(item.quantity) <= 0 && !gmailActive.has(String(item.id) + ":zero")) : [];
+  const whatsappZeroNew = whatsappOn ? low.filter((item: any) => Number(item.quantity) <= 0 && !whatsappActive.has(String(item.id) + ":zero")) : [];
 
   const formatMessage = (items: any[]) => {
     const timestamp = new Date().toLocaleString();
@@ -298,13 +300,13 @@ export async function checkAndSendImmediateLowStockAlerts(): Promise<string> {
     }).join("\n\n");
     return [
       "ORTHO LOGBOOK",
-      "IMMEDIATE LOW-STOCK ALERT",
+      items.length > 0 && items.every((item: any) => Number(item.quantity) <= 0) ? "OUT-OF-STOCK ALERT" : "IMMEDIATE LOW-STOCK ALERT",
       "--------------------------------",
       "Newly affected item(s): " + items.length,
       "",
       itemDetails,
       "",
-      "Action required: Please arrange replenishment for the item(s) listed above.",
+      items.length > 0 && items.every((item: any) => Number(item.quantity) <= 0) ? "Action required: Replenish these item(s) urgently; available stock is zero." : "Action required: Please arrange replenishment for the item(s) listed above.",
       "Alert time: " + timestamp,
       "",
       "This alert includes only item(s) newly reaching or falling below minimum stock."
@@ -336,6 +338,31 @@ export async function checkAndSendImmediateLowStockAlerts(): Promise<string> {
         whatsappActiveIds = currentKeys;
         results.push("WhatsApp immediate alert sent");
       } catch (e: any) { results.push("WhatsApp FAILED: " + String(e?.message || e)); }
+    }
+  }
+
+  // Send a distinct urgent message at zero, even if the item already triggered at minimum.
+  // Do not record failed :zero thresholds so the admin retry can resend them.
+  if (gmailOn && gmailZeroNew.length) {
+    try {
+      await sendLowStockAlertEmail("OUT OF STOCK ALERT — " + gmailZeroNew.map((item: any) => String(item.name || item.category || "Inventory item")).join(", "), formatMessage(gmailZeroNew), config);
+      gmailActiveIds = currentKeys;
+      results.push("Gmail out-of-stock alert sent");
+    } catch (e: any) {
+      const failedKeys = new Set(gmailZeroNew.map((item: any) => String(item.id) + ":zero"));
+      gmailActiveIds = currentKeys.filter(key => !failedKeys.has(key));
+      results.push("Gmail out-of-stock alert FAILED: " + String(e?.message || e));
+    }
+  }
+  if (whatsappOn && whatsappZeroNew.length) {
+    try {
+      await sendLowStockAlertWhatsApp(formatMessage(whatsappZeroNew), config);
+      whatsappActiveIds = currentKeys;
+      results.push("WhatsApp out-of-stock alert sent");
+    } catch (e: any) {
+      const failedKeys = new Set(whatsappZeroNew.map((item: any) => String(item.id) + ":zero"));
+      whatsappActiveIds = currentKeys.filter(key => !failedKeys.has(key));
+      results.push("WhatsApp out-of-stock alert FAILED: " + String(e?.message || e));
     }
   }
 
@@ -469,12 +496,7 @@ export async function attemptDueLowStockReport(): Promise<string> {
       deliveredChannels.push("WhatsApp");
     }
   } catch (error: any) {
-    if (deliveredChannels.length) {
-      Alert.alert(
-        "Automatic report partially sent",
-        deliveredChannels.join(" and ") + " delivery succeeded, but another enabled channel failed: " + String(error?.message || error)
-      );
-    }
+    // Compact failure feedback is shown by the app toast.
     throw error;
   }
   const nextState = {
@@ -483,10 +505,6 @@ export async function attemptDueLowStockReport(): Promise<string> {
     lastStatus: `Automatically sent ${pdf.count} low-stock item(s) for ${pdf.periodStart.slice(0,10)} to ${pdf.periodEnd.slice(0,10)} via ${channels.join(" and ")}.`,
   };
   await saveState(nextState);
-  Alert.alert(
-    "Automatic low-stock report sent",
-    "Successfully delivered by " + deliveredChannels.join(" and ") + ".\n\n" + nextState.lastStatus
-  );
   return nextState.lastStatus!;
 }
 

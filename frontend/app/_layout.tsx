@@ -23,11 +23,25 @@ LogBox.ignoreAllLogs(true);
 function LowStockAlertBootstrap() {
   const toast = useToast();
   useEffect(() => {
-    void checkAndSendImmediateLowStockAlerts().then(result => {
-      if (/FAILED|failed|error|could not|missing/i.test(result) && !result.includes("disabled")) {
-        toast("Low-stock alert failed. Admin can retry it in Automatic Low Stock Reports.", "error");
-      } else if (result.includes("sent")) toast("Low-stock alert sent successfully.", "success");
-    }).catch((e:any) => toast("Low-stock alert failed: " + String(e?.message || e), "error"));
+    let active = true;
+    const run = async () => {
+      try {
+        const result = await attemptDueLowStockReport();
+        if (active && /automatically sent|successfully/i.test(result) && !/not due yet/i.test(result)) toast("Low-stock report sent successfully.", "success");
+      } catch {
+        if (active) toast("Low-stock report could not be sent. Admin can retry it in Automatic Low Stock Reports.", "error");
+      }
+      try {
+        const result = await checkAndSendImmediateLowStockAlerts();
+        if (!active) return;
+        if (/FAILED|failed|error|could not|missing/i.test(result) && !result.includes("disabled")) toast("Low-stock alert failed. Admin can retry it in Automatic Low Stock Reports.", "error");
+        else if (result.includes("sent")) toast("Low-stock alert sent successfully.", "success");
+      } catch {
+        if (active) toast("Low-stock alert failed. Admin can retry it in Automatic Low Stock Reports.", "error");
+      }
+    };
+    void run();
+    return () => { active = false; };
   }, [toast]);
   return null;
 }
@@ -52,9 +66,6 @@ function DatabaseBootstrap({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!ready) return;
     const stopBackup = startAutomaticDriveBackup();
-    // Evaluate the admin-configured low-stock schedule whenever the app starts.
-    // Delivery is idempotent per reporting period in low-stock-auto-report.ts.
-    void attemptDueLowStockReport().catch(() => {});
     return stopBackup;
   }, [ready]);
 
