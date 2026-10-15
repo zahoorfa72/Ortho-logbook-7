@@ -801,14 +801,8 @@ export default function PatientForm() {
     }
   };
 
-  const scanDocumentsToPatientPhotos = async () => {
+  const scanWithCameraDocuments = async () => {
     if (photoBusy || cameraOpen || imagePickerOpening.current) return;
-    // If patient images already exist, offer them first. This action must not
-    // unexpectedly launch the camera when the user wants to process a saved photo.
-    if (p.photos.length > 0) {
-      setExistingScanPickerVisible(true);
-      return;
-    }
     imagePickerOpening.current = true;
     setPhotoBusy(true);
     try {
@@ -824,6 +818,13 @@ export default function PatientForm() {
       setPhotoBusy(false);
       imagePickerOpening.current = false;
     }
+  };
+
+  const scanDocumentsToPatientPhotos = () => {
+    if (photoBusy || cameraOpen || imagePickerOpening.current) return;
+    // Always show the source chooser: users can scan saved patient photos,
+    // select a new gallery image, or scan a fresh paper document with camera.
+    setExistingScanPickerVisible(true);
   };
 
   const addFromCamera = async () => {
@@ -1343,6 +1344,9 @@ export default function PatientForm() {
               </View>
               <Pressable style={styles.photoSaveButton} onPress={() => { void chooseGalleryPhotoForScan(); }} disabled={photoBusy}>
                 <Text style={styles.photoSaveText}>{photoBusy ? "Opening gallery…" : "Choose a Gallery Photo to Scan"}</Text>
+              </Pressable>
+              <Pressable style={styles.photoCancelButton} onPress={() => { setExistingScanPickerVisible(false); void scanWithCameraDocuments(); }} disabled={photoBusy}>
+                <Text style={styles.photoCancelText}>Scan a New Paper with Camera</Text>
               </Pressable>
               <ScrollView contentContainerStyle={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.sm }}>
                 {p.photos.map((uri, idx) => (
