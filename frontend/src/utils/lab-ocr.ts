@@ -639,8 +639,8 @@ export async function recognizeLabText(uri: string, onlineApiKey = ""): Promise<
     bestSize = originalSize;
     best = await recognizeText(uri);
     const maxDimension = Math.max(originalSize.width, originalSize.height);
-    if (maxDimension < 2200) {
-      const scale = Math.min(2, 2200 / Math.max(1, maxDimension));
+    if (maxDimension < 2400) {
+      const scale = Math.min(2, 2400 / Math.max(1, maxDimension));
       const enhanced = await ImageManipulator.manipulateAsync(
         uri,
         [{ resize: originalSize.width >= originalSize.height ? { width: Math.round(originalSize.width * scale) } : { height: Math.round(originalSize.height * scale) } }],
@@ -668,9 +668,12 @@ export async function recognizeLabText(uri: string, onlineApiKey = ""): Promise<
   }
   const localScore = (value: any) => {
     const text = String(value?.text || "");
+    // Prefer OCR passes that actually preserve test/result pairs, not just
+    // passes that produce a longer block of patient metadata and reference ranges.
+    const parsedRows = parseLabReportRows(text, [], "", 10, true).length;
     return text.length + (text.match(/\d+(?:[.,]\d+)?/g) || []).length * 8 +
       (text.match(/\b(?:result|reference|range|hemoglobin|haemoglobin|platelets|glucose|creatinine)\b/gi) || []).length * 12 +
-      (extractLabReportDate(text) ? 1500 : 0);
+      parsedRows * 120 + (extractLabReportDate(text) ? 1800 : 0);
   };
   // If the first read is weak, retry sideways images at both orientations and
   // keep the OCR pass that reads the most text/numbers/lab terms.
@@ -698,7 +701,8 @@ export async function recognizeLabText(uri: string, onlineApiKey = ""): Promise<
     (isLikelyLabReportText(value) ? 80 : 0) +
     (value.match(/\d+(?:[.,]\d+)?/g) || []).length * 8 +
     (value.match(/\b(?:result|reference|range|hemoglobin|platelets|glucose|creatinine)\b/gi) || []).length * 12 +
-    (extractLabReportDate(value) ? 1500 : 0);
+    parseLabReportRows(value, [], "", 10, true).length * 120 +
+    (extractLabReportDate(value) ? 1800 : 0);
   if (onlineText && (
     qualityScore(onlineText) > qualityScore(text) ||
     (isLikelyLabReportText(onlineText) && !isLikelyLabReportText(text))
