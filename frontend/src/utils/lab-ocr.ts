@@ -339,18 +339,37 @@ function classifyDeviation(resultRaw: string, reference: ReferenceInterval, warn
  * Never fall back to the patient's operation/file date or an unlabelled DOB.
  */
 export function extractLabReportDate(text: string): string {
+  // OCR frequently splits punctuation or confuses O/0 and I/1 in printed dates.
+  // Normalize whitespace first, then inspect every complete date-like token.
   const source = String(text || "").replace(/[\t\r\n]+/g, " ").replace(/\s+/g, " ");
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  const monthPattern = "(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)";
-  const tokenPattern = new RegExp("\\d{1,2}[-\\/. ]" + monthPattern + "[-\\/. ]\\d{2,4}|\\d{1,2}[-\\/. ]\\d{1,2}[-\\/. ]\\d{4}|" + monthPattern + "\\s+\\d{1,2},?\\s+\\d{4}", "gi");
+  const monthNumber = (raw: string): number => {
+    const cleaned = String(raw || "").toLowerCase()
+      .replace(/0/g, "o").replace(/[1|!]/g, "l").replace(/5/g, "s")
+      .replace(/[^a-z]/g, "");
+    const exact = months.findIndex(name => name.toLowerCase() === cleaned.slice(0, 3));
+    if (exact >= 0) return exact;
+    // Tolerate one OCR character substitution in a three-letter month token.
+    const token = cleaned.slice(0, 3);
+    let best = -1, bestDistance = 2;
+    for (let i = 0; i < months.length; i++) {
+      const candidate = months[i].toLowerCase().slice(0, 3);
+      let distance = 0;
+      for (let j = 0; j < 3; j++) if (token[j] !== candidate[j]) distance++;
+      if (distance < bestDistance) { bestDistance = distance; best = i; }
+    }
+    return bestDistance <= 1 ? best : -1;
+  };
   const normalize = (raw: string): string => {
     const value = String(raw || "").trim().replace(/[,]/g, "").replace(/\s+/g, " ");
-    let m = /^(\d{1,2})[-\/. ]([A-Za-z]{3,9})[-\/. ](\d{2,4})$/.exec(value);
+    let m = /^(\d{1,2})[-\/. ]([A-Za-z0-9|!]{3,9})[-\/. ](\d{2,4})$/i.exec(value);
     if (m) {
-      const month = months.findIndex(name => name.toLowerCase() === m![2].slice(0, 3).toLowerCase());
-      let year = Number(m[3]); if (m[3].length === 2) year += year >= 50 ? 1900 : 2000;
-      const day = Number(m[1]);
-      if (month >= 0 && day >= 1 && day <= 31 && year >= 1900 && year <= 2200) return String(day).padStart(2, "0") + "-" + months[month] + "-" + year;
+      const month = monthNumber(m[2]);
+      let yearText = m[3].replace(/[Oo]/g, "0").replace(/[Il|!]/g, "1");
+      let year = Number(yearText); if (yearText.length === 2) year += year >= 50 ? 1900 : 2000;
+      const day = Number(m[1].replace(/[Il|!]/g, "1").replace(/[Oo]/g, "0"));
+      if (month >= 0 && day >= 1 && day <= 31 && year >= 1900 && year <= 2200)
+        return String(day).padStart(2, "0") + "-" + months[month] + "-" + year;
       return "";
     }
     m = /^(\d{1,2})[\/. -](\d{1,2})[\/. -](\d{4})$/.exec(value);
@@ -360,43 +379,43 @@ export function extractLabReportDate(text: string): string {
         return String(day).padStart(2, "0") + "-" + months[month - 1] + "-" + year;
       return "";
     }
-    m = /^([A-Za-z]{3,9})[-\/. ](\d{1,2})[-\/. ](\d{4})$/.exec(value)
-      || /^([A-Za-z]{3,9})\s+(\d{1,2}),?\s+(\d{4})$/.exec(value);
+    m = /^([A-Za-z0-9|!]{3,9})[-\/. ](\d{1,2})[-\/. ](\d{4})$/i.exec(value)
+      || /^([A-Za-z0-9|!]{3,9})\s+(\d{1,2}),?\s+(\d{4})$/i.exec(value);
     if (m) {
-      const month = months.findIndex(name => name.toLowerCase() === m![1].slice(0, 3).toLowerCase());
-      const day = Number(m[2]), year = Number(m[3]);
+      const month = monthNumber(m[1]), day = Number(m[2]), year = Number(m[3]);
       if (month >= 0 && day >= 1 && day <= 31 && year >= 1900 && year <= 2200)
         return String(day).padStart(2, "0") + "-" + months[month] + "-" + year;
     }
     return "";
   };
+  const monthToken = "(?:[A-Za-z0-9|!]{3,9})";
+  const dateToken = "(?:\\\\d{1,2}[-\\\\/. ]" + monthToken + "[-\\\\/. ]\\\\d{2,4}|\\\\d{1,2}[-\\\\/. ]\\\\d{1,2}[-\\\\/. ]\\\\d{4}|" + monthToken + "\\\\s+\\\\d{1,2},?\\\\s+\\\\d{4})";
+  const tokenPattern = new RegExp(dateToken, "gi");
   const candidates: Array<{ date: string; rank: number; index: number }> = [];
   let match: RegExpExecArray | null;
   while ((match = tokenPattern.exec(source)) !== null) {
     const normalized = normalize(match[0]);
     if (!normalized) continue;
-    const before = source.slice(Math.max(0, match.index - 90), match.index).toLowerCase();
-    // A DOB is never a lab report date, even when OCR drops punctuation.
-    if (/(?:date\s*of\s*birth|birth\s*date|d\.?\s*o\.?\s*b\.?|dob)\s*[:=\-]?\s*[^|;]{0,45}$/.test(before)) continue;
-    const near = before.slice(-75);
-    let rank = 1; // recognizable but unlabelled date: last resort only
-    if (/(?:image\s+report\s+date|report(?:ing)?\s+date|date\s+of\s+report|collection\s+date|date\s+of\s+collection|sample\s+date|specimen\s+date|test\s+date|collected\s+on|tested\s+on)\s*[:=\-]?\s*[^|;]{0,35}$/.test(near)) rank = 4;
-    else if (/(?:^|[\s|,])date\s*[:=\-]?\s*[^|;]{0,35}$/.test(near)) rank = 3;
-    else if (/(?:received\s+on|printed\s+on|verified\s+on)\s*[:=\-]?\s*[^|;]{0,35}$/.test(near)) rank = 2;
+    const before = source.slice(Math.max(0, match.index - 120), match.index).toLowerCase();
+    const after = source.slice(match.index + match[0].length, Math.min(source.length, match.index + match[0].length + 45)).toLowerCase();
+    // Never treat DOB as the report date. This also handles label and date split by OCR whitespace.
+    if (/(?:date\s*of\s*birth|birth\s*date|d\.?\s*o\.?\s*b\.?|dob)\s*[:=\-]?\s*[^|;]{0,70}$/.test(before)) continue;
+    if (/^\s*(?:of\s*birth|of\s*birthplace)\b/.test(after)) continue;
+    const near = before.slice(-100);
+    let rank = 1; // One unambiguous full date is usable as a last resort.
+    if (/(?:image\s+report\s+date|report(?:ing)?\s+date|date\s+of\s+report|collection\s+date|date\s+of\s+collection|sample\s+date|specimen\s+date|test\s+date|collected\s+on|tested\s+on|received\s+on|verified\s+on|printed\s+on)\s*[:=\-]?\s*[^|;]{0,60}$/.test(near)) rank = 4;
+    else if (/(?:^|[\s|,])date\s*[:=\-]?\s*[^|;]{0,60}$/.test(near)) rank = 3;
     candidates.push({ date: normalized, rank, index: match.index });
   }
   candidates.sort((a, b) => b.rank - a.rank || a.index - b.index);
   if (!candidates.length) return "";
   const bestRank = candidates[0].rank;
   const bestDates = [...new Set(candidates.filter(candidate => candidate.rank === bestRank).map(candidate => candidate.date))];
+  // Prefer the date explicitly attached to a report/sample/test label. Otherwise
+  // accept only a single unique full date; if several dates exist, request admin
+  // confirmation instead of guessing which date belongs to the report.
   if (bestDates.length !== 1) return "";
-  // A report/test/collection label can distinguish the report date. If dates
-  // are only unlabelled and more than one distinct date appears, ask the admin.
-  // Only trust a date tied to an explicit date/report/collection label.
-  // A lone unlabelled date could be DOB, printed date, or OCR noise. Leave it
-  // for the administrator to confirm instead of assigning a potentially wrong age.
-  if (bestRank >= 3) return bestDates[0];
-  return "";
+  return bestDates[0];
 }
 
 export function parseLabReportRows(text: string, configuredTests: LabTestDefinition[] = [], gender = "", warningPercent = 10, includeNormal = false): ParsedLabRow[] {
