@@ -100,7 +100,7 @@ function parseLabDate(value: string): Date | null {
     // A date-only value is already a calendar date. For a timestamp (created_at),
     // convert the instant to the device's local calendar day before comparing days.
     let year = Number(iso[1]), month = Number(iso[2]) - 1, day = Number(iso[3]);
-    if (/[T ]\\d/.test(text)) {
+    if (text.length > 10) {
       const timestamp = new Date(text);
       if (Number.isNaN(timestamp.getTime())) return null;
       year = timestamp.getFullYear();
