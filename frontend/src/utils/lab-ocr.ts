@@ -401,12 +401,12 @@ export function extractLabReportDate(text: string): string {
     const before = source.slice(Math.max(0, match.index - 120), match.index).toLowerCase();
     const after = source.slice(match.index + match[0].length, Math.min(source.length, match.index + match[0].length + 45)).toLowerCase();
     // Never treat DOB as the report date. This also handles label and date split by OCR whitespace.
-    if (/(?:date\s*of\s*birth|birth\s*date|d\.?\s*o\.?\s*b\.?|dob)\s*[:=\-]?\s*[^\\n|;]{0,70}$/.test(before)) continue;
+    if (/(?:date\s*of\s*birth|birth\s*date|d\.?\s*o\.?\s*b\.?|dob)\s*[:=\-]?\s*[^\n|;]{0,70}$/.test(before)) continue;
     if (/^\s*(?:of\s*birth|of\s*birthplace)\b/.test(after)) continue;
     const near = before.slice(-100);
     let rank = 1; // One unambiguous full date is usable as a last resort.
-    if (/(?:image\s+report\s+date|report(?:ing)?\s+date|date\s+of\s+report|collection\s+date|date\s+of\s+collection|sample\s+date|specimen\s+date|test\s+date|collected\s+on|tested\s+on|received\s+on|verified\s+on|printed\s+on)\s*[:=\-]?\s*[^\\n|;]{0,60}$/.test(near)) rank = 4;
-    else if (/(?:^|[\s|,])date\s*[:=\-]?\s*[^\\n|;]{0,60}$/.test(near)) rank = 3;
+    if (/(?:image\s+report\s+date|report(?:ing)?\s+date|date\s+of\s+report|collection\s+date|date\s+of\s+collection|sample\s+date|specimen\s+date|test\s+date|collected\s+on|tested\s+on|received\s+on|verified\s+on|printed\s+on)\s*[:=\-]?\s*[^\n|;]{0,60}$/.test(near)) rank = 4;
+    else if (/(?:^|[\s|,])date\s*[:=\-]?\s*[^\n|;]{0,60}$/.test(near)) rank = 3;
     candidates.push({ date: normalized, rank, index: match.index });
   }
   candidates.sort((a, b) => b.rank - a.rank || a.index - b.index);
