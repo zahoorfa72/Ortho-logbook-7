@@ -42,24 +42,29 @@ export default function LowStockReportsScreen() {
   const generate = async () => { setBusy(true); try { await save(); await shareLowStockPdfViaWhatsApp(); const s = await getLowStockReportState(); setStatus(s.lastStatus || "Report generated."); setLastGenerated(s.lastGeneratedAt ? new Date(s.lastGeneratedAt).toLocaleString() : ""); toast("Period-filtered PDF created. Choose an app to share it.", "success"); } catch (e: any) { Alert.alert("Could not create report", String(e?.message || e)); } finally { setBusy(false); } };
   const testAutomatic = async () => { setBusy(true); try { if (!(await save())) return; const result = await testLowStockReportDeliveryNow(); setStatus(result); toast(result, "success"); } catch (e:any) { const message = String(e?.message || e); setStatus(message); Alert.alert("Delivery test result", message); } finally { setBusy(false); } };
   const testImmediateAlerts = async () => { setBusy(true); try { if (!(await save())) return; const result = await testImmediateLowStockAlertDeliveryNow(); setStatus(result); toast(result, "success"); } catch (e:any) { const message = String(e?.message || e); setStatus(message); Alert.alert("Immediate alert test result", message); } finally { setBusy(false); } };
-  const retryFailedDelivery = async () => {
+  const retryFailedAlert = async () => {
     setBusy(true);
-    const outcomes: string[] = [];
     try {
-      const result = await attemptDueLowStockReport();
-      if (!/not due yet|not configured|disabled/i.test(result)) outcomes.push(result);
-    } catch (e: any) { outcomes.push("Scheduled report FAILED: " + String(e?.message || e)); }
-    try {
-      const result = await checkAndSendImmediateLowStockAlerts();
-      if (!/not configured|disabled|No newly low-stock/i.test(result)) outcomes.push(result);
-    } catch (e: any) { outcomes.push("Immediate alert FAILED: " + String(e?.message || e)); }
-    const result = outcomes.join("; ") || "No pending alert was sent. Check internet, Gmail connection, recipients, and delivery settings.";
-    setStatus(result);
-    const failed = /FAILED|failed|could not|error/i.test(result);
-    toast(failed ? "Low-stock delivery failed. Check details and retry." : "Low-stock delivery check completed.", failed ? "error" : "success");
-    try {
+      if (!(await save())) return;
+      const outcomes: string[] = [];
+      try {
+        const result = await attemptDueLowStockReport();
+        if (!/not due yet|not configured|disabled/i.test(result)) outcomes.push(result);
+      } catch (e: any) { outcomes.push("Scheduled report FAILED: " + String(e?.message || e)); }
+      try {
+        const result = await checkAndSendImmediateLowStockAlerts();
+        if (!/not configured|disabled|No newly low-stock/i.test(result)) outcomes.push(result);
+      } catch (e: any) { outcomes.push("Immediate alert FAILED: " + String(e?.message || e)); }
+      const result = outcomes.join("; ") || "No pending alert was sent. Check internet, Gmail connection, recipients, and delivery settings.";
+      setStatus(result);
+      const failed = /FAILED|failed|could not|error/i.test(result);
+      toast(failed ? "Low-stock delivery failed. Check details and retry." : "Low-stock delivery check completed.", failed ? "error" : "success");
       const state = await getLowStockReportState();
       setLastGenerated(state.lastGeneratedAt ? new Date(state.lastGeneratedAt).toLocaleString() : "");
+    } catch (e: any) {
+      const message = String(e?.message || e);
+      setStatus(message);
+      toast("Retry failed: " + message, "error");
     } finally { setBusy(false); }
   };
   const sendManualAlert = async () => { setBusy(true); try { if (!(await save())) return; const result = await sendManualLowStockTextAlertNow(); setStatus(result); toast(result, "success"); } catch (e:any) { const message = String(e?.message || e); setStatus(message); Alert.alert("Manual low-stock alert result", message); } finally { setBusy(false); } };
@@ -106,9 +111,8 @@ export default function LowStockReportsScreen() {
       <Pressable disabled={busy} onPress={async () => { if (await save()) toast("Settings saved.", "success"); }} style={styles.action}><Text style={styles.actionText}>Save delivery settings</Text></Pressable>
       <Pressable disabled={busy} onPress={testAutomatic} style={[styles.primary, busy && { opacity: .55 }]}><Text style={styles.primaryText}>{busy ? "Working…" : "Test automatic delivery now"}</Text></Pressable>
       <Pressable disabled={busy} onPress={testImmediateAlerts} style={styles.action}><Text style={styles.actionText}>{busy ? "Working…" : "Test immediate low-stock text alerts"}</Text></Pressable>
-      <Pressable disabled={busy} onPress={retryFailedAlert} style={styles.action}><Text style={styles.actionText}>{busy ? "Working…" : "Retry failed low-stock alert"}</Text></Pressable>
       <Pressable disabled={busy} onPress={sendManualAlert} style={styles.primary}><Text style={styles.primaryText}>{busy ? "Working…" : "Send low-stock text alert now (manual)"}</Text></Pressable>
-      <Pressable disabled={busy} onPress={retryFailedDelivery} style={styles.action}><Text style={styles.actionText}>{busy ? "Retrying…" : "Retry failed automatic delivery"}</Text></Pressable>
+      <Pressable disabled={busy} onPress={retryFailedAlert} style={styles.action}><Text style={styles.actionText}>{busy ? "Retrying…" : "Retry failed delivery"}</Text></Pressable>
       <Pressable disabled={busy} onPress={generate} style={styles.action}><Text style={styles.actionText}>{busy ? "Please wait…" : "Share report using WhatsApp or another app"}</Text></Pressable>
       {!!status && <View style={styles.status}><Text style={styles.label}>Latest result</Text><Text style={styles.help}>{status}</Text></View>}
       {!!lastGenerated && <View style={styles.status}><Text style={styles.label}>Last generated/sent</Text><Text style={styles.help}>{lastGenerated}</Text></View>}
