@@ -10,7 +10,7 @@ export type ParsedLabRow = {
   result: string;
   unit: string;
   reference: string;
-  severity: "WARNING" | "ALERT";
+  severity: "WARNING" | "ALERT" | "";
   sourceLine: string;
 };
 
@@ -397,7 +397,7 @@ export function extractLabReportDate(text: string): string {
   return allDates.length === 1 ? allDates[0] : "";
 }
 
-export function parseLabReportRows(text: string, configuredTests: LabTestDefinition[] = [], gender = "", warningPercent = 10): ParsedLabRow[] {
+export function parseLabReportRows(text: string, configuredTests: LabTestDefinition[] = [], gender = "", warningPercent = 10, includeNormal = false): ParsedLabRow[] {
   const rows: ParsedLabRow[] = [];
   const seen = new Set<string>();
 
@@ -444,8 +444,8 @@ export function parseLabReportRows(text: string, configuredTests: LabTestDefinit
       reference = configuredReference(testPrefix.configured, gender);
       if (!resultRaw || !reference) continue;
 
-      const severity = classifyDeviation(resultRaw, reference, warningPercent);
-      if (!severity) continue;
+      const severity = classifyDeviation(resultRaw, reference, warningPercent) || "";
+      if (!severity && !includeNormal) continue;
       const result = numericValue(resultRaw);
       const cleanedUnit = unit
         // OCR frequently merges sex labels (F, M, iM) or stray glyphs into

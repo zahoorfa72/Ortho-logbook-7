@@ -129,57 +129,76 @@ function oldLabResultLabels(patient: Patient, days: number): string[] {
   const addedDay = new Date(addedDate.getFullYear(), addedDate.getMonth(), addedDate.getDate()).getTime();
   const staleByTestResult = new Map<string, string>();
   let manual: any[] = [];
+  let detected: any[] = [];
   try {
     const parsed = patient.customData?.labOcrManualResults ? JSON.parse(patient.customData.labOcrManualResults) : [];
     if (Array.isArray(parsed)) manual = parsed;
   } catch {}
+  try {
+    const parsed = patient.customData?.labOcrDetectedResults ? JSON.parse(patient.customData.labOcrDetectedResults) : [];
+    if (Array.isArray(parsed)) detected = parsed;
+  } catch {}
   const normalizeSavedResult = (value: unknown) => {
-    const parsed = Number(String(value ?? "").replace(",", ".").match(/[-+]?\d+(?:\.\d+)?/)?.[0]);
-    return Number.isFinite(parsed) ? String(parsed) : String(value ?? "").trim().toLowerCase();
+    const found = String(value ?? "").replace(/,/g, ".").match(/[-+]?\d+(?:\.\d+)?/);
+    if (!found) return String(value ?? "").trim().toLowerCase();
+    const n = Number(found[0]);
+    return Number.isFinite(n) ? String(n) : found[0];
   };
   const normalizeTestKey = (value: unknown) => String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const resultKey = (testName: unknown, result: unknown) => normalizeTestKey(testName) + "|" + normalizeSavedResult(result);
   const manualResultKeys = new Set(manual
-    .filter(item => item && String(item.test || "").trim() && String(item.result ?? "").trim())
-    .map(item => normalizeTestKey(item.test) + "|" + normalizeSavedResult(item.result))
+    .filter(item => item && String(item.test || "").trim() && String(item.result ?? "").trim()
+      && !!parseLabDate(String(item.date || item.reportDate || "")))
+    .map(item => resultKey(item.test, item.result))
     .filter(Boolean));
   const addIfOld = (testName: string, result: string, rawDate: string) => {
+    const test = String(testName || "").trim();
+    const resultText = String(result || "").trim();
+    if (!test || !resultText) return;
     const reportDate = parseLabDate(String(rawDate || "").trim());
     if (!reportDate) return;
     const reportDay = new Date(reportDate.getFullYear(), reportDate.getMonth(), reportDate.getDate()).getTime();
     const ageDays = Math.floor((addedDay - reportDay) / 86400000);
     if (ageDays < days) return;
-    const resultText = String(result || "").trim();
-    const key = normalizeTestKey(testName) + "|" + normalizeSavedResult(resultText);
+    const key = resultKey(test, resultText);
     if (!staleByTestResult.has(key)) {
       const formattedDate = normalizeLabDateInput(rawDate) || String(rawDate).trim();
-      staleByTestResult.set(key, "OLD RESULT: " + (testName.trim() || "Lab test")
-        + (resultText ? " " + resultText : "")
+      staleByTestResult.set(key, "OLD RESULT: " + test + " " + resultText
         + " · Report date " + formattedDate
         + " is " + ageDays + " days before patient was added");
     }
   };
-  const lines = String(patient.customData?.labOcrPossibleFlags || "").split(/\r?\n/).map(x => x.trim()).filter(Boolean);
-  for (const line of lines) {
-    const dateMatch = line.match(/\|\s*Date\s*:\s*([^|]+)/i)
-      || line.match(/\s·\s*DATE:\s*([^|]+)/i);
-    if (!dateMatch) continue;
-    const withoutStatus = line.replace(/^(?:WARNING|ALERT|HIGH|LOW)\s*:\s*/i, "");
-    const withoutDate = withoutStatus.replace(/\|\s*Date\s*:\s*[^|]*/i, "").replace(/\s·\s*DATE:\s*[^|]*/i, "");
-    const referenceMatch = /\|\s*Ref\s*:/i.exec(withoutDate);
-    const resultAndTest = (referenceMatch ? withoutDate.slice(0, referenceMatch.index) : withoutDate).trim();
-    const resultMatch = /[-+]?\d+(?:[.,]\d+)?/.exec(resultAndTest);
-    const testName = resultMatch && resultMatch.index !== undefined
-      ? resultAndTest.slice(0, resultMatch.index).replace(/[\s:|•-]+$/g, "").trim()
-      : resultAndTest;
-    if (!testName) continue;
-    const resultText = resultMatch?.[0] || "";
-    const resultKey = normalizeTestKey(testName) + "|" + normalizeSavedResult(resultText);
-    if (manualResultKeys.has(resultKey)) continue;
-    addIfOld(testName, resultText, dateMatch[1].trim());
-  }
+
+  // Corrected/manual values have priority; rows without a usable manual date do not
+  // suppress a dated OCR result for the same test and value.
   for (const item of manual) {
-    if (!item || !String(item.test || "").trim()) continue;
-    addIfOld(String(item.test), String(item.result ?? ""), String(item.date || item.reportDate || ""));
+    if (!item || !String(item.test || "").trim() || !String(item.result ?? "").trim()) continue;
+    addIfOld(String(item.test), String(item.result), String(item.date || item.reportDate || ""));
+  }
+  for (const item of detected) {
+    if (!item || !String(item.test || "").trim() || !String(item.result ?? "").trim()) continue;
+    if (manualResultKeys.has(resultKey(item.test, item.result))) continue;
+    addIfOld(String(item.test), String(item.result), String(item.date || item.reportDate || ""));
+  }
+
+  // Before structured rows were saved, only abnormal flags were retained. Keep
+  // reading those old records, but don't parse the same result twice on newer scans.
+  if (!detected.length) {
+    const lines = String(patient.customData?.labOcrPossibleFlags || "").split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+    for (const line of lines) {
+      const dateMatch = line.match(/\|\s*Date\s*:\s*([^|]+)/i)
+        || line.match(/\s·\s*DATE:\s*([^|]+)/i);
+      if (!dateMatch) continue;
+      const withoutStatus = line.replace(/^(?:WARNING|ALERT|HIGH|LOW)\s*:\s*/i, "");
+      const withoutDate = withoutStatus.replace(/\|\s*Date\s*:\s*[^|]*/i, "").replace(/\s·\s*DATE:\s*[^|]*/i, "");
+      const referenceMatch = /\|\s*Ref\s*:/i.exec(withoutDate);
+      const testAndResult = (referenceMatch ? withoutDate.slice(0, referenceMatch.index) : withoutDate).trim();
+      const resultMatch = /[-+]?\d+(?:[.,]\d+)?/.exec(testAndResult);
+      if (!resultMatch || resultMatch.index === undefined) continue;
+      const testName = testAndResult.slice(0, resultMatch.index).replace(/[\s:|•-]+$/g, "").trim();
+      if (!testName) continue;
+      addIfOld(testName, resultMatch[0], dateMatch[1].trim());
+    }
   }
   return [...staleByTestResult.values()].slice(0, 20);
 }
@@ -508,7 +527,7 @@ export default function Logbook() {
         try {
           await api.put("/patients/" + patientId, {
             ...patient,
-            customData: { ...(patient.customData || {}), labOcrPossibleFlags: "", labOcrDetectedAt: new Date().toISOString(), labOcrReportDate: "", labOcrDateNeedsAdmin: "false", labOcrDateManuallyConfirmed: "false" },
+            customData: { ...(patient.customData || {}), labOcrPossibleFlags: "", labOcrDetectedResults: "[]", labOcrDetectedAt: new Date().toISOString(), labOcrReportDate: "", labOcrDateNeedsAdmin: "false", labOcrDateManuallyConfirmed: "false" },
           });
           queryClient.invalidateQueries({ queryKey: ["patients"] });
         } catch {}
@@ -540,16 +559,31 @@ export default function Logbook() {
         : distinctReportDates.length > 1 ? "Multiple report dates — see each result"
         : distinctReportDates[0];
       const flags: string[] = [];
+      const detectedResults: Array<{ test: string; result: string; unit: string; reference: string; severity: string; date: string }> = [];
       for (let pageIndex = 0; pageIndex < reportPages.length; pageIndex++) {
         const page = reportPages[pageIndex];
-        const reportDate = effectivePageDates[pageIndex] || "Date not detected";
-        for (const row of parseLabReportRows(page.text, configuredTests, patient.gender, warningPercent)) {
+        const reportDate = effectivePageDates[pageIndex] || "";
+        // Normal values can still be stale compared with when the patient was added.
+        const parsedRows = parseLabReportRows(page.text, configuredTests, patient.gender, warningPercent, true);
+        for (const row of parsedRows) {
+          detectedResults.push({
+            test: row.test, result: row.result, unit: row.unit, reference: row.reference,
+            severity: row.severity, date: reportDate,
+          });
+          if (!row.severity) continue;
           flags.push(row.severity + ": " + row.test + " " + row.result +
             (row.unit ? " " + row.unit : "") +
-            " | Date: " + reportDate + " | Ref: " + row.reference);
+            " | Date: " + (reportDate || "Date not detected") + " | Ref: " + row.reference);
         }
       }
       const uniqueFlags = flags.filter((flag, i, all) => all.indexOf(flag) === i).slice(0, 20);
+      const uniqueDetectedResults = detectedResults
+        .filter((row, index, all) => all.findIndex(other =>
+          other.test.toLowerCase() === row.test.toLowerCase() &&
+          other.result.replace(/,/g, ".") === row.result.replace(/,/g, ".") &&
+          other.unit.toLowerCase() === row.unit.toLowerCase() &&
+          other.date === row.date) === index)
+        .slice(0, 200);
       const signature = photos.join("|") + "|gender:" + String(patient.gender || "") +
         "|ranges:" + configuredTests.map(item => [item.name,item.maleMin,item.maleMax,item.femaleMin,item.femaleMax,item.unit].join(":")).join(";");
       setLabFlagsByPatient(previous => ({ ...previous, [patientId]: { signature, flags: uniqueFlags, reportDate: reportDateSummary } }));
@@ -560,6 +594,7 @@ export default function Logbook() {
           customData: {
             ...existingCustomData,
             labOcrPossibleFlags: uniqueFlags.join("\n"),
+            labOcrDetectedResults: JSON.stringify(uniqueDetectedResults),
             labOcrDetectedAt: new Date().toISOString(),
             labOcrReportDate: reportDateSummary,
             labOcrDateNeedsAdmin: reportDateNeedsAdmin ? "true" : "false",
@@ -705,12 +740,25 @@ export default function Logbook() {
         if (!shouldReplaceDate(oldDate)) return item;
         return { ...item, date: confirmedDate, reportDate: confirmedDate };
       });
+      let savedDetectedResults: any[] = [];
+      try {
+        const parsed = customData.labOcrDetectedResults ? JSON.parse(customData.labOcrDetectedResults) : [];
+        if (Array.isArray(parsed)) savedDetectedResults = parsed;
+      } catch {}
+      const updatedDetectedResults = savedDetectedResults.map(item => {
+        if (!item || !String(item.test || "").trim() || !String(item.result ?? "").trim()) return item;
+        const oldDate = String(item.date || item.reportDate || "").trim();
+        if (!shouldReplaceDate(oldDate)) return item;
+        return { ...item, date: confirmedDate, reportDate: confirmedDate, dateManuallyVerified: true };
+      });
       const dates = [
         ...updatedFlags.map(line => {
           const m = /\|\s*Date\s*:\s*([^|]+)/i.exec(line) || /\s·\s*DATE:\s*([^|]+)/i.exec(line);
           return m ? normalizeLabDateInput(m[1].trim()) : null;
         }),
         ...updatedManualResults.filter(item => item && String(item.test || "").trim() && String(item.result ?? "").trim())
+          .map(item => normalizeLabDateInput(String(item.date || item.reportDate || ""))),
+        ...updatedDetectedResults.filter(item => item && String(item.test || "").trim() && String(item.result ?? "").trim())
           .map(item => normalizeLabDateInput(String(item.date || item.reportDate || ""))),
       ].filter((date): date is string => !!date);
       const uniqueDates = [...new Set(dates)];
@@ -725,6 +773,7 @@ export default function Logbook() {
         labOcrDateConfirmedAt: new Date().toISOString(),
       };
       if (savedManualResults.length) updatedCustomData.labOcrManualResults = JSON.stringify(updatedManualResults);
+      if (savedDetectedResults.length) updatedCustomData.labOcrDetectedResults = JSON.stringify(updatedDetectedResults);
       await api.put("/patients/" + patientId, { ...fullPatient, customData: updatedCustomData });
       setLabFlagsByPatient(previous => ({
         ...previous,
@@ -1167,7 +1216,21 @@ export default function Logbook() {
                     return normalizeLabDateInput(matched) || "";
                   })
                   .filter(Boolean) as string[];
-                const uniquePerResultDates = [...new Set(datesFromDisplayedResults)];
+                let automaticReportDates: string[] = [];
+                try {
+                  const parsed = item.customData?.labOcrDetectedResults ? JSON.parse(item.customData.labOcrDetectedResults) : [];
+                  if (Array.isArray(parsed)) automaticReportDates = parsed
+                    .map((row: any) => normalizeLabDateInput(String(row?.date || row?.reportDate || "")) || "")
+                    .filter(Boolean);
+                } catch {}
+                let manualReportDates: string[] = [];
+                try {
+                  const parsed = item.customData?.labOcrManualResults ? JSON.parse(item.customData.labOcrManualResults) : [];
+                  if (Array.isArray(parsed)) manualReportDates = parsed
+                    .map((row: any) => normalizeLabDateInput(String(row?.date || row?.reportDate || "")) || "")
+                    .filter(Boolean);
+                } catch {}
+                const uniquePerResultDates = [...new Set([...datesFromDisplayedResults, ...automaticReportDates, ...manualReportDates])];
                 const summaryDate = normalizeLabDateInput(persistedReportDate)
                   || normalizeLabDateInput(status.reportDate) || "";
                 const reportDateDisplay = uniquePerResultDates.length ? uniquePerResultDates.join(", ") : summaryDate;
@@ -1187,7 +1250,8 @@ export default function Logbook() {
                 );
                 const dateNeedsAdmin = item.customData?.labOcrDateNeedsAdmin === "true"
                   || hasUndatedAutomaticResult || hasUndatedManualResult
-                  || (!reportDateDisplay && status.status === "success" && item.customData?.labOcrDateManuallyConfirmed !== "true");
+                  || (!reportDateDisplay && status.status === "success" && item.customData?.labOcrDateManuallyConfirmed !== "true"
+                    && !/^multiple report dates — see each result$/i.test(persistedReportDate));
                 const hasAlert = !hidden && (labLabels.some(label => label.startsWith("ALERT:")) || oldResultLabels.length > 0);
                 const hasWarning = !hidden && labLabels.some(label => label.startsWith("WARNING:"));
                 const tone = hasAlert ? (colors.error || "#B91C1C") : hasWarning ? (colors.warning || "#B7791F")
