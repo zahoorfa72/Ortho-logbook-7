@@ -1303,8 +1303,6 @@ export default function Logbook() {
                   : status.status === "failed" ? "FAILED"
                   : status.status === "stopped" ? "STOPPED" : "NOT SCANNED";
                 const canStop = status.status === "queued" || status.status === "scanning";
-                const hasLabContent = allDisplayLabLabels.length > 0 || !!reportDateDisplay || dateNeedsAdmin || status.status !== "not-scanned";
-                if (!hasLabContent) return null;
                 const defaultDate = dateNeedsAdmin ? "" : (uniquePerResultDates.length === 1 ? uniquePerResultDates[0] : summaryDate);
                 const targetDate = dateNeedsAdmin ? "" : (normalizeLabDateInput(defaultDate || "") || "");
                 const editorOpen = labDateEditorOpenByPatient[item.id] === true;
