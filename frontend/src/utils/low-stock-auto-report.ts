@@ -345,22 +345,22 @@ export async function checkAndSendImmediateLowStockAlerts(): Promise<string> {
   if (gmailOn && gmailZeroNew.length) {
     try {
       await sendLowStockAlertEmail("OUT OF STOCK ALERT — " + gmailZeroNew.map((item: any) => String(item.name || item.category || "Inventory item")).join(", "), formatMessage(gmailZeroNew), config);
-      gmailActiveIds = currentKeys;
+      gmailActiveIds = [...new Set([...gmailActiveIds.filter(key => currentKeys.includes(key)), ...gmailZeroNew.map((item: any) => String(item.id) + ":zero")])];
       results.push("Gmail out-of-stock alert sent");
     } catch (e: any) {
       const failedKeys = new Set(gmailZeroNew.map((item: any) => String(item.id) + ":zero"));
-      gmailActiveIds = currentKeys.filter(key => !failedKeys.has(key));
+      gmailActiveIds = gmailActiveIds.filter(key => currentKeys.includes(key) && !failedKeys.has(key));
       results.push("Gmail out-of-stock alert FAILED: " + String(e?.message || e));
     }
   }
   if (whatsappOn && whatsappZeroNew.length) {
     try {
       await sendLowStockAlertWhatsApp(formatMessage(whatsappZeroNew), config);
-      whatsappActiveIds = currentKeys;
+      whatsappActiveIds = [...new Set([...whatsappActiveIds.filter(key => currentKeys.includes(key)), ...whatsappZeroNew.map((item: any) => String(item.id) + ":zero")])];
       results.push("WhatsApp out-of-stock alert sent");
     } catch (e: any) {
       const failedKeys = new Set(whatsappZeroNew.map((item: any) => String(item.id) + ":zero"));
-      whatsappActiveIds = currentKeys.filter(key => !failedKeys.has(key));
+      whatsappActiveIds = whatsappActiveIds.filter(key => currentKeys.includes(key) && !failedKeys.has(key));
       results.push("WhatsApp out-of-stock alert FAILED: " + String(e?.message || e));
     }
   }
