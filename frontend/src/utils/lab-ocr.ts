@@ -706,23 +706,56 @@ export async function recognizeLabText(
       if (rotatedUri) { try { await FileSystem.deleteAsync(rotatedUri, { idempotent: true }); } catch {} }
     }
   }
-  // Dates usually sit in a small header. If the full-page OCR missed it,
-  // crop the top band and enlarge it for a dedicated second date-reading pass.
-  if (!extractLabReportDate(String(best?.text || ""))) {
+  // Re-read the page in overlapping enlarged bands. This helps reports photographed
+  // from farther away, where the full-page OCR often loses small test values.
+  // Keep the original full-page OCR blocks for table geometry and append crop text
+  // as a fallback source so labels/results split across crops are not silently lost.
+  try {
+    const size = originalDimensions || await imageSize(uri);
+    const rowCount = parseLabReportRows(String(best?.text || ""), configuredTests, gender, 10, true).length;
+    if (rowCount < Math.min(5, Math.max(2, configuredTests.length)) || localScore(best) < 420) {
+      const bandHeight = Math.max(1, Math.round(size.height * 0.56));
+      const starts = [0, Math.max(0, size.height - bandHeight)];
+      const cropTexts: string[] = [];
+      for (const originY of [...new Set(starts)]) {
+        let cropUri = "";
+        try {
+          const crop = await ImageManipulator.manipulateAsync(uri, [
+            { crop: { originX: 0, originY, width: size.width, height: Math.min(bandHeight, size.height - originY) } },
+            { resize: size.width >= 2200 ? { height: Math.round(Math.min(bandHeight, size.height - originY) * 1.25) } : { width: 2600 } },
+          ], { compress: 1, format: ImageManipulator.SaveFormat.PNG });
+          cropUri = crop.uri;
+          const read = await recognizeText(cropUri);
+          const cropText = String(read?.text || "").trim();
+          if (cropText && localScore(read) > 20) cropTexts.push(cropText);
+        } catch {}
+        if (cropUri) { try { await FileSystem.deleteAsync(cropUri, { idempotent: true }); } catch {} }
+      }
+      if (cropTexts.length) {
+        const merged = [String(best?.text || "").trim(), ...cropTexts].filter(Boolean).join("\n");
+        if (localScore({ text: merged }) >= localScore(best)) best = { ...best, text: merged };
+      }
+    }
+  } catch {}
+
+  // Always read the header separately, even if the full-page pass found a date:
+  // a full-page read can mistake DOB/other dates for the report date or misread
+  // a clear printed date such as 06-Oct-2026.
+  {
     let headerUri = "";
     try {
       const size = originalDimensions || await imageSize(uri);
-      const headerHeight = Math.max(1, Math.round(size.height * 0.38));
+      const headerHeight = Math.max(1, Math.round(size.height * 0.46));
       const cropped = await ImageManipulator.manipulateAsync(uri, [
         { crop: { originX: 0, originY: 0, width: size.width, height: headerHeight } },
-        { resize: size.width >= 1800 ? { height: Math.round(headerHeight * 1.4) } : { width: 2400 } },
+        { resize: size.width >= 2200 ? { height: Math.round(headerHeight * 1.35) } : { width: 2800 } },
       ], { compress: 1, format: ImageManipulator.SaveFormat.PNG });
       headerUri = cropped.uri;
       const headerRead = await recognizeText(headerUri);
-      if (extractLabReportDate(String(headerRead?.text || "")) ||
-          localScore(headerRead) > localScore(best)) {
-        best = { ...headerRead, text: String(headerRead?.text || "") + "\n" + String(best?.text || "") };
-        bestSize = size;
+      const headerText = String(headerRead?.text || "").trim();
+      const currentText = String(best?.text || "");
+      if (headerText && (extractLabReportDate(headerText) || localScore(headerRead) > localScore(best))) {
+        best = { ...best, text: headerText + "\n" + currentText };
       }
     } catch {}
     if (headerUri) { try { await FileSystem.deleteAsync(headerUri, { idempotent: true }); } catch {} }
