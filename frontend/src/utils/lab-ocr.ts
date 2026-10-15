@@ -386,7 +386,15 @@ export function extractLabReportDate(text: string): string {
     candidates.push({ date: normalized, rank, index: match.index });
   }
   candidates.sort((a, b) => b.rank - a.rank || a.index - b.index);
-  return candidates[0]?.date || "";
+  if (!candidates.length) return "";
+  const bestRank = candidates[0].rank;
+  const bestDates = [...new Set(candidates.filter(candidate => candidate.rank === bestRank).map(candidate => candidate.date))];
+  if (bestDates.length !== 1) return "";
+  // A report/test/collection label can distinguish the report date. If dates
+  // are only unlabelled and more than one distinct date appears, ask the admin.
+  if (bestRank >= 3) return bestDates[0];
+  const allDates = [...new Set(candidates.map(candidate => candidate.date))];
+  return allDates.length === 1 ? allDates[0] : "";
 }
 
 export function parseLabReportRows(text: string, configuredTests: LabTestDefinition[] = [], gender = "", warningPercent = 10): ParsedLabRow[] {

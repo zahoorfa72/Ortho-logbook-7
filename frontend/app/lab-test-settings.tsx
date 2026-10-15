@@ -86,7 +86,7 @@ export default function LabTestSettingsScreen() {
       await AsyncStorage.setItem(OLD_RESULT_DAYS_KEY, String(value));
       triggerAutomaticDriveBackup("appSettings");
       setOldResultDays(String(value));
-      toast("Old lab-result alert saved: " + value + " days before patient date.", "success");
+      toast("Old lab-result alert saved: " + value + " days before patient was added.", "success");
     } catch { toast("Could not save the old-result alert setting.", "error"); }
     finally { setOldDaysBusy(false); }
   };
@@ -136,9 +136,9 @@ export default function LabTestSettingsScreen() {
       <Pressable disabled={thresholdBusy} onPress={saveWarningThreshold} style={styles.action}><Text style={styles.actionText}>{thresholdBusy ? "Saving…" : "Save warning threshold"}</Text></Pressable>
       {field("Test name", "name", "e.g. Hemoglobin")}
       <Text style={styles.section}>Old lab-result alert</Text>
-      <Text style={styles.help}>Show an OLD LAB RESULT alert outside the Patient Form when a report date is this many days or more before the patient record date. Example: 10 days. A readable report date and patient date are required.</Text>
+      <Text style={styles.help}>Show an OLD LAB RESULT alert outside the Patient Form when a report date is this many days or more before the patient was first added to this app. Example: 10 days. The report date and patient-added date are required.</Text>
       <View style={styles.field}>
-        <Text style={styles.label}>Days before patient date</Text>
+        <Text style={styles.label}>Days before patient was added</Text>
         <TextInput value={oldResultDays} onChangeText={setOldResultDays} keyboardType="number-pad" selectTextOnFocus style={styles.input} placeholder="10" />
       </View>
       <Pressable disabled={oldDaysBusy} onPress={saveOldResultDays} style={styles.action}><Text style={styles.actionText}>{oldDaysBusy ? "Saving…" : "Save old-result alert"}</Text></Pressable>

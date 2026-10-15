@@ -67,6 +67,7 @@ type Patient = {
   implant: string;
   implantII: string;
   date: string;
+  createdAt?: string;
   address: string;
   fileName: string;
   photos: string[];
@@ -114,9 +115,16 @@ function parseLabDate(value: string): Date | null {
   }
   return null;
 }
+function normalizeLabDateInput(value: string): string | null {
+  const date = parseLabDate(String(value || ""));
+  if (!date) return null;
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return String(date.getDate()).padStart(2, "0") + "-" + months[date.getMonth()] + "-" + date.getFullYear();
+}
+
 function oldLabResultLabels(patient: Patient, days: number): string[] {
   if (!Number.isFinite(days) || days < 1) return [];
-  const addedDate = parseLabDate(String(patient.date || ""));
+  const addedDate = parseLabDate(String(patient.createdAt || patient.date || ""));
   if (!addedDate) return [];
   const addedDay = new Date(addedDate.getFullYear(), addedDate.getMonth(), addedDate.getDate()).getTime();
   const staleByTestResult = new Map<string, string>();
@@ -129,34 +137,45 @@ function oldLabResultLabels(patient: Patient, days: number): string[] {
     const parsed = Number(String(value ?? "").replace(",", ".").match(/[-+]?\d+(?:\.\d+)?/)?.[0]);
     return Number.isFinite(parsed) ? String(parsed) : String(value ?? "").trim().toLowerCase();
   };
+  const normalizeTestKey = (value: unknown) => String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
   const manualResultKeys = new Set(manual
     .filter(item => item && String(item.test || "").trim() && String(item.result ?? "").trim())
-    .map(item => String(item.test).toLowerCase().replace(/[^a-z0-9]+/g, "") + "|" + normalizeSavedResult(item.result))
+    .map(item => normalizeTestKey(item.test) + "|" + normalizeSavedResult(item.result))
     .filter(Boolean));
   const addIfOld = (testName: string, result: string, rawDate: string) => {
     const reportDate = parseLabDate(String(rawDate || "").trim());
     if (!reportDate) return;
     const reportDay = new Date(reportDate.getFullYear(), reportDate.getMonth(), reportDate.getDate()).getTime();
     const ageDays = Math.floor((addedDay - reportDay) / 86400000);
-    if (ageDays >= days) {
-      const resultText = String(result || "").trim();
-      const key = String(testName || "").toLowerCase().replace(/[^a-z0-9]+/g, "") + "|" + resultText.replace(/[^0-9.+-]/g, "");
-      if (!staleByTestResult.has(key)) staleByTestResult.set(key, "OLD RESULT: " + (testName.trim() || "Lab test")
+    if (ageDays < days) return;
+    const resultText = String(result || "").trim();
+    const key = normalizeTestKey(testName) + "|" + normalizeSavedResult(resultText);
+    if (!staleByTestResult.has(key)) {
+      const formattedDate = normalizeLabDateInput(rawDate) || String(rawDate).trim();
+      staleByTestResult.set(key, "OLD RESULT: " + (testName.trim() || "Lab test")
         + (resultText ? " " + resultText : "")
-        + " · Report date " + String(rawDate).trim()
-        + " is " + ageDays + " days before patient date");
+        + " · Report date " + formattedDate
+        + " is " + ageDays + " days before patient was added");
     }
   };
   const lines = String(patient.customData?.labOcrPossibleFlags || "").split(/\r?\n/).map(x => x.trim()).filter(Boolean);
   for (const line of lines) {
-    const match = line.match(/\|\s*Date\s*:\s*([^|]+)/i) || line.match(/\s· DATE:\s*(.+)$/i);
-    if (!match) continue;
+    const dateMatch = line.match(/\|\s*Date\s*:\s*([^|]+)/i)
+      || line.match(/\s·\s*DATE:\s*([^|]+)/i);
+    if (!dateMatch) continue;
     const withoutStatus = line.replace(/^(?:WARNING|ALERT|HIGH|LOW)\s*:\s*/i, "");
-    const testName = withoutStatus.split(/[|:]/)[0].trim();
-    const resultMatch = withoutStatus.match(/[-+]?\d+(?:[.,]\d+)?/);
-    const resultKey = testName.toLowerCase().replace(/[^a-z0-9]+/g, "") + "|" + normalizeSavedResult(resultMatch?.[0] || "");
+    const withoutDate = withoutStatus.replace(/\|\s*Date\s*:\s*[^|]*/i, "").replace(/\s·\s*DATE:\s*[^|]*/i, "");
+    const referenceMatch = /\|\s*Ref\s*:/i.exec(withoutDate);
+    const resultAndTest = (referenceMatch ? withoutDate.slice(0, referenceMatch.index) : withoutDate).trim();
+    const resultMatch = /[-+]?\d+(?:[.,]\d+)?/.exec(resultAndTest);
+    const testName = resultMatch && resultMatch.index !== undefined
+      ? resultAndTest.slice(0, resultMatch.index).replace(/[\s:|•-]+$/g, "").trim()
+      : resultAndTest;
+    if (!testName) continue;
+    const resultText = resultMatch?.[0] || "";
+    const resultKey = normalizeTestKey(testName) + "|" + normalizeSavedResult(resultText);
     if (manualResultKeys.has(resultKey)) continue;
-    addIfOld(testName, resultMatch?.[0] || "", match[1].trim());
+    addIfOld(testName, resultText, dateMatch[1].trim());
   }
   for (const item of manual) {
     if (!item || !String(item.test || "").trim()) continue;
@@ -268,6 +287,10 @@ export default function Logbook() {
   const [labWarningsEnabled, setLabWarningsEnabled] = useState(true);
   const [labResultsHiddenByPatient, setLabResultsHiddenByPatient] = useState<Record<string, boolean>>({});
   const [oldLabResultDays, setOldLabResultDays] = useState(10);
+  const [labDateEditorOpenByPatient, setLabDateEditorOpenByPatient] = useState<Record<string, boolean>>({});
+  const [labDateInputsByPatient, setLabDateInputsByPatient] = useState<Record<string, string>>({});
+  const [labDateTargetsByPatient, setLabDateTargetsByPatient] = useState<Record<string, string>>({});
+  const [labDateSavingByPatient, setLabDateSavingByPatient] = useState<Record<string, boolean>>({});
   const [labFlagsByPatient, setLabFlagsByPatient] = useState<Record<string, { signature: string; flags: string[]; reportDate?: string }>>({});
   const [labScanStates, setLabScanStates] = useState<Record<string, LabScanStatus>>({});
   const [labScanStateLoaded, setLabScanStateLoaded] = useState(false);
@@ -485,7 +508,7 @@ export default function Logbook() {
         try {
           await api.put("/patients/" + patientId, {
             ...patient,
-            customData: { ...(patient.customData || {}), labOcrPossibleFlags: "", labOcrDetectedAt: new Date().toISOString(), labOcrReportDate: "" },
+            customData: { ...(patient.customData || {}), labOcrPossibleFlags: "", labOcrDetectedAt: new Date().toISOString(), labOcrReportDate: "", labOcrDateNeedsAdmin: "false", labOcrDateManuallyConfirmed: "false" },
           });
           queryClient.invalidateQueries({ queryKey: ["patients"] });
         } catch {}
@@ -503,9 +526,23 @@ export default function Logbook() {
         return;
       }
 
+      const existingCustomData = patient.customData || {};
+      const previouslyConfirmedDate = existingCustomData.labOcrDateManuallyConfirmed === "true"
+        ? normalizeLabDateInput(String(existingCustomData.labOcrReportDate || ""))
+        : null;
+      const detectedPageDates = reportPages.map(page =>
+        normalizeLabDateInput(page.reportDate || "") || normalizeLabDateInput(extractLabReportDate(page.text)) || ""
+      );
+      const effectivePageDates = detectedPageDates.map(date => date || previouslyConfirmedDate || "");
+      const reportDateNeedsAdmin = effectivePageDates.some(date => !date);
+      const distinctReportDates = [...new Set(effectivePageDates.filter(Boolean))];
+      const reportDateSummary = distinctReportDates.length === 0 ? "Date not detected"
+        : distinctReportDates.length > 1 ? "Multiple report dates — see each result"
+        : distinctReportDates[0];
       const flags: string[] = [];
-      for (const page of reportPages) {
-        const reportDate = page.reportDate || extractLabReportDate(page.text) || "Date not detected";
+      for (let pageIndex = 0; pageIndex < reportPages.length; pageIndex++) {
+        const page = reportPages[pageIndex];
+        const reportDate = effectivePageDates[pageIndex] || "Date not detected";
         for (const row of parseLabReportRows(page.text, configuredTests, patient.gender, warningPercent)) {
           flags.push(row.severity + ": " + row.test + " " + row.result +
             (row.unit ? " " + row.unit : "") +
@@ -513,10 +550,6 @@ export default function Logbook() {
         }
       }
       const uniqueFlags = flags.filter((flag, i, all) => all.indexOf(flag) === i).slice(0, 20);
-      const availableDates = reportPages.map(page => page.reportDate).filter(Boolean);
-      const reportDateSummary = availableDates.length === 0 ? "Date not detected"
-        : [...new Set(availableDates)].length > 1 ? "Multiple report dates — see each result"
-        : availableDates[0];
       const signature = photos.join("|") + "|gender:" + String(patient.gender || "") +
         "|ranges:" + configuredTests.map(item => [item.name,item.maleMin,item.maleMax,item.femaleMin,item.femaleMax,item.unit].join(":")).join(";");
       setLabFlagsByPatient(previous => ({ ...previous, [patientId]: { signature, flags: uniqueFlags, reportDate: reportDateSummary } }));
@@ -529,6 +562,7 @@ export default function Logbook() {
             labOcrPossibleFlags: uniqueFlags.join("\n"),
             labOcrDetectedAt: new Date().toISOString(),
             labOcrReportDate: reportDateSummary,
+            labOcrDateNeedsAdmin: reportDateNeedsAdmin ? "true" : "false",
           },
         });
         void updated;
@@ -618,6 +652,109 @@ export default function Logbook() {
     } catch {
       setLabResultsHiddenByPatient(labResultsHiddenByPatient);
       toast("Could not save this patient's lab-result visibility setting.", "error");
+    }
+  };
+
+  const openLabDateEditor = (patientId: string, initialDate: string, targetDate: string) => {
+    setLabDateInputsByPatient(previous => ({ ...previous, [patientId]: initialDate }));
+    setLabDateTargetsByPatient(previous => ({ ...previous, [patientId]: targetDate }));
+    setLabDateEditorOpenByPatient(previous => ({ ...previous, [patientId]: true }));
+  };
+
+  const saveConfirmedLabDate = async (patientId: string) => {
+    const confirmedDate = normalizeLabDateInput(labDateInputsByPatient[patientId] || "");
+    if (!confirmedDate) {
+      toast("Enter a valid report date, for example 06-Oct-2026.", "error");
+      return;
+    }
+    setLabDateSavingByPatient(previous => ({ ...previous, [patientId]: true }));
+    try {
+      const fullPatient = await api.get<Patient>("/patients/" + patientId);
+      if (!fullPatient?.id) throw new Error("Could not load the full patient record.");
+      const customData = { ...(fullPatient.customData || {}) };
+      const targetDate = normalizeLabDateInput(labDateTargetsByPatient[patientId] || "");
+      const shouldReplaceDate = (rawDate: string) => {
+        const oldDate = normalizeLabDateInput(rawDate);
+        return !oldDate || (!!targetDate && oldDate === targetDate);
+      };
+      const updateFlagDate = (line: string) => {
+        const pipeDate = /\|\s*Date\s*:\s*([^|]*)/i.exec(line);
+        if (pipeDate) {
+          if (!shouldReplaceDate(pipeDate[1].trim())) return line;
+          return line.replace(pipeDate[0], "| Date: " + confirmedDate);
+        }
+        const suffixDate = /\s·\s*DATE:\s*([^|]*)/i.exec(line);
+        if (suffixDate) {
+          if (!shouldReplaceDate(suffixDate[1].trim())) return line;
+          return line.replace(suffixDate[0], " · DATE: " + confirmedDate);
+        }
+        const ref = /\|\s*Ref\s*:/i.exec(line);
+        return ref ? line.slice(0, ref.index) + "| Date: " + confirmedDate + " " + line.slice(ref.index)
+          : line + " | Date: " + confirmedDate;
+      };
+      const updatedFlags = String(customData.labOcrPossibleFlags || "").split(/\r?\n/)
+        .map(line => line.trim()).filter(Boolean).map(updateFlagDate);
+      let savedManualResults: any[] = [];
+      try {
+        const parsed = customData.labOcrManualResults ? JSON.parse(customData.labOcrManualResults) : [];
+        if (Array.isArray(parsed)) savedManualResults = parsed;
+      } catch {}
+      const updatedManualResults = savedManualResults.map(item => {
+        if (!item || !String(item.test || "").trim() || !String(item.result ?? "").trim()) return item;
+        const oldDate = String(item.date || item.reportDate || "").trim();
+        if (!shouldReplaceDate(oldDate)) return item;
+        return { ...item, date: confirmedDate, reportDate: confirmedDate };
+      });
+      const dates = [
+        ...updatedFlags.map(line => {
+          const m = /\|\s*Date\s*:\s*([^|]+)/i.exec(line) || /\s·\s*DATE:\s*([^|]+)/i.exec(line);
+          return m ? normalizeLabDateInput(m[1].trim()) : null;
+        }),
+        ...updatedManualResults.filter(item => item && String(item.test || "").trim() && String(item.result ?? "").trim())
+          .map(item => normalizeLabDateInput(String(item.date || item.reportDate || ""))),
+      ].filter((date): date is string => !!date);
+      const uniqueDates = [...new Set(dates)];
+      const reportDateSummary = uniqueDates.length > 1 ? "Multiple report dates — see each result"
+        : uniqueDates[0] || confirmedDate;
+      const updatedCustomData: Record<string, string> = {
+        ...customData,
+        labOcrPossibleFlags: updatedFlags.join("\n"),
+        labOcrReportDate: reportDateSummary,
+        labOcrDateNeedsAdmin: "false",
+        labOcrDateManuallyConfirmed: "true",
+        labOcrDateConfirmedAt: new Date().toISOString(),
+      };
+      if (savedManualResults.length) updatedCustomData.labOcrManualResults = JSON.stringify(updatedManualResults);
+      await api.put("/patients/" + patientId, { ...fullPatient, customData: updatedCustomData });
+      setLabFlagsByPatient(previous => ({
+        ...previous,
+        [patientId]: {
+          ...(previous[patientId] || { signature: (fullPatient.photos || []).join("|") }),
+          signature: previous[patientId]?.signature || (fullPatient.photos || []).join("|"),
+          flags: updatedFlags,
+          reportDate: reportDateSummary,
+        },
+      }));
+      try {
+        const raw = await AsyncStorage.getItem("ortho_lab_ocr_patient_cache_v7");
+        const snapshot = raw ? JSON.parse(raw) : {};
+        snapshot[patientId] = {
+          ...(snapshot[patientId] || {}),
+          signature: snapshot[patientId]?.signature || (fullPatient.photos || []).join("|"),
+          flags: updatedFlags,
+          reportDate: reportDateSummary,
+        };
+        await AsyncStorage.setItem("ortho_lab_ocr_patient_cache_v7", JSON.stringify(snapshot));
+      } catch {}
+      setLabDateInputsByPatient(previous => ({ ...previous, [patientId]: confirmedDate }));
+      setLabDateEditorOpenByPatient(previous => ({ ...previous, [patientId]: false }));
+      setLabDateTargetsByPatient(previous => ({ ...previous, [patientId]: confirmedDate }));
+      queryClient.invalidateQueries({ queryKey: ["patients"] });
+      toast("Lab report date confirmed: " + confirmedDate + ".", "success");
+    } catch (error: any) {
+      toast(error?.message || "Could not save the confirmed report date.", "error");
+    } finally {
+      setLabDateSavingByPatient(previous => ({ ...previous, [patientId]: false }));
     }
   };
 
@@ -1018,24 +1155,41 @@ export default function Logbook() {
                 const oldResultLabels = oldLabResultLabels(item, oldLabResultDays);
                 const persistedReportDate = String(item.customData?.labOcrReportDate || "").trim();
                 const persistedScanAt = String(item.customData?.labOcrDetectedAt || "").trim();
-                const savedScanExists = !!persistedScanAt;
-                const status: LabScanStatus = labScanStates[item.id] || (savedScanExists
+                const status: LabScanStatus = labScanStates[item.id] || (persistedScanAt
                   ? { status: "success", message: "", reportDate: persistedReportDate, updatedAt: persistedScanAt }
                   : { status: "not-scanned", message: "", reportDate: "", updatedAt: "" });
                 const hidden = labResultsHiddenByPatient[item.id] === true;
                 const allDisplayLabLabels = [...labLabels, ...oldResultLabels];
                 const datesFromDisplayedResults = allDisplayLabLabels
-                  .map(label => label.match(/\s· DATE:\s*(.+)$/i)?.[1]?.trim()
-                    || label.match(/Report date\s+(\d{1,2}-[A-Za-z]{3}-\d{4})/i)?.[1]?.trim() || "")
-                  .filter(date => !!date && !/^date not (?:detected|entered)$/i.test(date));
+                  .map(label => {
+                    const matched = label.match(/\s· DATE:\s*(.+)$/i)?.[1]?.trim()
+                      || label.match(/Report date\s+(\d{1,2}-[A-Za-z]{3}-\d{4})/i)?.[1]?.trim() || "";
+                    return normalizeLabDateInput(matched) || "";
+                  })
+                  .filter(Boolean) as string[];
                 const uniquePerResultDates = [...new Set(datesFromDisplayedResults)];
-                const summaryDate = persistedReportDate && !/^(?:date not detected|multiple report dates — see each result)$/i.test(persistedReportDate)
-                  ? persistedReportDate
-                  : status.reportDate && !/^(?:date not detected|multiple report dates — see each result)$/i.test(status.reportDate)
-                    ? status.reportDate : "";
+                const summaryDate = normalizeLabDateInput(persistedReportDate)
+                  || normalizeLabDateInput(status.reportDate) || "";
                 const reportDateDisplay = uniquePerResultDates.length ? uniquePerResultDates.join(", ") : summaryDate;
-                const hasAlert = labLabels.some(label => label.startsWith("ALERT:")) || oldResultLabels.length > 0;
-                const hasWarning = labLabels.some(label => label.startsWith("WARNING:"));
+                const automaticResultLines = String(item.customData?.labOcrPossibleFlags || "").split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+                const hasUndatedAutomaticResult = automaticResultLines.some(line => {
+                  const match = line.match(/\|\s*Date\s*:\s*([^|]+)/i) || line.match(/\s·\s*DATE:\s*([^|]+)/i);
+                  return !!match && !normalizeLabDateInput(match[1].trim());
+                });
+                let savedManualRows: any[] = [];
+                try {
+                  const parsed = item.customData?.labOcrManualResults ? JSON.parse(item.customData.labOcrManualResults) : [];
+                  if (Array.isArray(parsed)) savedManualRows = parsed;
+                } catch {}
+                const hasUndatedManualResult = savedManualRows.some(row =>
+                  row && String(row.test || "").trim() && String(row.result ?? "").trim()
+                  && !normalizeLabDateInput(String(row.date || row.reportDate || ""))
+                );
+                const dateNeedsAdmin = item.customData?.labOcrDateNeedsAdmin === "true"
+                  || hasUndatedAutomaticResult || hasUndatedManualResult
+                  || (!reportDateDisplay && status.status === "success" && item.customData?.labOcrDateManuallyConfirmed !== "true");
+                const hasAlert = !hidden && (labLabels.some(label => label.startsWith("ALERT:")) || oldResultLabels.length > 0);
+                const hasWarning = !hidden && labLabels.some(label => label.startsWith("WARNING:"));
                 const tone = hasAlert ? (colors.error || "#B91C1C") : hasWarning ? (colors.warning || "#B7791F")
                   : status.status === "failed" ? (colors.error || "#B91C1C")
                   : status.status === "success" ? "#15803D" : colors.brandPrimary;
@@ -1045,31 +1199,59 @@ export default function Logbook() {
                   : status.status === "failed" ? "FAILED"
                   : status.status === "stopped" ? "STOPPED" : "NOT SCANNED";
                 const canStop = status.status === "queued" || status.status === "scanning";
-                const hasLabContent = allDisplayLabLabels.length > 0 || !!reportDateDisplay || status.status !== "not-scanned";
+                const hasLabContent = allDisplayLabLabels.length > 0 || !!reportDateDisplay || dateNeedsAdmin || status.status !== "not-scanned";
                 if (!hasLabContent) return null;
+                const defaultDate = dateNeedsAdmin ? "" : (uniquePerResultDates.length === 1 ? uniquePerResultDates[0] : summaryDate);
+                const targetDate = dateNeedsAdmin ? "" : (normalizeLabDateInput(defaultDate || "") || "");
+                const editorOpen = labDateEditorOpenByPatient[item.id] === true;
                 return <View style={{ marginTop: spacing.xs, paddingVertical: 5, paddingHorizontal: 6, borderRadius: radius.sm, borderWidth: 1, borderColor: tone, backgroundColor: tone + "10" }}>
                   <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 5 }}>
                     {status.status === "scanning" || status.status === "queued"
                       ? <ActivityIndicator size="small" color={tone} />
                       : <Ionicons name={hasAlert ? "alert-circle" : hasWarning ? "warning" : status.status === "success" ? "checkmark-circle" : status.status === "failed" ? "close-circle" : status.status === "stopped" ? "pause-circle" : "flask-outline"} size={14} color={tone} />}
                     <Text style={{ color: tone, fontFamily: fontFamily.bold, fontSize: 10 }}>
-                      {oldResultLabels.length ? "OLD LAB RESULT" : hasAlert ? "LAB ALERT" : hasWarning ? "LAB WARNING" : "LAB SCAN · " + statusLabel}
+                      {hidden ? "LAB RESULTS HIDDEN · " + statusLabel : oldResultLabels.length ? "OLD LAB RESULT" : hasAlert ? "LAB ALERT" : hasWarning ? "LAB WARNING" : "LAB SCAN · " + statusLabel}
                     </Text>
                     {user?.role === "admin" ? (canStop
                       ? <Pressable onPress={event => { event.stopPropagation(); stopLabScan(item.id); }} hitSlop={8} style={{ paddingHorizontal: 7, paddingVertical: 2, borderRadius: 5, borderWidth: 1, borderColor: tone }}><Text style={{ color: tone, fontFamily: fontFamily.semibold, fontSize: 10 }}>Stop</Text></Pressable>
                       : <Pressable onPress={event => { event.stopPropagation(); requestLabScan(item.id, false); }} hitSlop={8} style={{ paddingHorizontal: 7, paddingVertical: 2, borderRadius: 5, borderWidth: 1, borderColor: tone }}><Text style={{ color: tone, fontFamily: fontFamily.semibold, fontSize: 10 }}>Retry</Text></Pressable>) : null}
-                    {allDisplayLabLabels.length || reportDateDisplay ? <Pressable onPress={event => { event.stopPropagation(); void toggleLabResultsHidden(item.id); }} hitSlop={8} accessibilityLabel={hidden ? "Show this patient's lab results" : "Hide this patient's lab results"} style={{ flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 4, paddingVertical: 2 }}>
+                    {allDisplayLabLabels.length || reportDateDisplay || dateNeedsAdmin ? <Pressable onPress={event => { event.stopPropagation(); void toggleLabResultsHidden(item.id); }} hitSlop={8} accessibilityLabel={hidden ? "Show this patient's lab results" : "Hide this patient's lab results"} style={{ flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 4, paddingVertical: 2 }}>
                       <Ionicons name={hidden ? "eye-outline" : "eye-off-outline"} size={14} color={tone} />
                       <Text style={{ color: tone, fontFamily: fontFamily.semibold, fontSize: 10 }}>{hidden ? "Show" : "Hide"}</Text>
                     </Pressable> : null}
                   </View>
                   {!hidden ? <>
-                    {reportDateDisplay ? <Text testID={"lab-report-date-" + item.id} style={{ color: colors.muted, fontSize: 10, marginTop: 2 }}>Report date: {reportDateDisplay}</Text> : null}
+                    {dateNeedsAdmin ? <View style={{ marginTop: 4, flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 5 }}>
+                      <Text style={{ color: colors.warning || "#B7791F", fontFamily: fontFamily.semibold, fontSize: 10 }}>REPORT DATE NEEDS ADMIN CONFIRMATION</Text>
+                      {user?.role === "admin" ? <Pressable onPress={event => {
+                        event.stopPropagation();
+                        openLabDateEditor(item.id, "", "");
+                      }} hitSlop={6} style={{ paddingHorizontal: 7, paddingVertical: 3, borderWidth: 1, borderColor: colors.warning || "#B7791F", borderRadius: 5 }}>
+                        <Text style={{ color: colors.warning || "#B7791F", fontFamily: fontFamily.semibold, fontSize: 10 }}>Enter date</Text>
+                      </Pressable> : <Text style={{ color: colors.muted, fontSize: 10 }}>Ask an administrator.</Text>}
+                    </View> : reportDateDisplay ? <View style={{ marginTop: 3, flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                      <Text testID={"lab-report-date-" + item.id} style={{ color: colors.muted, fontSize: 10 }}>Report date: {reportDateDisplay}</Text>
+                      {user?.role === "admin" && uniquePerResultDates.length === 1 ? <Pressable onPress={event => {
+                        event.stopPropagation();
+                        openLabDateEditor(item.id, uniquePerResultDates[0], uniquePerResultDates[0]);
+                      }} hitSlop={6}><Text style={{ color: colors.brandPrimary, fontSize: 10, fontFamily: fontFamily.semibold }}>Edit date</Text></Pressable> : null}
+                    </View> : null}
+                    {editorOpen && user?.role === "admin" ? <View style={{ marginTop: 5, flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 5 }}>
+                      <TextInput value={labDateInputsByPatient[item.id] || ""} onChangeText={value => setLabDateInputsByPatient(previous => ({ ...previous, [item.id]: value }))}
+                        placeholder="DD-MMM-YYYY e.g. 06-Oct-2026" placeholderTextColor={colors.muted} autoCapitalize="none" autoCorrect={false}
+                        style={{ flex: 1, minWidth: 150, borderWidth: 1, borderColor: colors.border, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 6, color: colors.onSurface, fontSize: 12 }} />
+                      <Pressable disabled={labDateSavingByPatient[item.id] === true} onPress={event => { event.stopPropagation(); void saveConfirmedLabDate(item.id); }} style={{ backgroundColor: colors.brandPrimary, borderRadius: 6, paddingHorizontal: 9, paddingVertical: 7, opacity: labDateSavingByPatient[item.id] ? 0.6 : 1 }}>
+                        <Text style={{ color: colors.onBrandPrimary, fontSize: 10, fontFamily: fontFamily.semibold }}>{labDateSavingByPatient[item.id] ? "Saving…" : "Save date"}</Text>
+                      </Pressable>
+                      <Pressable onPress={event => { event.stopPropagation(); setLabDateEditorOpenByPatient(previous => ({ ...previous, [item.id]: false })); }} style={{ paddingHorizontal: 6, paddingVertical: 6 }}>
+                        <Text style={{ color: colors.muted, fontSize: 10 }}>Cancel</Text>
+                      </Pressable>
+                    </View> : null}
                     {allDisplayLabLabels.length ? <View style={{ marginTop: 3, flexDirection: "row", flexWrap: "wrap", gap: 4 }}>
                       {allDisplayLabLabels.map((label, index) => {
                         const warning = label.startsWith("WARNING:");
                         const oldResult = label.startsWith("OLD RESULT:");
-                        const labelTone = oldResult ? (colors.muted || "#64748B") : warning ? (colors.warning || "#B7791F") : (colors.error || "#B91C1C");
+                        const labelTone = oldResult ? (colors.error || "#B91C1C") : warning ? (colors.warning || "#B7791F") : (colors.error || "#B91C1C");
                         const dateMatch = label.match(/\s· DATE:\s*(.+)$/);
                         const visibleLabel = dateMatch ? label.slice(0, dateMatch.index) : label;
                         const compactLabel = visibleLabel.length > 92 ? visibleLabel.slice(0, 89) + "…" : visibleLabel;
