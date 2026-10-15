@@ -342,7 +342,7 @@ export function extractLabReportDate(text: string): string {
   const source = String(text || "").replace(/[\t\r\n]+/g, " ").replace(/\s+/g, " ");
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const monthPattern = "(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)";
-  const tokenPattern = new RegExp("\\\\d{1,2}[-\\\\/. ]" + monthPattern + "[-\\\\/. ]\\\\d{2,4}|\\\\d{1,2}[-\\\\/. ]\\\\d{1,2}[-\\\\/. ]\\\\d{4}|" + monthPattern + "\\\\s+\\\\d{1,2},?\\\\s+\\\\d{4}", "gi");
+  const tokenPattern = new RegExp("\\d{1,2}[-\\/. ]" + monthPattern + "[-\\/. ]\\d{2,4}|\\d{1,2}[-\\/. ]\\d{1,2}[-\\/. ]\\d{4}|" + monthPattern + "\\s+\\d{1,2},?\\s+\\d{4}", "gi");
   const normalize = (raw: string): string => {
     const value = String(raw || "").trim().replace(/[,]/g, "").replace(/\s+/g, " ");
     let m = /^(\d{1,2})[-\/. ]([A-Za-z]{3,9})[-\/. ](\d{2,4})$/.exec(value);
