@@ -406,7 +406,7 @@ export function extractLabReportDate(text: string): string {
     const before = source.slice(Math.max(0, match.index - 140), match.index).toLowerCase();
     const after = source.slice(match.index + match[0].length, Math.min(source.length, match.index + match[0].length + 70)).toLowerCase();
     const context = before.slice(-120) + " " + after;
-    if (/(?:date\s*of\s*birth|birth\s*date|\bd\.?\s*o\.?\s*b\.?\b|\bdob\b|operation\s*date|surgery\s*date|admission\s*date|discharge\s*date)\s*[:= -]?\s*[^|\n;]{0,70}$/.test(before) || /^\s*(?:of\s*birth|of\s*surgery|of\s*operation)\b/.test(after)) continue;
+    if (/(?:date\s*of\s*birth|birth\s*date|\bd\.?\s*o\.?\s*b\.?\b|\bdob\b|operation\s*date|surgery\s*date|admission\s*date|discharge\s*date)\s*[:= -]?\s*$/.test(before) || /^\s*(?:of\s*birth|of\s*surgery|of\s*operation)\b/.test(after)) continue;
     let rank = 1;
     if (/(?:lab(?:oratory)?\s*)?(?:report|reporting|result)\s*date|date\s*of\s*(?:report|result)|report\s*generated|reported\s*on/.test(context)) rank = 6;
     else if (/(?:collection\s*date|date\s*of\s*collection|sample\s*date|specimen\s*date|collected\s*on|sample\s*collected|specimen\s*collected|received\s*on|verified\s*on|tested\s*on|test\s*date)/.test(context)) rank = 5;
