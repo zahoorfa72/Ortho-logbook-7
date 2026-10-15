@@ -126,7 +126,7 @@ function oldLabResultLabels(patient: Patient, days: number): string[] {
     if (Array.isArray(parsed)) manual = parsed;
   } catch {}
   const normalizeSavedResult = (value: unknown) => {
-    const parsed = Number(String(value ?? "").replace(",", ".").match(/[-+]?\\d+(?:\\.\\d+)?/)?.[0]);
+    const parsed = Number(String(value ?? "").replace(",", ".").match(/[-+]?\d+(?:\.\d+)?/)?.[0]);
     return Number.isFinite(parsed) ? String(parsed) : String(value ?? "").trim().toLowerCase();
   };
   const manualResultKeys = new Set(manual
@@ -186,7 +186,7 @@ function abnormalLabLabels(patient: Patient, automaticFlags?: string[], includeW
   } catch {}
   const normalizeTestKey = (value: unknown) => String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
   const normalizeFindingResult = (value: unknown) => {
-    const parsed = Number(String(value ?? "").replace(",", ".").match(/[-+]?\\d+(?:\\.\\d+)?/)?.[0]);
+    const parsed = Number(String(value ?? "").replace(",", ".").match(/[-+]?\d+(?:\.\d+)?/)?.[0]);
     return Number.isFinite(parsed) ? String(parsed) : String(value ?? "").trim().toLowerCase();
   };
   const manuallyVerifiedResults = new Set(manual
