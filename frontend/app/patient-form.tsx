@@ -1154,7 +1154,7 @@ export default function PatientForm() {
             <Ionicons name="scan-outline" size={18} color={colors.brandPrimary} />
             <Text style={styles.secondaryText}> {photoBusy ? "Processing…" : "Scan Document"}</Text>
           </Pressable>
-          <Pressable style={[styles.secondary, (!imagePickerReady || photoBusy) && { opacity: 0.5 }]} onPress={addFromCamera} disabled={!imagePickerReady || photoBusy || cameraOpen} testID="add-photo-camera-button">
+          <Pressable style={[styles.secondary, photoBusy && { opacity: 0.5 }]} onPress={addFromCamera} disabled={photoBusy || cameraOpen} testID="add-photo-camera-button">
             <Ionicons name="camera" size={18} color={colors.onSurface} />
             <Text style={styles.secondaryText}> Take & Auto-Scan</Text>
           </Pressable>
