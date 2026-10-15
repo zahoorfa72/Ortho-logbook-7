@@ -344,47 +344,46 @@ export function extractLabReportDate(text: string): string {
   const source = String(text || "").replace(/[\t\r\n]+/g, " ").replace(/\s+/g, " ");
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const monthNumber = (raw: string): number => {
-    const cleaned = String(raw || "").toLowerCase()
-      .replace(/0/g, "o").replace(/[1|!]/g, "l").replace(/5/g, "s")
-      .replace(/[^a-z]/g, "");
-    const exact = months.findIndex(name => name.toLowerCase() === cleaned.slice(0, 3));
-    if (exact >= 0) return exact;
-    // Tolerate one OCR character substitution in a three-letter month token.
-    const token = cleaned.slice(0, 3);
-    let best = -1, bestDistance = 2;
-    for (let i = 0; i < months.length; i++) {
-      const candidate = months[i].toLowerCase().slice(0, 3);
-      let distance = 0;
-      for (let j = 0; j < 3; j++) if (token[j] !== candidate[j]) distance++;
-      if (distance < bestDistance) { bestDistance = distance; best = i; }
-    }
-    return bestDistance <= 1 ? best : -1;
-  };
+    // Do not guess a month from a fuzzy OCR token. An incorrect but plausible
+    // date is more dangerous than asking an administrator to confirm it.
+    const cleaned = String(raw || "").toLowerCase().replace(/[^a-z]/g, "");
+    if (cleaned.length < 3) return -1;
+    return months.findIndex(name => name.toLowerCase() === cleaned.slice(0, 3));
+  };;
   const normalize = (raw: string): string => {
     const value = String(raw || "").trim().replace(/[,]/g, "").replace(/\s+/g, " ");
     let m = /^(\d{1,2})[-\/. ]([A-Za-z0-9|!]{3,9})[-\/. ](\d{2,4})$/i.exec(value);
     if (m) {
       const month = monthNumber(m[2]);
-      let yearText = m[3].replace(/[Oo]/g, "0").replace(/[Il|!]/g, "1");
+      let yearText = m[3];
       let year = Number(yearText); if (yearText.length === 2) year += year >= 50 ? 1900 : 2000;
-      const day = Number(m[1].replace(/[Il|!]/g, "1").replace(/[Oo]/g, "0"));
-      if (month >= 0 && day >= 1 && day <= 31 && year >= 1900 && year <= 2200)
-        return String(day).padStart(2, "0") + "-" + months[month] + "-" + year;
+      const day = Number(m[1]);
+      if (month >= 0 && day >= 1 && day <= 31 && year >= 1900 && year <= 2200) {
+        const check = new Date(year, month, day);
+        if (check.getFullYear() === year && check.getMonth() === month && check.getDate() === day)
+          return String(day).padStart(2, "0") + "-" + months[month] + "-" + year;
+      }
       return "";
     }
     m = /^(\d{1,2})[\/. -](\d{1,2})[\/. -](\d{4})$/.exec(value);
     if (m) {
       const day = Number(m[1]), month = Number(m[2]), year = Number(m[3]);
-      if (day >= 1 && day <= 31 && month >= 1 && month <= 12 && year >= 1900 && year <= 2200)
-        return String(day).padStart(2, "0") + "-" + months[month - 1] + "-" + year;
+      if (day >= 1 && day <= 31 && month >= 1 && month <= 12 && year >= 1900 && year <= 2200) {
+        const check = new Date(year, month - 1, day);
+        if (check.getFullYear() === year && check.getMonth() === month - 1 && check.getDate() === day)
+          return String(day).padStart(2, "0") + "-" + months[month - 1] + "-" + year;
+      }
       return "";
     }
     m = /^([A-Za-z0-9|!]{3,9})[-\/. ](\d{1,2})[-\/. ](\d{4})$/i.exec(value)
       || /^([A-Za-z0-9|!]{3,9})\s+(\d{1,2}),?\s+(\d{4})$/i.exec(value);
     if (m) {
       const month = monthNumber(m[1]), day = Number(m[2]), year = Number(m[3]);
-      if (month >= 0 && day >= 1 && day <= 31 && year >= 1900 && year <= 2200)
-        return String(day).padStart(2, "0") + "-" + months[month] + "-" + year;
+      if (month >= 0 && day >= 1 && day <= 31 && year >= 1900 && year <= 2200) {
+        const check = new Date(year, month, day);
+        if (check.getFullYear() === year && check.getMonth() === month && check.getDate() === day)
+          return String(day).padStart(2, "0") + "-" + months[month] + "-" + year;
+      }
     }
     return "";
   };
