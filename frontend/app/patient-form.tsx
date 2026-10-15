@@ -757,6 +757,50 @@ export default function PatientForm() {
     loadEditingPhotoDimensions(uri);
     void openPerspectiveEditor(uri);
   };
+  const chooseGalleryPhotoForScan = async () => {
+    if (photoBusy || cameraOpen || imagePickerOpening.current) return;
+    imagePickerOpening.current = true;
+    setPhotoBusy(true);
+    try {
+      await new Promise<void>((resolve) => InteractionManager.runAfterInteractions(() => setTimeout(resolve, 120)));
+      if (!(await waitForImagePickerActivity())) {
+        toast("Photo picker is still starting. Please try again in a moment.", "error");
+        return;
+      }
+      let result: ImagePicker.ImagePickerResult;
+      try {
+        result = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ["images"], allowsEditing: false, allowsMultipleSelection: false, quality: 1,
+        });
+      } catch (firstError: any) {
+        if (!isUnregisteredLauncherError(firstError) || !(await rearmImagePickerAfterLauncherError())) throw firstError;
+        result = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ["images"], allowsEditing: false, allowsMultipleSelection: false, quality: 1,
+        });
+      }
+      if (result.canceled || !result.assets?.[0]?.uri) return;
+      const permanentUri = await persistPhoto(result.assets[0].uri);
+      const nextIndex = p.photos.length;
+      setP(previous => ({ ...previous, photos: [...previous.photos, permanentUri] }));
+      setExistingScanPickerVisible(false);
+      setSelectedPhoto(null);
+      setEditingPhotoIndex(nextIndex);
+      setEditingPhotoOriginal(permanentUri);
+      setEditingPhotoUri(permanentUri);
+      setCropRect(null);
+      cropDragStartRef.current = null;
+      cropResizeStartRef.current = null;
+      setPhotoPreviewSize({ width: 0, height: 0 });
+      loadEditingPhotoDimensions(permanentUri);
+      void openPerspectiveEditor(permanentUri);
+    } catch (e: any) {
+      toast(e?.message || "Could not open that gallery photo for document scanning.", "error");
+    } finally {
+      setPhotoBusy(false);
+      imagePickerOpening.current = false;
+    }
+  };
+
   const scanDocumentsToPatientPhotos = async () => {
     if (photoBusy || cameraOpen || imagePickerOpening.current) return;
     // If patient images already exist, offer them first. This action must not
@@ -1086,7 +1130,7 @@ export default function PatientForm() {
             min,
             max,
             severity,
-            date: extractLabReportDate(item.reportDate || "") || item.reportDate || extractLabReportDate(labOcrText) || ""
+            date: extractLabReportDate(item.reportDate || "") || item.reportDate || extractLabReportDate(labOcrText) || "",
             manuallyVerified: true,
           };
         });
@@ -1297,6 +1341,9 @@ export default function PatientForm() {
                   <Ionicons name="close" size={22} color={colors.onSurface} />
                 </Pressable>
               </View>
+              <Pressable style={styles.photoSaveButton} onPress={() => { void chooseGalleryPhotoForScan(); }} disabled={photoBusy}>
+                <Text style={styles.photoSaveText}>{photoBusy ? "Opening gallery…" : "Choose a Gallery Photo to Scan"}</Text>
+              </Pressable>
               <ScrollView contentContainerStyle={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.sm }}>
                 {p.photos.map((uri, idx) => (
                   <Pressable key={uri + "-scan-" + idx} onPress={() => openExistingPhotoForScan(idx)} disabled={photoBusy} style={{ width: "30%", minWidth: 84, marginBottom: spacing.sm }}>
@@ -1541,7 +1588,7 @@ export default function PatientForm() {
                     const boundary = hasRange ? (value < (min as number) ? (min as number) : (max as number)) : 0;
                     const excursion = abnormal && boundary !== 0 ? Math.abs(value - boundary) / Math.abs(boundary) * 100 : abnormal ? 100 : 0;
                     const severity = abnormal && excursion > 1 ? (excursion <= labWarningThreshold ? "WARNING" : "ALERT") : "";
-                    return { test: item.test, result: item.result.trim(), unit: item.unit, reference: item.reference, date: extractLabReportDate(item.reportDate || "") || item.reportDate || extractLabReportDate(labOcrText) || "" min, max, severity, manuallyVerified: true };
+                    return { test: item.test, result: item.result.trim(), unit: item.unit, reference: item.reference, date: extractLabReportDate(item.reportDate || "") || item.reportDate || extractLabReportDate(labOcrText) || "", min, max, severity, manuallyVerified: true };
                   });
                   if (!manual.length) {
                     toast("Enter at least one lab result before applying manual review.", "error");
