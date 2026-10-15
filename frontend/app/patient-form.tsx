@@ -150,6 +150,7 @@ export default function PatientForm() {
   const appStateRef = useRef(AppState.currentState);
   const [cropRect, setCropRect] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const cropDragStartRef = useRef<{ x: number; y: number } | null>(null);
+  const cropResizeStartRef = useRef<{ rect: { x: number; y: number; width: number; height: number }; handle: string; pageX: number; pageY: number } | null>(null);
   const [photoPreviewSize, setPhotoPreviewSize] = useState({ width: 0, height: 0 });
   const [editingPhotoDimensions, setEditingPhotoDimensions] = useState<{ width: number; height: number } | null>(null);
   const [p, setP] = useState<Patient>(empty);
@@ -810,6 +811,7 @@ export default function PatientForm() {
     setEditingPhotoUri(uri);
     setCropRect(null);
     cropDragStartRef.current = null;
+    cropResizeStartRef.current = null;
     setPhotoPreviewSize({ width: 0, height: 0 });
     loadEditingPhotoDimensions(uri);
   };
@@ -854,6 +856,39 @@ export default function PatientForm() {
     cropDragStartRef.current = null;
     setCropRect(current => current && current.width >= 10 && current.height >= 10 ? current : null);
   };
+  const startCropResize = (handle: string) => (event: any) => {
+    if (photoBusy || !cropRect) return;
+    cropDragStartRef.current = null;
+    cropResizeStartRef.current = {
+      rect: { ...cropRect }, handle,
+      pageX: Number(event?.nativeEvent?.pageX) || 0,
+      pageY: Number(event?.nativeEvent?.pageY) || 0,
+    };
+  };
+  const moveCropResize = (event: any) => {
+    const start = cropResizeStartRef.current;
+    if (!start) return;
+    const dx = (Number(event?.nativeEvent?.pageX) || start.pageX) - start.pageX;
+    const dy = (Number(event?.nativeEvent?.pageY) || start.pageY) - start.pageY;
+    const minSize = 24;
+    let { x, y, width, height } = start.rect;
+    const h = start.handle;
+    if (h.includes("w")) { const right = x + width; x = Math.min(right - minSize, x + dx); width = right - x; }
+    if (h.includes("e")) width = Math.max(minSize, width + dx);
+    if (h.includes("n")) { const bottom = y + height; y = Math.min(bottom - minSize, y + dy); height = bottom - y; }
+    if (h.includes("s")) height = Math.max(minSize, height + dy);
+    const viewport = getPhotoViewport();
+    if (viewport) {
+      const rightLimit = viewport.left + viewport.width;
+      const bottomLimit = viewport.top + viewport.height;
+      x = Math.max(viewport.left, Math.min(x, rightLimit - minSize));
+      y = Math.max(viewport.top, Math.min(y, bottomLimit - minSize));
+      width = Math.max(minSize, Math.min(width, rightLimit - x));
+      height = Math.max(minSize, Math.min(height, bottomLimit - y));
+    }
+    setCropRect({ x, y, width, height });
+  };
+  const finishCropResize = () => { cropResizeStartRef.current = null; };
   const editPhoto = async (action: "rotate" | "crop" | "optimize") => {
     if (!editingPhotoUri) return;
     setPhotoBusy(true);
@@ -881,6 +916,7 @@ export default function PatientForm() {
       loadEditingPhotoDimensions(result.uri);
       setCropRect(null);
       cropDragStartRef.current = null;
+      cropResizeStartRef.current = null;
       if (action === "crop") toast("Freeform crop applied. You can adjust again before saving.", "success");
       else if (action === "optimize") toast("Photo optimized for sharp display and a manageable file size.", "success");
     } catch (e: any) {
@@ -1168,11 +1204,28 @@ export default function PatientForm() {
               >
                 {editingPhotoUri ? <Image source={{ uri: editingPhotoUri }} style={styles.photoEditPreview} resizeMode="contain" /> : null}
                 {cropRect ? (
-                  <View pointerEvents="none" style={[styles.cropSelection, { left: cropRect.x, top: cropRect.y, width: cropRect.width, height: cropRect.height }]}>
-                    <View style={[styles.cropCorner, { left: -2, top: -2, borderTopWidth: 3, borderLeftWidth: 3 }]} />
-                    <View style={[styles.cropCorner, { right: -2, top: -2, borderTopWidth: 3, borderRightWidth: 3 }]} />
-                    <View style={[styles.cropCorner, { left: -2, bottom: -2, borderBottomWidth: 3, borderLeftWidth: 3 }]} />
-                    <View style={[styles.cropCorner, { right: -2, bottom: -2, borderBottomWidth: 3, borderRightWidth: 3 }]} />
+                  <View pointerEvents="box-none" style={[styles.cropSelection, { left: cropRect.x, top: cropRect.y, width: cropRect.width, height: cropRect.height }]}>
+                    <View pointerEvents="none" style={styles.cropOutline} />
+                    {[
+                      { key: "nw", style: { left: -9, top: -9 } },
+                      { key: "n", style: { left: "50%", top: -5, marginLeft: -14 } },
+                      { key: "ne", style: { right: -9, top: -9 } },
+                      { key: "e", style: { right: -5, top: "50%", marginTop: -14 } },
+                      { key: "se", style: { right: -9, bottom: -9 } },
+                      { key: "s", style: { left: "50%", bottom: -5, marginLeft: -14 } },
+                      { key: "sw", style: { left: -9, bottom: -9 } },
+                      { key: "w", style: { left: -5, top: "50%", marginTop: -14 } },
+                    ].map(handle => (
+                      <View key={handle.key}
+                        style={[styles.cropHandle, handle.style]}
+                        onStartShouldSetResponder={() => !photoBusy}
+                        onMoveShouldSetResponder={() => !photoBusy}
+                        onResponderGrant={startCropResize(handle.key)}
+                        onResponderMove={moveCropResize}
+                        onResponderRelease={finishCropResize}
+                        onResponderTerminate={finishCropResize}
+                      />
+                    ))}
                   </View>
                 ) : (
                   <View pointerEvents="none" style={styles.cropInstruction}>
@@ -1190,6 +1243,23 @@ export default function PatientForm() {
                 <Pressable style={styles.photoTool} disabled={photoBusy} onPress={() => editPhoto("crop")}>
                   <Ionicons name="crop-outline" size={20} color={colors.onSurface} />
                   <Text style={styles.photoToolText}>Apply Free Crop</Text>
+                </Pressable>
+                <Pressable style={styles.photoTool} disabled={photoBusy} onPress={async () => {
+                  setPhotoBusy(true);
+                  try {
+                    const scanned = await scanPatientDocuments();
+                    if (!scanned.length) return;
+                    setEditingPhotoUri(scanned[0]);
+                    loadEditingPhotoDimensions(scanned[0]);
+                    setCropRect(null);
+                    toast("Perspective-corrected scan ready. Save photo to keep it.", "success");
+                    if (scanned.length > 1) toast("Additional scanned pages were not applied to this photo.", "info");
+                  } catch (e: any) {
+                    toast("Perspective scan failed. " + String(e?.message || e || "Please try again."), "error");
+                  } finally { setPhotoBusy(false); }
+                }}>
+                  <Ionicons name="scan-outline" size={20} color={colors.brandPrimary} />
+                  <Text style={styles.photoToolText}>Perspective Scan</Text>
                 </Pressable>
                 <Pressable style={styles.photoTool} disabled={photoBusy} onPress={() => editPhoto("optimize")}>
                   <Ionicons name="sparkles-outline" size={20} color={colors.brandPrimary} />
@@ -1645,7 +1715,8 @@ const useStyles = makeStyles((colors) => ({
   photoEditPreviewWrap: { width: "100%", height: 360, borderRadius: radius.md, backgroundColor: "#111111", overflow: "hidden", marginBottom: spacing.md, alignItems: "center", justifyContent: "center" },
   photoEditPreview: { width: "100%", height: "100%" },
   cropSelection: { position: "absolute", borderWidth: 1.5, borderColor: "#FFFFFF", backgroundColor: "rgba(255,255,255,0.05)" },
-  cropCorner: { position: "absolute", width: 18, height: 18, borderColor: "#FFFFFF" },
+  cropOutline: { position: "absolute", left: 0, right: 0, top: 0, bottom: 0, borderWidth: 1.5, borderColor: "#FFFFFF", backgroundColor: "rgba(255,255,255,0.05)" },
+  cropHandle: { position: "absolute", width: 18, height: 18, borderRadius: 5, borderWidth: 2, borderColor: "#FFFFFF", backgroundColor: "#2563EB", zIndex: 20 },
   cropInstruction: { position: "absolute", left: spacing.md, right: spacing.md, bottom: spacing.md, alignItems: "center", backgroundColor: "rgba(0,0,0,0.62)", borderRadius: radius.md, padding: spacing.sm },
   cropInstructionText: { color: "#FFFFFF", fontFamily: fontFamily.semibold, fontSize: fontSize.xs, textAlign: "center" },
   photoCropHelp: { fontFamily: fontFamily.regular, fontSize: fontSize.xs, color: colors.muted, lineHeight: 17, marginBottom: spacing.md },
