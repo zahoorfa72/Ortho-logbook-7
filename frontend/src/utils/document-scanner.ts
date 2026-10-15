@@ -4,7 +4,6 @@ export async function scanPatientDocuments(): Promise<string[]> {
   const result = await DocumentScanner.scanDocument({
     maxNumDocuments: 20,
     croppedImageQuality: 100,
-    responseType: "imageFilePath",
   });
   if (result.status !== "success" || !Array.isArray(result.scannedImages)) return [];
   return result.scannedImages
