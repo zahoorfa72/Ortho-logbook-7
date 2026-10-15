@@ -91,8 +91,8 @@ export default function Inventory() {
     onSuccess: () => {
       invalidate();
       void checkAndSendImmediateLowStockAlerts().then(result => {
-        if (result.includes("sent")) toast("Low-stock alert sent successfully.", "success");
-        else if (/FAILED|failed|error|could not|missing/i.test(result) && !result.includes("disabled")) toast("Low-stock alert failed. Admin can retry it in Automatic Low Stock Reports.", "error");
+        if (/FAILED|failed|error|could not|missing/i.test(result) && !result.includes("disabled")) toast("Low-stock alert failed. Admin can retry it in Automatic Low Stock Reports.", "error");
+        else if (result.includes("sent")) toast("Low-stock alert sent successfully.", "success");
       }).catch((e:any) => toast("Low-stock alert failed: " + String(e?.message || e), "error"));
       toast("Item updated.", "success");
       setEditItem(null);
@@ -121,8 +121,8 @@ export default function Inventory() {
         minimumStock: item.minimumStock,
       }),
     onSuccess: () => { invalidate(); void checkAndSendImmediateLowStockAlerts().then(result => {
-        if (result.includes("sent")) toast("Low-stock alert sent successfully.", "success");
-        else if (/FAILED|failed|error|could not|missing/i.test(result) && !result.includes("disabled")) toast("Low-stock alert failed. Admin can retry it in Automatic Low Stock Reports.", "error");
+        if (/FAILED|failed|error|could not|missing/i.test(result) && !result.includes("disabled")) toast("Low-stock alert failed. Admin can retry it in Automatic Low Stock Reports.", "error");
+        else if (result.includes("sent")) toast("Low-stock alert sent successfully.", "success");
       }).catch((e:any) => toast("Low-stock alert failed: " + String(e?.message || e), "error")); },
     onError: (e: any) => toast(e?.message || "Update failed.", "error"),
   });

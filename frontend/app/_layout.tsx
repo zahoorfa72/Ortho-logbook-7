@@ -24,10 +24,9 @@ function LowStockAlertBootstrap() {
   const toast = useToast();
   useEffect(() => {
     void checkAndSendImmediateLowStockAlerts().then(result => {
-      if (result.includes("sent")) toast("Low-stock alert sent successfully.", "success");
-      else if (/FAILED|failed|error|could not|missing/i.test(result) && !result.includes("disabled")) {
+      if (/FAILED|failed|error|could not|missing/i.test(result) && !result.includes("disabled")) {
         toast("Low-stock alert failed. Admin can retry it in Automatic Low Stock Reports.", "error");
-      }
+      } else if (result.includes("sent")) toast("Low-stock alert sent successfully.", "success");
     }).catch((e:any) => toast("Low-stock alert failed: " + String(e?.message || e), "error"));
   }, [toast]);
   return null;
