@@ -125,9 +125,13 @@ function oldLabResultLabels(patient: Patient, days: number): string[] {
     const parsed = patient.customData?.labOcrManualResults ? JSON.parse(patient.customData.labOcrManualResults) : [];
     if (Array.isArray(parsed)) manual = parsed;
   } catch {}
-  const manualTestNames = new Set(manual
+  const normalizeSavedResult = (value: unknown) => {
+    const parsed = Number(String(value ?? "").replace(",", ".").match(/[-+]?\\d+(?:\\.\\d+)?/)?.[0]);
+    return Number.isFinite(parsed) ? String(parsed) : String(value ?? "").trim().toLowerCase();
+  };
+  const manualResultKeys = new Set(manual
     .filter(item => item && String(item.test || "").trim() && String(item.result ?? "").trim())
-    .map(item => String(item.test).toLowerCase().replace(/[^a-z0-9]+/g, ""))
+    .map(item => String(item.test).toLowerCase().replace(/[^a-z0-9]+/g, "") + "|" + normalizeSavedResult(item.result))
     .filter(Boolean));
   const addIfOld = (testName: string, result: string, rawDate: string) => {
     const reportDate = parseLabDate(String(rawDate || "").trim());
@@ -149,8 +153,9 @@ function oldLabResultLabels(patient: Patient, days: number): string[] {
     if (!match) continue;
     const withoutStatus = line.replace(/^(?:WARNING|ALERT|HIGH|LOW)\s*:\s*/i, "");
     const testName = withoutStatus.split(/[|:]/)[0].trim();
-    if (manualTestNames.has(testName.toLowerCase().replace(/[^a-z0-9]+/g, ""))) continue;
     const resultMatch = withoutStatus.match(/[-+]?\d+(?:[.,]\d+)?/);
+    const resultKey = testName.toLowerCase().replace(/[^a-z0-9]+/g, "") + "|" + normalizeSavedResult(resultMatch?.[0] || "");
+    if (manualResultKeys.has(resultKey)) continue;
     addIfOld(testName, resultMatch?.[0] || "", match[1].trim());
   }
   for (const item of manual) {
@@ -180,9 +185,13 @@ function abnormalLabLabels(patient: Patient, automaticFlags?: string[], includeW
     if (Array.isArray(parsed)) manual = parsed;
   } catch {}
   const normalizeTestKey = (value: unknown) => String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
-  const manuallyVerifiedTests = new Set(manual
+  const normalizeFindingResult = (value: unknown) => {
+    const parsed = Number(String(value ?? "").replace(",", ".").match(/[-+]?\\d+(?:\\.\\d+)?/)?.[0]);
+    return Number.isFinite(parsed) ? String(parsed) : String(value ?? "").trim().toLowerCase();
+  };
+  const manuallyVerifiedResults = new Set(manual
     .filter(item => item && String(item.test || "").trim() && String(item.result ?? "").trim())
-    .map(item => normalizeTestKey(item.test))
+    .map(item => normalizeTestKey(item.test) + "|" + normalizeFindingResult(item.result))
     .filter(Boolean));
   const labels: string[] = [];
   for (const raw of saved.split(/\r?\n/)) {
@@ -204,8 +213,8 @@ function abnormalLabLabels(patient: Patient, automaticFlags?: string[], includeW
     let test = first > 0 ? core.slice(0, first).replace(/^[\s:|•-]+|[\s:|•-]+$/g, "").trim() : "";
     test = test.replace(/^(?:image\s+\d+\s*)/i, "").trim();
     if (!test || /^(?:ref(?:erence)?|normal|range|result|value)$/i.test(test)) test = "Test unclear";
-    // A manually verified result is authoritative for this test; don't show stale OCR copies.
-    if (manuallyVerifiedTests.has(normalizeTestKey(test))) continue;
+    // A manually verified copy of this same test/result is authoritative over duplicate OCR dates.
+    if (manuallyVerifiedResults.has(normalizeTestKey(test) + "|" + normalizeFindingResult(resultText))) continue;
     const unit = resultMatch ? core.slice(first + resultText.length).replace(/[|:;]/g, " ").replace(/\s+/g, " ").trim().slice(0, 12) : "";
     const label = status + ": " + test + (resultText ? " " + resultText : "") + (unit ? " " + unit : "") + (reference ? " (Ref " + reference + ")" : "") + (reportDate ? " · DATE: " + reportDate : "");
     if (!labels.includes(label) && (includeWarnings || status !== "WARNING")) labels.push(label);
