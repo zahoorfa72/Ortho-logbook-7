@@ -251,16 +251,32 @@ export async function checkAndSendImmediateLowStockAlerts(): Promise<string> {
     return !!item?.id && Number.isFinite(qty) && Number.isFinite(min) && qty <= min;
   });
   const state = await getLowStockReportState();
-  const currentIds = low.map((item: any) => String(item.id));
-  const gmailActive = new Set((state.activeLowStockGmailIds || []).map(String));
-  const whatsappActive = new Set((state.activeLowStockWhatsAppIds || []).map(String));
+  // Track minimum-stock and zero-stock crossings independently so an item
+  // can alert at its configured minimum and again if it later reaches zero.
+  const thresholdKeys = (item: any): string[] => {
+    const id = String(item?.id || "");
+    const qty = Number(item?.quantity);
+    const min = Number(item?.minimumStock ?? item?.minimum_stock);
+    if (!id || !Number.isFinite(qty) || !Number.isFinite(min) || qty > min) return [];
+    const keys = [id + ":minimum"];
+    if (qty <= 0) keys.push(id + ":zero");
+    return keys;
+  };
+  const currentKeys = [...new Set(low.flatMap(thresholdKeys))];
+  // Migrate old saved states that stored bare item IDs before threshold tracking.
+  const normalizeSavedKeys = (values: string[] | undefined) => (values || []).flatMap(value =>
+    String(value).endsWith(":minimum") || String(value).endsWith(":zero")
+      ? [String(value)]
+      : [String(value) + ":minimum"]
+  );
+  const gmailActive = new Set(normalizeSavedKeys(state.activeLowStockGmailIds));
+  const whatsappActive = new Set(normalizeSavedKeys(state.activeLowStockWhatsAppIds));
 
-  // First run establishes a baseline so old low-stock items are not falsely
-  // reported as if they triggered a brand-new immediate alert.
+  // First run establishes a baseline so existing low stock is not falsely reported.
   const hasGmailBaseline = Array.isArray(state.activeLowStockGmailIds);
   const hasWhatsAppBaseline = Array.isArray(state.activeLowStockWhatsAppIds);
-  const gmailNew = gmailOn && hasGmailBaseline ? low.filter((item: any) => !gmailActive.has(String(item.id))) : [];
-  const whatsappNew = whatsappOn && hasWhatsAppBaseline ? low.filter((item: any) => !whatsappActive.has(String(item.id))) : [];
+  const gmailNew = gmailOn && hasGmailBaseline ? low.filter((item: any) => thresholdKeys(item).some(key => !gmailActive.has(key))) : [];
+  const whatsappNew = whatsappOn && hasWhatsAppBaseline ? low.filter((item: any) => thresholdKeys(item).some(key => !whatsappActive.has(key))) : [];
 
   const formatMessage = (items: any[]) => {
     const timestamp = new Date().toLocaleString();
@@ -277,7 +293,7 @@ export async function checkAndSendImmediateLowStockAlerts(): Promise<string> {
         ...(size ? ["Size: " + size] : []),
         "Current stock: " + qty + " " + unit,
         "Minimum stock: " + min + " " + unit,
-        "Status: LOW STOCK",
+        "Status: " + (qty <= 0 ? "OUT OF STOCK" : "AT/BELOW MINIMUM STOCK"),
       ].join("\n");
     }).join("\n\n");
     return [
@@ -299,7 +315,7 @@ export async function checkAndSendImmediateLowStockAlerts(): Promise<string> {
   let gmailActiveIds = [...(state.activeLowStockGmailIds || [])];
   let whatsappActiveIds = [...(state.activeLowStockWhatsAppIds || [])];
   if (gmailOn) {
-    if (!hasGmailBaseline || !gmailNew.length) gmailActiveIds = currentIds;
+    if (!hasGmailBaseline || !gmailNew.length) gmailActiveIds = currentKeys;
     else {
       try {
         await sendLowStockAlertEmail(
@@ -307,17 +323,17 @@ export async function checkAndSendImmediateLowStockAlerts(): Promise<string> {
           formatMessage(gmailNew),
           config
         );
-        gmailActiveIds = currentIds;
+        gmailActiveIds = currentKeys;
         results.push("Gmail immediate alert sent");
       } catch (e: any) { results.push("Gmail FAILED: " + String(e?.message || e)); }
     }
   }
   if (whatsappOn) {
-    if (!hasWhatsAppBaseline || !whatsappNew.length) whatsappActiveIds = currentIds;
+    if (!hasWhatsAppBaseline || !whatsappNew.length) whatsappActiveIds = currentKeys;
     else {
       try {
         await sendLowStockAlertWhatsApp(formatMessage(whatsappNew), config);
-        whatsappActiveIds = currentIds;
+        whatsappActiveIds = currentKeys;
         results.push("WhatsApp immediate alert sent");
       } catch (e: any) { results.push("WhatsApp FAILED: " + String(e?.message || e)); }
     }
@@ -327,19 +343,13 @@ export async function checkAndSendImmediateLowStockAlerts(): Promise<string> {
     ...state,
     ...(gmailOn ? { activeLowStockGmailIds: gmailActiveIds } : {}),
     ...(whatsappOn ? { activeLowStockWhatsAppIds: whatsappActiveIds } : {}),
-    activeLowStockIds: currentIds,
+    activeLowStockIds: currentKeys,
     ...(results.some(x => x.includes("sent")) ? { lastImmediateAlertAt: new Date().toISOString() } : {}),
     ...(results.length ? { lastStatus: "Immediate low-stock alert: " + results.join("; ") } : {}),
   });
 
-  const successful = results.filter(x => x.includes("sent"));
-  if (successful.length) {
-    Alert.alert(
-      "Low-stock alert sent",
-      successful.join("\n") + "\n\nThe message included only the newly affected low-stock item(s)."
-    );
-  }
-  return results.length ? results.join("; ") : "No newly low-stock items.";
+  // Failed thresholds are deliberately not recorded as active, so retry can resend them.
+return results.length ? results.join("; ") : "No newly low-stock items.";
 }
 
 

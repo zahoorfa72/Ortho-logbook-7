@@ -10,7 +10,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 
 import { AuthProvider } from "@/src/auth/AuthContext";
 import { ErrorBoundary } from "@/src/components/error-boundary";
-import { ToastProvider } from "@/src/components/toast";
+import { ToastProvider, useToast } from "@/src/components/toast";
 import { queryClient } from "@/src/query-client";
 import { initializeDatabase, repairDatabaseData } from "@/src/db/database";
 import { ThemeProvider } from "@/src/theme";
@@ -19,6 +19,19 @@ import { attemptDueLowStockReport, checkAndSendImmediateLowStockAlerts } from "@
 import { DriveSyncIndicator } from "@/src/utils/storage/drive-sync-status";
 
 LogBox.ignoreAllLogs(true);
+
+function LowStockAlertBootstrap() {
+  const toast = useToast();
+  useEffect(() => {
+    void checkAndSendImmediateLowStockAlerts().then(result => {
+      if (result.includes("sent")) toast("Low-stock alert sent successfully.", "success");
+      else if (/FAILED|failed|error|could not|missing/i.test(result) && !result.includes("disabled")) {
+        toast("Low-stock alert failed. Admin can retry it in Automatic Low Stock Reports.", "error");
+      }
+    }).catch((e:any) => toast("Low-stock alert failed: " + String(e?.message || e), "error"));
+  }, [toast]);
+  return null;
+}
 
 function DatabaseBootstrap({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false);
@@ -43,8 +56,6 @@ function DatabaseBootstrap({ children }: { children: React.ReactNode }) {
     // Evaluate the admin-configured low-stock schedule whenever the app starts.
     // Delivery is idempotent per reporting period in low-stock-auto-report.ts.
     void attemptDueLowStockReport().catch(() => {});
-    // Catch any newly low-stock items in case a prior inventory change happened while delivery was offline.
-    void checkAndSendImmediateLowStockAlerts().catch(() => {});
     return stopBackup;
   }, [ready]);
 
@@ -88,6 +99,7 @@ export default function RootLayout() {
               <KeyboardProvider>
                 <AuthProvider>
                   <ToastProvider>
+                    <LowStockAlertBootstrap />
                     <StatusBar style="dark" />
                     <DriveSyncIndicator />
 
