@@ -97,8 +97,18 @@ function parseLabDate(value: string): Date | null {
   const text = String(value || "").trim();
   let iso = /^(\d{4})-(\d{1,2})-(\d{1,2})(?:T.*)?$/.exec(text);
   if (iso) {
-    const date = new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
-    return date.getFullYear() === Number(iso[1]) && date.getMonth() === Number(iso[2]) - 1 && date.getDate() === Number(iso[3]) ? date : null;
+    // A date-only value is already a calendar date. For a timestamp (created_at),
+    // convert the instant to the device's local calendar day before comparing days.
+    let year = Number(iso[1]), month = Number(iso[2]) - 1, day = Number(iso[3]);
+    if (/[T ]\\d/.test(text)) {
+      const timestamp = new Date(text);
+      if (Number.isNaN(timestamp.getTime())) return null;
+      year = timestamp.getFullYear();
+      month = timestamp.getMonth();
+      day = timestamp.getDate();
+    }
+    const date = new Date(year, month, day);
+    return date.getFullYear() === year && date.getMonth() === month && date.getDate() === day ? date : null;
   }
   let m = /^(\d{1,2})[-/. ]([A-Za-z]{3})[-/. ](\d{4})$/.exec(text);
   if (m) {
@@ -338,6 +348,16 @@ export default function Logbook() {
       } catch {}
     }).catch(() => {});
   }, []);
+
+  // Refresh admin-configured age threshold when the Logbook screen returns from Settings.
+  useFocusEffect(useCallback(() => {
+    let cancelled = false;
+    AsyncStorage.getItem(LAB_OLD_RESULT_DAYS_KEY).then(raw => {
+      const value = Number(raw);
+      if (!cancelled && raw && Number.isInteger(value) && value >= 1 && value <= 3650) setOldLabResultDays(value);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []));
 
   // Re-evaluate the daily backup reminder whenever the Logbook tab regains focus.
   useFocusEffect(
