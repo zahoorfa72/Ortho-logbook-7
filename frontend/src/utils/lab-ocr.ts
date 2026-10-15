@@ -443,10 +443,13 @@ export function parseLabReportRows(text: string, configuredTests: LabTestDefinit
       unit = String(testPrefix.configured?.unit || "").trim();
       // Never use a reference interval printed on the report for alerting.
       // Use only the saved range for this patient's sex (M/male or F/female).
+      if (!resultRaw) continue;
       reference = configuredReference(testPrefix.configured, gender);
-      if (!resultRaw || !reference) continue;
+      if (!reference && !includeNormal) continue;
 
-      const severity = classifyDeviation(resultRaw, reference, warningPercent) || "";
+      // When includeNormal is true, missing sex-specific ranges are retained as
+      // unclassified rows for the age-of-report check only; never label them normal.
+      const severity = reference ? (classifyDeviation(resultRaw, reference, warningPercent) || "") : "";
       if (!severity && !includeNormal) continue;
       const result = numericValue(resultRaw);
       const cleanedUnit = unit
@@ -459,14 +462,14 @@ export function parseLabReportRows(text: string, configuredTests: LabTestDefinit
         .replace(/[0-9.,+\-–—:|;]/g, " ")
         .replace(/\s+/g, " ")
         .trim();
-      const key = (normaliseName(testPrefix.name) + "|" + result + "|" + reference.text).toLowerCase();
+      const key = (normaliseName(testPrefix.name) + "|" + result + "|" + (reference?.text || "no-reference")).toLowerCase();
       if (seen.has(key)) continue;
       seen.add(key);
       rows.push({
         test: testPrefix.name,
         result: resultRaw,
         unit: normalizeLabUnit(testPrefix.name, cleanedUnit || testPrefix.configured?.unit || defaultUnitForTest(testPrefix.name)).slice(0, 24),
-        reference: reference.text,
+        reference: reference?.text || "",
         severity,
         sourceLine: line,
       });

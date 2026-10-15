@@ -163,7 +163,7 @@ function oldLabResultLabels(patient: Patient, days: number): string[] {
       && !!parseLabDate(String(item.date || item.reportDate || "")))
     .map(item => resultKey(item.test, item.result, item.date || item.reportDate))
     .filter(Boolean));
-  const addIfOld = (testName: string, result: string, rawDate: string) => {
+  const addIfOld = (testName: string, result: string, rawDate: string, unit = "") => {
     const test = String(testName || "").trim();
     const resultText = String(result || "").trim();
     if (!test || !resultText) return;
@@ -176,6 +176,7 @@ function oldLabResultLabels(patient: Patient, days: number): string[] {
     if (!staleByTestResult.has(key)) {
       const formattedDate = normalizeLabDateInput(rawDate) || String(rawDate).trim();
       staleByTestResult.set(key, "OLD RESULT: " + test + " " + resultText
+        + (String(unit || "").trim() ? " " + String(unit).trim() : "")
         + " · Report date " + formattedDate
         + " is " + ageDays + " days before patient was added");
     }
@@ -185,12 +186,12 @@ function oldLabResultLabels(patient: Patient, days: number): string[] {
   // suppress a dated OCR result for the same test and value.
   for (const item of manual) {
     if (!item || !String(item.test || "").trim() || !String(item.result ?? "").trim()) continue;
-    addIfOld(String(item.test), String(item.result), String(item.date || item.reportDate || ""));
+    addIfOld(String(item.test), String(item.result), String(item.date || item.reportDate || ""), String(item.unit || ""));
   }
   for (const item of detected) {
     if (!item || !String(item.test || "").trim() || !String(item.result ?? "").trim()) continue;
     if (manualResultKeys.has(resultKey(item.test, item.result, item.date || item.reportDate))) continue;
-    addIfOld(String(item.test), String(item.result), String(item.date || item.reportDate || ""));
+    addIfOld(String(item.test), String(item.result), String(item.date || item.reportDate || ""), String(item.unit || ""));
   }
 
   // Before structured rows were saved, only abnormal flags were retained. Keep
@@ -209,7 +210,7 @@ function oldLabResultLabels(patient: Patient, days: number): string[] {
       if (!resultMatch || resultMatch.index === undefined) continue;
       const testName = testAndResult.slice(0, resultMatch.index).replace(/[\s:|•-]+$/g, "").trim();
       if (!testName) continue;
-      addIfOld(testName, resultMatch[0], dateMatch[1].trim());
+      addIfOld(testName, resultMatch[0], dateMatch[1].trim(), testAndResult.slice(resultMatch.index + resultMatch[0].length).trim());
     }
   }
   return [...staleByTestResult.values()].slice(0, 20);
