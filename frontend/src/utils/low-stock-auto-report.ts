@@ -1,5 +1,4 @@
 import * as SecureStore from "expo-secure-store";
-import { Alert } from "react-native";
 import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
 import * as FileSystem from "expo-file-system/legacy";
@@ -502,7 +501,7 @@ export async function attemptDueLowStockReport(): Promise<string> {
   const nextState = {
     ...state, lastGeneratedAt: new Date().toISOString(), lastSentAt: new Date().toISOString(),
     lastPeriodKey: config.schedule === "fixedDate" ? "fixedDate:" + String(config.fixedDate || "") + ":" + String(config.reportFromDate || "") + ":" + String(config.reportToDate || "") : pdf.periodKey,
-    lastStatus: `Automatically sent ${pdf.count} low-stock item(s) for ${pdf.periodStart.slice(0,10)} to ${pdf.periodEnd.slice(0,10)} via ${channels.join(" and ")}.`,
+    lastStatus: `Automatically sent ${pdf.count} low-stock item(s) for ${pdf.periodStart.slice(0,10)} to ${pdf.periodEnd.slice(0,10)} via ${deliveredChannels.join(" and ")}.`,
   };
   await saveState(nextState);
   return nextState.lastStatus!;
