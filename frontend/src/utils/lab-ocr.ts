@@ -354,7 +354,10 @@ export function extractLabReportDate(text: string): string {
   const candidates: Array<{ date: string; rank: number; index: number }> = [];
   let match: RegExpExecArray | null;
   while ((match = tokenPattern.exec(source)) !== null) {
-    const normalized = normalize(match[0]);
+    // Convert ISO YYYY-MM-DD to the parser's day-first format without
+    // changing interpretation of ambiguous day-first dates.
+    const isoDate = /^(\\d{4})[-\\/. ](\\d{1,2})[-\\/. ](\\d{1,2})$/.exec(match[0]);
+    const normalized = normalize(isoDate ? isoDate[3] + "-" + isoDate[2] + "-" + isoDate[1] : match[0]);
     if (!normalized) continue;
     const before = source.slice(Math.max(0, match.index - 120), match.index).toLowerCase();
     const after = source.slice(match.index + match[0].length, Math.min(source.length, match.index + match[0].length + 45)).toLowerCase();
