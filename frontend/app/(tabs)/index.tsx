@@ -157,7 +157,17 @@ function oldLabResultLabels(patient: Patient, days: number): string[] {
 function abnormalLabLabels(patient: Patient, automaticFlags?: string[], includeWarnings = true): string[] {
   const cachedFlags = Array.isArray(automaticFlags) ? automaticFlags : [];
   const persistedFlags = String(patient.customData?.labOcrPossibleFlags || "").split(/\r?\n/).map(value => value.trim()).filter(Boolean);
-  const saved = [...cachedFlags, ...persistedFlags].filter((value, index, all) => all.indexOf(value) === index).join("\n").trim();
+  const canonicalFindingKey = (value: string) => value
+    .replace(/\|\s*Date\s*:\s*[^|]+/ig, "")
+    .replace(/\s·\s*DATE:\s*.+$/ig, "")
+    .replace(/\|\s*Ref\s*:\s*/ig, " | Ref: ")
+    .replace(/\s+/g, " ").trim().toLowerCase();
+  const uniqueAutomatic = new Map<string, string>();
+  for (const value of [...cachedFlags, ...persistedFlags]) {
+    const key = canonicalFindingKey(value);
+    if (key && !uniqueAutomatic.has(key)) uniqueAutomatic.set(key, value);
+  }
+  const saved = [...uniqueAutomatic.values()].join("\n").trim();
   const labels: string[] = [];
   for (const raw of saved.split(/\r?\n/)) {
     const line = raw.trim();
@@ -1007,11 +1017,17 @@ export default function Logbook() {
                   .map(label => label.match(/\|\s*Date\s*:\s*([^|]+)/i)?.[1]?.trim()
                     || label.match(/\s· DATE:\s*(.+)$/i)?.[1]?.trim() || "")
                   .filter(date => !!date && !/^date not (?:detected|entered)$/i.test(date));
-                const dateCandidates = [...datesFromFlags, ...manualReportDates,
-                  ...(persistedReportDate && !/^(?:date not detected|multiple report dates — see each result)$/i.test(persistedReportDate) ? [persistedReportDate] : []),
-                  ...(status.reportDate && !/^(?:date not detected|multiple report dates — see each result)$/i.test(status.reportDate) ? [status.reportDate] : [])];
-                const uniqueReportDates = [...new Set(dateCandidates)];
-                const reportDateDisplay = uniqueReportDates.length ? uniqueReportDates.join(", ") : "";
+                const perResultDates = [...datesFromFlags, ...manualReportDates]
+                  .map(value => value.trim())
+                  .filter(value => !!value && !/^date not (?:detected|entered)$/i.test(value));
+                const uniquePerResultDates = [...new Set(perResultDates)];
+                const summaryDate = persistedReportDate && !/^(?:date not detected|multiple report dates — see each result)$/i.test(persistedReportDate)
+                  ? persistedReportDate
+                  : status.reportDate && !/^(?:date not detected|multiple report dates — see each result)$/i.test(status.reportDate)
+                    ? status.reportDate : "";
+                const reportDateDisplay = uniquePerResultDates.length
+                  ? uniquePerResultDates.join(", ")
+                  : summaryDate;
                 const allDisplayLabLabels = [...labLabels, ...oldResultLabels];
                 const hasAlert = labLabels.some(label => label.startsWith("ALERT:")) || oldResultLabels.length > 0;
                 const hasWarning = labLabels.some(label => label.startsWith("WARNING:"));
