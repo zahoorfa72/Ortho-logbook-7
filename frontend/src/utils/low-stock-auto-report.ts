@@ -176,11 +176,11 @@ async function makePdf(schedule: LowStockSchedule = "weekly", fromDate?: string,
     }
   }
   const low = [...latestById.values()];
-  if (!low.length) throw new Error(\`No new low-stock events were recorded from ${period.start.toLocaleDateString()} to ${period.end.toLocaleDateString()}.\`);
+  if (!low.length) throw new Error(`No new low-stock events were recorded from ${period.start.toLocaleDateString()} to ${period.end.toLocaleDateString()}.`);
   const saved = await storage.getItem<string>("ortho_branding", "");
   let branding: any = defaultBranding;
   if (saved) { try { branding = { ...defaultBranding, ...(typeof saved === "string" ? JSON.parse(saved) : saved) }; } catch {} }
-  const title = \`Low Stock Report (${period.start.toLocaleDateString()} – ${period.end.toLocaleDateString()})\`;
+  const title = `Low Stock Report (${period.start.toLocaleDateString()} – ${period.end.toLocaleDateString()})`;
   const html = buildInventoryHtml(branding, low, true, title);
   const file = await Print.printToFileAsync({ html, base64: false });
   return { uri: file.uri, count: low.length, periodStart: iso(period.start), periodEnd: iso(period.end), periodKey: period.key };
