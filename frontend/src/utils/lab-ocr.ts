@@ -392,9 +392,11 @@ export function extractLabReportDate(text: string): string {
   if (bestDates.length !== 1) return "";
   // A report/test/collection label can distinguish the report date. If dates
   // are only unlabelled and more than one distinct date appears, ask the admin.
+  // Only trust a date tied to an explicit date/report/collection label.
+  // A lone unlabelled date could be DOB, printed date, or OCR noise. Leave it
+  // for the administrator to confirm instead of assigning a potentially wrong age.
   if (bestRank >= 3) return bestDates[0];
-  const allDates = [...new Set(candidates.map(candidate => candidate.date))];
-  return allDates.length === 1 ? allDates[0] : "";
+  return "";
 }
 
 export function parseLabReportRows(text: string, configuredTests: LabTestDefinition[] = [], gender = "", warningPercent = 10, includeNormal = false): ParsedLabRow[] {

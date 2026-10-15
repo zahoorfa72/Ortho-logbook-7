@@ -1172,7 +1172,7 @@ export default function PatientForm() {
             <View style={{ flex: 1 }}><Field label="Result" value={manualTestResult} onChangeText={setManualTestResult} keyboardType="decimal-pad" inputMode="decimal" selectTextOnFocus placeholder="Measured value" /></View>
           </View>
           <Field label="Reference range (optional)" value={manualTestReference} onChangeText={setManualTestReference} placeholder="e.g. 20–50" />
-          <Field label="Report date (YYYY-MM-DD)" value={manualTestDate} onChangeText={setManualTestDate} placeholder="YYYY-MM-DD" />
+          <Field label="Report date (DD-MMM-YYYY)" value={manualTestDate} onChangeText={setManualTestDate} placeholder="DD-MMM-YYYY" />
           <Pressable onPress={() => {
             const test = manualTestName.trim();
             const result = manualTestResult.trim().replace(",", ".");
@@ -1189,7 +1189,7 @@ export default function PatientForm() {
             {labAddedResults.map((item, index) => <View key={item.test + "-" + index} style={{ borderTopWidth: 1, borderColor: colors.border, paddingTop: spacing.sm, marginTop: spacing.sm }}>
               <Text style={{ color: colors.onSurface, fontFamily: fontFamily.semibold }}>{item.test}{item.unit ? " (" + item.unit + ")" : ""}</Text>
               <Field label="Result" value={item.result} onChangeText={value => setLabAddedResults(previous => previous.map((row, rowIndex) => rowIndex === index ? { ...row, result: value.replace(",", ".").replace(/[^0-9.]/g, "") } : row))} keyboardType="decimal-pad" inputMode="decimal" selectTextOnFocus />
-              <Field label="Report date (YYYY-MM-DD)" value={item.reportDate || ""} onChangeText={value => setLabAddedResults(previous => previous.map((row, rowIndex) => rowIndex === index ? { ...row, reportDate: value } : row))} />
+              <Field label="Report date (DD-MMM-YYYY)" value={item.reportDate || ""} onChangeText={value => setLabAddedResults(previous => previous.map((row, rowIndex) => rowIndex === index ? { ...row, reportDate: value } : row))} />
               {item.reference ? <Text style={{ color: colors.onSurfaceSecondary, fontSize: fontSize.sm }}>Saved reference range: {item.reference}</Text> : <Text style={{ color: colors.onSurfaceSecondary, fontSize: fontSize.sm }}>No reference range saved; result will not be automatically classified.</Text>}
               <Pressable onPress={() => setLabAddedResults(previous => previous.filter((_, rowIndex) => rowIndex !== index))} style={{ alignSelf: "flex-start", paddingVertical: spacing.xs }}>
                 <Text style={{ color: colors.error, fontFamily: fontFamily.semibold }}>Remove test</Text>
@@ -1235,7 +1235,7 @@ export default function PatientForm() {
                       const numericValue = firstDot < 0 ? cleaned : cleaned.slice(0, firstDot + 1) + cleaned.slice(firstDot + 1).replace(/\./g, "");
                       setLabManualReviews(previous => previous.map((row, rowIndex) => rowIndex === index ? { ...row, result: numericValue } : row));
                     }} keyboardType="decimal-pad" inputMode="decimal" placeholder="Digits only — read the value from the report" />
-                    <Field label="Report date (YYYY-MM-DD)" value={item.reportDate || ""} onChangeText={(value: string) => setLabManualReviews(previous => previous.map((row, rowIndex) => rowIndex === index ? { ...row, reportDate: value } : row))} placeholder="Date printed on report" />
+                    <Field label="Report date (DD-MMM-YYYY)" value={item.reportDate || ""} onChangeText={(value: string) => setLabManualReviews(previous => previous.map((row, rowIndex) => rowIndex === index ? { ...row, reportDate: value } : row))} placeholder="e.g. 06-Oct-2026" />
                     {item.reference ? <Text style={{ color: colors.onSurfaceSecondary, marginTop: spacing.xs }}>Reference range: {item.reference}</Text> : <Text style={{ color: colors.onSurfaceSecondary, marginTop: spacing.xs }}>No saved reference range available. Compare with the printed range.</Text>}
                     {hasValue ? <Text style={{ color: abnormal ? (colors.error || "#B91C1C") : colors.onSurfaceSecondary, marginTop: spacing.xs, fontFamily: abnormal ? fontFamily.bold : fontFamily.regular }}>{abnormal ? "Outside the saved reference range — verify promptly with a qualified clinician." : item.min !== undefined && item.max !== undefined ? "Within the saved reference range; still verify the source and units." : "Value entered. Verify against the printed reference range."}</Text> : null}
                   </View>;
@@ -1351,7 +1351,7 @@ export default function PatientForm() {
               case "procedure": return <View key={key}><AutocompleteField label="Procedure" testID="patient-procedure-input" value={p.procedure} onChangeText={set("procedure")} placeholder="Type to search procedures" suggestions={procedureSuggestions} />{!!procedures?.length && <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.quickScroller} contentContainerStyle={styles.quickRow}>{procedures.map((x) => <Pressable key={x.id} style={styles.quickChip} onPress={() => set("procedure")(x.name)}><Text style={styles.quickChipText}>{x.name}</Text></Pressable>)}</ScrollView>}</View>;
               case "procedureII": return <View key={key}><AutocompleteField label={branding.procedureSecondLabel?.trim() || "Procedure 2"} testID="patient-procedure2-input" value={p.procedureII || ""} onChangeText={set("procedureII")} placeholder="Type to search second procedure" suggestions={procedureSuggestions} />{!!procedures?.length && <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.quickScroller} contentContainerStyle={styles.quickRow}>{procedures.map((x) => <Pressable key={x.id} style={styles.quickChip} onPress={() => set("procedureII")(x.name)}><Text style={styles.quickChipText}>{x.name}</Text></Pressable>)}</ScrollView>}</View>;
               case "fileName": return <Field key={key} label="File / Reference" testID="patient-file-input" value={p.fileName} onChangeText={set("fileName")} placeholder="File reference" />;
-              case "date": return <Field key={key} label="Date" testID="patient-date-input" value={p.date} onChangeText={set("date")} placeholder="YYYY-MM-DD" />;
+              case "date": return <Field key={key} label="Date" testID="patient-date-input" value={p.date} onChangeText={set("date")} placeholder="DD-MMM-YYYY" />;
               default: {
                 const f:any = customByKey.get(key);
                 if (!f) return null;
