@@ -143,6 +143,7 @@ export default function PatientForm() {
   const [photoBusy, setPhotoBusy] = useState(false);
   const [perspectiveMode, setPerspectiveMode] = useState(false);
   const [perspectiveHtml, setPerspectiveHtml] = useState("");
+  const [existingScanPickerVisible, setExistingScanPickerVisible] = useState(false);
   const [imagePickerReady, setImagePickerReady] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
@@ -683,20 +684,17 @@ export default function PatientForm() {
       Image.getSize(sourceUri, (width, height) => resolve({ width, height }), reject);
     });
     const actions: any[] = [];
-    // Normalize every newly imported/captured picture to portrait orientation,
-    // then resize after rotation so the longest edge remains readable.
-    const isLandscape = dimensions.width > dimensions.height;
-    if (isLandscape) actions.push({ rotate: 90 });
-    const normalizedWidth = isLandscape ? dimensions.height : dimensions.width;
-    const normalizedHeight = isLandscape ? dimensions.width : dimensions.height;
-    const longest = Math.max(normalizedWidth, normalizedHeight);
-    if (longest > 3200) {
-      actions.push(normalizedWidth >= normalizedHeight
-        ? { resize: { width: 3200 } }
-        : { resize: { height: 3200 } });
+    // Preserve the selected photo's original orientation and crop. Never rotate
+    // landscape photos just because they are wider than they are tall. Only
+    // resize extremely large files, keeping enough pixels for small lab text.
+    const longest = Math.max(dimensions.width, dimensions.height);
+    if (longest > 4000) {
+      actions.push(dimensions.width >= dimensions.height
+        ? { resize: { width: 4000 } }
+        : { resize: { height: 4000 } });
     }
     const normalized = await ImageManipulator.manipulateAsync(sourceUri, actions, {
-      compress: 0.96, format: ImageManipulator.SaveFormat.JPEG,
+      compress: 0.98, format: ImageManipulator.SaveFormat.JPEG,
     });
     const filename = "patient-photo-" + Date.now() + "-" + Math.random().toString(36).slice(2, 10) + ".jpg";
     const destination = directory + filename;
@@ -744,8 +742,29 @@ export default function PatientForm() {
     finally { imagePickerOpening.current = false; }
   };
 
+  const openExistingPhotoForScan = (idx: number) => {
+    const uri = p.photos[idx];
+    if (!uri) return;
+    setExistingScanPickerVisible(false);
+    setSelectedPhoto(null);
+    setEditingPhotoIndex(idx);
+    setEditingPhotoOriginal(uri);
+    setEditingPhotoUri(uri);
+    setCropRect(null);
+    cropDragStartRef.current = null;
+    cropResizeStartRef.current = null;
+    setPhotoPreviewSize({ width: 0, height: 0 });
+    loadEditingPhotoDimensions(uri);
+    void openPerspectiveEditor(uri);
+  };
   const scanDocumentsToPatientPhotos = async () => {
     if (photoBusy || cameraOpen || imagePickerOpening.current) return;
+    // If patient images already exist, offer them first. This action must not
+    // unexpectedly launch the camera when the user wants to process a saved photo.
+    if (p.photos.length > 0) {
+      setExistingScanPickerVisible(true);
+      return;
+    }
     imagePickerOpening.current = true;
     setPhotoBusy(true);
     try {
@@ -835,17 +854,17 @@ export default function PatientForm() {
   const loadEditingPhotoDimensions = (uri: string) => {
     Image.getSize(uri, (width, height) => setEditingPhotoDimensions({ width, height }), () => setEditingPhotoDimensions(null));
   };
-  const openPerspectiveEditor = async () => {
-    if (!editingPhotoUri || photoBusy) return;
+  const openPerspectiveEditor = async (sourceUri: string | null = editingPhotoUri) => {
+    if (!sourceUri || photoBusy) return;
     setPhotoBusy(true);
     try {
       const dimensions = await new Promise<{ width: number; height: number }>((resolve, reject) =>
-        Image.getSize(editingPhotoUri, (width, height) => resolve({ width, height }), reject));
+        Image.getSize(sourceUri, (width, height) => resolve({ width, height }), reject));
       const actions: any[] = [];
       if (Math.max(dimensions.width, dimensions.height) > 2800) {
         actions.push(dimensions.width >= dimensions.height ? { resize: { width: 2800 } } : { resize: { height: 2800 } });
       }
-      const prepared = await ImageManipulator.manipulateAsync(editingPhotoUri, actions, {
+      const prepared = await ImageManipulator.manipulateAsync(sourceUri, actions, {
         compress: 0.96, format: ImageManipulator.SaveFormat.JPEG, base64: true,
       });
       if (!prepared.base64) throw new Error("Could not prepare this photo for perspective correction.");
@@ -864,7 +883,7 @@ export default function PatientForm() {
       toast(String(message.message || "Perspective correction failed."), "error");
       return;
     }
-    if (message?.type !== "done") return;
+    if (message?.type !== "done" && message?.type !== "enhanced") return;
     setPhotoBusy(true);
     try {
       const match = String(message.dataUrl || "").match(/^data:image\/jpeg;base64,([\s\S]+)$/);
@@ -878,7 +897,7 @@ export default function PatientForm() {
       setCropRect(null);
       setPerspectiveMode(false);
       setPerspectiveHtml("");
-      toast("Perspective correction applied to this existing patient photo. Tap Save changes to keep it.", "success");
+      toast(message.type === "enhanced" ? "High-contrast, sharpened OCR copy prepared. Check it, then tap Save changes to keep it." : "Perspective correction applied to this existing patient photo. Tap Save changes to keep it.", "success");
     } catch (e: any) {
       toast("Could not save the corrected preview. " + String(e?.message || e || "Please try again."), "error");
     } finally {
@@ -1239,7 +1258,7 @@ export default function PatientForm() {
           <PrimaryButton title={"Add from Gallery" + (p.photos.length ? " (+)" : "")} onPress={addFromLibrary} disabled={!imagePickerReady || photoBusy} testID="add-photo-library-button" />
           <Pressable style={[styles.secondary, photoBusy && { opacity: 0.5 }]} onPress={scanDocumentsToPatientPhotos} disabled={photoBusy || cameraOpen} testID="scan-patient-document-button">
             <Ionicons name="scan-outline" size={18} color={colors.brandPrimary} />
-            <Text style={styles.secondaryText}> {photoBusy ? "Processing…" : "Scan Document"}</Text>
+            <Text style={styles.secondaryText}> {photoBusy ? "Processing…" : (p.photos.length ? "Scan Existing Photo" : "Scan Document")}</Text>
           </Pressable>
           <Pressable style={[styles.secondary, photoBusy && { opacity: 0.5 }]} onPress={addFromCamera} disabled={photoBusy || cameraOpen} testID="add-photo-camera-button">
             <Ionicons name="camera" size={18} color={colors.onSurface} />
@@ -1265,6 +1284,33 @@ export default function PatientForm() {
             ))}
           </ScrollView>
         )}
+
+        <Modal visible={existingScanPickerVisible} transparent animationType="fade" onRequestClose={() => setExistingScanPickerVisible(false)}>
+          <View style={styles.photoEditOverlay}>
+            <View style={[styles.photoEditCard, { maxHeight: "82%" }]}>
+              <View style={styles.photoEditHeader}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.photoEditTitle}>Scan an Existing Patient Photo</Text>
+                  <Text style={styles.photoEditHint}>Choose a saved photo. It will open in the document-correction editor, not the camera.</Text>
+                </View>
+                <Pressable onPress={() => setExistingScanPickerVisible(false)} style={styles.photoEditIconButton}>
+                  <Ionicons name="close" size={22} color={colors.onSurface} />
+                </Pressable>
+              </View>
+              <ScrollView contentContainerStyle={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.sm }}>
+                {p.photos.map((uri, idx) => (
+                  <Pressable key={uri + "-scan-" + idx} onPress={() => openExistingPhotoForScan(idx)} disabled={photoBusy} style={{ width: "30%", minWidth: 84, marginBottom: spacing.sm }}>
+                    <Image source={{ uri }} style={{ width: "100%", height: 112, borderRadius: radius.sm, backgroundColor: colors.surfaceVariant }} resizeMode="contain" />
+                    <Text style={{ color: colors.onSurface, fontSize: fontSize.xs, textAlign: "center", marginTop: 4 }}>Photo {idx + 1}</Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+              <Pressable style={styles.photoCancelButton} onPress={() => setExistingScanPickerVisible(false)}>
+                <Text style={styles.photoCancelText}>Cancel</Text>
+              </Pressable>
+            </View>
+          </View>
+        </Modal>
 
         <Modal visible={editingPhotoIndex !== null} transparent animationType="fade" onRequestClose={closePhotoEditor}>
           <View style={styles.photoEditOverlay}>
