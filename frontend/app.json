@@ -68,6 +68,12 @@
         }
       ],
       "@react-native-google-signin/google-signin",
+      [
+        "react-native-document-scanner-plugin",
+        {
+          "cameraPermission": "Scan patient photos, lab reports and paper records with automatic page-edge correction."
+        }
+      ],
       "./plugins/with-drive-background-upload"
     ],
     "experiments": {

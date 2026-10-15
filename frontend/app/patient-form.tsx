@@ -8,6 +8,7 @@ import { Asset, requestPermissionsAsync } from "expo-media-library";
 import * as FileSystem from "expo-file-system/legacy";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { extractLabReportDate, hasKnownLabTestName, isLabMetadataLine, isLikelyLabReportText, parseLabReportRows, recognizeLabText } from "@/src/utils/lab-ocr";
+import { scanPatientDocuments } from "@/src/utils/document-scanner";
 import { Dimensions } from "react-native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AppState, Image, InteractionManager, Modal, Pressable, ScrollView, Text, View } from "react-native";
@@ -147,9 +148,10 @@ export default function PatientForm() {
   const imagePickerOpening = useRef(false);
   const imagePickerReadyRef = useRef(false);
   const appStateRef = useRef(AppState.currentState);
-  const [cropScale, setCropScale] = useState(0.78);
-  const [cropX, setCropX] = useState(0.5);
-  const [cropY, setCropY] = useState(0.5);
+  const [cropRect, setCropRect] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+  const cropDragStartRef = useRef<{ x: number; y: number } | null>(null);
+  const [photoPreviewSize, setPhotoPreviewSize] = useState({ width: 0, height: 0 });
+  const [editingPhotoDimensions, setEditingPhotoDimensions] = useState<{ width: number; height: number } | null>(null);
   const [p, setP] = useState<Patient>(empty);
   const savedManualLabResults = useMemo(() => {
     try {
@@ -408,8 +410,16 @@ export default function PatientForm() {
         positiveScreening.hbaSg && !p.hbaSg ? "HbAsg" : "",
         positiveScreening.hiv && !p.hiv ? "HIV" : "",
       ].filter(Boolean);
-      if (newlyTicked.length) toast("Positive lab result detected; screening checkbox ticked for review: " + newlyTicked.join(", "), "info");
+      if (newlyTicked.length) toast("Possible positive screening result (" + newlyTicked.join(", ") + "). Verify the original lab report.", "info");
       const alertCandidates = candidates.filter(row => row.startsWith("ALERT:"));
+      if (!automatic) {
+        const scanMessage = alertCandidates.length
+          ? "Lab scan complete: " + alertCandidates.length + " result(s) need review."
+          : uncertain.length
+            ? "Lab scan complete: " + uncertain.length + " item(s) need manual review."
+            : "Lab scan complete. Verify extracted values and dates before saving.";
+        toast(scanMessage, alertCandidates.length ? "error" : uncertain.length ? "info" : "success");
+      }
       if (alertCandidates.length && automatic && isEdit && id && ready) {
         // Show a lab warning only when opening an existing patient's detail.
         // Limit to two alerts per patient per local calendar day.
@@ -424,10 +434,7 @@ export default function PatientForm() {
           if (shown < 2) {
             counts[patientDayKey] = shown + 1;
             await AsyncStorage.setItem(storageKey, JSON.stringify(counts));
-            Alert.alert(
-              "Possible abnormal lab result",
-              "Results to verify for " + (p.name || "this patient") + ":\n\n" + alertCandidates.join("\n") + "\n\nCompare each result, unit and reference range with the original report and clinical guidance."
-            );
+            toast("Possible abnormal lab results for " + (p.name || "this patient") + ". Review flagged rows below against the original report.", "error");
           }
         } catch {
           // If local rate-limit storage is unavailable, avoid repeated popups.
@@ -635,31 +642,27 @@ export default function PatientForm() {
   // record never depends on the gallery app or a temporary URI.
   const persistPhoto = async (sourceUri: string) => {
     if (!sourceUri || sourceUri.startsWith("data:")) return sourceUri;
-    const directory = `${FileSystem.documentDirectory}patient-photos/`;
+    const directory = String(FileSystem.documentDirectory || "") + "patient-photos/";
     await FileSystem.makeDirectoryAsync(directory, { intermediates: true }).catch(() => {});
-    // Keep patient photos sharp enough for clinical reference, while avoiding
-    // full-resolution camera files bloating the offline database and Drive backups.
+    // Keep patient pictures sharp while avoiding very large camera files.
     const dimensions = await new Promise<{ width: number; height: number }>((resolve, reject) => {
       Image.getSize(sourceUri, (width, height) => resolve({ width, height }), reject);
     });
     const actions: any[] = [];
-    if (dimensions.width > 2200 || dimensions.height > 2200) {
-      actions.push(dimensions.width >= dimensions.height
-        ? { resize: { width: 2200 } }
-        : { resize: { height: 2200 } });
+    if (Math.max(dimensions.width, dimensions.height) > 2800) {
+      actions.push(dimensions.width >= dimensions.height ? { resize: { width: 2800 } } : { resize: { height: 2800 } });
     }
-    const normalized = await ImageManipulator.manipulateAsync(
-      sourceUri,
-      actions,
-      { compress: 0.84, format: ImageManipulator.SaveFormat.JPEG },
-    );
-    const filename = `patient-photo-${Date.now()}-${Math.random().toString(36).slice(2, 10)}.jpg`;
-    const destination = `${directory}${filename}`;
+    const normalized = await ImageManipulator.manipulateAsync(sourceUri, actions, {
+      compress: 0.93, format: ImageManipulator.SaveFormat.JPEG,
+    });
+    const filename = "patient-photo-" + Date.now() + "-" + Math.random().toString(36).slice(2, 10) + ".jpg";
+    const destination = directory + filename;
     await FileSystem.copyAsync({ from: normalized.uri, to: destination });
     return destination;
   };
 
-  // No cropping (allowsEditing:false). Library allows multi-select.
+  // Gallery keeps multi-select. Scan Document detects page edges and straightens paper records.
+
   const addFromLibrary = async () => {
     if (!imagePickerReady || imagePickerOpening.current) return;
     imagePickerOpening.current = true;
@@ -696,6 +699,25 @@ export default function PatientForm() {
       setP((x) => ({ ...x, photos: [...x.photos, ...permanentUris] }));
     } catch (e: any) { toast(e?.message || "Could not save the selected photo.", "error"); }
     finally { imagePickerOpening.current = false; }
+  };
+
+  const scanDocumentsToPatientPhotos = async () => {
+    if (photoBusy || cameraOpen || imagePickerOpening.current) return;
+    imagePickerOpening.current = true;
+    setPhotoBusy(true);
+    try {
+      const scannedUris = await scanPatientDocuments();
+      if (!scannedUris.length) return;
+      const permanentUris: string[] = [];
+      for (const uri of scannedUris) permanentUris.push(await persistPhoto(uri));
+      setP(previous => ({ ...previous, photos: [...previous.photos, ...permanentUris] }));
+      toast(permanentUris.length === 1 ? "Document scanned, edge-corrected and saved." : permanentUris.length + " document pages scanned, edge-corrected and saved.", "success");
+    } catch (e: any) {
+      toast("Document scan failed. " + String(e?.message || e || "Please try again."), "error");
+    } finally {
+      setPhotoBusy(false);
+      imagePickerOpening.current = false;
+    }
   };
 
   const addFromCamera = async () => {
@@ -760,6 +782,9 @@ export default function PatientForm() {
   const removePhoto = (idx: number) => {
     setP((x) => ({ ...x, photos: x.photos.filter((_, i) => i !== idx) }));
   };
+  const loadEditingPhotoDimensions = (uri: string) => {
+    Image.getSize(uri, (width, height) => setEditingPhotoDimensions({ width, height }), () => setEditingPhotoDimensions(null));
+  };
   const openPhotoEditor = (idx: number) => {
     const uri = p.photos[idx];
     if (!uri) return;
@@ -767,67 +792,93 @@ export default function PatientForm() {
     setEditingPhotoIndex(idx);
     setEditingPhotoOriginal(uri);
     setEditingPhotoUri(uri);
-    setCropScale(0.78);
-    setCropX(0.5);
-    setCropY(0.5);
+    setCropRect(null);
+    cropDragStartRef.current = null;
+    setPhotoPreviewSize({ width: 0, height: 0 });
+    loadEditingPhotoDimensions(uri);
   };
-
   const closePhotoEditor = () => {
     if (photoBusy) return;
     setEditingPhotoIndex(null);
     setEditingPhotoOriginal(null);
     setEditingPhotoUri(null);
-    setCropScale(0.78);
-    setCropX(0.5);
-    setCropY(0.5);
+    setEditingPhotoDimensions(null);
+    setCropRect(null);
+    cropDragStartRef.current = null;
   };
-
-  const editPhoto = async (action: "rotate" | "crop") => {
+  const getPhotoViewport = () => {
+    const image = editingPhotoDimensions, box = photoPreviewSize;
+    if (!image || image.width <= 0 || image.height <= 0 || box.width <= 0 || box.height <= 0) return null;
+    const scale = Math.min(box.width / image.width, box.height / image.height);
+    const width = image.width * scale, height = image.height * scale;
+    return { left: (box.width - width) / 2, top: (box.height - height) / 2, width, height, scale };
+  };
+  const clampPhotoPoint = (x: number, y: number) => {
+    const viewport = getPhotoViewport();
+    if (!viewport) return { x, y };
+    return {
+      x: Math.max(viewport.left, Math.min(viewport.left + viewport.width, x)),
+      y: Math.max(viewport.top, Math.min(viewport.top + viewport.height, y)),
+    };
+  };
+  const startCropSelection = (event: any) => {
+    if (photoBusy || !editingPhotoDimensions) return;
+    const point = clampPhotoPoint(Number(event?.nativeEvent?.locationX) || 0, Number(event?.nativeEvent?.locationY) || 0);
+    cropDragStartRef.current = point;
+    setCropRect({ x: point.x, y: point.y, width: 1, height: 1 });
+  };
+  const moveCropSelection = (event: any) => {
+    const start = cropDragStartRef.current;
+    if (!start) return;
+    const point = clampPhotoPoint(Number(event?.nativeEvent?.locationX) || 0, Number(event?.nativeEvent?.locationY) || 0);
+    setCropRect({ x: Math.min(start.x, point.x), y: Math.min(start.y, point.y), width: Math.abs(point.x - start.x), height: Math.abs(point.y - start.y) });
+  };
+  const finishCropSelection = (event: any) => {
+    moveCropSelection(event);
+    cropDragStartRef.current = null;
+    setCropRect(current => current && current.width >= 10 && current.height >= 10 ? current : null);
+  };
+  const editPhoto = async (action: "rotate" | "crop" | "optimize") => {
     if (!editingPhotoUri) return;
     setPhotoBusy(true);
     try {
       let actions: any[] = [];
-      if (action === "rotate") {
-        actions = [{ rotate: 90 }];
+      if (action === "rotate") actions = [{ rotate: 90 }];
+      else if (action === "crop") {
+        const image = editingPhotoDimensions, viewport = getPhotoViewport(), rect = cropRect;
+        if (!image || !viewport || !rect || rect.width < 10 || rect.height < 10) throw new Error("Touch and drag on the image to draw the area you want to keep.");
+        const originX = Math.max(0, Math.min(image.width - 1, Math.floor((rect.x - viewport.left) / viewport.scale)));
+        const originY = Math.max(0, Math.min(image.height - 1, Math.floor((rect.y - viewport.top) / viewport.scale)));
+        const width = Math.max(1, Math.min(image.width - originX, Math.floor(rect.width / viewport.scale)));
+        const height = Math.max(1, Math.min(image.height - originY, Math.floor(rect.height / viewport.scale)));
+        if (width < 10 || height < 10) throw new Error("Crop area is too small. Draw a larger rectangle.");
+        actions = [{ crop: { originX, originY, width, height } }];
       } else {
-        const size = await new Promise<{ width: number; height: number }>((resolve, reject) =>
-          Image.getSize(editingPhotoUri, (width, height) => resolve({ width, height }), reject),
-        );
-        const side = Math.max(1, Math.round(Math.min(size.width, size.height) * cropScale));
-        const maxX = Math.max(0, size.width - side);
-        const maxY = Math.max(0, size.height - side);
-        actions = [{
-          crop: {
-            originX: Math.max(0, Math.min(maxX, Math.round(maxX * cropX))),
-            originY: Math.max(0, Math.min(maxY, Math.round(maxY * cropY))),
-            width: side,
-            height: side,
-          },
-        }];
+        const image = editingPhotoDimensions || await new Promise<{ width: number; height: number }>((resolve, reject) =>
+          Image.getSize(editingPhotoUri, (width, height) => resolve({ width, height }), reject));
+        if (Math.max(image.width, image.height) > 2800) actions = [image.width >= image.height ? { resize: { width: 2800 } } : { resize: { height: 2800 } }];
       }
       const result = await ImageManipulator.manipulateAsync(editingPhotoUri, actions, {
-        compress: 0.9,
-        format: ImageManipulator.SaveFormat.JPEG,
+        compress: action === "optimize" ? 0.94 : 0.92, format: ImageManipulator.SaveFormat.JPEG,
       });
       setEditingPhotoUri(result.uri);
-      if (action === "crop") {
-        setCropScale(0.78);
-        setCropX(0.5);
-        setCropY(0.5);
-      }
+      loadEditingPhotoDimensions(result.uri);
+      setCropRect(null);
+      cropDragStartRef.current = null;
+      if (action === "crop") toast("Freeform crop applied. You can adjust again before saving.", "success");
+      else if (action === "optimize") toast("Photo optimized for sharp display and a manageable file size.", "success");
     } catch (e: any) {
       toast(e?.message || "Could not edit photo.", "error");
     } finally {
       setPhotoBusy(false);
     }
   };
-
   const resetPhotoEdits = () => {
     if (photoBusy || !editingPhotoOriginal) return;
     setEditingPhotoUri(editingPhotoOriginal);
-    setCropScale(0.78);
-    setCropX(0.5);
-    setCropY(0.5);
+    loadEditingPhotoDimensions(editingPhotoOriginal);
+    setCropRect(null);
+    cropDragStartRef.current = null;
   };
 
   const savePhotoEdits = async () => {
@@ -840,7 +891,12 @@ export default function PatientForm() {
         photos: x.photos.map((v, i) => i === editingPhotoIndex ? permanent : v),
       }));
       toast("Photo changes saved.", "success");
-      closePhotoEditor();
+      setEditingPhotoIndex(null);
+      setEditingPhotoOriginal(null);
+      setEditingPhotoUri(null);
+      setEditingPhotoDimensions(null);
+      setCropRect(null);
+      cropDragStartRef.current = null;
     } catch (e: any) {
       toast(e?.message || "Could not save photo changes.", "error");
     } finally {
@@ -1041,8 +1097,12 @@ export default function PatientForm() {
         ) : null}
         <Text style={styles.section}>Patient photos</Text>
         <View style={styles.photoActions}>
-          <PrimaryButton title={`Add from Gallery${p.photos.length ? " (+)" : ""}`} onPress={addFromLibrary} disabled={!imagePickerReady || photoBusy} testID="add-photo-library-button" />
-          <Pressable style={[styles.secondary, (!imagePickerReady || photoBusy) && { opacity: 0.5 }]} onPress={addFromCamera} disabled={photoBusy || cameraOpen} testID="add-photo-camera-button">
+          <PrimaryButton title={"Add from Gallery" + (p.photos.length ? " (+)" : "")} onPress={addFromLibrary} disabled={!imagePickerReady || photoBusy} testID="add-photo-library-button" />
+          <Pressable style={[styles.secondary, photoBusy && { opacity: 0.5 }]} onPress={scanDocumentsToPatientPhotos} disabled={photoBusy || cameraOpen} testID="scan-patient-document-button">
+            <Ionicons name="scan-outline" size={18} color={colors.brandPrimary} />
+            <Text style={styles.secondaryText}> {photoBusy ? "Processing…" : "Scan Document"}</Text>
+          </Pressable>
+          <Pressable style={[styles.secondary, (!imagePickerReady || photoBusy) && { opacity: 0.5 }]} onPress={addFromCamera} disabled={!imagePickerReady || photoBusy || cameraOpen} testID="add-photo-camera-button">
             <Ionicons name="camera" size={18} color={colors.onSurface} />
             <Text style={styles.secondaryText}> Take Photo</Text>
           </Pressable>
@@ -1080,39 +1140,31 @@ export default function PatientForm() {
                 </Pressable>
               </View>
 
-              <View style={styles.photoEditPreviewWrap}>
-                {editingPhotoUri ? (
-                  <Image source={{ uri: editingPhotoUri }} style={styles.photoEditPreview} resizeMode="contain" />
-                ) : null}
-              </View>
-
-              <View style={styles.cropControls}>
-                <View style={styles.cropControlHeader}>
-                  <View>
-                    <Text style={styles.cropTitle}>Crop area</Text>
-                    <Text style={styles.cropHint}>Adjust the frame, position it, then apply crop.</Text>
+              <View
+                style={styles.photoEditPreviewWrap}
+                onLayout={event => setPhotoPreviewSize({ width: event.nativeEvent.layout.width, height: event.nativeEvent.layout.height })}
+                onStartShouldSetResponder={() => !photoBusy && !!editingPhotoDimensions}
+                onMoveShouldSetResponder={() => !photoBusy && !!cropDragStartRef.current}
+                onResponderGrant={startCropSelection}
+                onResponderMove={moveCropSelection}
+                onResponderRelease={finishCropSelection}
+                onResponderTerminate={() => { cropDragStartRef.current = null; }}
+              >
+                {editingPhotoUri ? <Image source={{ uri: editingPhotoUri }} style={styles.photoEditPreview} resizeMode="contain" /> : null}
+                {cropRect ? (
+                  <View pointerEvents="none" style={[styles.cropSelection, { left: cropRect.x, top: cropRect.y, width: cropRect.width, height: cropRect.height }]}>
+                    <View style={[styles.cropCorner, { left: -2, top: -2, borderTopWidth: 3, borderLeftWidth: 3 }]} />
+                    <View style={[styles.cropCorner, { right: -2, top: -2, borderTopWidth: 3, borderRightWidth: 3 }]} />
+                    <View style={[styles.cropCorner, { left: -2, bottom: -2, borderBottomWidth: 3, borderLeftWidth: 3 }]} />
+                    <View style={[styles.cropCorner, { right: -2, bottom: -2, borderBottomWidth: 3, borderRightWidth: 3 }]} />
                   </View>
-                  <Text style={styles.cropValue}>{Math.round(cropScale * 100)}%</Text>
-                </View>
-                <View style={styles.cropSizeRow}>
-                  <Pressable style={styles.cropCircleButton} disabled={photoBusy} onPress={() => setCropScale(v => Math.max(0.45, Number((v - 0.08).toFixed(2))))}>
-                    <Ionicons name="remove" size={20} color={colors.onSurface} />
-                  </Pressable>
-                  <View style={styles.cropTrack}><View style={[styles.cropTrackFill, { width: `${Math.round(((cropScale - 0.45) / 0.45) * 100)}%` }]} /></View>
-                  <Pressable style={styles.cropCircleButton} disabled={photoBusy} onPress={() => setCropScale(v => Math.min(0.9, Number((v + 0.08).toFixed(2))))}>
-                    <Ionicons name="add" size={20} color={colors.onSurface} />
-                  </Pressable>
-                </View>
-                <View style={styles.cropPosition}>
-                  <Pressable style={styles.cropArrow} disabled={photoBusy} onPress={() => setCropY(v => Math.max(0, Number((v - 0.08).toFixed(2))))}><Ionicons name="chevron-up" size={20} color={colors.onSurface} /></Pressable>
-                  <View style={styles.cropMiddle}>
-                    <Pressable style={styles.cropArrow} disabled={photoBusy} onPress={() => setCropX(v => Math.max(0, Number((v - 0.08).toFixed(2))))}><Ionicons name="chevron-back" size={20} color={colors.onSurface} /></Pressable>
-                    <View style={styles.cropCenter}><Ionicons name="scan-outline" size={18} color={colors.muted} /></View>
-                    <Pressable style={styles.cropArrow} disabled={photoBusy} onPress={() => setCropX(v => Math.min(1, Number((v + 0.08).toFixed(2))))}><Ionicons name="chevron-forward" size={20} color={colors.onSurface} /></Pressable>
+                ) : (
+                  <View pointerEvents="none" style={styles.cropInstruction}>
+                    <Text style={styles.cropInstructionText}>Touch and drag to select any rectangular crop area</Text>
                   </View>
-                  <Pressable style={styles.cropArrow} disabled={photoBusy} onPress={() => setCropY(v => Math.min(1, Number((v + 0.08).toFixed(2))))}><Ionicons name="chevron-down" size={20} color={colors.onSurface} /></Pressable>
-                </View>
+                )}
               </View>
+              <Text style={styles.photoCropHelp}>Crop freely to any width or height—no percentage slider or fixed aspect ratio. For paper records and lab reports, use Scan Document to detect corners and straighten the page.</Text>
 
               <View style={styles.photoEditActions}>
                 <Pressable style={styles.photoTool} disabled={photoBusy} onPress={() => editPhoto("rotate")}>
@@ -1121,7 +1173,11 @@ export default function PatientForm() {
                 </Pressable>
                 <Pressable style={styles.photoTool} disabled={photoBusy} onPress={() => editPhoto("crop")}>
                   <Ionicons name="crop-outline" size={20} color={colors.onSurface} />
-                  <Text style={styles.photoToolText}>Apply Crop</Text>
+                  <Text style={styles.photoToolText}>Apply Free Crop</Text>
+                </Pressable>
+                <Pressable style={styles.photoTool} disabled={photoBusy} onPress={() => editPhoto("optimize")}>
+                  <Ionicons name="sparkles-outline" size={20} color={colors.brandPrimary} />
+                  <Text style={styles.photoToolText}>Optimize Photo</Text>
                 </Pressable>
                 <Pressable style={styles.photoTool} disabled={photoBusy} onPress={resetPhotoEdits}>
                   <Ionicons name="refresh-circle-outline" size={20} color={colors.onSurface} />
@@ -1550,41 +1606,11 @@ const useStyles = makeStyles((colors) => ({
   photoActions: { flexDirection: "row", gap: spacing.md, marginBottom: spacing.md, alignItems: "center", flexWrap: "wrap" },
   secondary: { flexDirection: "row", alignItems: "center", height: 48, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, paddingHorizontal: spacing.md, justifyContent: "center" },
   secondaryText: { fontFamily: fontFamily.semibold, color: colors.onSurface },
-  cropControls: { backgroundColor: colors.surfaceSecondary, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, padding: spacing.md, marginBottom: spacing.md },
-  cropControlHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: spacing.sm },
-  cropTitle: { fontFamily: fontFamily.semibold, fontSize: fontSize.sm, color: colors.onSurface },
-  cropHint: { fontFamily: fontFamily.regular, fontSize: fontSize.xs, color: colors.muted, marginTop: 2 },
-  cropValue: { fontFamily: fontFamily.bold, fontSize: fontSize.sm, color: colors.brandPrimary },
-  cropSizeRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
-  cropCircleButton: { width: 38, height: 38, borderRadius: 19, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" },
-  cropTrack: { flex: 1, height: 6, borderRadius: 3, backgroundColor: colors.border, overflow: "hidden" },
-  cropTrackFill: { height: "100%", backgroundColor: colors.brandPrimary, borderRadius: 3 },
-  cropPosition: { alignItems: "center", marginTop: spacing.sm },
-  cropMiddle: { flexDirection: "row", alignItems: "center", gap: spacing.lg },
-  cropArrow: { width: 38, height: 38, borderRadius: 19, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" },
-  cropCenter: { width: 44, height: 44, borderRadius: 10, borderWidth: 1, borderColor: colors.border, alignItems: "center", justifyContent: "center", backgroundColor: colors.surface },
-  cameraScreen: { flex: 1, backgroundColor: "#080808" },
-  cameraHeader: { minHeight: 64, paddingHorizontal: spacing.md, paddingBottom: spacing.sm, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  cameraTitle: { fontFamily: fontFamily.bold, fontSize: fontSize.base, color: "#FFFFFF" },
-  cameraPreviewWrap: { flex: 1, overflow: "hidden", backgroundColor: "#000000" },
-  cameraPreview: { flex: 1 },
-  cameraLoading: { position: "absolute", left: 0, right: 0, top: 0, bottom: 0, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(0,0,0,0.35)" },
-  cameraLoadingText: { fontFamily: fontFamily.medium, fontSize: fontSize.sm, color: "#FFFFFF", textAlign: "center" },
-  cameraControls: { minHeight: 150, alignItems: "center", justifyContent: "center", gap: spacing.sm, paddingTop: spacing.md, backgroundColor: "#080808" },
-  cameraHint: { fontFamily: fontFamily.regular, fontSize: fontSize.xs, color: "#D1D5DB", textAlign: "center" },
-  cameraShutter: { width: 76, height: 76, borderRadius: 38, borderWidth: 4, borderColor: "#FFFFFF", alignItems: "center", justifyContent: "center" },
-  cameraShutterInner: { width: 58, height: 58, borderRadius: 29, backgroundColor: "#FFFFFF" },
-  photoViewerToolbar: { position: "absolute", bottom: 32, left: 20, right: 20, flexDirection: "row", justifyContent: "center", gap: spacing.sm },
-  photoViewerAction: { minWidth: 120, height: 46, borderRadius: 23, paddingHorizontal: spacing.md, backgroundColor: "rgba(0,0,0,0.68)", borderWidth: 1, borderColor: "rgba(255,255,255,0.25)", flexDirection: "row", alignItems: "center", justifyContent: "center", gap: spacing.xs },
-  photoViewerActionText: { fontFamily: fontFamily.semibold, color: "#FFFFFF", fontSize: fontSize.sm },
-  photoEditOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.72)", justifyContent: "center", padding: spacing.lg },
-  photoEditCard: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.lg, width: "100%", maxWidth: 520, maxHeight: "92%" },
-  photoEditHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: spacing.md },
-  photoEditTitle: { fontFamily: fontFamily.bold, fontSize: fontSize.lg, color: colors.onSurface },
-  photoEditHint: { fontFamily: fontFamily.regular, fontSize: fontSize.xs, color: colors.muted, marginTop: 3, paddingRight: spacing.md },
-  photoEditIconButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.surfaceSecondary, borderWidth: 1, borderColor: colors.border, alignItems: "center", justifyContent: "center" },
-  photoEditPreviewWrap: { width: "100%", height: 360, borderRadius: radius.md, backgroundColor: "#111111", overflow: "hidden", marginBottom: spacing.md, alignItems: "center", justifyContent: "center" },
-  photoEditPreview: { width: "100%", height: "100%" },
+  cropSelection: { position: "absolute", borderWidth: 1.5, borderColor: "#FFFFFF", backgroundColor: "rgba(255,255,255,0.05)" },
+  cropCorner: { position: "absolute", width: 18, height: 18, borderColor: "#FFFFFF" },
+  cropInstruction: { position: "absolute", left: spacing.md, right: spacing.md, bottom: spacing.md, alignItems: "center", backgroundColor: "rgba(0,0,0,0.62)", borderRadius: radius.md, padding: spacing.sm },
+  cropInstructionText: { color: "#FFFFFF", fontFamily: fontFamily.semibold, fontSize: fontSize.xs, textAlign: "center" },
+  photoCropHelp: { fontFamily: fontFamily.regular, fontSize: fontSize.xs, color: colors.muted, lineHeight: 17, marginBottom: spacing.md },
   photoEditActions: { flexDirection: "row", gap: spacing.sm, marginBottom: spacing.md },
   photoTool: { flex: 1, minHeight: 72, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surfaceSecondary, alignItems: "center", justifyContent: "center", gap: 5 },
   photoToolText: { fontFamily: fontFamily.semibold, fontSize: fontSize.xs, color: colors.onSurface },

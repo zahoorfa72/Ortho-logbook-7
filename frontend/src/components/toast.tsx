@@ -1,79 +1,67 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { Text, View } from "react-native";
-import Animated, { FadeInUp, FadeOutUp } from "react-native-reanimated";
+import Ionicons from "@react-native-vector-icons/ionicons";
+import Animated, { FadeInDown, FadeOutDown } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-
-import { fontFamily, fontSize, makeStyles, radius, spacing } from "@/src/theme";
+import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 
 type ToastType = "success" | "error" | "info";
 type ToastItem = { id: number; message: string; type: ToastType };
-
 const ToastContext = createContext<(message: string, type?: ToastType) => void>(() => {});
 
 export function ToastProvider({ children }: { children: React.ReactNode }) {
-  const [toast, setToast] = useState<ToastItem | null>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [queue, setQueue] = useState<ToastItem[]>([]);
+  const nextId = useRef(0);
   const insets = useSafeAreaInsets();
+  const { colors } = useTheme();
   const styles = useStyles();
+  const current = queue[0];
+  const currentId = current?.id;
+  const currentType = current?.type;
+
+  useEffect(() => {
+    if (currentId === undefined || !currentType) return;
+    const timer = setTimeout(() => setQueue(items => items[0]?.id === currentId ? items.slice(1) : items), currentType === "error" ? 5200 : 3600);
+    return () => clearTimeout(timer);
+  }, [currentId, currentType]);
 
   const show = useCallback((message: string, type: ToastType = "info") => {
-    if (timer.current) clearTimeout(timer.current);
-    setToast({ id: Date.now(), message, type });
-    timer.current = setTimeout(() => setToast(null), 3000);
+    const cleanMessage = String(message || "").trim();
+    if (!cleanMessage) return;
+    const item: ToastItem = { id: ++nextId.current, message: cleanMessage, type };
+    setQueue(items => items.length >= 4 ? [...items.slice(0, 3), item] : [...items, item]);
   }, []);
 
-  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  const icon = current?.type === "success" ? "checkmark-circle" : current?.type === "error" ? "alert-circle" : "information-circle";
+  const iconColor = current?.type === "success" ? colors.success : current?.type === "error" ? colors.error : colors.brandPrimary;
 
   return (
     <ToastContext.Provider value={show}>
       {children}
-      {toast && (
-        <Animated.View
-          key={toast.id}
-          entering={FadeInUp.springify()}
-          exiting={FadeOutUp}
-          style={[styles.wrap, { top: insets.top + spacing.sm }]}
-          pointerEvents="none"
-        >
-          <View style={[styles.toast, styles[toast.type]]} testID="app-toast">
-            <Text style={styles.text} testID="app-toast-text">{toast.message}</Text>
+      {current && (
+        <Animated.View key={current.id} entering={FadeInDown.duration(180)} exiting={FadeOutDown.duration(150)}
+          style={[styles.wrap, { bottom: insets.bottom + spacing.md }]} pointerEvents="none" accessibilityLiveRegion="polite">
+          <View style={[styles.toast, styles[current.type]]} testID="app-toast">
+            <Ionicons name={icon as any} size={22} color={iconColor} />
+            <Text style={styles.text} numberOfLines={2} ellipsizeMode="tail" testID="app-toast-text">{current.message}</Text>
           </View>
         </Animated.View>
       )}
     </ToastContext.Provider>
   );
 }
-
-export function useToast() {
-  return useContext(ToastContext);
-}
+export function useToast() { return useContext(ToastContext); }
 
 const useStyles = makeStyles((colors) => ({
-  wrap: {
-    position: "absolute",
-    left: spacing.lg,
-    right: spacing.lg,
-    alignItems: "center",
-    zIndex: 9999,
-  },
+  wrap: { position: "absolute", left: 0, right: 0, alignItems: "center", paddingHorizontal: spacing.md, zIndex: 9999 },
   toast: {
-    width: "100%",
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.lg,
-    borderRadius: radius.md,
-    shadowColor: "#000",
-    shadowOpacity: 0.15,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 6,
+    alignSelf: "center", width: "100%", maxWidth: 430, minHeight: 48, flexDirection: "row", alignItems: "center",
+    gap: spacing.sm, paddingVertical: spacing.sm, paddingHorizontal: spacing.md, borderRadius: radius.lg, borderWidth: 1,
+    backgroundColor: colors.surface, shadowColor: "#000000", shadowOpacity: 0.16, shadowRadius: 14,
+    shadowOffset: { width: 0, height: 4 }, elevation: 7,
   },
-  success: { backgroundColor: colors.success },
-  error: { backgroundColor: colors.error },
-  info: { backgroundColor: colors.surfaceInverse },
-  text: {
-    color: colors.onSurfaceInverse,
-    fontFamily: fontFamily.semibold,
-    fontSize: fontSize.base,
-    textAlign: "center",
-  },
+  success: { borderColor: colors.success },
+  error: { borderColor: colors.error },
+  info: { borderColor: colors.border },
+  text: { flex: 1, color: colors.onSurface, fontFamily: fontFamily.semibold, fontSize: fontSize.sm, lineHeight: 18, textAlign: "left" },
 }));

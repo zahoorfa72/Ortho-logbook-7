@@ -141,7 +141,10 @@ export default function StockScreen(){
       });
     },
     onSuccess:()=>{
-      void checkAndSendImmediateLowStockAlerts().catch(()=>{});
+      void checkAndSendImmediateLowStockAlerts().then(result=>{
+        if (/FAILED|failed|error|could not|missing/i.test(result) && !/disabled/i.test(result)) toast("Immediate low-stock alert failed. " + result.slice(0, 100), "error");
+        else if (result.includes("sent")) toast("Immediate low-stock alert sent successfully.", "success");
+      }).catch(()=>toast("Immediate low-stock alert failed. Admin can retry it in Automatic Low Stock Reports.", "error"));
       qc.invalidateQueries({queryKey:["inventory"]});
       qc.invalidateQueries({queryKey:["inventory","stock-picker"]});
       qc.invalidateQueries({queryKey:["inventory-purchase-receipts"]});

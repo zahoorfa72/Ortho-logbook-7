@@ -27,17 +27,27 @@ function LowStockAlertBootstrap() {
     const run = async () => {
       try {
         const result = await attemptDueLowStockReport();
-        if (active && /automatically sent|successfully/i.test(result) && !/not due yet/i.test(result)) toast("Low-stock report sent successfully.", "success");
-      } catch {
-        if (active) toast("Low-stock report could not be sent. Admin can retry it in Automatic Low Stock Reports.", "error");
+        if (active && /automatically sent|successfully/i.test(result) && !/not due yet|already been sent/i.test(result)) {
+          const channels = ["Gmail", "WhatsApp"].filter(channel => new RegExp("\\b" + channel + "\\b", "i").test(result));
+          toast("Scheduled low-stock report sent successfully" + (channels.length ? " via " + channels.join(" and ") : "") + ".", "success");
+        }
+      } catch (error: any) {
+        if (active) {
+          const detail = String(error?.message || error || "Unknown delivery error");
+          toast("Scheduled low-stock report failed. " + detail.slice(0, 105), "error");
+        }
       }
       try {
         const result = await checkAndSendImmediateLowStockAlerts();
         if (!active) return;
-        if (/FAILED|failed|error|could not|missing/i.test(result) && !result.includes("disabled")) toast("Low-stock alert failed. Admin can retry it in Automatic Low Stock Reports.", "error");
-        else if (result.includes("sent")) toast("Low-stock alert sent successfully.", "success");
+        if (/FAILED|failed|error|could not|missing/i.test(result) && !/disabled/i.test(result)) {
+          toast("Immediate low-stock delivery failed. " + result.slice(0, 100) + ". Admin can retry in Automatic Low Stock Reports.", "error");
+        } else if (result.includes("sent")) {
+          const channels = ["Gmail", "WhatsApp"].filter(channel => new RegExp("\\b" + channel + "\\b", "i").test(result));
+          toast("Immediate low-stock alert sent successfully" + (channels.length ? " via " + channels.join(" and ") : "") + ".", "success");
+        }
       } catch {
-        if (active) toast("Low-stock alert failed. Admin can retry it in Automatic Low Stock Reports.", "error");
+        if (active) toast("Immediate low-stock alert failed. Admin can retry it in Automatic Low Stock Reports.", "error");
       }
     };
     void run();
