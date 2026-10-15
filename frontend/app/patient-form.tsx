@@ -175,7 +175,13 @@ export default function PatientForm() {
   }, []);
 
   const analyzeLabPhotos = async (photoUris: string[] = [...new Set(p.photos)], automatic = false) => {
-    if (!labOcrEnabled || !photoUris.length || labOcrBusy) return;
+    if (!labOcrEnabled || !photoUris.length) return;
+    if (labOcrBusy) {
+      // The automatic-scan effect may have queued a new photo set while another
+      // scan was finishing. Clear its signature so the effect retries when idle.
+      lastAutoLabScan.current = "";
+      return;
+    }
     setLabOcrBusy(true);
     try {
       let configuredLabTests: import("@/src/utils/lab-ocr").LabTestDefinition[] = [];
@@ -490,8 +496,12 @@ export default function PatientForm() {
     if (!uris.length || (isEdit && !ready)) return;
     const signature = uris.join("|");
     if (lastAutoLabScan.current === signature) return;
-    lastAutoLabScan.current = signature;
-    const timer = setTimeout(() => { void analyzeLabPhotos(uris, true); }, 500);
+    const timer = setTimeout(() => {
+      // Mark the set only when the scan can start; if another scan is busy,
+      // analyzeLabPhotos clears this signature and the effect retries.
+      lastAutoLabScan.current = signature;
+      void analyzeLabPhotos(uris, true);
+    }, 500);
     return () => clearTimeout(timer);
   }, [labOcrEnabled, labOcrBusy, p.photos, ready, isEdit]);
   useEffect(() => {
