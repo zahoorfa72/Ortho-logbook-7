@@ -137,7 +137,7 @@ export default function LabTestSettingsScreen() {
       {field("Test name", "name", "e.g. Hemoglobin")}
       <Text style={styles.section}>Old lab-result alert</Text>
       <Text style={styles.help}>Show an OLD LAB RESULT alert outside the Patient Form when a report date is this many days or more before the patient record date. Example: 10 days. A readable report date and patient date are required.</Text>
-      <View style={styles.row}>
+      <View style={styles.field}>
         <Text style={styles.label}>Days before patient date</Text>
         <TextInput value={oldResultDays} onChangeText={setOldResultDays} keyboardType="number-pad" selectTextOnFocus style={styles.input} placeholder="10" />
       </View>
