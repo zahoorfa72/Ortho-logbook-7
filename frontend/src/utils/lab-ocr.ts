@@ -342,7 +342,7 @@ function classifyDeviation(resultRaw: string, reference: ReferenceInterval, warn
  * Never fall back to the patient's operation/file date or an unlabelled DOB.
  */
 export function extractLabReportDate(text: string): string {
-  const source = String(text || "").replace(/[\t\r]+/g, " ").split("\n").map(line => line.replace(/\s+/g, " ").trim()).join("\n");
+  const source = String(text || "").replace(/[\t\r]+/g, " ").split("\n").map(line => line.replace(/\s+/g, " ").trim()).join("\n").replace(/(\d{1,2})\s*[-/.]\s*([A-Za-z]{3,9})\s*[-/.]\s*(\d{4})/g, "$1-$2-$3").replace(/(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})/g, "$1-$2-$3");
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const monthIndex = (raw: string): number => {
     const token = String(raw || "").toLowerCase().trim().replace(/[|!]/g, "t").replace(/^0(?=ct(?:ober)?$)/, "o").replace(/\.$/, "");

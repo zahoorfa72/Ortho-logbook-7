@@ -319,14 +319,14 @@ export default function PatientForm() {
         const validRange = String(test.min ?? "").trim() !== "" && String(test.max ?? "").trim() !== "" && Number.isFinite(min) && Number.isFinite(max);
         const range = validRange ? String(test.min) + "–" + String(test.max) : "";
         const matchingPage = extracted.split(/(?=LAB REPORT IMAGE\s+\d+)/i).find(page => canonical(page).includes(canonical(test.name)));
-        const reportDate = extractLabReportDate(matchingPage || extracted);
+        const reportDate = extractLabReportDate(matchingPage || "") || extractLabReportDate(extracted);
         return { test: test.name, unit: test.unit || "", result: "", reference: range, photoUri: reviewSourcePhotos[0] || "", reportDate: reportDate || undefined, min: validRange ? min : undefined, max: validRange ? max : undefined };
       });
       const candidates: string[] = parsedRows
         .filter(row => row.severity === "ALERT" || (row.severity === "WARNING" && labWarningsEnabled))
         .map(row => {
           const matchingPage = extracted.split(/(?=LAB REPORT IMAGE\s+\d+)/i).find(page => canonical(page).includes(canonical(row.test)));
-          const reportDate = extractLabReportDate(matchingPage || extracted);
+          const reportDate = extractLabReportDate(matchingPage || "") || extractLabReportDate(extracted);
           return row.severity + ": " + row.test + " " + row.result + (row.unit ? " " + row.unit : "") +
             (reportDate ? " | Date: " + reportDate : "") + " | Ref: " + row.reference;
         });
@@ -990,7 +990,7 @@ export default function PatientForm() {
             min,
             max,
             severity,
-            date: item.reportDate || "",
+            date: extractLabReportDate(item.reportDate || "") || item.reportDate || "",
             manuallyVerified: true,
           };
         });
@@ -1259,11 +1259,20 @@ export default function PatientForm() {
                   try {
                     const scanned = await scanPatientDocuments();
                     if (!scanned.length) return;
+                    // Use the first corrected page for the photo being edited and
+                    // preserve every other page from the same multi-page scan.
+                    const extraPages: string[] = [];
+                    for (const uri of scanned.slice(1)) extraPages.push(await persistPhoto(uri));
+                    if (extraPages.length) {
+                      setP(previous => ({ ...previous, photos: [...previous.photos, ...extraPages] }));
+                    }
                     setEditingPhotoUri(scanned[0]);
                     loadEditingPhotoDimensions(scanned[0]);
                     setCropRect(null);
-                    toast("Perspective-corrected scan ready. Save photo to keep it.", "success");
-                    if (scanned.length > 1) toast("Additional scanned pages were not applied to this photo.", "info");
+                    toast(scanned.length === 1
+                      ? "Perspective-corrected scan ready. Save photo to keep it."
+                      : "First corrected page ready; " + extraPages.length + " additional page(s) added. Save changes to keep the edited page.",
+                      "success");
                   } catch (e: any) {
                     toast("Perspective scan failed. " + String(e?.message || e || "Please try again."), "error");
                   } finally { setPhotoBusy(false); }
@@ -1403,7 +1412,7 @@ export default function PatientForm() {
                     const boundary = hasRange ? (value < (min as number) ? (min as number) : (max as number)) : 0;
                     const excursion = abnormal && boundary !== 0 ? Math.abs(value - boundary) / Math.abs(boundary) * 100 : abnormal ? 100 : 0;
                     const severity = abnormal && excursion > 1 ? (excursion <= labWarningThreshold ? "WARNING" : "ALERT") : "";
-                    return { test: item.test, result: item.result.trim(), unit: item.unit, reference: item.reference, date: item.reportDate || "", min, max, severity, manuallyVerified: true };
+                    return { test: item.test, result: item.result.trim(), unit: item.unit, reference: item.reference, date: extractLabReportDate(item.reportDate || "") || item.reportDate || "", min, max, severity, manuallyVerified: true };
                   });
                   if (!manual.length) {
                     toast("Enter at least one lab result before applying manual review.", "error");
