@@ -643,8 +643,11 @@ export async function recognizeLabText(uri: string, onlineApiKey = ""): Promise<
         const second = await recognizeText(enhanced.uri);
         const score = (value: any) => {
           const text = String(value?.text || "");
+          // Report-date recognition outranks raw OCR length: the best general OCR
+          // pass can still omit a small printed date near the report header.
           return text.length + (text.match(/\d+(?:[.,]\d+)?/g) || []).length * 8 +
-            (text.match(/\b(?:result|reference|range|hemoglobin|platelets|glucose|creatinine)\b/gi) || []).length * 12;
+            (text.match(/\b(?:result|reference|range|hemoglobin|platelets|glucose|creatinine)\b/gi) || []).length * 12 +
+            (extractLabReportDate(text) ? 1500 : 0);
         };
         if (score(second) > score(best)) {
           best = second;
@@ -659,11 +662,12 @@ export async function recognizeLabText(uri: string, onlineApiKey = ""): Promise<
   const localScore = (value: any) => {
     const text = String(value?.text || "");
     return text.length + (text.match(/\d+(?:[.,]\d+)?/g) || []).length * 8 +
-      (text.match(/\b(?:result|reference|range|hemoglobin|haemoglobin|platelets|glucose|creatinine)\b/gi) || []).length * 12;
+      (text.match(/\b(?:result|reference|range|hemoglobin|haemoglobin|platelets|glucose|creatinine)\b/gi) || []).length * 12 +
+      (extractLabReportDate(text) ? 1500 : 0);
   };
   // If the first read is weak, retry sideways images at both orientations and
   // keep the OCR pass that reads the most text/numbers/lab terms.
-  if (localScore(best) < 180 || (String(best?.text || "").match(/\d+(?:[.,]\d+)?/g) || []).length < 3) {
+  if (localScore(best) < 180 || (String(best?.text || "").match(/\d+(?:[.,]\d+)?/g) || []).length < 3 || !extractLabReportDate(String(best?.text || ""))) {
     for (const degrees of [90, 270]) {
       let rotatedUri = "";
       try {
@@ -686,7 +690,8 @@ export async function recognizeLabText(uri: string, onlineApiKey = ""): Promise<
   const qualityScore = (value: string) =>
     (isLikelyLabReportText(value) ? 80 : 0) +
     (value.match(/\d+(?:[.,]\d+)?/g) || []).length * 8 +
-    (value.match(/\b(?:result|reference|range|hemoglobin|platelets|glucose|creatinine)\b/gi) || []).length * 12;
+    (value.match(/\b(?:result|reference|range|hemoglobin|platelets|glucose|creatinine)\b/gi) || []).length * 12 +
+    (extractLabReportDate(value) ? 1500 : 0);
   if (onlineText && (
     qualityScore(onlineText) > qualityScore(text) ||
     (isLikelyLabReportText(onlineText) && !isLikelyLabReportText(text))
