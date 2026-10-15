@@ -1212,9 +1212,9 @@ export default function PatientForm() {
                       { key: "ne", style: { right: -9, top: -9 } },
                       { key: "e", style: { right: -5, top: "50%" as const, marginTop: -14 } },
                       { key: "se", style: { right: -9, bottom: -9 } },
-                      { key: "s", style: { left: "50%", bottom: -5, marginLeft: -14 } },
+                      { key: "s", style: { left: "50%" as const, bottom: -5, marginLeft: -14 } },
                       { key: "sw", style: { left: -9, bottom: -9 } },
-                      { key: "w", style: { left: -5, top: "50%", marginTop: -14 } },
+                      { key: "w", style: { left: -5, top: "50%" as const, marginTop: -14 } },
                     ].map(handle => (
                       <View key={handle.key}
                         style={[styles.cropHandle, handle.style]}
