@@ -1351,7 +1351,7 @@ export default function PatientForm() {
               <ScrollView contentContainerStyle={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.sm }}>
                 {p.photos.map((uri, idx) => (
                   <Pressable key={uri + "-scan-" + idx} onPress={() => openExistingPhotoForScan(idx)} disabled={photoBusy} style={{ width: "30%", minWidth: 84, marginBottom: spacing.sm }}>
-                    <Image source={{ uri }} style={{ width: "100%", height: 112, borderRadius: radius.sm, backgroundColor: colors.surfaceVariant }} resizeMode="contain" />
+                    <Image source={{ uri }} style={{ width: "100%", height: 112, borderRadius: radius.sm, backgroundColor: colors.surfaceTertiary }} resizeMode="contain" />
                     <Text style={{ color: colors.onSurface, fontSize: fontSize.xs, textAlign: "center", marginTop: 4 }}>Photo {idx + 1}</Text>
                   </Pressable>
                 ))}
@@ -1454,7 +1454,7 @@ export default function PatientForm() {
                   <Ionicons name="crop-outline" size={20} color={colors.onSurface} />
                   <Text style={styles.photoToolText}>Apply Free Crop</Text>
                 </Pressable>
-                <Pressable style={styles.photoTool} disabled={photoBusy} onPress={openPerspectiveEditor}>
+                <Pressable style={styles.photoTool} disabled={photoBusy} onPress={() => { void openPerspectiveEditor(); }}>
                   <Ionicons name="scan-outline" size={20} color={colors.brandPrimary} />
                   <Text style={styles.photoToolText}>Perspective Scan</Text>
                 </Pressable>
