@@ -83,10 +83,30 @@ async function makePdf(schedule: LowStockSchedule = "weekly", fromDate?: string,
   const period = getPeriod(schedule, now, fromDate, toDate);
   const inventory = await api.get<any[]>("/inventory");
   const all = Array.isArray(inventory) ? inventory : [];
-  const rows = db.getAllSync<any>(
-    "SELECT m.inventory_id, m.quantity_after, m.created_at, i.name, i.quantity, i.minimum_stock, i.unit, i.category, i.category_id, i.size, i.low_stock_since FROM inventory_movements m INNER JOIN inventory i ON i.id=m.inventory_id WHERE m.created_at>=? AND m.created_at<=? AND m.quantity_after<=i.minimum_stock ORDER BY m.created_at DESC",
-    [iso(period.start), iso(period.end)],
+  // Apply the report window using parsed timestamps, not SQLite text comparison:
+  // older installations may have movement timestamps in different date formats.
+  const candidateRows = db.getAllSync<any>(
+    "SELECT m.inventory_id, m.quantity_after, m.created_at, i.name, i.quantity, i.minimum_stock, i.unit, i.category, i.category_id, i.size, i.low_stock_since FROM inventory_movements m INNER JOIN inventory i ON i.id=m.inventory_id WHERE m.quantity_after<=i.minimum_stock ORDER BY m.created_at DESC",
   );
+  const parseMovementDate = (raw: unknown): Date | null => {
+    const value = String(raw ?? "").trim();
+    if (!value) return null;
+    const parsed = new Date(value);
+    if (Number.isFinite(parsed.getTime())) return parsed;
+    const match = /^(\\d{1,2})[-\\/. ]([A-Za-z]{3,9})[-\\/. ](\\d{2,4})$/.exec(value);
+    if (!match) return null;
+    const month = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"].indexOf(match[2].slice(0,3).toLowerCase());
+    let year = Number(match[3]);
+    if (match[3].length === 2) year += year >= 50 ? 1900 : 2000;
+    const day = Number(match[1]);
+    if (month < 0 || year < 1900 || year > 2200) return null;
+    const date = new Date(year, month, day);
+    return date.getFullYear() === year && date.getMonth() === month && date.getDate() === day ? date : null;
+  };
+  const rows = candidateRows.filter((row: any) => {
+    const eventDate = parseMovementDate(row.created_at);
+    return !!eventDate && eventDate.getTime() >= period.start.getTime() && eventDate.getTime() <= period.end.getTime();
+  });
   // Only include low-stock events inside the selected reporting window; do not
   // accidentally turn a weekly report into a lifetime/current-stock report.
   const latestById = new Map<string, any>();

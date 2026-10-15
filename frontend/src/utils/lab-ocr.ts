@@ -368,7 +368,18 @@ export function extractLabReportDate(text: string): string {
       }
       return "";
     }
-    m = /^(\d{1,2})[\/. -](\d{1,2})[\/. -](\d{4})$/.exec(value);
+    // Support ISO year-first dates as well as day-first numeric lab dates.
+    m = /^(\\d{4})[\\/. -](\\d{1,2})[\\/. -](\\d{1,2})$/.exec(value);
+    if (m) {
+      const year = Number(m[1]), month = Number(m[2]), day = Number(m[3]);
+      if (day >= 1 && day <= 31 && month >= 1 && month <= 12 && year >= 1900 && year <= 2200) {
+        const check = new Date(year, month - 1, day);
+        if (check.getFullYear() === year && check.getMonth() === month - 1 && check.getDate() === day)
+          return String(day).padStart(2, "0") + "-" + months[month - 1] + "-" + year;
+      }
+      return "";
+    }
+    m = /^(\\d{1,2})[\\/. -](\\d{1,2})[\\/. -](\\d{4})$/.exec(value);
     if (m) {
       const day = Number(m[1]), month = Number(m[2]), year = Number(m[3]);
       if (day >= 1 && day <= 31 && month >= 1 && month <= 12 && year >= 1900 && year <= 2200) {
