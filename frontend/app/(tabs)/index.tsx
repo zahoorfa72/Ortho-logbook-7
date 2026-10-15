@@ -145,11 +145,13 @@ function oldLabResultLabels(patient: Patient, days: number): string[] {
     return Number.isFinite(n) ? String(n) : found[0];
   };
   const normalizeTestKey = (value: unknown) => String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
-  const resultKey = (testName: unknown, result: unknown) => normalizeTestKey(testName) + "|" + normalizeSavedResult(result);
+  const resultKey = (testName: unknown, result: unknown, rawDate: unknown) =>
+    normalizeTestKey(testName) + "|" + normalizeSavedResult(result) + "|"
+      + (normalizeLabDateInput(String(rawDate || "")) || String(rawDate || "").trim().toLowerCase());
   const manualResultKeys = new Set(manual
     .filter(item => item && String(item.test || "").trim() && String(item.result ?? "").trim()
       && !!parseLabDate(String(item.date || item.reportDate || "")))
-    .map(item => resultKey(item.test, item.result))
+    .map(item => resultKey(item.test, item.result, item.date || item.reportDate))
     .filter(Boolean));
   const addIfOld = (testName: string, result: string, rawDate: string) => {
     const test = String(testName || "").trim();
@@ -160,7 +162,7 @@ function oldLabResultLabels(patient: Patient, days: number): string[] {
     const reportDay = new Date(reportDate.getFullYear(), reportDate.getMonth(), reportDate.getDate()).getTime();
     const ageDays = Math.floor((addedDay - reportDay) / 86400000);
     if (ageDays < days) return;
-    const key = resultKey(test, resultText);
+    const key = resultKey(test, resultText, rawDate);
     if (!staleByTestResult.has(key)) {
       const formattedDate = normalizeLabDateInput(rawDate) || String(rawDate).trim();
       staleByTestResult.set(key, "OLD RESULT: " + test + " " + resultText
@@ -177,7 +179,7 @@ function oldLabResultLabels(patient: Patient, days: number): string[] {
   }
   for (const item of detected) {
     if (!item || !String(item.test || "").trim() || !String(item.result ?? "").trim()) continue;
-    if (manualResultKeys.has(resultKey(item.test, item.result))) continue;
+    if (manualResultKeys.has(resultKey(item.test, item.result, item.date || item.reportDate))) continue;
     addIfOld(String(item.test), String(item.result), String(item.date || item.reportDate || ""));
   }
 
@@ -527,7 +529,7 @@ export default function Logbook() {
         try {
           await api.put("/patients/" + patientId, {
             ...patient,
-            customData: { ...(patient.customData || {}), labOcrPossibleFlags: "", labOcrDetectedResults: "[]", labOcrDetectedAt: new Date().toISOString(), labOcrReportDate: "", labOcrDateNeedsAdmin: "false", labOcrDateManuallyConfirmed: "false" },
+            customData: { ...(patient.customData || {}), labOcrPossibleFlags: "", labOcrDetectedResults: "[]", labOcrDetectedAt: new Date().toISOString(), labOcrReportDate: "", labOcrPhotoSignature: photos.join("|"), labOcrDateNeedsAdmin: "false", labOcrDateManuallyConfirmed: "false" },
           });
           queryClient.invalidateQueries({ queryKey: ["patients"] });
         } catch {}
@@ -546,7 +548,10 @@ export default function Logbook() {
       }
 
       const existingCustomData = patient.customData || {};
+      // Only reuse a previously confirmed date when the saved photo set is unchanged.
+      // Newly added photos must be scanned/confirmed independently.
       const previouslyConfirmedDate = existingCustomData.labOcrDateManuallyConfirmed === "true"
+        && existingCustomData.labOcrPhotoSignature === photos.join("|")
         ? normalizeLabDateInput(String(existingCustomData.labOcrReportDate || ""))
         : null;
       const detectedPageDates = reportPages.map(page =>
@@ -595,6 +600,7 @@ export default function Logbook() {
             ...existingCustomData,
             labOcrPossibleFlags: uniqueFlags.join("\n"),
             labOcrDetectedResults: JSON.stringify(uniqueDetectedResults),
+            labOcrPhotoSignature: photos.join("|"),
             labOcrDetectedAt: new Date().toISOString(),
             labOcrReportDate: reportDateSummary,
             labOcrDateNeedsAdmin: reportDateNeedsAdmin ? "true" : "false",
@@ -764,9 +770,14 @@ export default function Logbook() {
       const uniqueDates = [...new Set(dates)];
       const reportDateSummary = uniqueDates.length > 1 ? "Multiple report dates — see each result"
         : uniqueDates[0] || confirmedDate;
+      const confirmedPhotoUris = [...new Set([
+        ...(fullPatient.photos || []),
+        ...((fullPatient as any).photoUri ? [(fullPatient as any).photoUri] : []),
+      ])].filter(Boolean);
       const updatedCustomData: Record<string, string> = {
         ...customData,
         labOcrPossibleFlags: updatedFlags.join("\n"),
+        labOcrPhotoSignature: confirmedPhotoUris.join("|"),
         labOcrReportDate: reportDateSummary,
         labOcrDateNeedsAdmin: "false",
         labOcrDateManuallyConfirmed: "true",
@@ -1232,7 +1243,7 @@ export default function Logbook() {
                 } catch {}
                 const uniquePerResultDates = [...new Set([...datesFromDisplayedResults, ...automaticReportDates, ...manualReportDates])];
                 const summaryDate = normalizeLabDateInput(persistedReportDate)
-                  || normalizeLabDateInput(status.reportDate) || "";
+                  || normalizeLabDateInput(status.reportDate || "") || "";
                 const reportDateDisplay = uniquePerResultDates.length ? uniquePerResultDates.join(", ") : summaryDate;
                 const automaticResultLines = String(item.customData?.labOcrPossibleFlags || "").split(/\r?\n/).map(line => line.trim()).filter(Boolean);
                 const hasUndatedAutomaticResult = automaticResultLines.some(line => {
@@ -1248,8 +1259,17 @@ export default function Logbook() {
                   row && String(row.test || "").trim() && String(row.result ?? "").trim()
                   && !normalizeLabDateInput(String(row.date || row.reportDate || ""))
                 );
+                let savedDetectedRows: any[] = [];
+                try {
+                  const parsed = item.customData?.labOcrDetectedResults ? JSON.parse(item.customData.labOcrDetectedResults) : [];
+                  if (Array.isArray(parsed)) savedDetectedRows = parsed;
+                } catch {}
+                const hasUndatedDetectedResult = savedDetectedRows.some(row =>
+                  row && String(row.test || "").trim() && String(row.result ?? "").trim()
+                  && !normalizeLabDateInput(String(row.date || row.reportDate || ""))
+                );
                 const dateNeedsAdmin = item.customData?.labOcrDateNeedsAdmin === "true"
-                  || hasUndatedAutomaticResult || hasUndatedManualResult
+                  || hasUndatedAutomaticResult || hasUndatedManualResult || hasUndatedDetectedResult
                   || (!reportDateDisplay && status.status === "success" && item.customData?.labOcrDateManuallyConfirmed !== "true"
                     && !/^multiple report dates — see each result$/i.test(persistedReportDate));
                 const hasAlert = !hidden && (labLabels.some(label => label.startsWith("ALERT:")) || oldResultLabels.length > 0);
