@@ -185,7 +185,7 @@ export default function PatientForm() {
       try { onlineOcrKey = (await AsyncStorage.getItem("ortho_lab_online_ocr_api_key_v1")) || ""; } catch {}
       for (let i = 0; i < photoUris.length; i++) {
         try {
-          const result = await recognizeLabText(photoUris[i], onlineOcrKey);
+          const result = await recognizeLabText(photoUris[i], onlineOcrKey, configuredLabTests, p.gender);
           const text = String(result?.text || "").trim();
           const structuredText = result?.mode === "online" ? "" : String(result?.structuredText || "").trim();
           // Prefer rows reconstructed from OCR bounding-box positions. Keep the
@@ -213,7 +213,7 @@ export default function PatientForm() {
         else toast("No readable text found. Retake the report in good light with the full page in focus.", "error");
         return;
       }
-      const parsedRows = parseLabReportRows(extracted, configuredLabTests, p.gender, labWarningThreshold);
+      const parsedRows = parseLabReportRows(extracted, configuredLabTests, p.gender, labWarningThreshold, true);
       const reviewSourcePhotos = [...new Set(recognizedPhotoUris)];
       const canonical = (value: string) => String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
       const isHemoglobin = (value: string) => ["hemoglobin", "haemoglobin", "hgb", "hb"].includes(canonical(value));
@@ -649,11 +649,20 @@ export default function PatientForm() {
       Image.getSize(sourceUri, (width, height) => resolve({ width, height }), reject);
     });
     const actions: any[] = [];
-    if (Math.max(dimensions.width, dimensions.height) > 2800) {
-      actions.push(dimensions.width >= dimensions.height ? { resize: { width: 2800 } } : { resize: { height: 2800 } });
+    // Normalize every newly imported/captured picture to portrait orientation,
+    // then resize after rotation so the longest edge remains readable.
+    const isLandscape = dimensions.width > dimensions.height;
+    if (isLandscape) actions.push({ rotate: 90 });
+    const normalizedWidth = isLandscape ? dimensions.height : dimensions.width;
+    const normalizedHeight = isLandscape ? dimensions.width : dimensions.height;
+    const longest = Math.max(normalizedWidth, normalizedHeight);
+    if (longest > 3200) {
+      actions.push(normalizedWidth >= normalizedHeight
+        ? { resize: { width: 3200 } }
+        : { resize: { height: 3200 } });
     }
     const normalized = await ImageManipulator.manipulateAsync(sourceUri, actions, {
-      compress: 0.93, format: ImageManipulator.SaveFormat.JPEG,
+      compress: 0.96, format: ImageManipulator.SaveFormat.JPEG,
     });
     const filename = "patient-photo-" + Date.now() + "-" + Math.random().toString(36).slice(2, 10) + ".jpg";
     const destination = directory + filename;
@@ -721,17 +730,24 @@ export default function PatientForm() {
   };
 
   const addFromCamera = async () => {
-    // Use an in-app CameraView rather than launching an external camera Activity.
-    // This avoids Android's ActivityResultLauncher registration failure.
+    // Capture patient-file documents through the native edge-detection scanner
+    // so page borders and perspective are corrected automatically at capture.
     if (photoBusy || cameraOpen || imagePickerOpening.current) return;
     imagePickerOpening.current = true;
+    setPhotoBusy(true);
     try {
-      if (!(await ensureCameraPermission())) return;
-      setCameraReady(false);
-      setCameraOpen(true);
+      const scannedUris = await scanPatientDocuments();
+      if (!scannedUris.length) return;
+      const permanentUris: string[] = [];
+      for (const uri of scannedUris) permanentUris.push(await persistPhoto(uri));
+      setP(previous => ({ ...previous, photos: [...previous.photos, ...permanentUris] }));
+      toast(permanentUris.length === 1
+        ? "Photo captured, document edges corrected and saved."
+        : permanentUris.length + " scanned pages captured, corrected and saved.", "success");
     } catch (e: any) {
-      toast(e?.message || "Could not open the camera.", "error");
+      toast("Camera document scan failed. " + String(e?.message || e || "Please try again."), "error");
     } finally {
+      setPhotoBusy(false);
       imagePickerOpening.current = false;
     }
   };
@@ -1104,7 +1120,7 @@ export default function PatientForm() {
           </Pressable>
           <Pressable style={[styles.secondary, (!imagePickerReady || photoBusy) && { opacity: 0.5 }]} onPress={addFromCamera} disabled={!imagePickerReady || photoBusy || cameraOpen} testID="add-photo-camera-button">
             <Ionicons name="camera" size={18} color={colors.onSurface} />
-            <Text style={styles.secondaryText}> Take Photo</Text>
+            <Text style={styles.secondaryText}> Take & Auto-Scan</Text>
           </Pressable>
         </View>
         {p.photos.length === 0 ? (
@@ -1160,11 +1176,11 @@ export default function PatientForm() {
                   </View>
                 ) : (
                   <View pointerEvents="none" style={styles.cropInstruction}>
-                    <Text style={styles.cropInstructionText}>Touch and drag to select any rectangular crop area</Text>
+                    <Text style={styles.cropInstructionText}>Drag to draw a crop. Then drag any corner or side handle to fine-tune it</Text>
                   </View>
                 )}
               </View>
-              <Text style={styles.photoCropHelp}>Crop freely to any width or height—no percentage slider or fixed aspect ratio. For paper records and lab reports, use Scan Document to detect corners and straighten the page.</Text>
+              <Text style={styles.photoCropHelp}>Images are automatically rotated to portrait and saved at high quality. Use Scan Document or Take & Auto-Scan for edge detection and perspective correction. Drag any corner or side of the crop frame to adjust it.</Text>
 
               <View style={styles.photoEditActions}>
                 <Pressable style={styles.photoTool} disabled={photoBusy} onPress={() => editPhoto("rotate")}>
@@ -1265,7 +1281,7 @@ export default function PatientForm() {
             <Text style={styles.section}>Automatic lab report check</Text>
             <Text style={styles.hint}>{labOcrBusy ? "Automatically checking existing patient-file pictures for laboratory reports…" : "No photo needs to be added or selected. Existing patient-file pictures are checked automatically; only pictures recognized as laboratory reports are used for lab-result analysis."}</Text>
             {labOcrText ? <View style={{ marginTop: spacing.sm, padding: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md }}>
-              {labOcrFindings.length ? <><Text style={[styles.label, { marginTop: spacing.xs }]}>Lab results to verify</Text>{labOcrFindings.map((finding, i) => { const isWarning = finding.startsWith("WARNING:"); const tone = isWarning ? (colors.warning || "#B7791F") : (colors.error || "#B91C1C"); return <Text key={i} style={{ color: tone, marginTop: spacing.xs, fontFamily: isWarning ? fontFamily.medium : fontFamily.bold }}>{finding}</Text>; })}</> : <Text style={{ color: colors.onSurfaceSecondary, marginTop: spacing.sm }}>{labWarningsEnabled ? "No out-of-range rows were detected by this scan. This does not prove that every result is normal." : "No larger alerts were detected. Mild warnings are disabled in Settings; this does not prove that every result is normal."}</Text>}
+              {labOcrFindings.length ? <><Text style={[styles.label, { marginTop: spacing.xs }]}>Lab results to verify</Text>{labOcrFindings.map((finding, i) => { const isWarning = finding.startsWith("WARNING:"); const tone = isWarning ? (colors.warning || "#B7791F") : (colors.error || "#B91C1C"); return <Text key={i} style={{ color: tone, marginTop: spacing.xs, fontFamily: isWarning ? fontFamily.medium : fontFamily.bold }}>{finding}</Text>; })}</> : <Text style={{ color: colors.onSurfaceSecondary, marginTop: spacing.sm }}>{labWarningsEnabled ? "No confirmed out-of-range result was extracted. OCR can miss abnormal values; verify every printed test and date against the original image. If any row is unreadable or missing a saved reference range, ask an administrator to review it." : "No larger alerts were detected. Mild warnings are disabled in Settings; this does not prove that every result is normal."}</Text>}
               <Pressable onPress={() => setShowLabRawText(value => !value)} style={{ marginTop: spacing.md, paddingVertical: spacing.sm, flexDirection: "row", alignItems: "center", gap: spacing.xs }}>
                 <Ionicons name={showLabRawText ? "chevron-up" : "document-text-outline"} size={18} color={colors.brandPrimary} />
                 <Text style={{ color: colors.brandPrimary, fontFamily: fontFamily.semibold }}>{showLabRawText ? "Hide full OCR text" : "Show full OCR text (" + labOcrText.length + " characters)"}</Text>

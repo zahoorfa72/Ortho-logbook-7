@@ -436,9 +436,13 @@ export function parseLabReportRows(text: string, configuredTests: LabTestDefinit
     const structuredAt = page.indexOf(structuredMarker);
     const rawAt = page.indexOf(rawMarker);
     const structuredSection = structuredAt >= 0 ? page.slice(structuredAt + structuredMarker.length, rawAt >= 0 ? rawAt : undefined) : "";
-    const useStructured = !!structuredSection.trim();
-    const source = useStructured ? structuredSection : page;
+    const rawSection = rawAt >= 0 ? page.slice(rawAt + rawMarker.length) : page;
+    const structuredSource = structuredSection.trim() ? structuredSection : "";
+    // Process reconstructed rows first, then raw OCR lines as a fallback for
+    // tests the column geometry missed. Duplicate test/result pairs are removed below.
+    const sources = structuredSource ? [structuredSource, rawSection] : [page];
 
+    for (const source of sources) {
     for (const rawLine of source.split(/\r?\n/)) {
       const line = rawLine.replace(/\s+/g, " ").trim();
       if (isNonResultLine(line, configuredTests)) continue;
@@ -496,6 +500,7 @@ export function parseLabReportRows(text: string, configuredTests: LabTestDefinit
         severity,
         sourceLine: line,
       });
+    }
     }
   }
   return rows;
@@ -623,7 +628,12 @@ async function recognizeOnlineLabText(uri: string, apiKey: string): Promise<stri
   }
 }
 
-export async function recognizeLabText(uri: string, onlineApiKey = ""): Promise<{ text: string; structuredText: string; mode: "online" | "offline" }> {
+export async function recognizeLabText(
+  uri: string,
+  onlineApiKey = "",
+  configuredTests: LabTestDefinition[] = [],
+  gender = "",
+): Promise<{ text: string; structuredText: string; mode: "online" | "offline" }> {
   // Run on-device OCR on the original and, for small/blurry-looking captures,
   // an enlarged high-quality copy. Upscaling cannot restore lost detail, but
   // often helps OCR read small printed digits without sending data online.
@@ -665,16 +675,23 @@ export async function recognizeLabText(uri: string, onlineApiKey = ""): Promise<
   }
   const localScore = (value: any) => {
     const text = String(value?.text || "");
-    // Prefer OCR passes that actually preserve test/result pairs, not just
-    // passes that produce a longer block of patient metadata and reference ranges.
-    const parsedRows = parseLabReportRows(text, [], "", 10, true).length;
-    return text.length + (text.match(/\d+(?:[.,]\d+)?/g) || []).length * 8 +
-      (text.match(/\b(?:result|reference|range|hemoglobin|haemoglobin|platelets|glucose|creatinine)\b/gi) || []).length * 12 +
-      parsedRows * 120 + (extractLabReportDate(text) ? 1800 : 0);
+    // Judge OCR passes by recognized test/result pairs and the saved sex-specific
+    // ranges, not merely by how much text or how many reference-range numbers they contain.
+    const parsedRows = parseLabReportRows(text, configuredTests, gender, 10, true);
+    const matchedNames = configuredTests.filter(test => {
+      const name = normaliseName(test.name);
+      return name.length > 1 && normaliseName(text).includes(name);
+    }).length;
+    const flagged = parsedRows.filter(row => row.severity === "ALERT" || row.severity === "WARNING").length;
+    return text.length * 0.2 +
+      (text.match(/\d+(?:[.,]\d+)?/g) || []).length * 3 +
+      (text.match(/\b(?:result|reference|range|hemoglobin|haemoglobin|platelets|glucose|creatinine)\b/gi) || []).length * 10 +
+      parsedRows.length * 160 + matchedNames * 90 + flagged * 35 +
+      (extractLabReportDate(text) ? 1000 : 0);
   };
   // If the first read is weak, retry sideways images at both orientations and
   // keep the OCR pass that reads the most text/numbers/lab terms.
-  if (localScore(best) < 180 || (String(best?.text || "").match(/\d+(?:[.,]\d+)?/g) || []).length < 3 || !extractLabReportDate(String(best?.text || ""))) {
+  if (localScore(best) < 220 || parseLabReportRows(String(best?.text || ""), configuredTests, gender, 10, true).length < Math.min(3, Math.max(1, configuredTests.length)) || !extractLabReportDate(String(best?.text || ""))) {
     for (const degrees of [90, 270]) {
       let rotatedUri = "";
       try {
@@ -689,6 +706,27 @@ export async function recognizeLabText(uri: string, onlineApiKey = ""): Promise<
       if (rotatedUri) { try { await FileSystem.deleteAsync(rotatedUri, { idempotent: true }); } catch {} }
     }
   }
+  // Dates usually sit in a small header. If the full-page OCR missed it,
+  // crop the top band and enlarge it for a dedicated second date-reading pass.
+  if (!extractLabReportDate(String(best?.text || ""))) {
+    let headerUri = "";
+    try {
+      const size = originalDimensions || await imageSize(uri);
+      const headerHeight = Math.max(1, Math.round(size.height * 0.38));
+      const cropped = await ImageManipulator.manipulateAsync(uri, [
+        { crop: { originX: 0, originY: 0, width: size.width, height: headerHeight } },
+        { resize: size.width >= 1800 ? { height: Math.round(headerHeight * 1.4) } : { width: 2400 } },
+      ], { compress: 1, format: ImageManipulator.SaveFormat.PNG });
+      headerUri = cropped.uri;
+      const headerRead = await recognizeText(headerUri);
+      if (extractLabReportDate(String(headerRead?.text || "")) ||
+          localScore(headerRead) > localScore(best)) {
+        best = { ...headerRead, text: String(headerRead?.text || "") + "\n" + String(best?.text || "") };
+        bestSize = size;
+      }
+    } catch {}
+    if (headerUri) { try { await FileSystem.deleteAsync(headerUri, { idempotent: true }); } catch {} }
+  }
   let text = normalizeHemoglobinUnitText(String(best?.text || ""));
   let mode: "online" | "offline" = "offline";
   // Optional cloud OCR is attempted only when the admin explicitly saves a key.
@@ -698,7 +736,7 @@ export async function recognizeLabText(uri: string, onlineApiKey = ""): Promise<
     (isLikelyLabReportText(value) ? 80 : 0) +
     (value.match(/\d+(?:[.,]\d+)?/g) || []).length * 8 +
     (value.match(/\b(?:result|reference|range|hemoglobin|platelets|glucose|creatinine)\b/gi) || []).length * 12 +
-    parseLabReportRows(value, [], "", 10, true).length * 120 +
+    parseLabReportRows(value, configuredTests, gender, 10, true).length * 160 +
     (extractLabReportDate(value) ? 1800 : 0);
   if (onlineText && (
     qualityScore(onlineText) > qualityScore(text) ||
