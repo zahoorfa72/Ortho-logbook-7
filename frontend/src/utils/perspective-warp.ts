@@ -5,8 +5,8 @@ export function buildPerspectiveWarpHtml(rawBase64: string): string {
 <style>
 *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;background:#141414;color:#fff;font:15px Arial,sans-serif}
 body{display:flex;flex-direction:column;overflow:hidden}.note{padding:9px 12px;color:#eee;font-size:13px;line-height:1.35}
-.stage{flex:1;min-height:240px;display:flex;align-items:center;justify-content:center;overflow:hidden}
-canvas{max-width:100%;max-height:100%;width:auto;height:auto;touch-action:none}
+.stage{flex:1;min-height:240px;height:100%;width:100%;display:flex;align-items:center;justify-content:center;overflow:hidden}
+canvas{display:block;flex-shrink:0;max-width:100%;max-height:100%;width:auto;height:auto;touch-action:none}
 .controls{display:flex;gap:8px;padding:10px 12px;background:#202020}
 button{flex:1;min-width:0;border:0;border-radius:9px;padding:10px 4px;font-weight:700;font-size:12px;color:#fff;background:#3b82f6}
 button.secondary{background:#454545}button:disabled{opacity:.55}
@@ -17,7 +17,9 @@ button.secondary{background:#454545}button:disabled{opacity:.55}
 <script>
 (function(){
 var img=new Image(),canvas=document.getElementById("preview"),ctx=canvas.getContext("2d"),points=[],active=-1;
-img.onload=function(){canvas.width=img.naturalWidth;canvas.height=img.naturalHeight;var w=canvas.width,h=canvas.height,i=Math.max(12,Math.min(w,h)*.035);points=[{x:i,y:i},{x:w-i,y:i},{x:w-i,y:h-i},{x:i,y:h-i}];draw();};
+function fitPreview(){if(!img.naturalWidth||!img.naturalHeight)return;var stage=document.querySelector(".stage"),sw=stage.clientWidth||window.innerWidth,sh=stage.clientHeight||300,scale=Math.min(sw/img.naturalWidth,sh/img.naturalHeight);canvas.style.width=Math.max(1,Math.floor(img.naturalWidth*scale))+"px";canvas.style.height=Math.max(1,Math.floor(img.naturalHeight*scale))+"px";}
+img.onload=function(){canvas.width=img.naturalWidth;canvas.height=img.naturalHeight;var w=canvas.width,h=canvas.height,i=Math.max(12,Math.min(w,h)*.035);points=[{x:i,y:i},{x:w-i,y:i},{x:w-i,y:h-i},{x:i,y:h-i}];fitPreview();draw();};
+window.addEventListener("resize",fitPreview);
 img.onerror=function(){window.ReactNativeWebView&&window.ReactNativeWebView.postMessage(JSON.stringify({type:"error",message:"The selected photo could not be opened."}));};
 img.src="data:image/jpeg;base64,__BASE64__";
 function draw(){if(!img.naturalWidth)return;ctx.clearRect(0,0,canvas.width,canvas.height);ctx.drawImage(img,0,0);ctx.save();ctx.fillStyle="rgba(37,99,235,.18)";ctx.strokeStyle="#3b82f6";ctx.lineWidth=Math.max(5,canvas.width*.0025);ctx.beginPath();ctx.moveTo(points[0].x,points[0].y);for(var i=1;i<4;i++)ctx.lineTo(points[i].x,points[i].y);ctx.closePath();ctx.fill();ctx.stroke();var r=Math.max(22,canvas.width*.012);points.forEach(function(p,i){ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.fillStyle="#2563eb";ctx.fill();ctx.lineWidth=Math.max(5,canvas.width*.002);ctx.strokeStyle="#fff";ctx.stroke();ctx.fillStyle="#fff";ctx.font="bold "+Math.max(22,canvas.width*.012)+"px Arial";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(String(i+1),p.x,p.y);});ctx.restore();}

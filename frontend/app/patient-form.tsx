@@ -801,6 +801,39 @@ export default function PatientForm() {
     }
   };
 
+  const captureFallbackDocument = async () => {
+    if (photoBusy || cameraOpen || imagePickerOpening.current) return;
+    imagePickerOpening.current = true;
+    setPhotoBusy(true);
+    try {
+      const permission = await ImagePicker.requestCameraPermissionsAsync();
+      if (!permission.granted) throw new Error("Camera permission is required. Enable it in Android Settings and try again.");
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ["images"], allowsEditing: false, quality: 1,
+      });
+      if (result.canceled || !result.assets?.[0]?.uri) return;
+      const permanentUri = await persistPhoto(result.assets[0].uri);
+      const nextIndex = p.photos.length;
+      setP(previous => ({ ...previous, photos: [...previous.photos, permanentUri] }));
+      setExistingScanPickerVisible(false);
+      setSelectedPhoto(null);
+      setEditingPhotoIndex(nextIndex);
+      setEditingPhotoOriginal(permanentUri);
+      setEditingPhotoUri(permanentUri);
+      setCropRect(null);
+      cropDragStartRef.current = null;
+      cropResizeStartRef.current = null;
+      setPhotoPreviewSize({ width: 0, height: 0 });
+      loadEditingPhotoDimensions(permanentUri);
+      void openPerspectiveEditor(permanentUri);
+    } catch (e: any) {
+      toast("Camera fallback failed. " + String(e?.message || e || "Please try again."), "error");
+    } finally {
+      setPhotoBusy(false);
+      imagePickerOpening.current = false;
+    }
+  };
+
   const scanWithCameraDocuments = async () => {
     if (photoBusy || cameraOpen || imagePickerOpening.current) return;
     imagePickerOpening.current = true;
@@ -813,7 +846,15 @@ export default function PatientForm() {
       setP(previous => ({ ...previous, photos: [...previous.photos, ...permanentUris] }));
       toast(permanentUris.length === 1 ? "Document scanned, edge-corrected and saved." : permanentUris.length + " document pages scanned, edge-corrected and saved.", "success");
     } catch (e: any) {
-      toast("Document scan failed. " + String(e?.message || e || "Please try again."), "error");
+      const detail = String(e?.message || e || "Please try again.");
+      Alert.alert(
+        "Document scanner unavailable",
+        "The automatic document scanner failed to open. You can capture the page with the regular camera and then correct its edges in the perspective editor." + String.fromCharCode(10,10) + detail,
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Use camera fallback", onPress: () => { void captureFallbackDocument(); } },
+        ],
+      );
     } finally {
       setPhotoBusy(false);
       imagePickerOpening.current = false;
@@ -1131,7 +1172,7 @@ export default function PatientForm() {
             min,
             max,
             severity,
-            date: extractLabReportDate(item.reportDate || "") || item.reportDate || extractLabReportDate(labOcrText) || "",
+            date: extractLabReportDate(item.reportDate || "") || extractLabReportDate(labOcrText) || item.reportDate || "",
             manuallyVerified: true,
           };
         });
@@ -1592,7 +1633,7 @@ export default function PatientForm() {
                     const boundary = hasRange ? (value < (min as number) ? (min as number) : (max as number)) : 0;
                     const excursion = abnormal && boundary !== 0 ? Math.abs(value - boundary) / Math.abs(boundary) * 100 : abnormal ? 100 : 0;
                     const severity = abnormal && excursion > 1 ? (excursion <= labWarningThreshold ? "WARNING" : "ALERT") : "";
-                    return { test: item.test, result: item.result.trim(), unit: item.unit, reference: item.reference, date: extractLabReportDate(item.reportDate || "") || item.reportDate || extractLabReportDate(labOcrText) || "", min, max, severity, manuallyVerified: true };
+                    return { test: item.test, result: item.result.trim(), unit: item.unit, reference: item.reference, date: extractLabReportDate(item.reportDate || "") || extractLabReportDate(labOcrText) || item.reportDate || "", min, max, severity, manuallyVerified: true };
                   });
                   if (!manual.length) {
                     toast("Enter at least one lab result before applying manual review.", "error");
