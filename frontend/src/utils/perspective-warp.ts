@@ -4,14 +4,14 @@ export function buildPerspectiveWarpHtml(rawBase64: string): string {
 <html><head><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <style>
 *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;background:#141414;color:#fff;font:15px Arial,sans-serif}
-body{display:flex;flex-direction:column;overflow:hidden}.note{padding:9px 12px;color:#eee;font-size:13px;line-height:1.35}
-.stage{flex:1;min-height:240px;height:100%;width:100%;display:flex;align-items:center;justify-content:center;overflow:hidden}
+body{display:flex;flex-direction:column;overflow:hidden}.note{padding:5px 8px;color:#eee;font-size:11px;line-height:1.25;flex-shrink:0}
+.stage{flex:1;min-height:120px;height:100%;width:100%;display:flex;align-items:center;justify-content:center;overflow:hidden}
 canvas{display:block;flex-shrink:0;max-width:100%;max-height:100%;width:auto;height:auto;touch-action:none}
-.controls{display:flex;gap:8px;padding:10px 12px;background:#202020}
-button{flex:1;min-width:0;border:0;border-radius:9px;padding:10px 3px;font-weight:700;font-size:11px;color:#fff;background:#3b82f6}
+.controls{display:flex;gap:5px;padding:5px 6px;background:#202020;flex-shrink:0}
+button{flex:1;min-width:0;border:0;border-radius:7px;padding:8px 2px;font-weight:700;font-size:10px;line-height:1.15;color:#fff;background:#3b82f6}
 button.secondary{background:#454545}button:disabled{opacity:.55}
 </style></head><body>
-<div class="note">Drag each blue corner onto the paper edges and tap <b>Correct perspective</b>, or tap <b>AI Enhance</b>. The AI model downloads once (about 92 MB) and then runs locally on this phone. Patient photos are never uploaded. Keep the original for comparison: AI may alter fine details and must not be treated as proof of a medical result.</div>
+<div class="note">Drag the blue corners onto the paper edges, then tap Correct. AI Enhance downloads its model only when needed; the model and photo processing stay on this phone.</div>
 <div class="stage"><canvas id="preview"></canvas></div>
 <div class="controls"><button class="secondary" id="reset">Reset</button><button class="secondary" id="autoScan">Auto-Scan Page</button><button class="secondary" id="enhance">AI Enhance</button><button id="apply">Correct</button></div>
 <script>

@@ -10,7 +10,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { extractLabReportDate, hasKnownLabTestName, isLabMetadataLine, isLikelyLabReportText, parseLabReportRows, recognizeLabText } from "@/src/utils/lab-ocr";
 import { scanPatientDocuments } from "@/src/utils/document-scanner";
 import { buildPerspectiveWarpHtml } from "@/src/utils/perspective-warp";
-import { enhanceImageWithOfflineAI } from "@/src/utils/offline-ai-enhance";
+import { enhanceImageWithOfflineAI, getOfflineAIModelStatus } from "@/src/utils/offline-ai-enhance";
 import { Dimensions } from "react-native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AppState, Image, InteractionManager, Modal, Pressable, ScrollView, Text, View } from "react-native";
@@ -142,9 +142,22 @@ export default function PatientForm() {
   const [editingPhotoOriginal, setEditingPhotoOriginal] = useState<string | null>(null);
   const [editingPhotoUri, setEditingPhotoUri] = useState<string | null>(null);
   const [photoBusy, setPhotoBusy] = useState(false);
+  const [aiModelStatus, setAiModelStatus] = useState("AI model status will appear here.");
   const [perspectiveMode, setPerspectiveMode] = useState(false);
   const [perspectiveHtml, setPerspectiveHtml] = useState("");
   const perspectiveWebViewRef = useRef<any>(null);
+  useEffect(() => {
+    if (!perspectiveMode) return;
+    let active = true;
+    setAiModelStatus("Checking on-device AI model…");
+    void getOfflineAIModelStatus().then(status => {
+      if (!active) return;
+      setAiModelStatus(status.installed
+        ? "AI model ready on this phone (" + Math.round(status.sizeBytes / (1024 * 1024)) + " MB). No download needed."
+        : "AI model not downloaded yet (about 92 MB). Tap AI Enhance to download over the internet.");
+    }).catch(() => { if (active) setAiModelStatus("Could not check AI model. Tap AI Enhance to retry."); });
+    return () => { active = false; };
+  }, [perspectiveMode]);
   const [existingScanPickerVisible, setExistingScanPickerVisible] = useState(false);
   const [imagePickerReady, setImagePickerReady] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
@@ -1004,13 +1017,16 @@ export default function PatientForm() {
       setPhotoBusy(true);
       try {
         const result = await enhanceImageWithOfflineAI(String(message.dataUrl || ""), status => {
+          setAiModelStatus(status);
           const js = "window.__aiEnhanceStatus && window.__aiEnhanceStatus(" + JSON.stringify(status) + ");true;";
           perspectiveWebViewRef.current?.injectJavaScript(js);
         });
+        setAiModelStatus("AI model ready. Image enhancement finished on this phone.");
         const js = "window.__aiEnhanceComplete && window.__aiEnhanceComplete(" + JSON.stringify(result) + ", null);true;";
         perspectiveWebViewRef.current?.injectJavaScript(js);
       } catch (e: any) {
         const reason = String(e?.message || e || "AI enhancement failed.");
+        setAiModelStatus("AI unavailable: " + reason);
         const js = "window.__aiEnhanceComplete && window.__aiEnhanceComplete(null, " + JSON.stringify(reason) + ");true;";
         perspectiveWebViewRef.current?.injectJavaScript(js);
       } finally {
@@ -1479,7 +1495,7 @@ export default function PatientForm() {
 
         <Modal visible={editingPhotoIndex !== null} transparent animationType="fade" onRequestClose={closePhotoEditor}>
           <View style={styles.photoEditOverlay}>
-            <View style={[styles.photoEditCard, perspectiveMode && { height: "86%", maxHeight: "86%", width: "96%", padding: spacing.sm }]}>
+            <View style={[styles.photoEditCard, perspectiveMode && { height: "76%", maxHeight: "76%", width: "96%", padding: spacing.sm }]}>
               {perspectiveMode ? (
                 <View style={{ flex: 1, minHeight: 0, flexShrink: 1 }}>
                   <View style={styles.photoEditHeader}>
@@ -1491,7 +1507,10 @@ export default function PatientForm() {
                       <Ionicons name="close" size={22} color={colors.onSurface} />
                     </Pressable>
                   </View>
-                  <View style={{ flexDirection: "row", gap: spacing.sm, marginBottom: spacing.sm }}>
+                  <View style={{ backgroundColor: colors.surfaceSecondary, borderRadius: radius.sm, paddingHorizontal: spacing.sm, paddingVertical: 6, marginBottom: spacing.xs }}>
+                    <Text style={{ color: colors.onSurfaceSecondary, fontSize: fontSize.xs, lineHeight: 17 }}>{aiModelStatus}</Text>
+                  </View>
+                  <View style={{ flexDirection: "row", gap: spacing.sm, marginBottom: spacing.xs }}>
                     <Pressable
                       style={[styles.secondary, { flex: 1, backgroundColor: colors.surfaceSecondary }]}
                       disabled={photoBusy}
@@ -1517,10 +1536,10 @@ export default function PatientForm() {
                     originWhitelist={["*"]}
                     javaScriptEnabled
                     scrollEnabled={false}
-                    style={{ flex: 1, minHeight: 0, maxHeight: 520, backgroundColor: "#141414", borderRadius: radius.md, marginBottom: spacing.xs }}
+                    style={{ flex: 1, minHeight: 150, backgroundColor: "#141414", borderRadius: radius.md, marginBottom: spacing.xs }}
                     onMessage={handlePerspectiveMessage}
                   />
-                  <Text style={{ color: colors.muted, fontSize: fontSize.xs, marginBottom: spacing.sm }}>Works on this saved patient image. The original is kept unless you tap Save changes.</Text>
+                  <Text style={{ color: colors.muted, fontSize: fontSize.xs, marginBottom: spacing.xs }}>Original photo stays unchanged until you tap Save changes.</Text>
                   <Pressable style={styles.photoCancelButton} disabled={photoBusy} onPress={() => { setPerspectiveMode(false); setPerspectiveHtml(""); }}>
                     <Text style={styles.photoCancelText}>Back to photo editor</Text>
                   </Pressable>

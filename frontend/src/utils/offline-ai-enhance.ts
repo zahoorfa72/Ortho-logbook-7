@@ -17,16 +17,37 @@ function localModelUri(): string {
   return root + "ai-models/" + MODEL_NAME;
 }
 
+export async function getOfflineAIModelStatus(): Promise<{ installed: boolean; sizeBytes: number }> {
+  try {
+    const info = await FileSystem.getInfoAsync(localModelUri());
+    const sizeBytes = info.exists ? Number(info.size || 0) : 0;
+    return { installed: !!info.exists && sizeBytes >= MIN_MODEL_BYTES, sizeBytes };
+  } catch {
+    return { installed: false, sizeBytes: 0 };
+  }
+}
+
 async function ensureModel(onStatus?: (message: string) => void): Promise<string> {
   const uri = localModelUri();
   const current = await FileSystem.getInfoAsync(uri);
   if (current.exists && (current.size || 0) >= MIN_MODEL_BYTES) return uri;
 
-  onStatus?.("Downloading AI model (about 92 MB)…");
+  onStatus?.("Preparing AI model download…");
   const directory = uri.slice(0, uri.lastIndexOf("/") + 1);
   await FileSystem.makeDirectoryAsync(directory, { intermediates: true });
   try { if (current.exists) await FileSystem.deleteAsync(uri, { idempotent: true }); } catch {}
-  const downloaded = await FileSystem.downloadAsync(MODEL_URL, uri);
+  const downloadTask = FileSystem.createDownloadResumable(MODEL_URL, uri, {}, progress => {
+    const received = Number(progress.totalBytesWritten || 0);
+    const total = Number(progress.totalBytesExpectedToWrite || 0);
+    if (total > 0) {
+      const percent = Math.max(0, Math.min(100, Math.floor(received / total * 100)));
+      onStatus?.("Downloading AI model: " + percent + "% (" + (received / (1024 * 1024)).toFixed(1) + " / " + (total / (1024 * 1024)).toFixed(1) + " MB). Keep internet connected.");
+    } else {
+      onStatus?.("Downloading AI model: " + (received / (1024 * 1024)).toFixed(1) + " MB received…");
+    }
+  });
+  const downloaded = await downloadTask.downloadAsync();
+  if (!downloaded) throw new Error("The AI model download was cancelled. Tap AI Enhance to try again.");
   const info = await FileSystem.getInfoAsync(downloaded.uri);
   if (downloaded.status < 200 || downloaded.status >= 300 || !info.exists || (info.size || 0) < MIN_MODEL_BYTES) {
     try { await FileSystem.deleteAsync(downloaded.uri, { idempotent: true }); } catch {}
