@@ -940,20 +940,37 @@ export default function PatientForm() {
   const loadEditingPhotoDimensions = (uri: string) => {
     Image.getSize(uri, (width, height) => setEditingPhotoDimensions({ width, height }), () => setEditingPhotoDimensions(null));
   };
+  const materializeImageUri = async (uri: string) => {
+    if (!uri.startsWith("data:image/")) return uri;
+    const match = uri.match(/^data:image\/([^;]+);base64,([\s\S]+)$/i);
+    if (!match?.[2]) throw new Error("The embedded photo data is invalid.");
+    const directory = String(FileSystem.cacheDirectory || FileSystem.documentDirectory || "");
+    if (!directory) throw new Error("Photo storage is not available.");
+    const extension = match[1].toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
+    const destination = directory + "patient-photo-open-" + Date.now() + "." + extension;
+    await FileSystem.writeAsStringAsync(destination, match[2], { encoding: FileSystem.EncodingType.Base64 });
+    return destination;
+  };
+
   const openPerspectiveEditor = async (sourceUri: string | null = editingPhotoUri) => {
     if (!sourceUri || photoBusy) return;
     setPhotoBusy(true);
     try {
+      // React Native's native image loaders and ImageManipulator do not support
+      // every data: URI scheme. Convert restored embedded backup photos to a
+      // local cache file before measuring or editing them.
+      const usableUri = await materializeImageUri(sourceUri);
       const dimensions = await new Promise<{ width: number; height: number }>((resolve, reject) =>
-        Image.getSize(sourceUri, (width, height) => resolve({ width, height }), reject));
+        Image.getSize(usableUri, (width, height) => resolve({ width, height }), reject));
       const actions: any[] = [];
-      if (Math.max(dimensions.width, dimensions.height) > 2800) {
-        actions.push(dimensions.width >= dimensions.height ? { resize: { width: 2800 } } : { resize: { height: 2800 } });
+      if (Math.max(dimensions.width, dimensions.height) > 4096) {
+        actions.push(dimensions.width >= dimensions.height ? { resize: { width: 4096 } } : { resize: { height: 4096 } });
       }
-      const prepared = await ImageManipulator.manipulateAsync(sourceUri, actions, {
-        compress: 0.96, format: ImageManipulator.SaveFormat.JPEG, base64: true,
+      const prepared = await ImageManipulator.manipulateAsync(usableUri, actions, {
+        compress: 0.98, format: ImageManipulator.SaveFormat.JPEG, base64: true,
       });
       if (!prepared.base64) throw new Error("Could not prepare this photo for perspective correction.");
+      setEditingPhotoUri(usableUri);
       setPerspectiveHtml(buildPerspectiveWarpHtml(prepared.base64));
       setPerspectiveMode(true);
     } catch (e: any) {
