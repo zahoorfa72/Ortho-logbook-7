@@ -118,7 +118,7 @@ jobs:
                   lines.insert(index + 1, indent + 'if (rnVersionParts[0].toInteger() == 0 && rnVersionParts[1].toInteger() < 71) {')
                   patched = True
                   break
-          s = "\\n".join(lines) + "\\n"
+          s = "\n".join(lines) + "\n"
           if not patched and "VersionNumber.parse(REACT_NATIVE_VERSION)" in s:
               raise SystemExit("Could not locate ONNX Runtime Gradle compatibility check")
           if "VersionNumber.parse(REACT_NATIVE_VERSION)" in s:
