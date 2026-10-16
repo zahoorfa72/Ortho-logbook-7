@@ -4,9 +4,11 @@
 
 import { reloadAppAsync } from "expo";
 import { Component, type ErrorInfo, type PropsWithChildren, useState } from "react";
-import { Platform, Pressable, ScrollView, Text, View } from "react-native";
+import { Alert, Platform, Pressable, ScrollView, Share, Text, View } from "react-native";
+import * as Clipboard from "expo-clipboard";
 
 import { makeStyles } from "@/src/theme";
+import { buildProblemReport, recordDiagnosticError } from "@/src/utils/problem-report";
 
 type ErrorBoundaryState = { error: Error | null };
 
@@ -19,6 +21,7 @@ export class ErrorBoundary extends Component<PropsWithChildren, ErrorBoundarySta
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
     console.error("[ErrorBoundary] render crash:", error, info.componentStack ?? "");
+    void recordDiagnosticError(error, info.componentStack ?? "");
   }
 
   resetError = (): void => {
@@ -37,6 +40,23 @@ function ErrorFallback({ error, resetError }: { error: Error; resetError: () => 
   const styles = useStyles();
   const [showDetails, setShowDetails] = useState(false);
 
+  const handleCopyReport = async () => {
+    try {
+      await Clipboard.setStringAsync(await buildProblemReport("", error));
+      Alert.alert("Report copied", "The crash report is copied. You can paste it into your message to the developer.");
+    } catch {
+      Alert.alert("Could not copy report", "Please use Show details and copy the error text.");
+    }
+  };
+
+  const handleShareReport = async () => {
+    try {
+      await Share.share({ title: "Ortho Logbook crash report", message: await buildProblemReport("", error) });
+    } catch {
+      Alert.alert("Could not share report", "Please use the Report a Problem option after reopening the app.");
+    }
+  };
+
   const handleReload = async () => {
     try {
       await reloadAppAsync();
@@ -52,6 +72,12 @@ function ErrorFallback({ error, resetError }: { error: Error; resetError: () => 
         <Text style={styles.title}>Something went wrong</Text>
         <Text style={styles.message}>Please reload the app to continue.</Text>
         <Text style={styles.devMessage}>{error.message}</Text>
+        <Pressable onPress={handleCopyReport} accessibilityRole="button" style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}>
+          <Text style={styles.buttonText}>Copy crash report</Text>
+        </Pressable>
+        <Pressable onPress={handleShareReport} accessibilityRole="button" style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}>
+          <Text style={styles.buttonText}>Share crash report</Text>
+        </Pressable>
         <Pressable
           onPress={handleReload}
           testID="error-fallback-reload"

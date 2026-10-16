@@ -17,6 +17,7 @@ import { ThemeProvider } from "@/src/theme";
 import { startAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-backup";
 import { attemptDueLowStockReport, checkAndSendImmediateLowStockAlerts } from "@/src/utils/low-stock-auto-report";
 import { DriveSyncIndicator } from "@/src/utils/storage/drive-sync-status";
+import { installGlobalErrorCapture } from "@/src/utils/problem-report";
 
 LogBox.ignoreAllLogs(true);
 
@@ -95,6 +96,8 @@ function DatabaseBootstrap({ children }: { children: React.ReactNode }) {
 }
 
 export default function RootLayout() {
+  useEffect(() => { installGlobalErrorCapture(); }, []);
+
   const [loaded] = useFonts({
     "PlusJakartaSans-Regular": require("../assets/fonts/PlusJakartaSans-Regular.ttf"),
     "PlusJakartaSans-Medium": require("../assets/fonts/PlusJakartaSans-Medium.ttf"),
@@ -147,6 +150,7 @@ export default function RootLayout() {
                       options={{ headerShown: false }}
                     />
                     <Stack.Screen name="settings" />
+                    <Stack.Screen name="report-problem" />
                     <Stack.Screen name="low-stock-reports" />
                     <Stack.Screen name="trash" options={{ headerShown: false }} />
                     <Stack.Screen name="branding" />

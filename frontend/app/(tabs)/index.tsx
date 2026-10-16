@@ -1032,6 +1032,15 @@ export default function Logbook() {
               </Pressable>
             )}
             <Pressable
+              testID="report-problem-button"
+              accessibilityLabel="Report a Problem"
+              onPress={() => router.push("/report-problem")}
+              style={styles.iconBtn}
+              hitSlop={8}
+            >
+              <Ionicons name="bug-outline" size={22} color={colors.onSurfaceSecondary} />
+            </Pressable>
+            <Pressable
               testID="logout-button"
               onPress={logout}
               style={styles.iconBtn}

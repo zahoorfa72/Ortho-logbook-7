@@ -58,6 +58,7 @@ export default function SettingsScreen() {
     { icon: "flask-outline", label: "Lab Test Reference Ranges", sub: "Add, edit or delete male/female ranges for offline OCR checks", to: "/lab-test-settings", testID: "settings-lab-test-ranges" },
     { icon: "mail-outline", label: "Automatic Low Stock Reports", sub: "Scheduled PDF delivery by email and WhatsApp", to: "/low-stock-reports", testID: "settings-low-stock-reports" },
     { icon: "people-outline", label: "User Management", sub: "Add or restrict doctors & staff", to: "/user-management", testID: "settings-users" },
+    { icon: "bug-outline", label: "Report a Problem", sub: "Copy or share app errors and technical diagnostics", to: "/report-problem", testID: "settings-report-problem" },
   ];
 
   return (
