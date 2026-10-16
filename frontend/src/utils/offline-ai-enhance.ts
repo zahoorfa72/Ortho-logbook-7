@@ -16,12 +16,19 @@ const SUPER_RES_MODEL_NAME = "realesr-general-x4v3.onnx";
 const SUPER_RES_MIN_BYTES = 3 * 1024 * 1024;
 const SUPER_RES_TILE = 128;
 const SUPER_RES_CONTEXT = 16;
+// Optional higher-detail SwinIR transformer model. It is larger and slower,
+// so users explicitly select it rather than downloading it during every edit.
+const SWINIR_MODEL_URL = "https://huggingface.co/Heliosoph/swinir-onnx/resolve/main/swinir_realsr_x4.onnx";
+const SWINIR_MODEL_NAME = "swinir_realsr_x4.onnx";
+const SWINIR_MIN_BYTES = 90 * 1024 * 1024;
+const SWINIR_TILE = 64;
 const TILE_SIZE = 512;
 const MAX_IMAGE_SIDE = 1536;
 const MIN_MODEL_BYTES = 80 * 1024 * 1024;
 
 let sessionPromise: Promise<InferenceSession> | null = null;
 let superResolutionSessionPromise: Promise<InferenceSession> | null = null;
+let swinirSessionPromise: Promise<InferenceSession> | null = null;
 
 function localModelUri(): string {
   const root = FileSystem.documentDirectory || FileSystem.cacheDirectory;
@@ -77,6 +84,128 @@ function superResolutionModelUri(): string {
   const root = FileSystem.documentDirectory || FileSystem.cacheDirectory;
   if (!root) throw new Error("Private app storage is unavailable.");
   return root + "ai-models/" + SUPER_RES_MODEL_NAME;
+}
+
+function swinirModelUri(): string {
+  const root = FileSystem.documentDirectory || FileSystem.cacheDirectory;
+  if (!root) throw new Error("Private app storage is unavailable.");
+  return root + "ai-models/" + SWINIR_MODEL_NAME;
+}
+
+async function getSwinIRSession(onStatus?: (message: string) => void): Promise<InferenceSession> {
+  if (!swinirSessionPromise) {
+    swinirSessionPromise = (async () => {
+      const uri = swinirModelUri();
+      const current = await FileSystem.getInfoAsync(uri);
+      let modelUri = uri;
+      if (!current.exists || Number(current.size || 0) < SWINIR_MIN_BYTES) {
+        onStatus?.("Downloading SwinIR high-detail model (~110 MB)…");
+        const directory = uri.slice(0, uri.lastIndexOf("/") + 1);
+        await FileSystem.makeDirectoryAsync(directory, { intermediates: true });
+        try { if (current.exists) await FileSystem.deleteAsync(uri, { idempotent: true }); } catch {}
+        const task = FileSystem.createDownloadResumable(SWINIR_MODEL_URL, uri, {}, progress => {
+          const received = Number(progress.totalBytesWritten || 0);
+          const total = Number(progress.totalBytesExpectedToWrite || 0);
+          if (total > 0) {
+            const percent = Math.max(0, Math.min(100, Math.floor(received / total * 100)));
+            onStatus?.("Downloading SwinIR: " + percent + "% (" + (received / (1024 * 1024)).toFixed(1) + " / " + (total / (1024 * 1024)).toFixed(1) + " MB).");
+          } else {
+            onStatus?.("Downloading SwinIR: " + (received / (1024 * 1024)).toFixed(1) + " MB received…");
+          }
+        });
+        const downloaded = await task.downloadAsync();
+        if (!downloaded) throw new Error("SwinIR download was cancelled. Connect to the internet and try again.");
+        const info = await FileSystem.getInfoAsync(downloaded.uri);
+        if (downloaded.status < 200 || downloaded.status >= 300 || !info.exists || Number(info.size || 0) < SWINIR_MIN_BYTES) {
+          try { await FileSystem.deleteAsync(downloaded.uri, { idempotent: true }); } catch {}
+          throw new Error("SwinIR download was incomplete. Connect to the internet and try again.");
+        }
+        modelUri = downloaded.uri;
+      }
+      onStatus?.("Loading SwinIR transformer model on this phone…");
+      const session = await InferenceSession.create(modelUri.replace(/^file:\/\//, ""));
+      if (!session.inputNames.includes("image") || !session.outputNames.includes("upscaled")) {
+        throw new Error("The SwinIR model input/output did not match the expected model format.");
+      }
+      return session;
+    })().catch(error => {
+      swinirSessionPromise = null;
+      throw error;
+    });
+  }
+  return swinirSessionPromise;
+}
+
+/**
+ * SwinIR real-world super-resolution uses fixed 64x64 RGB tiles and returns
+ * 4x output. Downsample to 2x for manageable patient-photo size and memory.
+ */
+async function runSwinIRSuperResolution(
+  pixels: Uint8Array,
+  width: number,
+  height: number,
+  onStatus?: (message: string) => void,
+): Promise<{ pixels: Uint8Array; width: number; height: number }> {
+  const session = await getSwinIRSession(onStatus);
+  const outputWidth = width * 2;
+  const outputHeight = height * 2;
+  const output = new Uint8Array(outputWidth * outputHeight * 4);
+  const tile = SWINIR_TILE;
+  const planeSize = tile * tile;
+  const tilesX = Math.ceil(width / tile);
+  const tilesY = Math.ceil(height / tile);
+  let completed = 0;
+
+  for (let top = 0; top < height; top += tile) {
+    for (let left = 0; left < width; left += tile) {
+      const input = new Float32Array(3 * planeSize);
+      for (let y = 0; y < tile; y++) {
+        const sy = Math.min(height - 1, top + y);
+        for (let x = 0; x < tile; x++) {
+          const sx = Math.min(width - 1, left + x);
+          const sourceIndex = (sy * width + sx) * 4;
+          const p = y * tile + x;
+          input[p] = pixels[sourceIndex] / 255;
+          input[planeSize + p] = pixels[sourceIndex + 1] / 255;
+          input[2 * planeSize + p] = pixels[sourceIndex + 2] / 255;
+        }
+      }
+      const feeds: Record<string, Tensor> = {
+        image: new Tensor("float32", input, [1, 3, tile, tile]),
+      };
+      const resultMap = await session.run(feeds, ["upscaled"]);
+      const resultTensor = resultMap.upscaled;
+      const superWidth = tile * 4;
+      const superPlaneSize = superWidth * superWidth;
+      if (!resultTensor || !resultTensor.data || resultTensor.data.length < 3 * superPlaneSize) {
+        throw new Error("SwinIR returned an unexpected output size.");
+      }
+      const restored = resultTensor.data as Float32Array;
+      const copyWidth = Math.min(tile, width - left);
+      const copyHeight = Math.min(tile, height - top);
+      for (let y = 0; y < copyHeight * 2; y++) {
+        for (let x = 0; x < copyWidth * 2; x++) {
+          const oy = y * 2, ox = x * 2;
+          const dest = (((top * 2 + y) * outputWidth) + left * 2 + x) * 4;
+          for (let channel = 0; channel < 3; channel++) {
+            const base = channel * superPlaneSize;
+            const v = (
+              restored[base + oy * superWidth + ox] +
+              restored[base + oy * superWidth + ox + 1] +
+              restored[base + (oy + 1) * superWidth + ox] +
+              restored[base + (oy + 1) * superWidth + ox + 1]
+            ) * 63.75;
+            output[dest + channel] = Math.max(0, Math.min(255, Math.round(v)));
+          }
+          output[dest + 3] = 255;
+        }
+      }
+      completed++;
+      onStatus?.("SwinIR high-detail reconstruction " + completed + "/" + (tilesX * tilesY) + "…");
+      await new Promise<void>(resolve => setTimeout(resolve, 0));
+    }
+  }
+  return { pixels: output, width: outputWidth, height: outputHeight };
 }
 
 async function getSuperResolutionSession(onStatus?: (message: string) => void): Promise<InferenceSession> {
@@ -276,6 +405,7 @@ function sharpenAndImproveContrast(pixels: Uint8Array, width: number, height: nu
 export async function enhanceImageWithOfflineAI(
   dataUrl: string,
   onStatus?: (message: string) => void,
+  mode: "balanced" | "high-detail" = "balanced",
 ): Promise<string> {
   const match = String(dataUrl || "").match(/^data:image\/(?:jpeg|jpg);base64,([\s\S]+)$/i);
   if (!match?.[1]) throw new Error("The selected image was not a supported JPEG.");
@@ -283,8 +413,11 @@ export async function enhanceImageWithOfflineAI(
   const decoded = jpeg.decode(encodedInput, { useTArray: true, formatAsRGBA: true });
   const width = decoded.width;
   const height = decoded.height;
-  if (!width || !height || width > MAX_IMAGE_SIDE || height > MAX_IMAGE_SIDE || width * height > MAX_IMAGE_SIDE * MAX_IMAGE_SIDE) {
-    throw new Error("The AI image is too large to process safely. Please reopen the photo and try again; AI processing is limited to 1536 pixels on the longest side to prevent the app from freezing.");
+  const maxSideForMode = mode === "high-detail" ? 1024 : MAX_IMAGE_SIDE;
+  if (!width || !height || width > maxSideForMode || height > maxSideForMode || width * height > maxSideForMode * maxSideForMode) {
+    throw new Error(mode === "high-detail"
+      ? "SwinIR high-detail mode is limited to 1024 pixels on the longest side to protect phone memory. Choose Balanced mode for larger photos."
+      : "The AI image is too large to process safely. Please reopen the photo and try again; AI processing is limited to 1536 pixels on the longest side to prevent the app from freezing.");
   }
 
   const session = await getSession(onStatus);
@@ -344,8 +477,10 @@ export async function enhanceImageWithOfflineAI(
 
   onStatus?.("Deblurring and recovering contrast locally…");
   const enhancedPixels = sharpenAndImproveContrast(output, width, height);
-  onStatus?.("Reconstructing photo detail with trained super-resolution AI…");
-  const restored = await runLearnedSuperResolution(enhancedPixels, width, height, onStatus);
+  onStatus?.(mode === "high-detail" ? "Reconstructing detail with SwinIR transformer AI…" : "Reconstructing photo detail with Real-ESRGAN AI…");
+  const restored = mode === "high-detail"
+    ? await runSwinIRSuperResolution(enhancedPixels, width, height, onStatus)
+    : await runLearnedSuperResolution(enhancedPixels, width, height, onStatus);
   onStatus?.("Encoding higher-resolution AI result…");
   const encoded = jpeg.encode({ data: restored.pixels, width: restored.width, height: restored.height }, 92);
   return "data:image/jpeg;base64," + Buffer.from(encoded.data).toString("base64");

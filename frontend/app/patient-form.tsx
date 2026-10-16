@@ -1021,7 +1021,7 @@ export default function PatientForm() {
           setAiModelStatus(status);
           const js = "window.__aiEnhanceStatus && window.__aiEnhanceStatus(" + JSON.stringify(status) + ");true;";
           perspectiveWebViewRef.current?.injectJavaScript(js);
-        });
+        }, message.mode === "high-detail" ? "high-detail" : "balanced");
         setAiModelStatus("AI model ready. Image enhancement finished on this phone.");
         const js = "window.__aiEnhanceComplete && window.__aiEnhanceComplete(" + JSON.stringify(result) + ", null);true;";
         perspectiveWebViewRef.current?.injectJavaScript(js);
