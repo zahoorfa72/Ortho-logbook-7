@@ -748,9 +748,14 @@ export default function PatientForm() {
     const uri = p.photos[idx];
     if (!uri || photoBusy) return;
     setExistingScanPickerVisible(false);
+    setPerspectiveMode(false);
+    setPerspectiveHtml("");
     setSelectedPhoto(null);
     setPhotoBusy(true);
     try {
+      // Let the native source-picker modal finish dismissing before opening
+      // the editor modal; overlapping Android modal animations can hide it.
+      await new Promise<void>(resolve => setTimeout(resolve, 350));
       // Materialize restored data-URI photos before any native image view,
       // size lookup, or perspective editor tries to display them.
       const usableUri = await materializeImageUri(uri);
@@ -796,6 +801,7 @@ export default function PatientForm() {
       setP(previous => ({ ...previous, photos: [...previous.photos, permanentUri] }));
       setExistingScanPickerVisible(false);
       setSelectedPhoto(null);
+      await new Promise<void>(resolve => setTimeout(resolve, 350));
       setEditingPhotoIndex(nextIndex);
       setEditingPhotoOriginal(permanentUri);
       setEditingPhotoUri(permanentUri);
@@ -1564,8 +1570,8 @@ export default function PatientForm() {
                   <Text style={styles.photoToolText}>Apply Free Crop</Text>
                 </Pressable>
                 <Pressable style={styles.photoTool} disabled={photoBusy} onPress={() => { void openPerspectiveEditor(); }}>
-                  <Ionicons name="scan-outline" size={20} color={colors.brandPrimary} />
-                  <Text style={styles.photoToolText}>Perspective Scan</Text>
+                  <Ionicons name="sparkles" size={20} color={colors.brandPrimary} />
+                  <Text style={styles.photoToolText}>AI Enhance / Auto-scan</Text>
                 </Pressable>
                 <Pressable style={styles.photoTool} disabled={photoBusy} onPress={() => editPhoto("optimize")}>
                   <Ionicons name="sparkles-outline" size={20} color={colors.brandPrimary} />

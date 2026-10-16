@@ -55,7 +55,36 @@ function autoDetectPageCorners(){
     var boxArea=(maxX-minX+1)*(maxY-minY+1);
     if(!touchesEdge&&count>bestCount&&count>total*.035&&boxArea>total*.08){bestCount=count;best={minX:minX,maxX:maxX,minY:minY,maxY:maxY};}
   }
-  if(!best)throw new Error("Could not confidently find the paper edges in this photo. Move the four blue corners manually, then tap Correct.");
+  if(!best){
+    // Fallback for gray, colored, or low-contrast documents: locate strong
+    // horizontal/vertical edge intersections near each expected page corner.
+    var regions=[
+      {x0:2,y0:2,x1:Math.floor(sw*.62),y1:Math.floor(sh*.62),cx:0,cy:0},
+      {x0:Math.floor(sw*.38),y0:2,x1:sw-3,y1:Math.floor(sh*.62),cx:sw-1,cy:0},
+      {x0:Math.floor(sw*.38),y0:Math.floor(sh*.38),x1:sw-3,y1:sh-3,cx:sw-1,cy:sh-1},
+      {x0:2,y0:Math.floor(sh*.38),x1:Math.floor(sw*.62),y1:sh-3,cx:0,cy:sh-1}
+    ];
+    var fallback=[];
+    regions.forEach(function(r){
+      var strongest=0,bx=r.cx,by=r.cy;
+      for(var yy=Math.max(2,r.y0);yy<Math.min(sh-2,r.y1);yy+=1){
+        for(var xx=Math.max(2,r.x0);xx<Math.min(sw-2,r.x1);xx+=1){
+          var at=yy*sw+xx;
+          var gx=Math.abs(gray[at+1]-gray[at-1])+Math.abs(gray[at+sw+1]-gray[at+sw-1]);
+          var gy=Math.abs(gray[at+sw]-gray[at-sw])+Math.abs(gray[at+sw+1]-gray[at-sw+1]);
+          var dist=Math.hypot(xx-r.cx,yy-r.cy)/Math.hypot(sw,sh);
+          var score=Math.min(gx,gy)*(1.25-.55*dist);
+          if(score>strongest){strongest=score;bx=xx;by=yy;}
+        }
+      }
+      fallback.push({x:Math.max(0,Math.min(canvas.width,bx/scale)),y:Math.max(0,Math.min(canvas.height,by/scale))});
+    });
+    var fallbackArea=0;for(var z=0;z<4;z++)fallbackArea+=fallback[z].x*fallback[(z+1)%4].y-fallback[(z+1)%4].x*fallback[z].y;
+    var fallbackWidth=Math.max(fallback[0].x,fallback[1].x,fallback[2].x,fallback[3].x)-Math.min(fallback[0].x,fallback[1].x,fallback[2].x,fallback[3].x);
+    var fallbackHeight=Math.max(fallback[0].y,fallback[1].y,fallback[2].y,fallback[3].y)-Math.min(fallback[0].y,fallback[1].y,fallback[2].y,fallback[3].y);
+    if(Math.abs(fallbackArea)>canvas.width*canvas.height*.05&&fallbackWidth>canvas.width*.18&&fallbackHeight>canvas.height*.18){points=fallback;draw();return;}
+    throw new Error("Could not confidently detect all four page corners. Try Auto-Scan again or drag the blue corners manually.");
+  }
   var componentPoints=[];
   for(var y=best.minY;y<=best.maxY;y++)for(var x=best.minX;x<=best.maxX;x++){var idx=y*sw+x;if(gray[idx]>=threshold)componentPoints.push({x:x,y:y});}
   if(componentPoints.length<100)throw new Error("Not enough clear paper area was found. Please adjust the corners manually.");
