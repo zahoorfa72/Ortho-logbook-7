@@ -9,11 +9,19 @@ import { InferenceSession, Tensor } from "onnxruntime-react-native";
 
 const MODEL_URL = "https://huggingface.co/opencv/deblurring_nafnet/resolve/main/deblurring_nafnet_2025may.onnx";
 const MODEL_NAME = "deblurring_nafnet_2025may.onnx";
+// Real-ESRGAN is a trained super-resolution model: unlike sharpening, it learns
+// to reconstruct plausible high-frequency detail and upscale photographs.
+const SUPER_RES_MODEL_URL = "https://huggingface.co/Heliosoph/realesrgan-onnx/resolve/main/realesr-general-x4v3.onnx";
+const SUPER_RES_MODEL_NAME = "realesr-general-x4v3.onnx";
+const SUPER_RES_MIN_BYTES = 3 * 1024 * 1024;
+const SUPER_RES_TILE = 128;
+const SUPER_RES_CONTEXT = 16;
 const TILE_SIZE = 512;
 const MAX_IMAGE_SIDE = 1536;
 const MIN_MODEL_BYTES = 80 * 1024 * 1024;
 
 let sessionPromise: Promise<InferenceSession> | null = null;
+let superResolutionSessionPromise: Promise<InferenceSession> | null = null;
 
 function localModelUri(): string {
   const root = FileSystem.documentDirectory || FileSystem.cacheDirectory;
@@ -58,6 +66,132 @@ async function ensureModel(onStatus?: (message: string) => void): Promise<string
     throw new Error("The AI model download was incomplete. Connect to the internet and try again.");
   }
   return downloaded.uri;
+}
+
+function superResolutionModelUri(): string {
+  const root = FileSystem.documentDirectory || FileSystem.cacheDirectory;
+  if (!root) throw new Error("Private app storage is unavailable.");
+  return root + "ai-models/" + SUPER_RES_MODEL_NAME;
+}
+
+async function getSuperResolutionSession(onStatus?: (message: string) => void): Promise<InferenceSession> {
+  if (!superResolutionSessionPromise) {
+    superResolutionSessionPromise = (async () => {
+      const uri = superResolutionModelUri();
+      const current = await FileSystem.getInfoAsync(uri);
+      let modelUri = uri;
+      if (!current.exists || Number(current.size || 0) < SUPER_RES_MIN_BYTES) {
+        onStatus?.("Downloading trained photo-restoration AI model…");
+        const directory = uri.slice(0, uri.lastIndexOf("/") + 1);
+        await FileSystem.makeDirectoryAsync(directory, { intermediates: true });
+        try { if (current.exists) await FileSystem.deleteAsync(uri, { idempotent: true }); } catch {}
+        const task = FileSystem.createDownloadResumable(SUPER_RES_MODEL_URL, uri, {}, progress => {
+          const received = Number(progress.totalBytesWritten || 0);
+          const total = Number(progress.totalBytesExpectedToWrite || 0);
+          if (total > 0) {
+            const percent = Math.max(0, Math.min(100, Math.floor(received / total * 100)));
+            onStatus?.("Downloading restoration AI: " + percent + "% (" + (received / (1024 * 1024)).toFixed(1) + " / " + (total / (1024 * 1024)).toFixed(1) + " MB).");
+          } else {
+            onStatus?.("Downloading restoration AI: " + (received / (1024 * 1024)).toFixed(1) + " MB received…");
+          }
+        });
+        const downloaded = await task.downloadAsync();
+        if (!downloaded) throw new Error("The photo-restoration model download was cancelled. Connect to the internet and try AI Enhance again.");
+        const info = await FileSystem.getInfoAsync(downloaded.uri);
+        if (downloaded.status < 200 || downloaded.status >= 300 || !info.exists || Number(info.size || 0) < SUPER_RES_MIN_BYTES) {
+          try { await FileSystem.deleteAsync(downloaded.uri, { idempotent: true }); } catch {}
+          throw new Error("The photo-restoration model download was incomplete. Connect to the internet and try again.");
+        }
+        modelUri = downloaded.uri;
+      }
+      onStatus?.("Loading trained super-resolution model on this phone…");
+      const session = await InferenceSession.create(modelUri.replace(/^file:\/\//, ""));
+      const input = session.inputNames[0];
+      const output = session.outputNames[0];
+      if (!input || !output) throw new Error("The photo-restoration model has no usable input or output.");
+      return session;
+    })().catch(error => {
+      superResolutionSessionPromise = null;
+      throw error;
+    });
+  }
+  return superResolutionSessionPromise;
+}
+
+/**
+ * Run a learned Real-ESRGAN model in overlapping context tiles. The model
+ * produces 4x detail; 2x output is retained to keep phone memory and photo
+ * storage practical. Context is cropped before stitching to reduce tile seams.
+ */
+async function runLearnedSuperResolution(
+  pixels: Uint8Array,
+  width: number,
+  height: number,
+  onStatus?: (message: string) => void,
+): Promise<{ pixels: Uint8Array; width: number; height: number }> {
+  const session = await getSuperResolutionSession(onStatus);
+  const outputWidth = width * 2;
+  const outputHeight = height * 2;
+  const output = new Uint8Array(outputWidth * outputHeight * 4);
+  const tile = SUPER_RES_TILE;
+  const context = SUPER_RES_CONTEXT;
+  const patchSize = tile + context * 2;
+  const planeSize = patchSize * patchSize;
+  const tilesX = Math.ceil(width / tile);
+  const tilesY = Math.ceil(height / tile);
+  let completed = 0;
+
+  for (let top = 0; top < height; top += tile) {
+    for (let left = 0; left < width; left += tile) {
+      const input = new Float32Array(3 * planeSize);
+      for (let y = 0; y < patchSize; y++) {
+        const sy = Math.max(0, Math.min(height - 1, top + y - context));
+        for (let x = 0; x < patchSize; x++) {
+          const sx = Math.max(0, Math.min(width - 1, left + x - context));
+          const sourceIndex = (sy * width + sx) * 4;
+          const p = y * patchSize + x;
+          input[p] = pixels[sourceIndex] / 255;
+          input[planeSize + p] = pixels[sourceIndex + 1] / 255;
+          input[2 * planeSize + p] = pixels[sourceIndex + 2] / 255;
+        }
+      }
+
+      const feeds: Record<string, Tensor> = {};
+      feeds[session.inputNames[0]] = new Tensor("float32", input, [1, 3, patchSize, patchSize]);
+      const resultMap = await session.run(feeds, [session.outputNames[0]]);
+      const resultTensor = resultMap[session.outputNames[0]];
+      const superWidth = patchSize * 4;
+      const superPlaneSize = superWidth * superWidth;
+      if (!resultTensor || !resultTensor.data || resultTensor.data.length < 3 * superPlaneSize) {
+        throw new Error("The photo-restoration model returned an unexpected output size.");
+      }
+      const restored = resultTensor.data as Float32Array;
+      const copyWidth = Math.min(tile, width - left);
+      const copyHeight = Math.min(tile, height - top);
+      for (let y = 0; y < copyHeight * 2; y++) {
+        const oy = (context * 4) + y * 2;
+        for (let x = 0; x < copyWidth * 2; x++) {
+          const ox = (context * 4) + x * 2;
+          const dest = (((top * 2 + y) * outputWidth) + left * 2 + x) * 4;
+          for (let channel = 0; channel < 3; channel++) {
+            const base = channel * superPlaneSize;
+            const v = (
+              restored[base + oy * superWidth + ox] +
+              restored[base + oy * superWidth + ox + 1] +
+              restored[base + (oy + 1) * superWidth + ox] +
+              restored[base + (oy + 1) * superWidth + ox + 1]
+            ) * 63.75;
+            output[dest + channel] = Math.max(0, Math.min(255, Math.round(v)));
+          }
+          output[dest + 3] = 255;
+        }
+      }
+      completed++;
+      onStatus?.("AI detail reconstruction " + completed + "/" + (tilesX * tilesY) + "…");
+      await new Promise<void>(resolve => setTimeout(resolve, 0));
+    }
+  }
+  return { pixels: output, width: outputWidth, height: outputHeight };
 }
 
 async function getSession(onStatus?: (message: string) => void): Promise<InferenceSession> {
@@ -203,9 +337,11 @@ export async function enhanceImageWithOfflineAI(
     }
   }
 
-  onStatus?.("Restoring detail, sharpening edges and improving faded contrast…");
+  onStatus?.("Deblurring and recovering contrast locally…");
   const enhancedPixels = sharpenAndImproveContrast(output, width, height);
-  onStatus?.("Preparing enhanced preview…");
-  const encoded = jpeg.encode({ data: enhancedPixels, width, height }, 95);
+  onStatus?.("Reconstructing photo detail with trained super-resolution AI…");
+  const restored = await runLearnedSuperResolution(enhancedPixels, width, height, onStatus);
+  onStatus?.("Encoding higher-resolution AI result…");
+  const encoded = jpeg.encode({ data: restored.pixels, width: restored.width, height: restored.height }, 92);
   return "data:image/jpeg;base64," + Buffer.from(encoded.data).toString("base64");
 }
