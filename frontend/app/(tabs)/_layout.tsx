@@ -36,6 +36,10 @@ export default function TabsLayout() {
           <NativeTabs.Trigger.Icon sf="chart.bar.fill" />
           <NativeTabs.Trigger.Label>Stats</NativeTabs.Trigger.Label>
         </NativeTabs.Trigger>
+        <NativeTabs.Trigger name="lab-trends">
+          <NativeTabs.Trigger.Icon sf="chart.xyaxis.line" />
+          <NativeTabs.Trigger.Label>Lab Trends</NativeTabs.Trigger.Label>
+        </NativeTabs.Trigger>
       </NativeTabs>
     );
   }
@@ -97,6 +101,15 @@ export default function TabsLayout() {
           title: "Stats",
           tabBarIcon: ({ color, size, focused }) => (
             <Ionicons name={focused ? "stats-chart" : "stats-chart-outline"} size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="lab-trends"
+        options={{
+          title: "Lab Trends",
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons name={focused ? "analytics" : "analytics-outline"} size={size} color={color} />
           ),
         }}
       />
