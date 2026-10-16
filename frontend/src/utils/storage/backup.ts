@@ -1,10 +1,8 @@
 import * as Crypto from "expo-crypto";
 import { File } from "expo-file-system";
 import * as LegacyFileSystem from "expo-file-system/legacy";
-import * as ImageManipulator from "expo-image-manipulator";
 import * as SecureStore from "expo-secure-store";
 import nacl from "tweetnacl";
-import { Image } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { db, initializeDatabase, markInventoryResetDone, repairDatabaseData } from "@/src/db/database";
 import { storage } from "@/src/utils/storage";
@@ -86,42 +84,27 @@ async function embedPhoto(uri:string, cache?: Map<string,string>, profile: "pati
   const cacheKey = profile + ":" + uri;
   const cached = cache?.get(cacheKey);
   if (cached) return cached;
-  try{
-    // Keep lab/document detail OCR-readable in the Drive master backup.
-    // Compression is still lossy JPEG, but use high quality and avoid
-    // downscaling ordinary phone captures. This only changes the backup copy;
-    // the original on-device photo remains untouched.
-    const maxDimension = 4096;
-    const fallbackWidth = 2400;
-    const quality = 0.92;
-    let resizeActions: any[] = [];
-    try {
-      const dimensions = await new Promise<{width:number;height:number}>((resolve,reject) => {
-        Image.getSize(uri, (width,height) => resolve({width,height}), reject);
-      });
-      const longest = Math.max(dimensions.width, dimensions.height);
-      if (longest > maxDimension) {
-        resizeActions = [dimensions.width >= dimensions.height
-          ? {resize:{width:maxDimension}}
-          : {resize:{height:maxDimension}}];
-      }
-    } catch {
-      resizeActions = [{resize:{width:fallbackWidth}}];
+  try {
+    // Already-portable image payloads must never be recompressed. This prevents
+    // restored images from losing another generation of detail on the next sync.
+    if (/^data:image\//i.test(uri)) {
+      cache?.set(cacheKey, uri);
+      return uri;
     }
-    const result=await ImageManipulator.manipulateAsync(
-      uri,
-      resizeActions,
-      {compress:quality,format:ImageManipulator.SaveFormat.JPEG,base64:true}
-    );
-    if(!result.base64)throw new Error("Empty compressed photo.");
-    const portable = `data:image/jpeg;base64,${result.base64}`;
+    // Embed the original image bytes as base64 instead of resizing/re-encoding
+    // through JPEG. The encrypted master backup still stores a compact binary
+    // representation of these bytes, while restore gets the exact source pixels.
+    const base64 = await LegacyFileSystem.readAsStringAsync(uri, {
+      encoding: LegacyFileSystem.EncodingType.Base64,
+    });
+    if (!base64) throw new Error("Empty image data.");
+    const portable = `data:${photoMime(uri)};base64,${base64}`;
     cache?.set(cacheKey, portable);
     return portable;
-  }catch{
-    throw new Error("Could not compress a patient photo for backup. Please make sure the photo is still available on this device and try again.");
+  } catch {
+    throw new Error("Could not embed the original patient photo for backup. Please make sure the photo is still available on this device and try again.");
   }
 }
-
 async function embedOptionalPhoto(uri: string, cache?: Map<string,string>): Promise<string> {
   if (!uri) return uri;
   try { return await embedPhoto(uri, cache, "document"); }
