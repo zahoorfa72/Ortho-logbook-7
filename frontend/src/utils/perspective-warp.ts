@@ -8,12 +8,12 @@ body{display:flex;flex-direction:column;overflow:hidden}.note{padding:9px 12px;c
 .stage{flex:1;min-height:240px;height:100%;width:100%;display:flex;align-items:center;justify-content:center;overflow:hidden}
 canvas{display:block;flex-shrink:0;max-width:100%;max-height:100%;width:auto;height:auto;touch-action:none}
 .controls{display:flex;gap:8px;padding:10px 12px;background:#202020}
-button{flex:1;min-width:0;border:0;border-radius:9px;padding:10px 4px;font-weight:700;font-size:12px;color:#fff;background:#3b82f6}
+button{flex:1;min-width:0;border:0;border-radius:9px;padding:10px 3px;font-weight:700;font-size:11px;color:#fff;background:#3b82f6}
 button.secondary{background:#454545}button:disabled{opacity:.55}
 </style></head><body>
 <div class="note">Drag each blue corner onto the paper edges and tap <b>Correct perspective</b>, or tap <b>AI Enhance</b>. The AI model downloads once (about 92 MB) and then runs locally on this phone. Patient photos are never uploaded. Keep the original for comparison: AI may alter fine details and must not be treated as proof of a medical result.</div>
 <div class="stage"><canvas id="preview"></canvas></div>
-<div class="controls"><button class="secondary" id="reset">Reset</button><button class="secondary" id="enhance">AI Enhance</button><button id="apply">Correct perspective</button></div>
+<div class="controls"><button class="secondary" id="reset">Reset</button><button class="secondary" id="autoScan">Auto-Scan Page</button><button class="secondary" id="enhance">AI Enhance</button><button id="apply">Correct</button></div>
 <script>
 (function(){
 var img=new Image(),canvas=document.getElementById("preview"),ctx=canvas.getContext("2d"),points=[],active=-1;
@@ -31,6 +31,46 @@ document.getElementById("reset").onclick=function(){var w=canvas.width,h=canvas.
 function distance(a,b){return Math.hypot(a.x-b.x,a.y-b.y);}
 function sourcePoint(u,v,p){var dx1=p[1].x-p[2].x,dx2=p[3].x-p[2].x,dx3=p[0].x-p[1].x+p[2].x-p[3].x,dy1=p[1].y-p[2].y,dy2=p[3].y-p[2].y,dy3=p[0].y-p[1].y+p[2].y-p[3].y,den=dx1*dy2-dx2*dy1,g=0,h=0;if(Math.abs(dx3)>.0001||Math.abs(dy3)>.0001){if(Math.abs(den)<.0001)throw new Error("These corners are invalid. Move them so the paper forms a clear quadrilateral.");g=(dx3*dy2-dx2*dy3)/den;h=(dx1*dy3-dx3*dy1)/den;}var a=p[1].x-p[0].x+g*p[1].x,b=p[3].x-p[0].x+h*p[3].x,c=p[0].x,d=p[1].y-p[0].y+g*p[1].y,e=p[3].y-p[0].y+h*p[3].y,f=p[0].y,z=g*u+h*v+1;if(Math.abs(z)<.0001)throw new Error("These corners are invalid. Adjust the four corners.");return{x:(a*u+b*v+c)/z,y:(d*u+e*v+f)/z};}
 function drawTriangle(out,src,dst){var x1=src[0].x,y1=src[0].y,x2=src[1].x,y2=src[1].y,x3=src[2].x,y3=src[2].y,X1=dst[0].x,Y1=dst[0].y,X2=dst[1].x,Y2=dst[1].y,X3=dst[2].x,Y3=dst[2].y,den=x1*(y2-y3)+x2*(y3-y1)+x3*(y1-y2);if(Math.abs(den)<.0001)return;var a=(X1*(y2-y3)+X2*(y3-y1)+X3*(y1-y2))/den,c=(X1*(x3-x2)+X2*(x1-x3)+X3*(x2-x1))/den,e=(X1*(x2*y3-x3*y2)+X2*(x3*y1-x1*y3)+X3*(x1*y2-x2*y1))/den,b=(Y1*(y2-y3)+Y2*(y3-y1)+Y3*(y1-y2))/den,d=(Y1*(x3-x2)+Y2*(x1-x3)+Y3*(x2-x1))/den,f=(Y1*(x2*y3-x3*y2)+Y2*(x3*y1-x1*y3)+Y3*(x1*y2-x2*y1))/den;out.save();out.beginPath();out.moveTo(X1,Y1);out.lineTo(X2,Y2);out.lineTo(X3,Y3);out.closePath();out.clip();out.setTransform(a,b,c,d,e,f);out.drawImage(img,0,0);out.restore();}
+function autoDetectPageCorners(){
+  var maxSide=320,scale=Math.min(1,maxSide/Math.max(img.naturalWidth,img.naturalHeight));
+  var sw=Math.max(1,Math.round(img.naturalWidth*scale)),sh=Math.max(1,Math.round(img.naturalHeight*scale));
+  var sample=document.createElement("canvas");sample.width=sw;sample.height=sh;
+  var sampleCtx=sample.getContext("2d",{willReadFrequently:true});if(!sampleCtx)throw new Error("Automatic page detection is unavailable.");
+  sampleCtx.drawImage(img,0,0,sw,sh);
+  var pixels=sampleCtx.getImageData(0,0,sw,sh).data,total=sw*sh,gray=new Uint8Array(total),sum=0;
+  for(var i=0,j=0;i<pixels.length;i+=4,j++){var value=Math.round(.299*pixels[i]+.587*pixels[i+1]+.114*pixels[i+2]);gray[j]=value;sum+=value;}
+  var threshold=Math.max(160,Math.min(225,Math.round(sum/total+18)));
+  var visited=new Uint8Array(total),stack=new Int32Array(total),best=null,bestCount=0;
+  for(var seed=0;seed<total;seed++){
+    if(visited[seed]||gray[seed]<threshold)continue;
+    var top=0,bottom=0,minX=sw,maxX=0,minY=sh,maxY=0,count=0,touchesEdge=false;
+    stack[bottom++]=seed;visited[seed]=1;
+    while(top<bottom){
+      var index=stack[top++],x=index%sw,y=Math.floor(index/sw);count++;
+      if(x<minX)minX=x;if(x>maxX)maxX=x;if(y<minY)minY=y;if(y>maxY)maxY=y;
+      if(x===0||y===0||x===sw-1||y===sh-1)touchesEdge=true;
+      var neighbours=[x>0?index-1:-1,x<sw-1?index+1:-1,y>0?index-sw:-1,y<sh-1?index+sw:-1];
+      for(var k=0;k<4;k++){var next=neighbours[k];if(next>=0&&!visited[next]&&gray[next]>=threshold){visited[next]=1;stack[bottom++]=next;}}
+    }
+    var boxArea=(maxX-minX+1)*(maxY-minY+1);
+    if(!touchesEdge&&count>bestCount&&count>total*.035&&boxArea>total*.08){bestCount=count;best={minX:minX,maxX:maxX,minY:minY,maxY:maxY};}
+  }
+  if(!best)throw new Error("Could not confidently find the paper edges in this photo. Move the four blue corners manually, then tap Correct.");
+  var componentPoints=[];
+  for(var y=best.minY;y<=best.maxY;y++)for(var x=best.minX;x<=best.maxX;x++){var idx=y*sw+x;if(gray[idx]>=threshold)componentPoints.push({x:x,y:y});}
+  if(componentPoints.length<100)throw new Error("Not enough clear paper area was found. Please adjust the corners manually.");
+  var tl=null,tr=null,br=null,bl=null,minSum=Infinity,maxDiff=-Infinity,maxSum=-Infinity,minDiff=Infinity;
+  componentPoints.forEach(function(p){var s=p.x+p.y,d=p.x-p.y;if(s<minSum){minSum=s;tl=p;}if(d>maxDiff){maxDiff=d;tr=p;}if(s>maxSum){maxSum=s;br=p;}if(d<minDiff){minDiff=d;bl=p;}});
+  var candidate=[tl,tr,br,bl].map(function(p){return{x:Math.max(0,Math.min(canvas.width,p.x/scale)),y:Math.max(0,Math.min(canvas.height,p.y/scale))};});
+  var area=0;for(var q=0;q<4;q++)area+=candidate[q].x*candidate[(q+1)%4].y-candidate[(q+1)%4].x*candidate[q].y;
+  if(Math.abs(area)<canvas.width*canvas.height*.05)throw new Error("The detected page shape is too small. Please adjust the corners manually.");
+  points=candidate;draw();
+}
+document.getElementById("autoScan").onclick=function(){
+  var button=this;button.disabled=true;button.textContent="Detecting…";
+  try{autoDetectPageCorners();button.textContent="Correcting…";document.getElementById("apply").click();}
+  catch(err){button.disabled=false;button.textContent="Auto-Scan Page";window.ReactNativeWebView&&window.ReactNativeWebView.postMessage(JSON.stringify({type:"error",message:String(err&&err.message||err)}));}
+};
 var enhanceButton=document.getElementById("enhance");
 window.__aiEnhanceStatus=function(text){enhanceButton.textContent=String(text||"AI enhancing…");};
 window.__aiEnhanceComplete=function(dataUrl,error){enhanceButton.disabled=false;enhanceButton.textContent="AI Enhance";if(error){window.ReactNativeWebView&&window.ReactNativeWebView.postMessage(JSON.stringify({type:"error",message:String(error)}));return;}if(!dataUrl||typeof dataUrl!=="string"){window.ReactNativeWebView&&window.ReactNativeWebView.postMessage(JSON.stringify({type:"error",message:"The on-device AI returned no image."}));return;}window.ReactNativeWebView&&window.ReactNativeWebView.postMessage(JSON.stringify({type:"enhanced",dataUrl:dataUrl}));};

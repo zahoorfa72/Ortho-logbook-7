@@ -1453,7 +1453,7 @@ export default function PatientForm() {
 
         <Modal visible={editingPhotoIndex !== null} transparent animationType="fade" onRequestClose={closePhotoEditor}>
           <View style={styles.photoEditOverlay}>
-            <View style={styles.photoEditCard}>
+            <View style={[styles.photoEditCard, perspectiveMode && { height: "90%", maxHeight: "90%" }]}>
               {perspectiveMode ? (
                 <View style={{ flex: 1, minHeight: 0, flexShrink: 1 }}>
                   <View style={styles.photoEditHeader}>
@@ -1465,13 +1465,33 @@ export default function PatientForm() {
                       <Ionicons name="close" size={22} color={colors.onSurface} />
                     </Pressable>
                   </View>
+                  <View style={{ flexDirection: "row", gap: spacing.sm, marginBottom: spacing.sm }}>
+                    <Pressable
+                      style={[styles.secondary, { flex: 1, backgroundColor: colors.surfaceSecondary }]}
+                      disabled={photoBusy}
+                      onPress={() => perspectiveWebViewRef.current?.injectJavaScript('document.getElementById("autoScan").click(); true;')}
+                      testID="auto-scan-existing-photo-button"
+                    >
+                      <Ionicons name="scan-outline" size={18} color={colors.brandPrimary} />
+                      <Text style={styles.secondaryText}> Auto-Scan Page</Text>
+                    </Pressable>
+                    <Pressable
+                      style={[styles.secondary, { flex: 1, backgroundColor: colors.surfaceSecondary }]}
+                      disabled={photoBusy}
+                      onPress={() => perspectiveWebViewRef.current?.injectJavaScript('document.getElementById("enhance").click(); true;')}
+                      testID="ai-enhance-existing-photo-button"
+                    >
+                      <Ionicons name="sparkles-outline" size={18} color={colors.brandPrimary} />
+                      <Text style={styles.secondaryText}> AI Enhance</Text>
+                    </Pressable>
+                  </View>
                   <WebView
                     ref={perspectiveWebViewRef}
-                  source={{ html: perspectiveHtml }}
+                    source={{ html: perspectiveHtml }}
                     originWhitelist={["*"]}
                     javaScriptEnabled
                     scrollEnabled={false}
-                    style={{ height: Math.min(340, Math.max(220, Dimensions.get("window").height * 0.38)), backgroundColor: "#141414", borderRadius: radius.md, marginBottom: spacing.sm, flexShrink: 1 }}
+                    style={{ flex: 1, minHeight: 250, backgroundColor: "#141414", borderRadius: radius.md, marginBottom: spacing.sm }}
                     onMessage={handlePerspectiveMessage}
                   />
                   <Text style={{ color: colors.muted, fontSize: fontSize.xs, marginBottom: spacing.sm }}>Works on this saved patient image. The original is kept unless you tap Save changes.</Text>
