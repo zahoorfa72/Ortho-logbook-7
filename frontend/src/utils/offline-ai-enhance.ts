@@ -6,6 +6,7 @@ import { InferenceSession, Tensor } from "onnxruntime-react-native";
 const MODEL_URL = "https://huggingface.co/opencv/deblurring_nafnet/resolve/main/deblurring_nafnet_2025may.onnx";
 const MODEL_NAME = "deblurring_nafnet_2025may.onnx";
 const TILE_SIZE = 512;
+const MAX_IMAGE_SIDE = 1536;
 const MIN_MODEL_BYTES = 80 * 1024 * 1024;
 
 let sessionPromise: Promise<InferenceSession> | null = null;
@@ -63,8 +64,8 @@ export async function enhanceImageWithOfflineAI(
   const decoded = jpeg.decode(encodedInput, { useTArray: true, formatAsRGBA: true });
   const width = decoded.width;
   const height = decoded.height;
-  if (!width || !height || width * height > 2560 * 2560) {
-    throw new Error("The AI image is too large to process safely. Try a smaller photo.");
+  if (!width || !height || width > MAX_IMAGE_SIDE || height > MAX_IMAGE_SIDE || width * height > MAX_IMAGE_SIDE * MAX_IMAGE_SIDE) {
+    throw new Error("The AI image is too large to process safely. Please reopen the photo and try again; AI processing is limited to 1536 pixels on the longest side to prevent the app from freezing.");
   }
 
   const session = await getSession(onStatus);
@@ -83,6 +84,7 @@ export async function enhanceImageWithOfflineAI(
     for (let left = 0; left < width; left += TILE_SIZE) {
       const input = new Float32Array(3 * planeSize);
       for (let y = 0; y < TILE_SIZE; y++) {
+        if (y > 0 && y % 32 === 0) await new Promise<void>(resolve => setTimeout(resolve, 0));
         const sy = Math.min(height - 1, top + y);
         for (let x = 0; x < TILE_SIZE; x++) {
           const sx = Math.min(width - 1, left + x);
@@ -105,6 +107,7 @@ export async function enhanceImageWithOfflineAI(
       const tileWidth = Math.min(TILE_SIZE, width - left);
       const tileHeight = Math.min(TILE_SIZE, height - top);
       for (let y = 0; y < tileHeight; y++) {
+        if (y > 0 && y % 32 === 0) await new Promise<void>(resolve => setTimeout(resolve, 0));
         for (let x = 0; x < tileWidth; x++) {
           const p = y * TILE_SIZE + x;
           const destination = ((top + y) * width + left + x) * 4;
@@ -116,6 +119,7 @@ export async function enhanceImageWithOfflineAI(
       }
       completed++;
       onStatus?.("AI restoring tiles " + completed + "/" + tileCount + "…");
+      await new Promise<void>(resolve => setTimeout(resolve, 0));
     }
   }
 

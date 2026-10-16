@@ -1479,7 +1479,7 @@ export default function PatientForm() {
 
         <Modal visible={editingPhotoIndex !== null} transparent animationType="fade" onRequestClose={closePhotoEditor}>
           <View style={styles.photoEditOverlay}>
-            <View style={[styles.photoEditCard, perspectiveMode && { height: "92%", maxHeight: "92%", width: "100%" }]}>
+            <View style={[styles.photoEditCard, perspectiveMode && { height: "86%", maxHeight: "86%", width: "96%", padding: spacing.sm }]}>
               {perspectiveMode ? (
                 <View style={{ flex: 1, minHeight: 0, flexShrink: 1 }}>
                   <View style={styles.photoEditHeader}>
@@ -1517,7 +1517,7 @@ export default function PatientForm() {
                     originWhitelist={["*"]}
                     javaScriptEnabled
                     scrollEnabled={false}
-                    style={{ flex: 1, minHeight: 300, backgroundColor: "#141414", borderRadius: radius.md, marginBottom: spacing.sm }}
+                    style={{ flex: 1, minHeight: 0, maxHeight: 520, backgroundColor: "#141414", borderRadius: radius.md, marginBottom: spacing.xs }}
                     onMessage={handlePerspectiveMessage}
                   />
                   <Text style={{ color: colors.muted, fontSize: fontSize.xs, marginBottom: spacing.sm }}>Works on this saved patient image. The original is kept unless you tap Save changes.</Text>
