@@ -81,33 +81,47 @@ async function getSession(onStatus?: (message: string) => void): Promise<Inferen
  * on the model alone. Processing stays entirely on-device.
  */
 function sharpenAndImproveContrast(pixels: Uint8Array, width: number, height: number): Uint8Array {
+  // Work from a copy so every pixel is processed from the same source frame.
+  // This adaptive multi-pass is intentionally conservative around flat/noisy
+  // regions and stronger on edges, where document text and faded photo detail live.
   const source = pixels.slice();
   const result = pixels;
-  const luminanceAt = (x: number, y: number): number => {
-    const i = (y * width + x) * 4;
-    return 0.299 * source[i] + 0.587 * source[i + 1] + 0.114 * source[i + 2];
-  };
-
+  const luma = new Float32Array(width * height);
+  for (let i = 0, p = 0; i < source.length; i += 4, p++) {
+    luma[p] = 0.2126 * source[i] + 0.7152 * source[i + 1] + 0.0722 * source[i + 2];
+  }
+  const at = (x: number, y: number) => y * width + x;
   for (let y = 0; y < height; y++) {
-    const y0 = Math.max(0, y - 1);
-    const y1 = Math.min(height - 1, y + 1);
+    const ym = Math.max(0, y - 1), yp = Math.min(height - 1, y + 1);
     for (let x = 0; x < width; x++) {
-      const x0 = Math.max(0, x - 1);
-      const x1 = Math.min(width - 1, x + 1);
-      let blur = 0;
-      let count = 0;
-      for (let sy = y0; sy <= y1; sy++) {
-        for (let sx = x0; sx <= x1; sx++) {
-          blur += luminanceAt(sx, sy);
-          count++;
-        }
-      }
+      const xm = Math.max(0, x - 1), xp = Math.min(width - 1, x + 1);
+      const center = luma[at(x, y)];
+      // Gaussian-like 3x3 neighborhood; avoids the harsher halos of a simple
+      // high-radius sharpen and remains cheap enough for mid-range phones.
+      const blur = (
+        luma[at(xm, ym)] + 2 * luma[at(x, ym)] + luma[at(xp, ym)] +
+        2 * luma[at(xm, y)] + 4 * center + 2 * luma[at(xp, y)] +
+        luma[at(xm, yp)] + 2 * luma[at(x, yp)] + luma[at(xp, yp)]
+      ) / 16;
+      const edge = center - blur;
+      const localMin = Math.min(center, luma[at(xm, y)], luma[at(xp, y)], luma[at(x, ym)], luma[at(x, yp)]);
+      const localMax = Math.max(center, luma[at(xm, y)], luma[at(xp, y)], luma[at(x, ym)], luma[at(x, yp)]);
+      const localRange = localMax - localMin;
+      // Boost local contrast more on faded/low-contrast areas, but avoid
+      // exaggerating already crisp edges or amplifying grain in flat shadows.
+      const contrastGain = localRange < 24 ? 1.22 : localRange < 60 ? 1.12 : 1.045;
+      const edgeGain = localRange < 8 ? 0.35 : localRange < 24 ? 1.65 : 1.25;
       const i = (y * width + x) * 4;
-      const sourceLuma = 0.299 * source[i] + 0.587 * source[i + 1] + 0.114 * source[i + 2];
-      const edgeDetail = sourceLuma - blur / count;
+      const oldR = source[i], oldG = source[i + 1], oldB = source[i + 2];
+      const oldY = 0.2126 * oldR + 0.7152 * oldG + 0.0722 * oldB;
+      const contrastY = (oldY - 127.5) * contrastGain + 127.5;
+      const targetY = Math.max(0, Math.min(255, contrastY + edge * edgeGain));
+      // Apply luminance changes proportionally to preserve the photo's original
+      // color balance and skin tones rather than turning old photos grayscale.
+      const delta = targetY - oldY;
       for (let channel = 0; channel < 3; channel++) {
-        const contrast = (source[i + channel] - 127.5) * 1.08 + 127.5;
-        result[i + channel] = Math.max(0, Math.min(255, Math.round(contrast + edgeDetail * 0.85)));
+        const value = source[i + channel] + delta;
+        result[i + channel] = Math.max(0, Math.min(255, Math.round(value)));
       }
       result[i + 3] = source[i + 3];
     }
@@ -189,7 +203,7 @@ export async function enhanceImageWithOfflineAI(
     }
   }
 
-  onStatus?.("Sharpening text and improving contrast…");
+  onStatus?.("Restoring detail, sharpening edges and improving faded contrast…");
   const enhancedPixels = sharpenAndImproveContrast(output, width, height);
   onStatus?.("Preparing enhanced preview…");
   const encoded = jpeg.encode({ data: enhancedPixels, width, height }, 95);
