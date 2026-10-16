@@ -31,9 +31,14 @@ function localModelUri(): string {
 
 export async function getOfflineAIModelStatus(): Promise<{ installed: boolean; sizeBytes: number }> {
   try {
-    const info = await FileSystem.getInfoAsync(localModelUri());
-    const sizeBytes = info.exists ? Number(info.size || 0) : 0;
-    return { installed: !!info.exists && sizeBytes >= MIN_MODEL_BYTES, sizeBytes };
+    const [deblurInfo, superResInfo] = await Promise.all([
+      FileSystem.getInfoAsync(localModelUri()),
+      FileSystem.getInfoAsync(superResolutionModelUri()),
+    ]);
+    const deblurBytes = deblurInfo.exists ? Number(deblurInfo.size || 0) : 0;
+    const superResBytes = superResInfo.exists ? Number(superResInfo.size || 0) : 0;
+    const installed = deblurBytes >= MIN_MODEL_BYTES && superResBytes >= SUPER_RES_MIN_BYTES;
+    return { installed, sizeBytes: deblurBytes + superResBytes };
   } catch {
     return { installed: false, sizeBytes: 0 };
   }
