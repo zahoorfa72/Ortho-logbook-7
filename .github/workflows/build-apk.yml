@@ -97,8 +97,15 @@ jobs:
         working-directory: frontend
         run: |
           set -euo pipefail
-          ORT_DIR="node_modules/onnxruntime-react-native"
-          test -d "$ORT_DIR"
+          ORT_DIR=""
+          for candidate in node_modules/onnxruntime-react-native ../node_modules/onnxruntime-react-native; do
+            if [ -f "$candidate/package.json" ]; then ORT_DIR="$candidate"; break; fi
+          done
+          if [ -z "$ORT_DIR" ]; then
+            echo "::error::Could not locate the installed onnxruntime-react-native package."
+            exit 1
+          fi
+          export ORT_DIR
           # Expo's autolinker misclassifies this React Native native module if
           # its legacy unimodule marker is present. Community autolinking then
           # registers OnnxruntimePackage correctly.
@@ -106,8 +113,9 @@ jobs:
           # ORT 1.24.3 still references Gradle's removed VersionNumber class.
           # Patch only that compatibility check; leave model/runtime code intact.
           python3 - <<'PY'
+          import os
           from pathlib import Path
-          p = Path("node_modules/onnxruntime-react-native/android/build.gradle")
+          p = Path(os.environ["ORT_DIR"]) / "android" / "build.gradle"
           lines = p.read_text().splitlines()
           patched = False
           for index, line in enumerate(lines):
