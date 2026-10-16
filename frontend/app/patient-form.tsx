@@ -1201,12 +1201,36 @@ export default function PatientForm() {
     if (editingPhotoIndex === null || !editingPhotoUri) return;
     setPhotoBusy(true);
     try {
+      // AI/perspective previews are first written to cache. Copy them into the
+      // app's permanent documents directory before storing the URI anywhere.
       const permanent = await persistPhoto(editingPhotoUri);
-      setP((x) => ({
-        ...x,
-        photos: x.photos.map((v, i) => i === editingPhotoIndex ? permanent : v),
+      const updatedPhotos = p.photos.map((value, index) =>
+        index === editingPhotoIndex ? permanent : value
+      );
+      const updatedPhotoUri = updatedPhotos[0] || p.photoUri || "";
+
+      // For an existing patient, persist the photo change immediately. Previously
+      // this only called setP(), so leaving the patient screen before tapping the
+      // separate patient Save button discarded the enhanced photo on next open.
+      // Keep the editor open if the record update fails so the user can retry.
+      if (isEdit && id) {
+        await api.put("/patients/" + id, {
+          ...p,
+          photos: updatedPhotos,
+          photoUri: updatedPhotoUri,
+        });
+      }
+
+      setP((current) => ({
+        ...current,
+        photos: current.photos.map((value, index) =>
+          index === editingPhotoIndex ? permanent : value
+        ),
+        photoUri: updatedPhotoUri,
       }));
-      toast("Photo changes saved.", "success");
+      toast(isEdit && id
+        ? "Photo changes saved to this patient record."
+        : "Photo changes saved. Save the patient record to keep them.", "success");
       setEditingPhotoIndex(null);
       setEditingPhotoOriginal(null);
       setEditingPhotoUri(null);
@@ -1214,7 +1238,8 @@ export default function PatientForm() {
       setCropRect(null);
       cropDragStartRef.current = null;
     } catch (e: any) {
-      toast(e?.message || "Could not save photo changes.", "error");
+      void recordDiagnosticError(e, "Patient photo editor > save AI/perspective changes");
+      toast(e?.message || "Could not save photo changes. The editor is still open; please retry.", "error");
     } finally {
       setPhotoBusy(false);
     }
