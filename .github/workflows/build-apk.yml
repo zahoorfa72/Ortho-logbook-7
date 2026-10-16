@@ -122,7 +122,7 @@ jobs:
               raise SystemExit("Could not locate ONNX Runtime's obsolete VersionNumber block")
           if any("VersionNumber.parse(REACT_NATIVE_VERSION)" in line for line in lines):
               raise SystemExit("ONNX Runtime Gradle compatibility check remains unpatched")
-          p.write_text("\\n".join(lines) + "\\n")
+          p.write_text(chr(10).join(lines) + chr(10))
           PY
 
       - name: TypeScript validation
