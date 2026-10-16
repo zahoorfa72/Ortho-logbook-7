@@ -10,6 +10,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { extractLabReportDate, hasKnownLabTestName, isLabMetadataLine, isLikelyLabReportText, parseLabReportRows, recognizeLabText } from "@/src/utils/lab-ocr";
 import { scanPatientDocuments } from "@/src/utils/document-scanner";
 import { buildPerspectiveWarpHtml } from "@/src/utils/perspective-warp";
+import { enhanceImageWithOfflineAI } from "@/src/utils/offline-ai-enhance";
 import { Dimensions } from "react-native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AppState, Image, InteractionManager, Modal, Pressable, ScrollView, Text, View } from "react-native";
@@ -143,6 +144,7 @@ export default function PatientForm() {
   const [photoBusy, setPhotoBusy] = useState(false);
   const [perspectiveMode, setPerspectiveMode] = useState(false);
   const [perspectiveHtml, setPerspectiveHtml] = useState("");
+  const perspectiveWebViewRef = useRef<any>(null);
   const [existingScanPickerVisible, setExistingScanPickerVisible] = useState(false);
   const [imagePickerReady, setImagePickerReady] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
@@ -992,6 +994,24 @@ export default function PatientForm() {
   const handlePerspectiveMessage = async (event: any) => {
     let message: any;
     try { message = JSON.parse(String(event?.nativeEvent?.data || "{}")); } catch { return; }
+    if (message?.type === "ai-enhance-request") {
+      setPhotoBusy(true);
+      try {
+        const result = await enhanceImageWithOfflineAI(String(message.dataUrl || ""), status => {
+          const js = "window.__aiEnhanceStatus && window.__aiEnhanceStatus(" + JSON.stringify(status) + ");true;";
+          perspectiveWebViewRef.current?.injectJavaScript(js);
+        });
+        const js = "window.__aiEnhanceComplete && window.__aiEnhanceComplete(" + JSON.stringify(result) + ", null);true;";
+        perspectiveWebViewRef.current?.injectJavaScript(js);
+      } catch (e: any) {
+        const reason = String(e?.message || e || "AI enhancement failed.");
+        const js = "window.__aiEnhanceComplete && window.__aiEnhanceComplete(null, " + JSON.stringify(reason) + ");true;";
+        perspectiveWebViewRef.current?.injectJavaScript(js);
+      } finally {
+        setPhotoBusy(false);
+      }
+      return;
+    }
     if (message?.type === "error") {
       toast(String(message.message || "Perspective correction failed."), "error");
       return;
@@ -1010,7 +1030,7 @@ export default function PatientForm() {
       setCropRect(null);
       setPerspectiveMode(false);
       setPerspectiveHtml("");
-      toast(message.type === "enhanced" ? "High-contrast, sharpened OCR copy prepared. Check it, then tap Save changes to keep it." : "Perspective correction applied to this existing patient photo. Tap Save changes to keep it.", "success");
+      toast(message.type === "enhanced" ? "On-device AI preview prepared. Check it against the original before saving." : "Perspective correction applied to this existing patient photo. Tap Save changes to keep it.", "success");
     } catch (e: any) {
       toast("Could not save the corrected preview. " + String(e?.message || e || "Please try again."), "error");
     } finally {
@@ -1446,7 +1466,8 @@ export default function PatientForm() {
                     </Pressable>
                   </View>
                   <WebView
-                    source={{ html: perspectiveHtml }}
+                    ref={perspectiveWebViewRef}
+                  source={{ html: perspectiveHtml }}
                     originWhitelist={["*"]}
                     javaScriptEnabled
                     scrollEnabled={false}

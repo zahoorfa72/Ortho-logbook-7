@@ -61,14 +61,18 @@
     "expo-camera": "~57.0.6",
     "expo-ocr-kit": "0.1.4",
     "@uzimandias/react-native-pdf-to-image": "0.1.0",
-    "react-native-document-scanner-plugin": "2.0.4"
+    "react-native-document-scanner-plugin": "2.0.4",
+    "onnxruntime-react-native": "1.24.3",
+    "jpeg-js": "0.4.4",
+    "buffer": "6.0.3"
   },
   "devDependencies": {
     "@types/react": "19.2.10",
     "eslint": "9.25.0",
     "eslint-config-expo": "57.0.2",
     "expo-doctor": "1.19.8",
-    "typescript": "6.0.3"
+    "typescript": "6.0.3",
+    "@types/jpeg-js": "0.4.4"
   },
   "resolutions": {
     "@eslint/plugin-kit": "0.3.4",

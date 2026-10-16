@@ -93,6 +93,31 @@ jobs:
             yarn install --ignore-scripts
           fi
 
+      - name: Prepare ONNX Runtime for Expo 57
+        working-directory: frontend
+        run: |
+          set -euo pipefail
+          ORT_DIR="node_modules/onnxruntime-react-native"
+          test -d "$ORT_DIR"
+          # Expo's autolinker misclassifies this React Native native module if
+          # its legacy unimodule marker is present. Community autolinking then
+          # registers OnnxruntimePackage correctly.
+          rm -f "$ORT_DIR/unimodule.json"
+          # ORT 1.24.3 still references Gradle's removed VersionNumber class.
+          # Patch only that compatibility check; leave model/runtime code intact.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("node_modules/onnxruntime-react-native/android/build.gradle")
+          s = p.read_text()
+          old = 'if (VersionNumber.parse(REACT_NATIVE_VERSION) < VersionNumber.parse("0.71")) {'
+          new = 'def rnVersionParts = REACT_NATIVE_VERSION.split("\\\\.")\\n    if (rnVersionParts[0].toInteger() == 0 && rnVersionParts[1].toInteger() < 71) {'
+          if old in s:
+              s = s.replace(old, new, 1)
+              p.write_text(s)
+          if "VersionNumber.parse(REACT_NATIVE_VERSION)" in s:
+              raise SystemExit("Could not patch ONNX Runtime Gradle compatibility check")
+          PY
+
       - name: TypeScript validation
         working-directory: frontend
         run: npx tsc --noEmit
