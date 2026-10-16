@@ -87,12 +87,13 @@ async function embedPhoto(uri:string, cache?: Map<string,string>, profile: "pati
   const cached = cache?.get(cacheKey);
   if (cached) return cached;
   try{
-    // Recompress existing data URIs too. This affects only the backup copy,
-    // never the original local photo. Patient images prioritize small storage;
-    // bills use a larger dimension/quality so printed text remains readable.
-    const maxDimension = profile === "document" ? 1280 : 720;
-    const fallbackWidth = profile === "document" ? 960 : 480;
-    const quality = profile === "document" ? 0.42 : 0.2;
+    // Keep lab/document detail OCR-readable in the Drive master backup.
+    // Compression is still lossy JPEG, but use high quality and avoid
+    // downscaling ordinary phone captures. This only changes the backup copy;
+    // the original on-device photo remains untouched.
+    const maxDimension = 4096;
+    const fallbackWidth = 2400;
+    const quality = 0.92;
     let resizeActions: any[] = [];
     try {
       const dimensions = await new Promise<{width:number;height:number}>((resolve,reject) => {
