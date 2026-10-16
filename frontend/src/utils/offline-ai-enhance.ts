@@ -1,4 +1,8 @@
 import { Buffer } from "buffer";
+// Some native inference dependencies still read Buffer from the global scope.
+// Install the React Native polyfill before loading or running ONNX inference.
+const runtime = globalThis as typeof globalThis & { Buffer?: typeof Buffer };
+runtime.Buffer = runtime.Buffer || Buffer;
 import * as jpeg from "jpeg-js";
 import * as FileSystem from "expo-file-system/legacy";
 import { InferenceSession, Tensor } from "onnxruntime-react-native";

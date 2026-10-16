@@ -10,6 +10,7 @@ export type DiagnosticError = {
   message: string;
   stack?: string;
   fatal?: boolean;
+  context?: string;
 };
 
 function safeText(value: unknown, limit = 2400): string {
@@ -31,6 +32,7 @@ export async function recordDiagnosticError(error: unknown, extraStack = "", fat
       at: new Date().toISOString(),
       message: safeText(candidate?.message || error || "Unknown JavaScript error", 1000),
       stack: safeText(candidate?.stack || extraStack || "", 2400),
+      ...(extraStack ? { context: safeText(extraStack, 500) } : {}),
       ...(typeof fatal === "boolean" ? { fatal } : {}),
     });
     await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(errors.slice(-MAX_ERRORS)));
@@ -83,7 +85,7 @@ export async function buildProblemReport(description = "", currentError?: unknow
 
   const recent = errors.length
     ? errors.map((item, index) =>
-        `${index + 1}. [${item.at}]${item.fatal ? " [fatal]" : ""} ${safeText(item.message, 1000)}${item.stack ? "\n   Stack: " + safeText(item.stack, 1800) : ""}`
+        `${index + 1}. [${item.at}]${item.fatal ? " [fatal]" : ""}${item.context ? " [context: " + safeText(item.context, 500) + "]" : ""} ${safeText(item.message, 1000)}${item.stack ? "\n   Stack: " + safeText(item.stack, 1800) : ""}`
       ).join("\n")
     : "No captured JavaScript errors are saved on this device.";
 

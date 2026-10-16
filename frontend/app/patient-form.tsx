@@ -11,6 +11,7 @@ import { extractLabReportDate, hasKnownLabTestName, isLabMetadataLine, isLikelyL
 import { scanPatientDocuments } from "@/src/utils/document-scanner";
 import { buildPerspectiveWarpHtml } from "@/src/utils/perspective-warp";
 import { enhanceImageWithOfflineAI, getOfflineAIModelStatus } from "@/src/utils/offline-ai-enhance";
+import { recordDiagnosticError } from "@/src/utils/problem-report";
 import { Dimensions } from "react-native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AppState, Image, InteractionManager, Modal, Pressable, ScrollView, Text, View } from "react-native";
@@ -998,7 +999,7 @@ export default function PatientForm() {
         actions.push(dimensions.width >= dimensions.height ? { resize: { width: 4096 } } : { resize: { height: 4096 } });
       }
       const prepared = await ImageManipulator.manipulateAsync(usableUri, actions, {
-        compress: 0.98, format: ImageManipulator.SaveFormat.JPEG, base64: true,
+        compress: 0.95, format: ImageManipulator.SaveFormat.JPEG, base64: true,
       });
       if (!prepared.base64) throw new Error("Could not prepare this photo for perspective correction.");
       setEditingPhotoUri(usableUri);
@@ -1026,6 +1027,7 @@ export default function PatientForm() {
         perspectiveWebViewRef.current?.injectJavaScript(js);
       } catch (e: any) {
         const reason = String(e?.message || e || "AI enhancement failed.");
+        void recordDiagnosticError(e, "Photo editor > AI Enhance / on-device model and inference");
         setAiModelStatus("AI unavailable: " + reason);
         const js = "window.__aiEnhanceComplete && window.__aiEnhanceComplete(null, " + JSON.stringify(reason) + ");true;";
         perspectiveWebViewRef.current?.injectJavaScript(js);
@@ -1035,6 +1037,7 @@ export default function PatientForm() {
       return;
     }
     if (message?.type === "error") {
+      void recordDiagnosticError(new Error(String(message.message || "Perspective correction failed.")), "Photo editor > Auto-Scan / perspective correction WebView");
       toast(String(message.message || "Perspective correction failed."), "error");
       return;
     }
@@ -1495,7 +1498,7 @@ export default function PatientForm() {
 
         <Modal visible={editingPhotoIndex !== null} transparent animationType="fade" onRequestClose={closePhotoEditor}>
           <View style={styles.photoEditOverlay}>
-            <View style={[styles.photoEditCard, perspectiveMode && { height: "76%", maxHeight: "76%", width: "96%", padding: spacing.sm }]}>
+            <View style={[styles.photoEditCard, perspectiveMode && { height: "88%", maxHeight: "88%", width: "96%", padding: spacing.sm }]}>
               {perspectiveMode ? (
                 <View style={{ flex: 1, minHeight: 0, flexShrink: 1 }}>
                   <View style={styles.photoEditHeader}>
@@ -1530,18 +1533,21 @@ export default function PatientForm() {
                       <Text style={styles.secondaryText}> AI Enhance</Text>
                     </Pressable>
                   </View>
-                  <WebView
-                    ref={perspectiveWebViewRef}
-                    source={{ html: perspectiveHtml }}
-                    originWhitelist={["*"]}
-                    javaScriptEnabled
-                    scrollEnabled={false}
-                    style={{ flex: 1, minHeight: 150, backgroundColor: "#141414", borderRadius: radius.md, marginBottom: spacing.xs }}
-                    onMessage={handlePerspectiveMessage}
-                  />
+                  <View style={{ flex: 1, minHeight: 0, overflow: "hidden", borderRadius: radius.md, backgroundColor: "#141414", marginBottom: spacing.xs }}>
+                    <WebView
+                      ref={perspectiveWebViewRef}
+                      source={{ html: perspectiveHtml }}
+                      originWhitelist={["*"]}
+                      javaScriptEnabled
+                      scrollEnabled={false}
+                      style={{ flex: 1, backgroundColor: "#141414" }}
+                      onMessage={handlePerspectiveMessage}
+                    />
+                  </View>
                   <Text style={{ color: colors.muted, fontSize: fontSize.xs, marginBottom: spacing.xs }}>Original photo stays unchanged until you tap Save changes.</Text>
-                  <Pressable style={styles.photoCancelButton} disabled={photoBusy} onPress={() => { setPerspectiveMode(false); setPerspectiveHtml(""); }}>
-                    <Text style={styles.photoCancelText}>Back to photo editor</Text>
+                  <Pressable style={[styles.secondary, { minHeight: 44, height: 44, width: "100%", backgroundColor: colors.surfaceSecondary }]} disabled={photoBusy} onPress={() => { setPerspectiveMode(false); setPerspectiveHtml(""); }}>
+                    <Ionicons name="arrow-back" size={18} color={colors.onSurface} />
+                    <Text style={styles.secondaryText}>Back to photo editor</Text>
                   </Pressable>
                 </View>
               ) : (

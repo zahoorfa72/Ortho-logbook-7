@@ -64,7 +64,7 @@ export default function ReportProblemScreen() {
         <View style={styles.intro}>
           <Ionicons name="bug-outline" size={30} color={colors.brandPrimary} />
           <Text style={styles.introTitle}>Help us fix the issue</Text>
-          <Text style={styles.body}>Describe what happened and when. The report adds app version, device/OS details, and recent captured app errors. Nothing is sent automatically—you choose when to copy or share it.</Text>
+          <Text style={styles.body}>Describe what happened and when. The report includes app/build details, recent errors with stack traces, and the screen/action where a handled error occurred. Nothing is sent automatically—you choose when to copy or share it.</Text>
         </View>
 
         <Text style={styles.label}>What happened?</Text>
