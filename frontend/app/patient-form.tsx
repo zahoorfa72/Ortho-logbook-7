@@ -742,20 +742,30 @@ export default function PatientForm() {
     finally { imagePickerOpening.current = false; }
   };
 
-  const openExistingPhotoForScan = (idx: number) => {
+  const openExistingPhotoForScan = async (idx: number) => {
     const uri = p.photos[idx];
-    if (!uri) return;
+    if (!uri || photoBusy) return;
     setExistingScanPickerVisible(false);
     setSelectedPhoto(null);
-    setEditingPhotoIndex(idx);
-    setEditingPhotoOriginal(uri);
-    setEditingPhotoUri(uri);
-    setCropRect(null);
-    cropDragStartRef.current = null;
-    cropResizeStartRef.current = null;
-    setPhotoPreviewSize({ width: 0, height: 0 });
-    loadEditingPhotoDimensions(uri);
-    void openPerspectiveEditor(uri);
+    setPhotoBusy(true);
+    try {
+      // Materialize restored data-URI photos before any native image view,
+      // size lookup, or perspective editor tries to display them.
+      const usableUri = await materializeImageUri(uri);
+      setEditingPhotoIndex(idx);
+      setEditingPhotoOriginal(uri);
+      setEditingPhotoUri(usableUri);
+      setCropRect(null);
+      cropDragStartRef.current = null;
+      cropResizeStartRef.current = null;
+      setPhotoPreviewSize({ width: 0, height: 0 });
+      loadEditingPhotoDimensions(usableUri);
+      await openPerspectiveEditor(usableUri);
+    } catch (e: any) {
+      toast("Could not open this saved photo for document scanning. " + String(e?.message || e || "Please try again."), "error");
+    } finally {
+      setPhotoBusy(false);
+    }
   };
   const chooseGalleryPhotoForScan = async () => {
     if (photoBusy || cameraOpen || imagePickerOpening.current) return;
@@ -1425,7 +1435,7 @@ export default function PatientForm() {
           <View style={styles.photoEditOverlay}>
             <View style={styles.photoEditCard}>
               {perspectiveMode ? (
-                <View style={{ minHeight: 530, flexShrink: 1 }}>
+                <View style={{ flex: 1, minHeight: 0, flexShrink: 1 }}>
                   <View style={styles.photoEditHeader}>
                     <View>
                       <Text style={styles.photoEditTitle}>Correct Existing Document</Text>
@@ -1440,7 +1450,7 @@ export default function PatientForm() {
                     originWhitelist={["*"]}
                     javaScriptEnabled
                     scrollEnabled={false}
-                    style={{ height: 430, backgroundColor: "#141414", borderRadius: radius.md, marginBottom: spacing.sm }}
+                    style={{ height: Math.min(340, Math.max(220, Dimensions.get("window").height * 0.38)), backgroundColor: "#141414", borderRadius: radius.md, marginBottom: spacing.sm, flexShrink: 1 }}
                     onMessage={handlePerspectiveMessage}
                   />
                   <Text style={{ color: colors.muted, fontSize: fontSize.xs, marginBottom: spacing.sm }}>Works on this saved patient image. The original is kept unless you tap Save changes.</Text>
