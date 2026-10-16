@@ -109,20 +109,11 @@ jobs:
           from pathlib import Path
           p = Path("node_modules/onnxruntime-react-native/android/build.gradle")
           s = p.read_text()
-          lines = s.splitlines()
-          patched = False
-          for index, line in enumerate(lines):
-              if "VersionNumber.parse(REACT_NATIVE_VERSION)" in line:
-                  indent = line[:len(line) - len(line.lstrip())]
-                  lines[index] = indent + 'def rnVersionParts = REACT_NATIVE_VERSION.split("\\\\.")'
-                  lines.insert(index + 1, indent + 'if (rnVersionParts[0].toInteger() == 0 && rnVersionParts[1].toInteger() < 71) {')
-                  patched = True
-                  break
-          s = "\n".join(lines) + "\n"
-          if not patched and "VersionNumber.parse(REACT_NATIVE_VERSION)" in s:
-              raise SystemExit("Could not locate ONNX Runtime Gradle compatibility check")
+          old = 'VersionNumber.parse(REACT_NATIVE_VERSION) < VersionNumber.parse("0.71")'
+          if old in s:
+              s = s.replace(old, 'REACT_NATIVE_MINOR_VERSION < 71', 1)
           if "VersionNumber.parse(REACT_NATIVE_VERSION)" in s:
-              raise SystemExit("ONNX Runtime Gradle compatibility check remains unpatched")
+              raise SystemExit("Could not patch ONNX Runtime Gradle compatibility check")
           p.write_text(s)
           PY
 
