@@ -1396,7 +1396,7 @@ export default function PatientForm() {
         <View style={{ marginTop: spacing.sm, marginBottom: spacing.sm, padding: spacing.md, borderWidth: 1, borderColor: colors.brandPrimary, borderRadius: radius.md, backgroundColor: colors.surfaceSecondary }}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm, marginBottom: spacing.xs }}>
             <Ionicons name="sparkles" size={22} color={colors.brandPrimary} />
-            <Text style={{ color: colors.brandPrimary, fontFamily: fontFamily.bold, fontSize: fontSize.md }}>AI IMAGE TOOLS</Text>
+            <Text style={{ color: colors.brandPrimary, fontFamily: fontFamily.bold, fontSize: fontSize.base }}>AI IMAGE TOOLS</Text>
           </View>
           <Text style={{ color: colors.onSurfaceSecondary, fontSize: fontSize.xs, marginBottom: spacing.sm }}>
             Enhance, auto-detect document edges, and correct perspective on photos already saved in this patient file. Processing stays on this phone; AI model setup needs internet once.
