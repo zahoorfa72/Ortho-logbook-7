@@ -1027,7 +1027,7 @@ export async function backupToGoogleDrive(
   let existing = await findBackupByName(fileName);
   // Upgrade path: reuse the legacy full backup only for an all-time request.
   if (!existing && filter.type === "all") existing = await findBackupByName(BACKUP_NAME);
-  const previousHash = await storage.secureGet(LAST_DRIVE_CONTENT_HASH_KEY + ":" + fileName, "");
+  const previousHash = await storage.getItem(LAST_DRIVE_CONTENT_HASH_KEY + ":" + fileName, "");
   const previousSuccess = await getLastDriveBackupStatus();
   if (existing?.id && previousSuccess && options.skipIfUnchanged && previousHash === contentHash &&
       (!isMasterBackup || (!migrationAttempted && String((await storage.secureGet(MASTER_MIGRATION_KEY, "")) || "") === "1"))) {
@@ -1039,7 +1039,7 @@ export async function backupToGoogleDrive(
   await markBackupTaken();
   const completedAt = new Date().toISOString();
   await storage.secureSet(LAST_DRIVE_BACKUP_KEY, completedAt);
-  await storage.secureSet(LAST_DRIVE_CONTENT_HASH_KEY + ":" + fileName, contentHash);
+  await storage.setItem(LAST_DRIVE_CONTENT_HASH_KEY + ":" + fileName, contentHash);
   let cleanupFailures: string[] = [];
   if (isMasterBackup && migrationAttempted && migrationComplete && cleanupSafe && result?.id) {
     // Verify the newly merged master before recording migration as complete.
