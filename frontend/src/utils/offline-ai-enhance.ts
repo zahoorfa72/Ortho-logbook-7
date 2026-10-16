@@ -75,6 +75,47 @@ async function getSession(onStatus?: (message: string) => void): Promise<Inferen
 }
 
 /**
+ * Apply a conservative local contrast and luminance-sharpening pass after NAFNet.
+ * The deblurring model can legitimately return nearly identical pixels for a
+ * sharp input; this pass makes document text and edges clearer without relying
+ * on the model alone. Processing stays entirely on-device.
+ */
+function sharpenAndImproveContrast(pixels: Uint8Array, width: number, height: number): Uint8Array {
+  const source = pixels.slice();
+  const result = pixels;
+  const luminanceAt = (x: number, y: number): number => {
+    const i = (y * width + x) * 4;
+    return 0.299 * source[i] + 0.587 * source[i + 1] + 0.114 * source[i + 2];
+  };
+
+  for (let y = 0; y < height; y++) {
+    const y0 = Math.max(0, y - 1);
+    const y1 = Math.min(height - 1, y + 1);
+    for (let x = 0; x < width; x++) {
+      const x0 = Math.max(0, x - 1);
+      const x1 = Math.min(width - 1, x + 1);
+      let blur = 0;
+      let count = 0;
+      for (let sy = y0; sy <= y1; sy++) {
+        for (let sx = x0; sx <= x1; sx++) {
+          blur += luminanceAt(sx, sy);
+          count++;
+        }
+      }
+      const i = (y * width + x) * 4;
+      const sourceLuma = 0.299 * source[i] + 0.587 * source[i + 1] + 0.114 * source[i + 2];
+      const edgeDetail = sourceLuma - blur / count;
+      for (let channel = 0; channel < 3; channel++) {
+        const contrast = (source[i + channel] - 127.5) * 1.08 + 127.5;
+        result[i + channel] = Math.max(0, Math.min(255, Math.round(contrast + edgeDetail * 0.85)));
+      }
+      result[i + 3] = source[i + 3];
+    }
+  }
+  return result;
+}
+
+/**
  * NAFNet runs entirely on this device. Only public model weights are downloaded;
  * image bytes are decoded and inferred locally and never uploaded. The output
  * is a new JPEG preview; the caller keeps the original until explicitly saved.
@@ -148,7 +189,9 @@ export async function enhanceImageWithOfflineAI(
     }
   }
 
+  onStatus?.("Sharpening text and improving contrast…");
+  const enhancedPixels = sharpenAndImproveContrast(output, width, height);
   onStatus?.("Preparing enhanced preview…");
-  const encoded = jpeg.encode({ data: output, width, height }, 94);
+  const encoded = jpeg.encode({ data: enhancedPixels, width, height }, 95);
   return "data:image/jpeg;base64," + Buffer.from(encoded.data).toString("base64");
 }
