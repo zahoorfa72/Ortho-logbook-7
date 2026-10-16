@@ -71,8 +71,7 @@
     "eslint": "9.25.0",
     "eslint-config-expo": "57.0.2",
     "expo-doctor": "1.19.8",
-    "typescript": "6.0.3",
-    "@types/jpeg-js": "0.4.4"
+    "typescript": "6.0.3"
   },
   "resolutions": {
     "@eslint/plugin-kit": "0.3.4",
