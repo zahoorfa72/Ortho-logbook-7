@@ -110,7 +110,7 @@ jobs:
           p = Path("node_modules/onnxruntime-react-native/android/build.gradle")
           s = p.read_text()
           old = 'if (VersionNumber.parse(REACT_NATIVE_VERSION) < VersionNumber.parse("0.71")) {'
-          new = 'def rnVersionParts = REACT_NATIVE_VERSION.split("\\\\.")\\n    if (rnVersionParts[0].toInteger() == 0 && rnVersionParts[1].toInteger() < 71) {'
+          new = 'def rnVersionParts = REACT_NATIVE_VERSION.split("\\\\.")' + chr(10) + '    if (rnVersionParts[0].toInteger() == 0 && rnVersionParts[1].toInteger() < 71) {'
           if old in s:
               s = s.replace(old, new, 1)
               p.write_text(s)
