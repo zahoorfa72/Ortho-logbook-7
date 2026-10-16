@@ -1393,6 +1393,26 @@ export default function PatientForm() {
           </View>
         ) : null}
         <Text style={styles.section}>Patient photos</Text>
+        <View style={{ marginTop: spacing.sm, marginBottom: spacing.sm, padding: spacing.md, borderWidth: 1, borderColor: colors.brandPrimary, borderRadius: radius.md, backgroundColor: colors.surfaceSecondary }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm, marginBottom: spacing.xs }}>
+            <Ionicons name="sparkles" size={22} color={colors.brandPrimary} />
+            <Text style={{ color: colors.brandPrimary, fontFamily: fontFamily.bold, fontSize: fontSize.md }}>AI IMAGE TOOLS</Text>
+          </View>
+          <Text style={{ color: colors.onSurfaceSecondary, fontSize: fontSize.xs, marginBottom: spacing.sm }}>
+            Enhance, auto-detect document edges, and correct perspective on photos already saved in this patient file. Processing stays on this phone; AI model setup needs internet once.
+          </Text>
+          <Pressable
+            style={[styles.secondary, { backgroundColor: colors.brandPrimary, justifyContent: "center" }, photoBusy && { opacity: 0.5 }]}
+            onPress={scanDocumentsToPatientPhotos}
+            disabled={photoBusy || cameraOpen}
+            testID="open-ai-image-tools-button"
+            accessibilityRole="button"
+            accessibilityLabel="AI enhance and auto-scan existing patient images"
+          >
+            <Ionicons name="sparkles" size={19} color={colors.onBrandPrimary} />
+            <Text style={[styles.secondaryText, { color: colors.onBrandPrimary, fontFamily: fontFamily.bold }]}> AI Enhance / Auto-Scan Existing Images</Text>
+          </Pressable>
+        </View>
         <View style={styles.photoActions}>
           <PrimaryButton title={"Add from Gallery" + (p.photos.length ? " (+)" : "")} onPress={addFromLibrary} disabled={!imagePickerReady || photoBusy} testID="add-photo-library-button" />
           <Pressable style={[styles.secondary, photoBusy && { opacity: 0.5 }]} onPress={scanDocumentsToPatientPhotos} disabled={photoBusy || cameraOpen} testID="scan-patient-document-button">
@@ -1429,8 +1449,8 @@ export default function PatientForm() {
             <View style={[styles.photoEditCard, { maxHeight: "82%" }]}>
               <View style={styles.photoEditHeader}>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.photoEditTitle}>Scan an Existing Patient Photo</Text>
-                  <Text style={styles.photoEditHint}>Choose a saved photo. It will open in the document-correction editor, not the camera.</Text>
+                  <Text style={styles.photoEditTitle}>AI Enhance / Auto-Scan Existing Patient Images</Text>
+                  <Text style={styles.photoEditHint}>Select any image already saved in this patient file. AI Enhance, Auto-Scan Page, and manual perspective correction are available in the editor.</Text>
                 </View>
                 <Pressable onPress={() => setExistingScanPickerVisible(false)} style={styles.photoEditIconButton}>
                   <Ionicons name="close" size={22} color={colors.onSurface} />
@@ -1459,12 +1479,12 @@ export default function PatientForm() {
 
         <Modal visible={editingPhotoIndex !== null} transparent animationType="fade" onRequestClose={closePhotoEditor}>
           <View style={styles.photoEditOverlay}>
-            <View style={[styles.photoEditCard, perspectiveMode && { height: "90%", maxHeight: "90%" }]}>
+            <View style={[styles.photoEditCard, perspectiveMode && { height: "92%", maxHeight: "92%", width: "100%" }]}>
               {perspectiveMode ? (
                 <View style={{ flex: 1, minHeight: 0, flexShrink: 1 }}>
                   <View style={styles.photoEditHeader}>
                     <View>
-                      <Text style={styles.photoEditTitle}>Correct Existing Document</Text>
+                      <Text style={styles.photoEditTitle}>AI IMAGE TOOLS · PERSPECTIVE CORRECTION</Text>
                       <Text style={styles.photoEditHint}>Move all four corners to the paper edges, then apply the correction.</Text>
                     </View>
                     <Pressable onPress={() => { setPerspectiveMode(false); setPerspectiveHtml(""); }} disabled={photoBusy} style={styles.photoEditIconButton}>
@@ -1497,7 +1517,7 @@ export default function PatientForm() {
                     originWhitelist={["*"]}
                     javaScriptEnabled
                     scrollEnabled={false}
-                    style={{ flex: 1, minHeight: 250, backgroundColor: "#141414", borderRadius: radius.md, marginBottom: spacing.sm }}
+                    style={{ flex: 1, minHeight: 300, backgroundColor: "#141414", borderRadius: radius.md, marginBottom: spacing.sm }}
                     onMessage={handlePerspectiveMessage}
                   />
                   <Text style={{ color: colors.muted, fontSize: fontSize.xs, marginBottom: spacing.sm }}>Works on this saved patient image. The original is kept unless you tap Save changes.</Text>
