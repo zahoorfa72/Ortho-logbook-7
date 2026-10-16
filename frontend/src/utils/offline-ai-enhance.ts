@@ -426,9 +426,6 @@ export async function enhanceImageWithOfflineAI(
   const source = decoded.data;
   let output: Uint8Array;
   if (mode === "balanced") {
-    const source = decoded.data;
-  let output: Uint8Array;
-  if (mode === "balanced") {
   const session = await getSession(onStatus);
   if (!session.inputNames.length || !session.outputNames.length) {
     throw new Error("The AI model did not expose a valid input and output.");
