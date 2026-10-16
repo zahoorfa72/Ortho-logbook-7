@@ -86,25 +86,14 @@ async function embedPhoto(uri:string, cache?: Map<string,string>, profile: "pati
   const cached = cache?.get(cacheKey);
   if (cached) return cached;
   try {
-    // Images restored from a backup are already optimized. Keep their bytes
-    // unchanged so backup -> restore -> backup never creates quality loss.
+    // Restored data URIs have already passed through this optimizer. Leave
+    // them untouched to avoid generation-after-generation JPEG degradation.
     if (/^data:image\//i.test(uri)) {
       cache?.set(cacheKey, uri);
       return uri;
     }
-    const dimensions = await new Promise<{width:number;height:number}>((resolve,reject)=>
-      ImageManipulator.manipulateAsync(uri, [], {base64:false}).then(async result=>{
-        // The no-op result gives the native decoder a chance to validate the
-        // URI; dimensions are obtained from the original file metadata below.
-        try {
-          const info = await LegacyFileSystem.getInfoAsync(uri);
-          if (!info.exists) throw new Error("Image file is missing.");
-          resolve({width:0,height:0});
-        } catch(e) { reject(e); }
-      }).catch(reject));
-    void dimensions;
-    // Re-encode only once from the locally stored source. Keep OCR-critical
-    // resolution up to 4096px while using high-quality JPEG compression.
+    // Encode from the original local file once: preserve native resolution
+    // (including small OCR text) and use high-quality JPEG compression.
     const result = await ImageManipulator.manipulateAsync(uri, [], {
       compress: 0.90,
       format: ImageManipulator.SaveFormat.JPEG,
@@ -115,7 +104,7 @@ async function embedPhoto(uri:string, cache?: Map<string,string>, profile: "pati
     cache?.set(cacheKey, portable);
     return portable;
   } catch {
-    throw new Error("Could not optimize the original patient photo for backup. Please make sure the photo is still available on this device and try again.");
+    throw new Error("Could not optimize the original patient photo for backup. Please make sure the photo is still available on this device and try again");
   }
 }
 async function embedOptionalPhoto(uri: string, cache?: Map<string,string>): Promise<string> {
