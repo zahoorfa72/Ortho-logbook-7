@@ -297,6 +297,31 @@ function abnormalLabLabels(patient: Patient, automaticFlags?: string[], includeW
   }
   return labels.slice(0, 20);
 }
+function labTestBranch(label: string, definitions: Array<{ name: string; aliases?: string; category?: string }>): string {
+  const core = String(label || "").replace(/^(?:WARNING|ALERT|HIGH|LOW)\s*:\s*/i, "").replace(/^\[MANUAL\]\s*/i, "");
+  const resultMatch = core.match(/[-+]?\d+(?:[.,]\d+)?/);
+  const testName = (resultMatch && resultMatch.index !== undefined ? core.slice(0, resultMatch.index) : core).replace(/[\s:|•-]+$/g, "").trim();
+  const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const testKey = normalize(testName);
+  const definition = definitions.find(item => {
+    const names = [item.name, ...(String(item.aliases || "").split(/[,;\n]+/))].map(normalize).filter(Boolean);
+    return names.some(name => testKey === name || testKey.includes(name) || name.includes(testKey));
+  });
+  if (definition?.category?.trim()) return definition.category.trim();
+  const value = testName.toLowerCase();
+  if (/\b(?:hbsag|hcv|hepatitis|hiv)\b/.test(value)) return "Viral markers";
+  if (/\b(?:hemoglobin|haemoglobin|hgb|hb|platelets?|wbc|rbc|mcv|mch|mchc|hct|pcv|esr|rdw|mpv|neutrophils|lymphocytes)\b/.test(value)) return "CBC / Hematology";
+  if (/\b(?:alt|ast|sgpt|sgot|bilirubin|albumin|alp|ggt|liver)\b/.test(value)) return "LFT / Liver";
+  if (/\b(?:creatinine|urea|bun|sodium|potassium|chloride|renal|calcium|uric acid)\b/.test(value)) return "RFT / Kidney & Electrolytes";
+  if (/\b(?:glucose|sugar|fbs|rbs|hba1c|diabetes)\b/.test(value)) return "Diabetes";
+  if (/\b(?:tsh|thyroid|t3|t4)\b/.test(value)) return "Thyroid";
+  return "Other tests";
+}
+function cleanLabDisplayLabel(label: string): { visible: string; date: string } {
+  const match = label.match(/\s· DATE:\s*(.+)$/i);
+  return { visible: match ? label.slice(0, match.index) : label, date: match?.[1] || "" };
+}
+
 export default function Logbook() {
   const styles = useStyles();
   const { colors, branding } = useTheme();
@@ -319,6 +344,8 @@ export default function Logbook() {
   const [labOcrEnabled, setLabOcrEnabled] = useState(false);
   const [labWarningsEnabled, setLabWarningsEnabled] = useState(true);
   const [labResultsHiddenByPatient, setLabResultsHiddenByPatient] = useState<Record<string, boolean>>({});
+  const [labBranchesExpandedByPatient, setLabBranchesExpandedByPatient] = useState<Record<string, boolean>>({});
+  const [configuredLabTestDefinitions, setConfiguredLabTestDefinitions] = useState<Array<{ name: string; aliases?: string; category?: string }>>([]);
   const [oldLabResultDays, setOldLabResultDays] = useState(10);
   const [labDateEditorOpenByPatient, setLabDateEditorOpenByPatient] = useState<Record<string, boolean>>({});
   const [labDateInputsByPatient, setLabDateInputsByPatient] = useState<Record<string, string>>({});
@@ -355,6 +382,7 @@ export default function Logbook() {
   // Refresh admin-configured age threshold when the Logbook screen returns from Settings.
   useFocusEffect(useCallback(() => {
     let cancelled = false;
+    AsyncStorage.getItem("ortho_lab_test_definitions_v1").then(raw => { if (!cancelled && raw) { try { const parsed = JSON.parse(raw); if (Array.isArray(parsed)) setConfiguredLabTestDefinitions(parsed); } catch {} } }).catch(() => {});
     AsyncStorage.getItem(LAB_OLD_RESULT_DAYS_KEY).then(raw => {
       const value = Number(raw);
       if (!cancelled && raw && Number.isInteger(value) && value >= 1 && value <= 3650) setOldLabResultDays(value);
@@ -1387,17 +1415,34 @@ export default function Logbook() {
                         <Text style={{ color: colors.muted, fontSize: 10 }}>Cancel</Text>
                       </Pressable>
                     </View> : null}
-                    {allDisplayLabLabels.length ? <View style={{ marginTop: 3, flexDirection: "row", flexWrap: "wrap", gap: 4 }}>
-                      {allDisplayLabLabels.map((label, index) => {
+                    {allDisplayLabLabels.length ? (() => {
+                      const oldLabels = allDisplayLabLabels.filter(label => label.startsWith("OLD RESULT:"));
+                      const abnormalLabels = allDisplayLabLabels.filter(label => !label.startsWith("OLD RESULT:"));
+                      const groups = new Map<string, string[]>();
+                      for (const label of abnormalLabels) {
+                        const branch = labTestBranch(label, configuredLabTestDefinitions);
+                        groups.set(branch, [...(groups.get(branch) || []), label]);
+                      }
+                      const expanded = labBranchesExpandedByPatient[item.id] === true;
+                      const renderLabel = (label: string, index: number) => {
                         const warning = label.startsWith("WARNING:");
                         const oldResult = label.startsWith("OLD RESULT:");
                         const labelTone = oldResult ? (colors.error || "#B91C1C") : warning ? (colors.warning || "#B7791F") : (colors.error || "#B91C1C");
-                        const dateMatch = label.match(/\s· DATE:\s*(.+)$/);
-                        const visibleLabel = dateMatch ? label.slice(0, dateMatch.index) : label;
-                        const compactLabel = visibleLabel.length > 92 ? visibleLabel.slice(0, 89) + "…" : visibleLabel;
-                        return <Text key={label + index} numberOfLines={2} style={{ color: labelTone, fontFamily: fontFamily.semibold, fontSize: 10, lineHeight: 13, flexShrink: 1 }}>{compactLabel}{dateMatch ? " · " + dateMatch[1] : ""}</Text>;
-                      })}
-                    </View> : null}
+                        const cleaned = cleanLabDisplayLabel(label);
+                        const compactLabel = cleaned.visible.length > 92 ? cleaned.visible.slice(0, 89) + "…" : cleaned.visible;
+                        return <Text key={label + index} numberOfLines={2} style={{ color: labelTone, fontFamily: fontFamily.semibold, fontSize: 10, lineHeight: 13, flexShrink: 1 }}>{compactLabel}{cleaned.date ? " · " + cleaned.date : ""}</Text>;
+                      };
+                      return <View style={{ marginTop: 3, gap: 5 }}>
+                        {[...groups.entries()].map(([branch, labels]) => <View key={branch} style={{ borderWidth: 1, borderColor: colors.border, borderRadius: 5, overflow: "hidden" }}>
+                          <Pressable onPress={event => { event.stopPropagation(); setLabBranchesExpandedByPatient(previous => ({ ...previous, [item.id]: !previous[item.id] })); }} accessibilityRole="button" accessibilityLabel={(expanded ? "Collapse " : "Expand ") + branch + " abnormal lab results"} style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 7, paddingVertical: 5, backgroundColor: colors.surface }}>
+                            <Text style={{ color: colors.error || "#B91C1C", fontFamily: fontFamily.semibold, fontSize: 10, flex: 1 }}>{branch} · {labels.length} out of range</Text>
+                            <Ionicons name={expanded ? "chevron-up" : "chevron-down"} size={14} color={colors.muted} />
+                          </Pressable>
+                          {expanded ? <View style={{ paddingHorizontal: 7, paddingVertical: 5, gap: 4 }}>{labels.map(renderLabel)}</View> : null}
+                        </View>)}
+                        {oldLabels.length ? <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 4 }}>{oldLabels.map(renderLabel)}</View> : null}
+                      </View>;
+                    })() : null}
                   </> : null}
                 </View>;
               })()}

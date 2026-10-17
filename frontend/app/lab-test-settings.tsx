@@ -18,13 +18,14 @@ export type LabTestDefinition = {
   femaleMax: string;
   unit: string;
   aliases?: string;
+  category?: string;
 };
 
 const STORAGE_KEY = "ortho_lab_test_definitions_v1";
 const WARNING_THRESHOLD_KEY = "ortho_lab_warning_threshold_percent_v1";
 const OLD_RESULT_DAYS_KEY = "ortho_lab_old_result_days_v1";
 const ONLINE_OCR_KEY = "ortho_lab_online_ocr_api_key_v1";
-const blank = (): LabTestDefinition => ({ id: "", name: "", maleMin: "", maleMax: "", femaleMin: "", femaleMax: "", unit: "", aliases: "" });
+const blank = (): LabTestDefinition => ({ id: "", name: "", maleMin: "", maleMax: "", femaleMin: "", femaleMax: "", unit: "", aliases: "", category: "" });
 
 export default function LabTestSettingsScreen() {
   const { user } = useAuth();
@@ -135,9 +136,6 @@ export default function LabTestSettingsScreen() {
         <TextInput value={warningPercent} onChangeText={setWarningPercent} keyboardType="number-pad" placeholder="10" placeholderTextColor={colors.muted} style={styles.input}/>
       </View>
       <Pressable disabled={thresholdBusy} onPress={saveWarningThreshold} style={styles.action}><Text style={styles.actionText}>{thresholdBusy ? "Saving…" : "Save warning threshold"}</Text></Pressable>
-      {field("Test name", "name", "e.g. Hemoglobin")}
-      {field("Other report labels / OCR aliases", "aliases", "e.g. Hb, HGB, Haemoglobin (comma-separated)")}
-      <Text style={styles.help}>Enter abbreviations or alternate spellings that this laboratory uses for the same test. The app matches these labels to this saved test and uses its saved sex-specific range and unit. Do not add a different test as an alias.</Text>
       <Text style={styles.section}>Old lab-result alert</Text>
       <Text style={styles.help}>Show an OLD LAB RESULT alert outside the Patient Form when a report date is this many days or more before the patient was first added to this app. Example: 10 days. The report date and patient-added date are required.</Text>
       <View style={styles.field}>
@@ -146,6 +144,11 @@ export default function LabTestSettingsScreen() {
       </View>
       <Pressable disabled={oldDaysBusy} onPress={saveOldResultDays} style={styles.action}><Text style={styles.actionText}>{oldDaysBusy ? "Saving…" : "Save old-result alert"}</Text></Pressable>
 
+      {field("Test name", "name", "e.g. Hemoglobin")}
+      {field("Main test branch / category", "category", "e.g. CBC, LFT, RFT, Viral markers")}
+      <Text style={styles.help}>Group related tests under one main branch. On the patient list, each branch stays collapsed until opened and then shows its out-of-range results.</Text>
+      {field("Other report labels / OCR aliases", "aliases", "e.g. Hb, HGB, Haemoglobin (comma-separated)") }
+      <Text style={styles.help}>Enter abbreviations or alternate spellings that this laboratory uses for the same test. The app matches these labels to this saved test and uses its saved sex-specific range and unit. Do not add a different test as an alias.</Text>
       <Text style={styles.section}>Male reference range</Text>
       <View style={styles.two}>{field("From (minimum)", "maleMin", "12")}{field("To (maximum)", "maleMax", "16")}</View>
       <Text style={styles.section}>Female reference range</Text>
