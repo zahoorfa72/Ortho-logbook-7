@@ -621,7 +621,7 @@ export async function exportIncrementalBackupData(changedTables: string[], onPro
   if (!previousRows) {
    // First sync for this table, or a changed full-backup baseline: use a
    // complete table snapshot. This is slower once but remains restorable.
-   nextTables[table] = currentRows.map(stripBackupImages);
+   nextTables[table] = currentRows.map((row) => stripBackupImages(row));
    if (canDiff) fullTables.push(table);
    continue;
   }
@@ -670,7 +670,7 @@ export async function exportIncrementalBackupData(changedTables: string[], onPro
   });
   // Keep cache records lightweight: the Drive payload retains media, while this
   // local comparison cache retains only metadata plus media signatures.
-  nextTables[table] = currentRows.map(stripBackupImages);
+  nextTables[table] = currentRows.map((row) => stripBackupImages(row));
  }
  const effectiveTables = tables.filter((table) => {
   if (table === "branding" || table === "appSettings") {
@@ -732,7 +732,7 @@ export async function prepareIncrementalSnapshotCacheFromBackupData(baselineKey:
  const photoSources: Record<string, string> = {};
  for (const table of tableNames) {
   const rows = Array.isArray((backup as any)[table]) ? (backup as any)[table] as any[] : [];
-  tables[table] = rows.map(stripBackupImages);
+  tables[table] = rows.map((row) => stripBackupImages(row));
   if (table === "patients") {
    const sourceRows = db.getAllSync<any>("SELECT id,photo_uri,photos_json FROM patients");
    const currentIds = new Set<string>();
