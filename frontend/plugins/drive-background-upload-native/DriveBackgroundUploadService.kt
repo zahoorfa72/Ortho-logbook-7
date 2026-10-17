@@ -61,7 +61,8 @@ class DriveBackgroundUploadService : Service() {
     } else {
       startForeground(NOTIFICATION_ID, notification)
     }
-    prefs.edit().putString("$taskId.status", "running").putInt("$taskId.progress", 0).apply()
+    prefs.edit().putString("$taskId.status", "running").putInt("$taskId.progress", 0)
+      .putLong("$taskId.uploadedBytes", 0L).apply()
     Thread {
       try {
         val result = uploadResumable()
@@ -94,7 +95,7 @@ class DriveBackgroundUploadService : Service() {
           if (response.first in 200..299) {
             finalResult = parseJson(response.second)
             offset = total
-            setProgress(100)
+            setProgress(100, total)
             break
           }
           if (response.first == 308) {
@@ -107,7 +108,7 @@ class DriveBackgroundUploadService : Service() {
               if (checked.first) {
                 finalResult = checked.second
                 offset = total
-                setProgress(100)
+                setProgress(100, total)
                 break
               }
               if (checked.third >= total) {
@@ -120,7 +121,7 @@ class DriveBackgroundUploadService : Service() {
                 }
                 Thread.sleep(1000L * stalls)
                 offset = maxOf(0L, total - CHUNK_SIZE)
-                setProgress(((offset * 100) / total).toInt())
+                setProgress(((offset * 100) / total).toInt(), offset)
                 continue
               }
               offset = checked.third.coerceIn(0L, total)
@@ -132,7 +133,7 @@ class DriveBackgroundUploadService : Service() {
               if (checked.first) {
                 finalResult = checked.second
                 offset = total
-                setProgress(100)
+                setProgress(100, total)
                 break
               } else if (checked.third > offset && checked.third < total) {
                 offset = checked.third
@@ -144,7 +145,7 @@ class DriveBackgroundUploadService : Service() {
               offset = next
               stalls = 0
             }
-            setProgress(((offset * 100) / total).toInt())
+            setProgress(((offset * 100) / total).toInt(), offset)
             continue
           }
           throw IllegalStateException("Google Drive rejected an upload chunk (HTTP ${response.first}): ${response.second.take(300)}")
@@ -167,7 +168,7 @@ class DriveBackgroundUploadService : Service() {
             break
           }
           if (checked.third in 0..total) offset = checked.third
-          setProgress(((offset * 100) / total).toInt())
+          setProgress(((offset * 100) / total).toInt(), offset)
         }
       }
     }
@@ -250,10 +251,14 @@ class DriveBackgroundUploadService : Service() {
 
   private fun parseJson(body: String) = try { JSONObject(body) } catch (_: Exception) { JSONObject() }
 
-  private fun setProgress(progress: Int) {
+  private fun setProgress(progress: Int, uploadedBytes: Long) {
     val value = progress.coerceIn(0, 100)
-    prefs.edit().putInt("$taskId.progress", value).apply()
-    updateNotification(value, "Uploading backup to Google Drive… $value%")
+    val bytes = uploadedBytes.coerceIn(0L, total)
+    // Persist the acknowledged byte offset even when the whole-number percent
+    // has not changed; the UI and stall watchdog use this for large backups.
+    prefs.edit().putInt("$taskId.progress", value).putLong("$taskId.uploadedBytes", bytes).apply()
+    val precisePercent = if (total > 0L) (bytes.toDouble() * 100.0 / total.toDouble()) else value.toDouble()
+    updateNotification(value, "Uploading backup to Google Drive… " + String.format(java.util.Locale.US, "%.1f", precisePercent) + "%")
   }
 
   private fun fail(message: String) {

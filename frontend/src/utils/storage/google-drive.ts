@@ -596,9 +596,15 @@ async function uploadNativeBackground(
     throw new Error("This Android build does not include the background upload service. Install the latest Ortho Logbook APK.");
   }
   const taskId: string = await nativeUploader.startUpload(sessionUrl, token, fileUri, totalBytes);
-  let lastProgress = -1;
+  let lastUploadedBytes = -1;
   let lastProgressAt = Date.now();
   const noProgressLimitMs = 8 * 60 * 1000;
+  const formatBytes = (value: number) => {
+    const bytes = Math.max(0, value);
+    if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(2) + " GB";
+    if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+    return Math.round(bytes / 1024) + " KB";
+  };
   while (true) {
     const status = await nativeUploader.getStatus(taskId);
     if (status?.status === "completed") {
@@ -607,15 +613,23 @@ async function uploadNativeBackground(
     if (status?.status === "error") {
       throw new Error(status.error || "Google Drive background upload failed. Your local data is unchanged; retry when connected.");
     }
-    const progress = Number(status?.progress ?? 0);
-    if (progress !== lastProgress) {
-      lastProgress = progress;
+    const uploadedBytes = Math.max(0, Math.min(totalBytes, Number(status?.uploadedBytes ?? 0)));
+    const progress = Number(status?.progress ?? Math.floor((uploadedBytes / Math.max(1, totalBytes)) * 100));
+    // Integer percent can remain unchanged for many minutes on very large files.
+    // Heartbeat from byte advancement instead, and show a decimal percentage so
+    // a growing backup does not look frozen at e.g. 56%.
+    if (uploadedBytes > lastUploadedBytes) {
+      lastUploadedBytes = uploadedBytes;
       lastProgressAt = Date.now();
-      onProgress?.("Uploading backup to Google Drive in background… " + progress + "%");
+      const exactPercent = Math.min(100, (uploadedBytes / Math.max(1, totalBytes)) * 100);
+      onProgress?.(
+        "Uploading backup to Google Drive in background… " + exactPercent.toFixed(1) +
+        "% (" + formatBytes(uploadedBytes) + " / " + formatBytes(totalBytes) + ")"
+      );
     } else if (Date.now() - lastProgressAt >= noProgressLimitMs) {
       throw new Error(
-        "Google Drive background upload made no progress for 8 minutes (last reported " +
-        progress + "%). The backup was not marked successful; local data remains on this phone. Retry on a stable connection."
+        "Google Drive background upload has received no additional bytes for 8 minutes (last confirmed " +
+        formatBytes(uploadedBytes) + " of " + formatBytes(totalBytes) + "). The backup was not marked successful; local data remains on this phone. Retry on a stable connection."
       );
     }
     await new Promise<void>(resolve => setTimeout(resolve, 1000));
@@ -652,10 +666,10 @@ async function verifyUploadedFile(
   return file;
 }
 
-async function writeBackupTextInChunks(uri: string, content: string): Promise<void> {
-  // Large JSON strings can exceed the React Native native-bridge argument limit.
-  // Write bounded slices so a photo-heavy export is not passed in one huge call.
-  const chunkChars = 256 * 1024;
+async function writeBackupTextInChunks(uri: string, content: string, chunkChars = 64 * 1024): Promise<void> {
+  // Keep each native-bridge argument small. This writes the large JSON string to
+  // cache in bounded pieces so uploads never need an equally large Uint8Array copy.
+  chunkChars = Math.max(8 * 1024, Math.floor(chunkChars));
   let offset = 0;
   let first = true;
   while (offset < content.length) {
@@ -672,7 +686,12 @@ async function writeBackupTextInChunks(uri: string, content: string): Promise<vo
 
 async function uploadContent(backupText: string, existingId?: string, onProgress?: (stage: string) => void, fileName: string = BACKUP_NAME) {
   const token = await accessToken();
-  let useNativeBackground = Platform.OS === "android" && !!NativeModules.DriveBackgroundUpload?.startUpload && backupText.length <= 256 * 1024;
+  // The native uploader receives a file URI, not the backup string. Use it for
+  // every payload size so large photo backups avoid TextEncoder's extra full-size
+  // allocation and can continue on a foreground service while Android is busy.
+  let useNativeBackground = Platform.OS === "android" &&
+    !!NativeModules.DriveBackgroundUpload?.startUpload &&
+    !!NativeModules.DriveBackgroundUpload?.getStatus;
   let stagedFileUri: string | null = null;
   let totalBytes = 0;
   let bytes: Uint8Array | null = null;
@@ -688,17 +707,40 @@ async function uploadContent(backupText: string, existingId?: string, onProgress
       }
       totalBytes = info.size;
     } catch (error: any) {
-      try { await FileSystem.deleteAsync(stagedFileUri, { idempotent: true }); } catch {}
       const detail = String(error?.message || error || "");
+      try { await FileSystem.deleteAsync(stagedFileUri, { idempotent: true }); } catch {}
       if (/string length exceeds limit|value too large|too large for.*string/i.test(detail)) {
-        // Some Android bridge/file-system versions reject very large JS strings
-        // before the native background uploader can stage them. Fall back to
-        // the existing resumable 512 KiB uploader instead of failing sync.
-        stagedFileUri = null;
-        useNativeBackground = false;
-        bytes = new TextEncoder().encode(backupText);
-        totalBytes = bytes.length;
-        onProgress?.("Large backup detected · switching to resumable upload…");
+        // A bridge can reject an individual staged string on some Android
+        // versions. Retry with much smaller pieces; do not fall back to a giant
+        // in-memory byte array for a photo-heavy backup.
+        try {
+          await writeBackupTextInChunks(stagedFileUri, backupText, 16 * 1024);
+          const retryInfo = await FileSystem.getInfoAsync(stagedFileUri);
+          if (!retryInfo.exists || typeof retryInfo.size !== "number" || retryInfo.size <= 0) {
+            throw new Error("The smaller-chunk backup file is missing or empty.");
+          }
+          totalBytes = retryInfo.size;
+        } catch (retryError: any) {
+          try { await FileSystem.deleteAsync(stagedFileUri, { idempotent: true }); } catch {}
+          if (backupText.length > 8 * 1024 * 1024) {
+            throw new Error(
+              "Could not stage this large backup safely (" + String(retryError?.message || retryError) +
+              "). The app did not allocate a second full-size upload buffer. Your local records are unchanged; free some phone storage and retry."
+            );
+          }
+          // Small backups may still use the proven JS fallback, where its memory
+          // cost is bounded. Large backups must not take this path.
+          stagedFileUri = null;
+          useNativeBackground = false;
+          bytes = new TextEncoder().encode(backupText);
+          totalBytes = bytes.length;
+          onProgress?.("Using resumable upload for this small backup…");
+        }
+      } else if (backupText.length > 8 * 1024 * 1024) {
+        throw new Error(
+          "Could not prepare the large Drive backup file: " + detail +
+          ". The app avoided a memory-heavy fallback. Your local records are unchanged; free phone storage and retry."
+        );
       } else {
         throw new Error("Could not prepare the backup for background upload: " + detail);
       }
