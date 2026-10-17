@@ -69,6 +69,7 @@ export default function LabTrendsScreen() {
   const [selectedPatientId, setSelectedPatientId] = useState("");
   const [patientSearch, setPatientSearch] = useState("");
   const [testFilter, setTestFilter] = useState("");
+  const [showTrendChart, setShowTrendChart] = useState(false);
   const [test, setTest] = useState("");
   const [result, setResult] = useState("");
   const [unit, setUnit] = useState("");
@@ -285,34 +286,46 @@ export default function LabTrendsScreen() {
       </View>
 
       <View style={{ borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, padding: spacing.md, marginBottom: spacing.md }}>
-        <Text style={{ color: colors.onSurface, fontFamily: fontFamily.bold, fontSize: fontSize.lg }}>3. Trend chart</Text>
-        <Text style={{ color: colors.muted, fontSize: fontSize.sm, marginTop: 4 }}>{selectedPatient ? selectedPatient.name : "Select a patient above"} · choose a test to focus the chart.</Text>
-        {field("Filter test name", testFilter, setTestFilter, "e.g. Hemoglobin")}
-        {selectedTestEntries.length ? (
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: colors.onSurface, fontFamily: fontFamily.bold, fontSize: fontSize.lg }}>3. Trend chart</Text>
+            <Text style={{ color: colors.muted, fontSize: fontSize.sm, marginTop: 4 }}>{selectedPatient ? selectedPatient.name : "Select a patient above"} · optional visual history.</Text>
+          </View>
+          <Pressable accessibilityRole="button" accessibilityLabel={showTrendChart ? "Hide trend chart" : "Show trend chart"} onPress={() => setShowTrendChart(value => !value)} style={{ flexDirection: "row", alignItems: "center", gap: 5, paddingVertical: 9, paddingHorizontal: 11, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border }}>
+            <Ionicons name={showTrendChart ? "chevron-up" : "chevron-down"} size={17} color={colors.brandPrimary} />
+            <Text style={{ color: colors.brandPrimary, fontFamily: fontFamily.semibold, fontSize: fontSize.sm }}>{showTrendChart ? "Hide" : "Show"}</Text>
+          </Pressable>
+        </View>
+        {showTrendChart ? (
           <>
-            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: spacing.md, marginBottom: spacing.sm }}>
-              <View style={{ flex: 1 }}>
-                <Text style={{ color: colors.onSurface, fontFamily: fontFamily.semibold }}>{selectedTestEntries[selectedTestEntries.length - 1].test}</Text>
-                <Text style={{ color: colors.muted, fontSize: fontSize.xs }}>{chartEntries.length} numeric point(s)</Text>
-              </View>
-              <Text style={{ color: trendColor, fontFamily: fontFamily.bold }}>{trendLabel}</Text>
-            </View>
-            {chartEntries.length ? (
-              <View style={{ height: 155, flexDirection: "row", alignItems: "flex-end", gap: 7, paddingTop: 8, borderBottomWidth: 1, borderColor: colors.border }}>
-                {chartEntries.slice(-12).map((entry, index, shown) => {
-                  const n = numeric(entry.result);
-                  const height = 26 + ((n - min) / range) * 92;
-                  return <View key={entry.id} style={{ flex: 1, alignItems: "center", justifyContent: "flex-end", height: "100%" }}>
-                    <Text numberOfLines={1} style={{ color: colors.onSurface, fontSize: 9, marginBottom: 4 }}>{entry.result}</Text>
-                    <View style={{ width: "72%", height, minHeight: 8, borderTopLeftRadius: 4, borderTopRightRadius: 4, backgroundColor: colors.brandPrimary }} />
-                    <Text numberOfLines={1} style={{ color: colors.muted, fontSize: 8, marginTop: 4 }}>{entry.date.slice(5)}</Text>
-                  </View>;
-                })}
-              </View>
-            ) : <Text style={{ color: colors.muted, marginTop: 10 }}>No numeric values yet. Add numeric result entries to display the chart.</Text>}
-            <Text style={{ color: colors.muted, fontSize: fontSize.xs, marginTop: spacing.sm }}>The chart shows saved trend snapshots only; it does not diagnose a condition. Review results with a clinician.</Text>
+            {field("Filter test name", testFilter, setTestFilter, "e.g. Hemoglobin")}
+            {selectedTestEntries.length ? (
+              <>
+                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: spacing.md, marginBottom: spacing.sm }}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: colors.onSurface, fontFamily: fontFamily.semibold }}>{selectedTestEntries[selectedTestEntries.length - 1].test}</Text>
+                    <Text style={{ color: colors.muted, fontSize: fontSize.xs }}>{chartEntries.length} numeric point(s)</Text>
+                  </View>
+                  <Text style={{ color: trendColor, fontFamily: fontFamily.bold }}>{trendLabel}</Text>
+                </View>
+                {chartEntries.length ? (
+                  <View style={{ height: 155, flexDirection: "row", alignItems: "flex-end", gap: 7, paddingTop: 8, borderBottomWidth: 1, borderColor: colors.border }}>
+                    {chartEntries.slice(-12).map(entry => {
+                      const n = numeric(entry.result);
+                      const height = 26 + ((n - min) / range) * 92;
+                      return <View key={entry.id} style={{ flex: 1, alignItems: "center", justifyContent: "flex-end", height: "100%" }}>
+                        <Text numberOfLines={1} style={{ color: colors.onSurface, fontSize: 9, marginBottom: 4 }}>{entry.result}</Text>
+                        <View style={{ width: "72%", height, minHeight: 8, borderTopLeftRadius: 4, borderTopRightRadius: 4, backgroundColor: colors.brandPrimary }} />
+                        <Text numberOfLines={1} style={{ color: colors.muted, fontSize: 8, marginTop: 4 }}>{entry.date.slice(5)}</Text>
+                      </View>;
+                    })}
+                  </View>
+                ) : <Text style={{ color: colors.muted, marginTop: 10 }}>No numeric values yet. Add numeric result entries to display the chart.</Text>}
+                <Text style={{ color: colors.muted, fontSize: fontSize.xs, marginTop: spacing.sm }}>The chart shows saved trend snapshots only; it does not diagnose a condition. Review results with a clinician.</Text>
+              </>
+            ) : <Text style={{ color: colors.muted, marginTop: spacing.md }}>No trend entries for this patient and filter yet. Add a dated result or import verified results below.</Text>}
           </>
-        ) : <Text style={{ color: colors.muted, marginTop: spacing.md }}>No trend entries for this patient and filter yet. Add a dated result or import verified results below.</Text>}
+        ) : null}
       </View>
 
       <View style={{ borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, padding: spacing.md, marginBottom: spacing.md }}>

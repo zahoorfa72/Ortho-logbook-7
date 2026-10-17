@@ -362,7 +362,6 @@ export default function Logbook() {
   const activeLabScanRef = useRef<string | null>(null);
   const stopLabScansRef = useRef<Set<string>>(new Set());
   const scanQueueRunningRef = useRef(false);
-  const dashboardFocusedRef = useRef(false);
   const autoQueuedPatientIdsRef = useRef<Set<string>>(new Set());
   const forceRetryLabScanIdsRef = useRef<Set<string>>(new Set());
   const requestLabScanRef = useRef<(patientId: string, autoForNewPatient?: boolean) => void>(() => {});
@@ -694,10 +693,12 @@ export default function Logbook() {
   }, [labOcrEnabled, queryClient, removeNewPatientQueueEntry, saveLabScanState]);
 
   const drainLabScanQueue = useCallback(async () => {
-    if (!dashboardFocusedRef.current || scanQueueRunningRef.current) return;
+    // Keep new-patient OCR independent of dashboard focus so opening Settings,
+    // patient details, or another in-app screen does not interrupt the queue.
+    if (scanQueueRunningRef.current) return;
     scanQueueRunningRef.current = true;
     try {
-      while (dashboardFocusedRef.current && pendingLabScansRef.current.length) {
+      while (pendingLabScansRef.current.length) {
         const patientId = pendingLabScansRef.current.shift()!;
         if (stopLabScansRef.current.has(patientId)) continue;
         activeLabScanRef.current = patientId;
@@ -706,25 +707,9 @@ export default function Logbook() {
       }
     } finally {
       scanQueueRunningRef.current = false;
-      if (dashboardFocusedRef.current && pendingLabScansRef.current.length) void drainLabScanQueue();
+      if (pendingLabScansRef.current.length) void drainLabScanQueue();
     }
   }, [runOnePatientLabScan]);
-
-  // Pause background OCR while another screen (for example Settings) is open.
-  // Keep the interrupted patient queued so scanning can resume when Logbook is focused again.
-  useFocusEffect(useCallback(() => {
-    dashboardFocusedRef.current = true;
-    for (const patientId of pendingLabScansRef.current) stopLabScansRef.current.delete(patientId);
-    void drainLabScanQueue();
-    return () => {
-      dashboardFocusedRef.current = false;
-      const activePatientId = activeLabScanRef.current;
-      if (activePatientId) {
-        stopLabScansRef.current.add(activePatientId);
-        if (!pendingLabScansRef.current.includes(activePatientId)) pendingLabScansRef.current.unshift(activePatientId);
-      }
-    };
-  }, [drainLabScanQueue]));
 
   const requestLabScan = useCallback((patientId: string, autoForNewPatient = false) => {
     stopLabScansRef.current.delete(patientId);
