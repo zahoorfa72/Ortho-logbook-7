@@ -303,9 +303,10 @@ function labTestBranch(label: string, definitions: Array<{ name: string; aliases
   const testName = (resultMatch && resultMatch.index !== undefined ? core.slice(0, resultMatch.index) : core).replace(/[\s:|•-]+$/g, "").trim();
   const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, "");
   const testKey = normalize(testName);
+  const fullKey = normalize(core);
   const definition = definitions.find(item => {
-    const names = [item.name, ...(String(item.aliases || "").split(/[,;\n]+/))].map(normalize).filter(Boolean);
-    return names.some(name => testKey === name || testKey.includes(name) || name.includes(testKey));
+    const names = [item.name, ...(String(item.aliases || "").split(/[,;\\n]+/))].map(normalize).filter(Boolean);
+    return names.some(name => fullKey.includes(name) || testKey === name || testKey.includes(name) || name.includes(testKey));
   });
   if (definition?.category?.trim()) return definition.category.trim();
   const value = testName.toLowerCase();
@@ -1423,7 +1424,6 @@ export default function Logbook() {
                         const branch = labTestBranch(label, configuredLabTestDefinitions);
                         groups.set(branch, [...(groups.get(branch) || []), label]);
                       }
-                      const expanded = labBranchesExpandedByPatient[item.id] === true;
                       const renderLabel = (label: string, index: number) => {
                         const warning = label.startsWith("WARNING:");
                         const oldResult = label.startsWith("OLD RESULT:");
@@ -1433,12 +1433,17 @@ export default function Logbook() {
                         return <Text key={label + index} numberOfLines={2} style={{ color: labelTone, fontFamily: fontFamily.semibold, fontSize: 10, lineHeight: 13, flexShrink: 1 }}>{compactLabel}{cleaned.date ? " · " + cleaned.date : ""}</Text>;
                       };
                       return <View style={{ marginTop: 3, gap: 5 }}>
-                        {[...groups.entries()].map(([branch, labels]) => <View key={branch} style={{ borderWidth: 1, borderColor: colors.border, borderRadius: 5, overflow: "hidden" }}>
-                          <Pressable onPress={event => { event.stopPropagation(); setLabBranchesExpandedByPatient(previous => ({ ...previous, [item.id]: !previous[item.id] })); }} accessibilityRole="button" accessibilityLabel={(expanded ? "Collapse " : "Expand ") + branch + " abnormal lab results"} style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 7, paddingVertical: 5, backgroundColor: colors.surface }}>
+                        {[...groups.entries()].map(([branch, labels]) => {
+                          const branchKey = item.id + "::" + branch;
+                          const branchExpanded = labBranchesExpandedByPatient[branchKey] === true;
+                          return <View key={branch} style={{ borderWidth: 1, borderColor: colors.border, borderRadius: 5, overflow: "hidden" }}>
+                          <Pressable onPress={event => { event.stopPropagation(); setLabBranchesExpandedByPatient(previous => ({ ...previous, [branchKey]: !previous[branchKey] })); }} accessibilityRole="button" accessibilityLabel={(branchExpanded ? "Collapse " : "Expand ") + branch + " abnormal lab results"} style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 7, paddingVertical: 5, backgroundColor: colors.surface }}>
                             <Text style={{ color: colors.error || "#B91C1C", fontFamily: fontFamily.semibold, fontSize: 10, flex: 1 }}>{branch} · {labels.length} out of range</Text>
-                            <Ionicons name={expanded ? "chevron-up" : "chevron-down"} size={14} color={colors.muted} />
+                            <Ionicons name={branchExpanded ? "chevron-up" : "chevron-down"} size={14} color={colors.muted} />
                           </Pressable>
-                          {expanded ? <View style={{ paddingHorizontal: 7, paddingVertical: 5, gap: 4 }}>{labels.map(renderLabel)}</View> : null}
+                          {branchExpanded ? <View style={{ paddingHorizontal: 7, paddingVertical: 5, gap: 4 }}>{labels.map(renderLabel)}</View> : null}
+                        </View>;
+                        })}
                         </View>)}
                         {oldLabels.length ? <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 4 }}>{oldLabels.map(renderLabel)}</View> : null}
                       </View>;
