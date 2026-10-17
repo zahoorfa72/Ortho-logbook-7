@@ -94,8 +94,12 @@ async function embedPhoto(uri:string, cache?: Map<string,string>, profile: "pati
     }
     // Encode from the original local file once: preserve native resolution
     // (including small OCR text) and use high-quality JPEG compression.
-    const result = await ImageManipulator.manipulateAsync(uri, [], {
-      compress: 0.90,
+    const result = await ImageManipulator.manipulateAsync(uri, [{ resize: { width: 960 } }], {
+      // A bounded output is essential on Android: full-resolution source images
+      // can otherwise create huge base64 strings and exhaust the app heap while
+      // the backup progress appears stuck on one photo. Keep compression work
+      // strictly sequential in embedPhoto callers and limit each output image.
+      compress: 0.76,
       format: ImageManipulator.SaveFormat.JPEG,
       base64: true,
     });
