@@ -1437,14 +1437,13 @@ export default function Logbook() {
                           const branchKey = item.id + "::" + branch;
                           const branchExpanded = labBranchesExpandedByPatient[branchKey] === true;
                           return <View key={branch} style={{ borderWidth: 1, borderColor: colors.border, borderRadius: 5, overflow: "hidden" }}>
-                          <Pressable onPress={event => { event.stopPropagation(); setLabBranchesExpandedByPatient(previous => ({ ...previous, [branchKey]: !previous[branchKey] })); }} accessibilityRole="button" accessibilityLabel={(branchExpanded ? "Collapse " : "Expand ") + branch + " abnormal lab results"} style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 7, paddingVertical: 5, backgroundColor: colors.surface }}>
-                            <Text style={{ color: colors.error || "#B91C1C", fontFamily: fontFamily.semibold, fontSize: 10, flex: 1 }}>{branch} · {labels.length} out of range</Text>
-                            <Ionicons name={branchExpanded ? "chevron-up" : "chevron-down"} size={14} color={colors.muted} />
-                          </Pressable>
-                          {branchExpanded ? <View style={{ paddingHorizontal: 7, paddingVertical: 5, gap: 4 }}>{labels.map(renderLabel)}</View> : null}
-                        </View>;
+                            <Pressable onPress={event => { event.stopPropagation(); setLabBranchesExpandedByPatient(previous => ({ ...previous, [branchKey]: !previous[branchKey] })); }} accessibilityRole="button" accessibilityLabel={(branchExpanded ? "Collapse " : "Expand ") + branch + " abnormal lab results"} style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 7, paddingVertical: 5, backgroundColor: colors.surface }}>
+                              <Text style={{ color: colors.error || "#B91C1C", fontFamily: fontFamily.semibold, fontSize: 10, flex: 1 }}>{branch} · {labels.length} out of range</Text>
+                              <Ionicons name={branchExpanded ? "chevron-up" : "chevron-down"} size={14} color={colors.muted} />
+                            </Pressable>
+                            {branchExpanded ? <View style={{ paddingHorizontal: 7, paddingVertical: 5, gap: 4 }}>{labels.map(renderLabel)}</View> : null}
+                          </View>;
                         })}
-                        </View>)}
                         {oldLabels.length ? <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 4 }}>{oldLabels.map(renderLabel)}</View> : null}
                       </View>;
                     })() : null}
