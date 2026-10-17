@@ -100,60 +100,66 @@ async function embedPhoto(uri:string, cache?: Map<string,string>, profile: "pati
       return uri;
     }
 
-    // Progressive high-quality encoding aims for about 2.2 MB but prioritizes
-    // legibility. It never changes dimensions. Stop early as soon as the target
-    // is reached; if even the safest quality is too large, keep the best result.
-    const qualities = profile === "document" ? [0.94, 0.91, 0.88] : [0.92, 0.89, 0.86];
-    let bestUri = "";
-    let bestSize = Number.POSITIVE_INFINITY;
-    for (const quality of qualities) {
-      const result = await ImageManipulator.manipulateAsync(
-        uri,
-        [],
-        { compress: quality, format: ImageManipulator.SaveFormat.JPEG }
-      );
+    // Convert embedded data URIs to a temporary file first. Native image
+    // manipulation is unreliable with data: URIs on Android and could leave
+    // backup progress stuck on the final image. Use one high-quality pass,
+    // without resizing, and cap the wait so a broken decoder cannot hang sync.
+    const tempUris: string[] = [];
+    let inputUri = uri;
+    try {
+      if (isDataImage) {
+        if (!LegacyFileSystem.cacheDirectory) throw new Error("Image cache directory unavailable.");
+        const comma = uri.indexOf(",");
+        if (comma < 0) throw new Error("Malformed image data URI.");
+        inputUri = LegacyFileSystem.cacheDirectory + "ortho-backup-photo-" + Date.now() + "-" + Math.floor(Math.random() * 100000) + ".bin";
+        await LegacyFileSystem.writeAsStringAsync(inputUri, uri.slice(comma + 1), {
+          encoding: LegacyFileSystem.EncodingType.Base64,
+        });
+        tempUris.push(inputUri);
+      }
+      const quality = profile === "document" ? 0.94 : 0.92;
+      const result = await Promise.race([
+        ImageManipulator.manipulateAsync(inputUri, [], {
+          compress: quality,
+          format: ImageManipulator.SaveFormat.JPEG,
+        }),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Image processing timed out after 45 seconds.")), 45000)),
+      ]);
+      tempUris.push(result.uri);
       const info = await LegacyFileSystem.getInfoAsync(result.uri);
-      const size = info.exists && typeof info.size === "number" ? info.size : Number.POSITIVE_INFINITY;
-      if (size < bestSize) {
-        bestUri = result.uri;
-        bestSize = size;
-      }
-      if (size <= targetBytes) {
-        bestUri = result.uri;
-        break;
-      }
-    }
-
-    if (bestUri) {
-      const base64 = await LegacyFileSystem.readAsStringAsync(bestUri, {
+      if (!info.exists || typeof info.size !== "number" || info.size <= 0) throw new Error("Compressed image is empty.");
+      const base64 = await LegacyFileSystem.readAsStringAsync(result.uri, {
         encoding: LegacyFileSystem.EncodingType.Base64,
       });
-      if (base64) {
-        const portable = "data:image/jpeg;base64," + base64;
-        cache?.set(cacheKey, portable);
-        return portable;
+      if (!base64) throw new Error("Compressed image data is empty.");
+      const portable = "data:image/jpeg;base64," + base64;
+      cache?.set(cacheKey, portable);
+      return portable;
+    } catch (compressionError) {
+      // Preserve the source if the device decoder cannot safely finish. A
+      // large original may exceed the preferred size, but it must not be lost.
+      if (isDataImage) {
+        cache?.set(cacheKey, uri);
+        return uri;
+      }
+      const base64 = await LegacyFileSystem.readAsStringAsync(uri, {
+        encoding: LegacyFileSystem.EncodingType.Base64,
+      });
+      if (!base64) throw compressionError;
+      const path = uri.split("?")[0].toLowerCase();
+      const mime = path.endsWith(".png") ? "image/png"
+        : path.endsWith(".webp") ? "image/webp"
+        : path.endsWith(".heic") || path.endsWith(".heif") ? "image/heic"
+        : path.endsWith(".gif") ? "image/gif"
+        : "image/jpeg";
+      const portable = "data:" + mime + ";base64," + base64;
+      cache?.set(cacheKey, portable);
+      return portable;
+    } finally {
+      for (const tempUri of tempUris) {
+        try { await LegacyFileSystem.deleteAsync(tempUri, { idempotent: true }); } catch {}
       }
     }
-
-    // If the platform cannot process a provider/content URI, retain original
-    // bytes rather than risk losing a medical report.
-    if (isDataImage) {
-      cache?.set(cacheKey, uri);
-      return uri;
-    }
-    const base64 = await LegacyFileSystem.readAsStringAsync(uri, {
-      encoding: LegacyFileSystem.EncodingType.Base64,
-    });
-    if (!base64) throw new Error("Empty original image data.");
-    const path = uri.split("?")[0].toLowerCase();
-    const mime = path.endsWith(".png") ? "image/png"
-      : path.endsWith(".webp") ? "image/webp"
-      : path.endsWith(".heic") || path.endsWith(".heif") ? "image/heic"
-      : path.endsWith(".gif") ? "image/gif"
-      : "image/jpeg";
-    const portable = "data:" + mime + ";base64," + base64;
-    cache?.set(cacheKey, portable);
-    return portable;
   } catch (error) {
     throw new Error("Could not safely compress this image for backup without changing its dimensions. Please keep the original and try again.");
   }
@@ -274,6 +280,10 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
    } else {
      onProgress?.("Reading original patient photos… " + (i + 1) + "/" + patients.length);
      embeddedPatients.push(await embedPatientPhotos(patient, compressedPhotoCache));
+     onProgress?.("Patient photos prepared " + (i + 1) + "/" + patients.length);
+     // Yield after each patient so progress updates and Back remain responsive
+     // on phones with large reports.
+     await new Promise<void>((resolve) => setTimeout(resolve, 0));
    }
  }
 
