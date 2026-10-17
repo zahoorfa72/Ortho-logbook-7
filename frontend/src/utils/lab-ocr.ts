@@ -609,9 +609,18 @@ function structureLabColumns(blocks: any[], imageWidth: number, imageHeight: num
   const rowGroups: OcrPositionedLine[][] = [];
   for (const item of positioned.sort((a, b) => (a.y + a.height / 2) - (b.y + b.height / 2))) {
     const y = item.y + item.height / 2;
+    const itemIsTestLabel = !!findTestPrefix(item.text, configuredTests);
     let target = rowGroups.find(group => {
       const avgY = mean(group.map(entry => entry.y + entry.height / 2));
-      return Math.abs(y - avgY) <= Math.max(rowTolerance, Math.min(item.height, group[0].height) * 0.45);
+      const closeVertically = Math.abs(y - avgY) <= Math.max(rowTolerance, Math.min(item.height, group[0].height) * 0.45);
+      if (!closeVertically) return false;
+
+      // Never merge two different test labels into one visual row. This was a
+      // dangerous source of cross-row values (e.g. hemoglobin receiving the
+      // platelet count) when OCR boxes for adjacent CBC rows overlap vertically.
+      const existingText = group.map(entry => entry.text).join(" ");
+      if (itemIsTestLabel && findTestPrefix(existingText, configuredTests)) return false;
+      return true;
     });
     if (!target) { target = []; rowGroups.push(target); }
     target.push(item);
