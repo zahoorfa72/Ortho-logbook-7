@@ -726,6 +726,19 @@ async function writeBackupObjectToFile(uri: string, value: any): Promise<void> {
     }
   };
   const writeValue = async (item: any): Promise<void> => {
+    if (typeof item === "string") {
+      // Never JSON.stringify an entire image-heavy string (photos_json,
+      // snapshot_json, or payload_json) at once. Escape bounded pieces and
+      // stream them inside one valid JSON string literal.
+      await append('"');
+      const stringChunkChars = 8 * 1024;
+      for (let offset = 0; offset < item.length; offset += stringChunkChars) {
+        const encodedChunk = JSON.stringify(item.slice(offset, Math.min(item.length, offset + stringChunkChars)));
+        await append(encodedChunk.slice(1, -1));
+      }
+      await append('"');
+      return;
+    }
     if (item === null || typeof item !== "object") {
       const encoded = JSON.stringify(item);
       await append(encoded === undefined ? "null" : encoded);
