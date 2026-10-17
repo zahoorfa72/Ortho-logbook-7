@@ -641,7 +641,7 @@ async function verifyUploadedFile(
 
 async function uploadContent(backupText: string, existingId?: string, onProgress?: (stage: string) => void, fileName: string = BACKUP_NAME) {
   const token = await accessToken();
-  const useNativeBackground = Platform.OS === "android" && !!NativeModules.DriveBackgroundUpload?.startUpload;
+  let useNativeBackground = Platform.OS === "android" && !!NativeModules.DriveBackgroundUpload?.startUpload;
   let stagedFileUri: string | null = null;
   let totalBytes = 0;
   let bytes: Uint8Array | null = null;
@@ -658,7 +658,19 @@ async function uploadContent(backupText: string, existingId?: string, onProgress
       totalBytes = info.size;
     } catch (error: any) {
       try { await FileSystem.deleteAsync(stagedFileUri, { idempotent: true }); } catch {}
-      throw new Error("Could not prepare the backup for background upload: " + String(error?.message || error));
+      const detail = String(error?.message || error || "");
+      if (/string length exceeds limit|value too large|too large for.*string/i.test(detail)) {
+        // Some Android bridge/file-system versions reject very large JS strings
+        // before the native background uploader can stage them. Fall back to
+        // the existing resumable 512 KiB uploader instead of failing sync.
+        stagedFileUri = null;
+        useNativeBackground = false;
+        bytes = new TextEncoder().encode(backupText);
+        totalBytes = bytes.length;
+        onProgress?.("Large backup detected · switching to resumable upload…");
+      } else {
+        throw new Error("Could not prepare the backup for background upload: " + detail);
+      }
     }
   } else {
     bytes = new TextEncoder().encode(backupText);
