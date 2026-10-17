@@ -238,7 +238,7 @@ export default function LabTrendsScreen() {
   );
 
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: colors.background }} contentContainerStyle={{ padding: spacing.md, paddingTop: Math.max(insets.top, spacing.md), paddingBottom: Math.max(insets.bottom, spacing.xl) + 24 }}>
+    <ScrollView style={{ flex: 1, backgroundColor: colors.surfaceSecondary }} contentContainerStyle={{ padding: spacing.md, paddingTop: Math.max(insets.top, spacing.md), paddingBottom: Math.max(insets.bottom, spacing.xl) + 24 }}>
       <View style={{ flexDirection: "row", alignItems: "center", marginBottom: spacing.md }}>
         <View style={{ width: 42, height: 42, borderRadius: 13, backgroundColor: colors.brandPrimary, alignItems: "center", justifyContent: "center", marginRight: 12 }}>
           <Ionicons name="analytics-outline" size={22} color="#FFFFFF" />
@@ -260,7 +260,7 @@ export default function LabTrendsScreen() {
             {visiblePatients.slice(0, 30).map(patient => {
               const active = selectedPatientId === patient.id;
               return <Pressable key={patient.id} onPress={() => { setSelectedPatientId(patient.id); setTestFilter(""); }}
-                style={{ padding: 11, borderRadius: radius.md, borderWidth: 1, borderColor: active ? colors.brandPrimary : colors.border, backgroundColor: active ? colors.brandPrimary + "18" : colors.background }}>
+                style={{ padding: 11, borderRadius: radius.md, borderWidth: 1, borderColor: active ? colors.brandPrimary : colors.border, backgroundColor: active ? colors.brandPrimary + "18" : colors.surfaceSecondary }}>
                 <Text style={{ color: colors.onSurface, fontFamily: fontFamily.semibold }}>{patient.name || "Unnamed patient"}{patient.mrNo ? " · MR " + patient.mrNo : ""}</Text>
                 {patient.gender ? <Text style={{ color: colors.muted, fontSize: fontSize.xs }}>{patient.gender}</Text> : null}
               </Pressable>;
