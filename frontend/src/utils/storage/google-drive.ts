@@ -590,6 +590,7 @@ async function uploadNativeBackground(
   fileUri: string,
   totalBytes: number,
   onProgress?: (stage: string) => void,
+  authRetry = 0,
 ): Promise<any> {
   const nativeUploader = NativeModules.DriveBackgroundUpload;
   if (!nativeUploader?.startUpload || !nativeUploader?.getStatus) {
@@ -611,7 +612,13 @@ async function uploadNativeBackground(
       try { return status.result ? JSON.parse(status.result) : {}; } catch { return {}; }
     }
     if (status?.status === "error") {
-      throw new Error(status.error || "Google Drive background upload failed. Your local data is unchanged; retry when connected.");
+      const detail = String(status.error || "Google Drive background upload failed.");
+      if (authRetry < 1 && /HTTP 401|authorization expired|unauthorized/i.test(detail)) {
+        onProgress?.("Refreshing Google authorization and resuming the existing upload…");
+        const refreshedToken = await accessToken();
+        return uploadNativeBackground(sessionUrl, refreshedToken, fileUri, totalBytes, onProgress, authRetry + 1);
+      }
+      throw new Error(detail + " Your local data is unchanged; retry when connected.");
     }
     const uploadedBytes = Math.max(0, Math.min(totalBytes, Number(status?.uploadedBytes ?? 0)));
     const progress = Number(status?.progress ?? Math.floor((uploadedBytes / Math.max(1, totalBytes)) * 100));

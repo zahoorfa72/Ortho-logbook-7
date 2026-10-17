@@ -86,11 +86,24 @@ class DriveBackgroundUploadService : Service() {
     var failures = 0
     var stalls = 0
     var finalResult = JSONObject()
+    // Always reconcile with Drive before sending bytes. This is essential after
+    // a token refresh or Android restarting the foreground upload service.
+    val initialStatus = queryOffset()
+    if (initialStatus.first) {
+      finalResult = initialStatus.second
+      offset = total
+    } else {
+      offset = initialStatus.third.coerceIn(0L, total)
+    }
+    if (offset >= total && finalResult.length() > 0) return finalResult
     RandomAccessFile(file, "r").use { input ->
       while (offset < total) {
         val endExclusive = minOf(offset + CHUNK_SIZE, total)
         try {
           val response = sendChunk(input, offset, endExclusive)
+          if (response.first == 401) {
+            throw IllegalStateException("Google Drive authorization expired (HTTP 401). The upload can resume after token refresh.")
+          }
           failures = 0
           if (response.first in 200..299) {
             finalResult = parseJson(response.second)
@@ -150,6 +163,9 @@ class DriveBackgroundUploadService : Service() {
           }
           throw IllegalStateException("Google Drive rejected an upload chunk (HTTP ${response.first}): ${response.second.take(300)}")
         } catch (error: Exception) {
+          if (error.message?.contains("HTTP 401") == true || error.message?.contains("authorization expired", ignoreCase = true) == true) {
+            throw error
+          }
           failures++
           if (failures >= 12) throw IllegalStateException("Background upload could not recover after 12 network retries: ${error.message}. Check Wi-Fi/mobile data or Private DNS, then retry; local records are unchanged.")
           Thread.sleep(retryDelayMs(failures))
