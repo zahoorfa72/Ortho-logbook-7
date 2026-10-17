@@ -114,17 +114,8 @@ function findTestPrefix(line: string, configuredTests: LabTestDefinition[] = [])
   for (const { configured, alias } of configuredVariants) {
     const tokens = normaliseName(alias).split(" ").filter(Boolean);
     if (!tokens.length) continue;
-    // Accept common lab formatting differences: "Hb", "H.B.", "H-B" and
-    // multi-word names with inconsistent spaces or punctuation.
-    const flexible = tokens.map(token => token.replace(/[.*+?^${}()|[\]\\]/g, "\\  for (const configured of [...configuredTests].sort((a, b) => String(b.name || "").length - String(a.name || "").length)) {
-    const name = String(configured.name || "").trim();
-    if (name.length < 2) continue;
-    const lowerName = name.toLowerCase();
-    if (cleaned.toLowerCase().startsWith(lowerName)) {
-      const nextChar = cleaned.charAt(name.length);
-      if (!nextChar || /[\s:|]/.test(nextChar) || "([{/%".includes(nextChar)) return { name: cleaned.slice(0, name.length).trim(), end: name.length, configured };
-    }
-  }")).join("[\\s._/-]*");
+    // Normalize punctuation and spacing variants such as Hb, H.B. and H-B.
+    const flexible = tokens.join("[\\s._/-]*");
     const match = new RegExp("^" + flexible + "(?=$|\\s|:|\\||\\(|\\[|\\{|/|%)", "i").exec(cleaned);
     if (match) return { name: cleaned.slice(0, match[0].length).trim(), end: match[0].length, configured };
   }
