@@ -94,16 +94,20 @@ async function embedPhoto(uri:string, cache?: Map<string,string>, profile: "pati
       cache?.set(cacheKey, uri);
       return uri;
     }
-    // Preserve the source dimensions and use high-quality JPEG encoding.
-    // Memory pressure must be solved by bounded/sequential processing and
-    // streaming, not by shrinking or visibly degrading clinical photographs.
-    const result = await ImageManipulator.manipulateAsync(uri, [], {
-      compress: 0.90,
-      format: ImageManipulator.SaveFormat.JPEG,
-      base64: true,
+    // Embed the original file bytes verbatim. Do not resize, transcode, or
+    // recompress clinical photographs/documents during backup: that can blur
+    // small lab text and permanently lower image quality.
+    const base64 = await LegacyFileSystem.readAsStringAsync(uri, {
+      encoding: LegacyFileSystem.EncodingType.Base64,
     });
-    if (!result.base64) throw new Error("Empty compressed image data.");
-    const portable = `data:image/jpeg;base64,${result.base64}`;
+    if (!base64) throw new Error("Empty original image data.");
+    const path = uri.split("?")[0].toLowerCase();
+    const mime = path.endsWith(".png") ? "image/png"
+      : path.endsWith(".webp") ? "image/webp"
+      : path.endsWith(".heic") || path.endsWith(".heif") ? "image/heic"
+      : path.endsWith(".gif") ? "image/gif"
+      : "image/jpeg";
+    const portable = `data:${mime};base64,${base64}`;
     cache?.set(cacheKey, portable);
     return portable;
   } catch {
