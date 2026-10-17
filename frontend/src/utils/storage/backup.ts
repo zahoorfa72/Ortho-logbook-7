@@ -525,10 +525,21 @@ function photoSourceSignature(row: any): string {
  for (let field = 0; field < values.length; field++) {
   const value = values[field];
   total += value.length;
-  for (let i = 0; i < value.length; i++) {
-   const code = value.charCodeAt(i);
+  // Avoid synchronously scanning every character of large base64 photos. This
+  // check runs after photo preparation and previously froze navigation at 57/57.
+  const sampleLimit = 4096;
+  const step = Math.max(1, Math.ceil(value.length / sampleLimit));
+  const addCode = (code: number) => {
    h1 = Math.imul(h1 ^ code, 0x01000193) >>> 0;
    h2 = Math.imul(h2 ^ (code + field + 1), 0x85ebca6b) >>> 0;
+  };
+  addCode(value.length & 0xffff);
+  addCode((value.length >>> 16) & 0xffff);
+  if (value.length <= sampleLimit) {
+   for (let i = 0; i < value.length; i++) addCode(value.charCodeAt(i));
+  } else {
+   for (let i = 0; i < value.length; i += step) addCode(value.charCodeAt(i));
+   for (let i = Math.max(0, value.length - 64); i < value.length; i++) addCode(value.charCodeAt(i));
   }
   h1 = Math.imul(h1 ^ 0xff, 0x01000193) >>> 0;
   h2 = Math.imul(h2 ^ 0x9d, 0xc2b2ae35) >>> 0;
