@@ -599,9 +599,33 @@ export async function exportIncrementalBackupData(changedTables: string[], onPro
   canDiff && previous!.photoSources ? previous!.photoSources : undefined
  );
  const nextTables: Record<string, any> = canDiff ? { ...previous!.tables } : {};
+ const nextPhotoSources: Record<string, string> = canDiff && previous!.photoSources ? { ...previous!.photoSources } : {};
  const deletedIds: Record<string, string[]> = {};
  const fullTables: string[] = [];
  const currentRowsForCache: Record<string, any[]> = {};
+ if (canDiff) {
+  // Older app versions kept embedded bill photos in this comparison cache. Strip
+  // those bytes during migration before the cache is serialized again.
+  for (const table of Object.keys(nextTables)) {
+   const rows = nextTables[table];
+   if (Array.isArray(rows)) {
+    if (IMAGE_SIGNATURE_TABLES.has(table)) {
+     for (const row of rows) {
+      const id = rowKey(row);
+      if (id === null) continue;
+      const signatureKey = "images:" + table + ":" + id;
+      if (nextPhotoSources[signatureKey] === undefined) {
+       const signature = rowImageSignature(row);
+       if (signature) nextPhotoSources[signatureKey] = signature;
+      }
+     }
+    }
+    nextTables[table] = rows.map((row) => stripBackupImages(row));
+   } else {
+    nextTables[table] = stripBackupImages(rows);
+   }
+  }
+ }
  for (const table of tables) {
   if (table === "branding" || table === "appSettings") {
    nextTables[table] = (backup as any)[table] ?? null;
@@ -617,7 +641,7 @@ export async function exportIncrementalBackupData(changedTables: string[], onPro
     if (id !== null) currentImageSignatures.set(id, rowImageSignature(row));
    }
   }
-  const previousRows = canDiff && Array.isArray(previous!.tables[table]) ? previous!.tables[table] : null;
+  const previousRows = canDiff && Array.isArray(nextTables[table]) ? nextTables[table] : null;
   if (!previousRows) {
    // First sync for this table, or a changed full-backup baseline: use a
    // complete table snapshot. This is slower once but remains restorable.
@@ -690,7 +714,6 @@ export async function exportIncrementalBackupData(changedTables: string[], onPro
  (backup as any).fullTables = canDiff ? fullTables : effectiveTables.filter((table) => table !== "branding" && table !== "appSettings");
  // Track the source URIs separately from portable compressed photo bytes. This
  // lets future backups reuse unchanged photo payloads without recompressing them.
- const nextPhotoSources: Record<string, string> = canDiff && previous!.photoSources ? { ...previous!.photoSources } : {};
  for (const table of tables) {
   if (!IMAGE_SIGNATURE_TABLES.has(table)) continue;
   const prefix = "images:" + table + ":";
@@ -711,7 +734,9 @@ export async function exportIncrementalBackupData(changedTables: string[], onPro
    currentIds.add(id);
    nextPhotoSources[id] = photoSourceSignature(row);
   }
-  for (const id of Object.keys(nextPhotoSources)) if (!currentIds.has(id)) delete nextPhotoSources[id];
+  for (const id of Object.keys(nextPhotoSources)) {
+   if (!id.startsWith("images:") && !currentIds.has(id)) delete nextPhotoSources[id];
+  }
  }
  // Do not persist the new baseline until the upload succeeds.
  pendingDeltaCacheText = JSON.stringify({ baselineKey, tables: nextTables, photoSources: nextPhotoSources });
