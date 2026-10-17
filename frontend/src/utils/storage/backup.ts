@@ -417,10 +417,9 @@ export async function exportBackup(password:string, filter: BackupFilter = { typ
 
 // Google Drive uses a plain JSON snapshot so automatic backup does not depend on a password.
 // Phone/file backups continue using exportBackup() and remain encrypted.
-export async function exportUnencryptedBackup(filter: BackupFilter = { type: "all" }, onProgress?: (stage: string) => void): Promise<string> {
- // Reuse already-compressed photo bytes from the last confirmed snapshot when
- // the original patient photo URI has not changed. This avoids reprocessing
- // every photo for a small edit elsewhere in the database.
+export async function exportUnencryptedBackupData(filter: BackupFilter = { type: "all" }, onProgress?: (stage: string) => void): Promise<BackupData> {
+ // Keep the backup as structured data so Drive can serialize it in bounded
+ // chunks instead of constructing one potentially oversized JSON string.
  const cache = filter.type === "all" ? await readDeltaCache() : null;
  const backup = await createBackupData(
    filter,
@@ -430,7 +429,11 @@ export async function exportUnencryptedBackup(filter: BackupFilter = { type: "al
    cache?.photoSources,
  );
  backup.filter = filter;
- return JSON.stringify(backup);
+ return backup;
+}
+
+export async function exportUnencryptedBackup(filter: BackupFilter = { type: "all" }, onProgress?: (stage: string) => void): Promise<string> {
+ return JSON.stringify(await exportUnencryptedBackupData(filter, onProgress));
 }
 
 // Drive auto-sync keeps a local copy of each successfully uploaded table so
