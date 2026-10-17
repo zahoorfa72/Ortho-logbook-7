@@ -1,7 +1,7 @@
 import { GoogleSignin, statusCodes } from "@react-native-google-signin/google-signin";
 import { NativeModules, Platform } from "react-native";
 import * as FileSystem from "expo-file-system/legacy";
-import { exportUnencryptedBackup, exportUnencryptedBackupData, exportIncrementalBackup, commitIncrementalSnapshotCache, type BackupFilter } from "@/src/utils/storage/backup";
+import { exportUnencryptedBackup, exportUnencryptedBackupData, exportIncrementalBackup, exportIncrementalBackupData, prepareIncrementalSnapshotCacheFromBackupData, commitIncrementalSnapshotCache, type BackupFilter } from "@/src/utils/storage/backup";
 import { markBackupTaken } from "@/src/utils/backup-reminder";
 import { storage } from "@/src/utils/storage";
 
@@ -643,6 +643,16 @@ async function uploadNativeBackground(
   }
 }
 
+async function verifyStreamedDriveFile(fileId: string, expectedName: string, expectedBytes?: number): Promise<any> {
+  const response = await driveRequest(DRIVE_API + "/" + encodeURIComponent(fileId) + "?fields=id,name,size,modifiedTime,mimeType,trashed");
+  const file = await response.json();
+  if (!file?.id || file.trashed === true || file.name !== expectedName ||
+      file.mimeType === "application/vnd.google-apps.folder" ||
+      (expectedBytes !== undefined && Number(file.size) !== expectedBytes) || !Number(file.size)) {
+    throw new Error("Google Drive could not confirm the complete streamed backup file. The sync is not marked successful; local data remains on this phone.");
+  }
+  return file;
+}
 async function verifyUploadedFile(
   result: any,
   expectedName: string,
@@ -1193,7 +1203,7 @@ async function deleteDuplicateDriveBackups(masterFileId: string): Promise<string
 export async function backupToGoogleDrive(
   _password?: string,
   filter: BackupFilter = { type: "all" },
-  options: { skipIfUnchanged?: boolean; onProgress?: (stage: string) => void; preferDriveOnMigration?: boolean; backupTextOverride?: string; localChanges?: any } = {},
+  options: { skipIfUnchanged?: boolean; onProgress?: (stage: string) => void; preferDriveOnMigration?: boolean; backupTextOverride?: string; backupDataOverride?: any; localChanges?: any } = {},
 ) {
   options.onProgress?.("Preparing backup data…");
   const isMasterBackup = filter.type === "all";
@@ -1210,10 +1220,16 @@ export async function backupToGoogleDrive(
   let migrationComplete = true;
   let cleanupSafe = true;
   let migrationAttempted = false;
+  let seededCacheForLocalSnapshot = false;
 
   if (canStream) {
     options.onProgress?.("Preparing large backup in small pieces…");
-    let backupData: any = await exportUnencryptedBackupData(filter, options.onProgress);
+    let backupData: any = options.backupDataOverride || await exportUnencryptedBackupData(filter, options.onProgress);
+    if (!options.backupDataOverride) {
+      // Cache only metadata/media signatures; do not stringify the full photo payload.
+      await prepareIncrementalSnapshotCacheFromBackupData("", backupData);
+      seededCacheForLocalSnapshot = true;
+    }
     if (migrationMarker !== "1") {
       migrationAttempted = true;
       options.onProgress?.("Merging older Drive backups without building one oversized string…");
@@ -1246,7 +1262,9 @@ export async function backupToGoogleDrive(
       throw new Error("Could not prepare the large backup in safe chunks: " + String(error?.message || error) + ". Local data remains on this phone; retry after installing the latest APK.");
     }
   } else {
-    backupText = options.backupTextOverride || await exportUnencryptedBackup(filter, options.onProgress);
+    backupText = options.backupTextOverride || (options.backupDataOverride
+      ? JSON.stringify(options.backupDataOverride)
+      : await exportUnencryptedBackup(filter, options.onProgress));
     if (isMasterBackup && migrationMarker !== "1") {
       migrationAttempted = true;
       options.onProgress?.("Merging existing Drive backups into the master…");
@@ -1299,12 +1317,19 @@ export async function backupToGoogleDrive(
   await storage.setItem(LAST_DRIVE_CONTENT_HASH_KEY + ":" + fileName, contentHash);
   const cleanupFailures: string[] = [];
   if (isMasterBackup && migrationAttempted && migrationComplete && cleanupSafe && result?.id) {
-    const verifiedMaster = await downloadDriveJsonValidated(String(result.id));
-    if (!verifiedMaster || verifiedMaster.app !== "Ortho Logbook" ||
-        !Array.isArray(verifiedMaster.patients) || !Array.isArray(verifiedMaster.inventory)) {
-      throw new Error("The all-time backup could not be verified. Older Drive backups were kept; retry backup after checking the connection.");
+    if (stagedFileUri) {
+      await verifyStreamedDriveFile(String(result.id), fileName, stagedFileSize);
+    } else {
+      const verifiedMaster = await downloadDriveJsonValidated(String(result.id));
+      if (!verifiedMaster || verifiedMaster.app !== "Ortho Logbook" ||
+          !Array.isArray(verifiedMaster.patients) || !Array.isArray(verifiedMaster.inventory)) {
+        throw new Error("The all-time backup could not be verified. Older Drive backups were kept; retry backup after checking the connection.");
+      }
     }
     await storage.secureSet(MASTER_MIGRATION_KEY, "1");
+  }
+  if (isMasterBackup && seededCacheForLocalSnapshot && result?.id) {
+    await commitIncrementalSnapshotCache(String(result.id) + ":" + String(result.modifiedTime || ""));
   }
   return {
     ...result, skipped: false, completedAt, name: fileName, accountEmail: getConnectedGoogleAccount(),
@@ -1620,6 +1645,9 @@ export async function ensureGoogleDriveBaseline(onProgress?: (stage: string) => 
   if (existing?.id) return { skipped: true, name: String(existing.name || "Ortho Logbook Backup - All Time.orbackup") };
   onProgress?.("Creating the first complete all-time backup…");
   const result = await backupToGoogleDrive(undefined, { type: "all" }, { onProgress });
+  const confirmed = await findLatestBackup();
+  if (!confirmed?.id) throw new Error("The first Drive backup upload could not be found after upload. Local data remains on this phone.");
+  await commitIncrementalSnapshotCache(String(confirmed.id) + ":" + String(confirmed.modifiedTime || ""));
   // A single complete master file avoids tripling storage with month/year copies.
   return { ...result, baselineCreated: true, snapshotFailures: [] };
 }
@@ -1671,8 +1699,18 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
   if (!base?.id) return ensureGoogleDriveBaseline(onProgress);
 
   const baselineKey = String(base.id) + ":" + String(base.modifiedTime || "");
-  const backupText = await exportIncrementalBackup(changedTables, onProgress, baselineKey);
-  const delta = JSON.parse(backupText);
+  const canStreamIncremental = Platform.OS === "android" &&
+    !!NativeModules.DriveBackgroundUpload?.writeTextChunk &&
+    !!NativeModules.DriveBackgroundUpload?.startUpload &&
+    !!NativeModules.DriveBackgroundUpload?.getStatus;
+  let delta: any;
+  if (canStreamIncremental) {
+    // Avoid JSON.stringify on the entire changed-table payload before upload.
+    delta = await exportIncrementalBackupData(changedTables, onProgress, baselineKey);
+  } else {
+    const backupText = await exportIncrementalBackup(changedTables, onProgress, baselineKey);
+    delta = JSON.parse(backupText);
+  }
   const hasActualChanges = (Array.isArray(delta.changedTables) ? delta.changedTables : []).some((table: string) => {
     if (table === "branding" || table === "appSettings") return Object.prototype.hasOwnProperty.call(delta, table);
     if (Array.isArray(delta.fullTables) && delta.fullTables.includes(table)) return true;
@@ -1700,9 +1738,14 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
     });
     const migratedBase = await findLatestBackup();
     if (!migratedBase?.id) throw new Error("The complete backup was uploaded but could not be confirmed. Local data remains safe.");
-    const verified = await downloadDriveJsonValidated(String(migratedBase.id));
-    if (!verified || verified.app !== "Ortho Logbook" || !Array.isArray(verified.patients) || !Array.isArray(verified.inventory)) {
-      throw new Error("The complete backup could not be verified. The local change has not been marked as backed up.");
+    if (canStreamIncremental) {
+      await verifyStreamedDriveFile(String(migratedBase.id), "Ortho Logbook Backup - All Time.orbackup",
+        migrated?.size != null ? Number(migrated.size) : undefined);
+    } else {
+      const verified = await downloadDriveJsonValidated(String(migratedBase.id));
+      if (!verified || verified.app !== "Ortho Logbook" || !Array.isArray(verified.patients) || !Array.isArray(verified.inventory)) {
+        throw new Error("The complete backup could not be verified. The local change has not been marked as backed up.");
+      }
     }
     await commitIncrementalSnapshotCache(String(migratedBase.id) + ":" + String(migratedBase.modifiedTime || ""));
     // The first confirmed master contains all pre-existing data. Month archives
@@ -1746,20 +1789,51 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
   combined.incremental = true;
   combined._baselineKey = baselineKey;
   combined._updateCount = Math.max(0, Number(journal?._updateCount || 0)) + (hasActualChanges ? 1 : 0);
-  const journalText = JSON.stringify(combined);
-  const journalBytes = new TextEncoder().encode(journalText).length;
+  let journalText: string | null = null;
+  let journalStageUri: string | null = null;
+  let journalBytes = 0;
+  if (hasActualChanges && canStreamIncremental) {
+    if (!FileSystem.cacheDirectory) throw new Error("Device cache storage is unavailable for the Drive backup.");
+    journalStageUri = FileSystem.cacheDirectory + "ortho-drive-journal-" + Date.now() + ".json";
+    try {
+      await writeBackupObjectToFile(journalStageUri, combined);
+      const info = await FileSystem.getInfoAsync(journalStageUri);
+      if (!info.exists || typeof info.size !== "number" || info.size <= 0) throw new Error("The streamed change journal is missing or empty.");
+      journalBytes = info.size;
+    } catch (error: any) {
+      try { await FileSystem.deleteAsync(journalStageUri, { idempotent: true }); } catch {}
+      journalStageUri = null;
+      throw new Error("Could not prepare the change journal in safe chunks: " + String(error?.message || error) + ". Local data remains on this phone.");
+    }
+  } else if (hasActualChanges) {
+    journalText = JSON.stringify(combined);
+    journalBytes = new TextEncoder().encode(journalText).length;
+  }
   // Compact after a bounded number of edits or if photo changes make the
   // journal large. Most small edits only upload this journal, not the master.
   const shouldCompact = combined._updateCount >= 20 || journalBytes >= 8 * 1024 * 1024;
 
   if (hasActualChanges) {
     onProgress?.("Uploading only changed records to Google Drive…");
-    const uploaded = await uploadContent(journalText, journalFile?.id, onProgress, JOURNAL_NAME);
+    let uploaded: any;
+    try {
+      if (journalStageUri) uploaded = await uploadStagedJsonFile(journalStageUri, journalBytes, journalFile?.id, onProgress, JOURNAL_NAME);
+      else uploaded = await uploadContent(journalText as string, journalFile?.id, onProgress, JOURNAL_NAME);
+    } finally {
+      if (journalStageUri) {
+        try { await FileSystem.deleteAsync(journalStageUri, { idempotent: true }); } catch {}
+        journalStageUri = null;
+      }
+    }
     if (!uploaded?.id) throw new Error("Google Drive did not confirm the changed-record journal. Local data remains safe.");
-    const check = await downloadDriveJsonValidated(String(uploaded.id));
-    if (!check || check.app !== "Ortho Logbook" || check.incremental !== true ||
-        check._baselineKey !== baselineKey || !Array.isArray(check.changedTables)) {
-      throw new Error("The changed-record journal could not be verified. Local data remains safe; the sync will retry.");
+    if (canStreamIncremental) {
+      await verifyStreamedDriveFile(String(uploaded.id), JOURNAL_NAME, journalBytes);
+    } else {
+      const check = await downloadDriveJsonValidated(String(uploaded.id));
+      if (!check || check.app !== "Ortho Logbook" || check.incremental !== true ||
+          check._baselineKey !== baselineKey || !Array.isArray(check.changedTables)) {
+        throw new Error("The changed-record journal could not be verified. Local data remains safe; the sync will retry.");
+      }
     }
     journalFile = { ...uploaded, id: String(uploaded.id), name: JOURNAL_NAME };
   }
@@ -1783,14 +1857,19 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
     delete master._updateCount;
     const masterResult = await backupToGoogleDrive(undefined, { type: "all" }, {
       onProgress,
-      backupTextOverride: JSON.stringify(master),
+      backupDataOverride: master,
     });
     const refreshedBase = await findLatestBackup();
     if (!refreshedBase?.id) throw new Error("The refreshed full backup could not be found. The delta journal is retained.");
-    const verifiedMaster = await downloadDriveJsonValidated(String(refreshedBase.id));
-    if (!verifiedMaster || verifiedMaster.app !== "Ortho Logbook" ||
-        !Array.isArray(verifiedMaster.patients) || !Array.isArray(verifiedMaster.inventory)) {
-      throw new Error("The refreshed full backup could not be verified. The delta journal is retained.");
+    if (canStreamIncremental) {
+      await verifyStreamedDriveFile(String(refreshedBase.id), "Ortho Logbook Backup - All Time.orbackup",
+        masterResult?.size != null ? Number(masterResult.size) : undefined);
+    } else {
+      const verifiedMaster = await downloadDriveJsonValidated(String(refreshedBase.id));
+      if (!verifiedMaster || verifiedMaster.app !== "Ortho Logbook" ||
+          !Array.isArray(verifiedMaster.patients) || !Array.isArray(verifiedMaster.inventory)) {
+        throw new Error("The refreshed full backup could not be verified. The delta journal is retained.");
+      }
     }
     // The full master now contains the journal. Delete the journal only after
     // verification; if deletion fails, its timestamp is older than the master
