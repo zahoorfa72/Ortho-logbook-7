@@ -8,6 +8,7 @@ import { storage } from "@/src/utils/storage";
 const LAST_DRIVE_BACKUP_KEY = "ortho_drive_last_successful_backup";
 const LAST_DRIVE_CONTENT_HASH_KEY = "ortho_drive_last_uploaded_content_hash";
 const MASTER_MIGRATION_KEY = "ortho_drive_master_migration_v2";
+const MONTH_ARCHIVE_CURSOR_KEY = "ortho_drive_month_archive_cursor_v1";
 const DRIVE_SCOPE_VERSION_KEY = "ortho_drive_scope_version";
 const DRIVE_SCOPE_VERSION = "full-drive-gmail-v1";
 export async function getLastDriveBackupStatus(): Promise<string | null> {
@@ -218,7 +219,8 @@ export async function listGoogleDriveBackups(): Promise<Array<{id:string;name:st
   const files = await findLatestBackupCandidates();
   const masters = files.filter((file:any) => file.id && (
     String(file.name || "") === "Ortho Logbook Backup - All Time.orbackup" ||
-    String(file.name || "") === BACKUP_NAME
+    String(file.name || "") === BACKUP_NAME ||
+    /^Ortho Logbook Backup - Month \d{4}-\d{2}\.orbackup$/.test(String(file.name || ""))
   ));
 
   // Small automatic edits are stored in the rolling incremental journal so we
@@ -264,6 +266,17 @@ export async function restoreGoogleDriveBackupById(fileId: string) {
   const parsed = await downloadDriveJsonValidated(fileId);
   if (!parsed || parsed.app !== "Ortho Logbook" || !Array.isArray(parsed.patients) || !Array.isArray(parsed.inventory)) {
     throw new Error("The selected file is not a complete Ortho Logbook backup.");
+  }
+  // Monthly archives are period-scoped snapshots, not master baselines. Do not
+  // apply the rolling all-time journal to them or unrelated months could leak in.
+  if (/^Ortho Logbook Backup - Month \d{4}-\d{2}\.orbackup$/.test(String(metadata.name || ""))) {
+    return {
+      name: String(metadata.name),
+      modifiedTime: String(metadata.modifiedTime || ""),
+      backupText: JSON.stringify(parsed),
+      appliedIncrementals: 0,
+      recoveryWarnings: [],
+    };
   }
 
   // The master is intentionally stable between compactions. Automatic edits,
@@ -639,6 +652,24 @@ async function verifyUploadedFile(
   return file;
 }
 
+async function writeBackupTextInChunks(uri: string, content: string): Promise<void> {
+  // Large JSON strings can exceed the React Native native-bridge argument limit.
+  // Write bounded slices so a photo-heavy export is not passed in one huge call.
+  const chunkChars = 256 * 1024;
+  let offset = 0;
+  let first = true;
+  while (offset < content.length) {
+    const end = Math.min(offset + chunkChars, content.length);
+    await FileSystem.writeAsStringAsync(uri, content.slice(offset, end), {
+      encoding: FileSystem.EncodingType.UTF8,
+      append: !first,
+    });
+    first = false;
+    offset = end;
+  }
+  if (first) await FileSystem.writeAsStringAsync(uri, "", { encoding: FileSystem.EncodingType.UTF8 });
+}
+
 async function uploadContent(backupText: string, existingId?: string, onProgress?: (stage: string) => void, fileName: string = BACKUP_NAME) {
   const token = await accessToken();
   let useNativeBackground = Platform.OS === "android" && !!NativeModules.DriveBackgroundUpload?.startUpload;
@@ -650,7 +681,7 @@ async function uploadContent(backupText: string, existingId?: string, onProgress
     if (!FileSystem.cacheDirectory) throw new Error("Device cache storage is unavailable for the Drive backup.");
     stagedFileUri = FileSystem.cacheDirectory + "ortho-drive-backup-" + Date.now() + ".json";
     try {
-      await FileSystem.writeAsStringAsync(stagedFileUri, backupText, { encoding: FileSystem.EncodingType.UTF8 });
+      await writeBackupTextInChunks(stagedFileUri, backupText);
       const info = await FileSystem.getInfoAsync(stagedFileUri);
       if (!info.exists || typeof info.size !== "number" || info.size <= 0) {
         throw new Error("Could not prepare the backup file for background upload.");
@@ -1410,6 +1441,47 @@ export async function ensureGoogleDriveBaseline(onProgress?: (stage: string) => 
   return { ...result, baselineCreated: true, snapshotFailures: [] };
 }
 
+function monthKeyFromDate(date: Date): string {
+  return String(date.getFullYear()) + "-" + String(date.getMonth() + 1).padStart(2, "0");
+}
+
+function nextMonthKey(month: string): string {
+  const match = /^(\d{4})-(\d{2})$/.exec(month);
+  if (!match) return monthKeyFromDate(new Date());
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, 1);
+  date.setMonth(date.getMonth() + 1);
+  return monthKeyFromDate(date);
+}
+
+async function archiveCompletedMonths(onProgress?: (stage: string) => void) {
+  const currentMonth = monthKeyFromDate(new Date());
+  let cursor = String((await storage.secureGet(MONTH_ARCHIVE_CURSOR_KEY, "")) || "");
+  if (!/^\d{4}-\d{2}$/.test(cursor)) {
+    // The initial all-time master is the one-time baseline for old records.
+    // Begin period archives on the next month rollover, avoiding duplicate
+    // historical full-master copies during first-time migration.
+    await storage.secureSet(MONTH_ARCHIVE_CURSOR_KEY, currentMonth);
+    return;
+  }
+  let guard = 0;
+  while (cursor < currentMonth && guard++ < 120) {
+    const month = cursor;
+    const name = "Ortho Logbook Backup - Month " + month + ".orbackup";
+    const text = await exportUnencryptedBackup({ type: "month", value: month }, onProgress);
+    const existing = await findBackupByName(name);
+    onProgress?.("Saving completed month " + month + " to Google Drive…");
+    const uploaded = await uploadContent(text, existing?.id, onProgress, name);
+    if (!uploaded?.id) throw new Error("Google Drive did not confirm the monthly archive for " + month + ". Local data remains safe.");
+    const verified = await downloadDriveJsonValidated(String(uploaded.id));
+    if (!verified || verified.app !== "Ortho Logbook" || !Array.isArray(verified.patients) || !Array.isArray(verified.inventory) ||
+        verified.filter?.type !== "month" || String(verified.filter?.value || "") !== month) {
+      throw new Error("The monthly archive for " + month + " could not be verified. Local data remains safe; monthly archiving will retry.");
+    }
+    cursor = nextMonthKey(cursor);
+    await storage.secureSet(MONTH_ARCHIVE_CURSOR_KEY, cursor);
+  }
+}
+
 export async function backupIncrementalToGoogleDrive(changedTables: string[], onProgress?: (stage: string) => void) {
   onProgress?.("Checking whether saved records changed…");
   const base = await findLatestBackup();
@@ -1450,8 +1522,15 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
       throw new Error("The complete backup could not be verified. The local change has not been marked as backed up.");
     }
     await commitIncrementalSnapshotCache(String(migratedBase.id) + ":" + String(migratedBase.modifiedTime || ""));
+    // The first confirmed master contains all pre-existing data. Month archives
+    // begin only after a later calendar-month rollover.
+    await storage.secureSet(MONTH_ARCHIVE_CURSOR_KEY, monthKeyFromDate(new Date()));
     return { ...migrated, skipped: false, completedAt: new Date().toISOString(), name: "Ortho Logbook Backup - All Time.orbackup", accountEmail: getConnectedGoogleAccount(), snapshotFailures: [] };
   }
+
+  // Archive each completed month once. These files contain period-filtered data,
+  // never another full all-time master. The original master remains the baseline.
+  await archiveCompletedMonths(onProgress);
 
   const JOURNAL_NAME = "Ortho Logbook Incremental Journal.orbackup";
   onProgress?.("Preparing the small change journal…");

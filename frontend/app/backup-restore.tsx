@@ -197,10 +197,10 @@ export default function BackupRestoreScreen() {
   const handleLoadDriveBackups = async () => {
     try {
       setDriveLoading(true);
-      setDriveStatus("Finding the single master backup…");
+      setDriveStatus("Finding the master and monthly backups…");
       const files = await listGoogleDriveBackups();
       setDriveBackups(files);
-      if (!files.length) Alert.alert("No master backup yet", "Tap Backup to Google Drive once to merge older month/year backups into one master file. Older files are kept unless every readable record is merged successfully.");
+      if (!files.length) Alert.alert("No Drive backups yet", "Tap Backup to Google Drive once. The first backup creates one full master with your old data; completed months are archived separately after each month ends.");
     } catch (error) {
       Alert.alert("Could not list backups", error instanceof Error ? error.message : "Unable to list Google Drive backups.");
     } finally {
@@ -468,7 +468,7 @@ export default function BackupRestoreScreen() {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Google Drive Backup</Text>
           <Text style={styles.cardSub}>
-            Connect a Google account on this phone. Google Drive keeps one rolling master backup with compressed patient and bill photos. Choose all-time, month, or year after downloading it. Drive backups are unencrypted; phone/file backups remain encrypted.
+            Connect a Google account on this phone. The first confirmed backup contains all existing data in one full master. After each month ends, Drive adds a month-named archive containing that period only—not another full master. Drive backups are unencrypted; phone/file backups remain encrypted.
           </Text>
           {googleAccount ? (
             <>
@@ -502,7 +502,7 @@ export default function BackupRestoreScreen() {
                 disabled={driveLoading}
               >
                 <Ionicons name="list-outline" size={18} color={colors.onSurface} />
-                <Text style={styles.secondaryText}>Select Master Backup for Period Restore</Text>
+                <Text style={styles.secondaryText}>Select Master or Monthly Backup to Restore</Text>
               </Pressable>
               {driveBackups.map((file) => (
                 <Pressable
@@ -516,7 +516,7 @@ export default function BackupRestoreScreen() {
                     {file.modifiedTime ? new Date(file.modifiedTime).toLocaleString() : "Drive backup"}
                     {file.size ? " · " + (Number(file.size) / (1024 * 1024)).toFixed(1) + " MB" : ""}
                   </Text>
-                  <Text style={styles.hint}>Tap to download the master backup, then choose all-time, month, or year restore</Text>
+                  <Text style={styles.hint}>{file.name.includes(" - Month ") ? "Monthly archive · restores this month without applying unrelated master changes" : "Full master · includes old data and current incremental changes"}</Text>
                 </Pressable>
               ))}
               <Pressable
