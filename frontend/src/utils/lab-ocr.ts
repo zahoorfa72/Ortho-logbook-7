@@ -463,7 +463,7 @@ export function parseLabReportRows(text: string, configuredTests: LabTestDefinit
     const structuredSource = structuredSection.trim() ? structuredSection : "";
     // Process reconstructed rows first, then raw OCR lines as a fallback for
     // tests the column geometry missed. Duplicate test/result pairs are removed below.
-    const sources = structuredSource ? [structuredSource, rawSection] : [page];
+    const sources = structuredSource ? [structuredSource] : [page];
 
     for (const source of sources) {
     const sourceLines = source.split(/\r?\n/);
@@ -756,33 +756,18 @@ export async function recognizeLabText(
     originalDimensions = originalSize;
     bestSize = originalSize;
     best = await recognizeText(uri);
-    const maxDimension = Math.max(originalSize.width, originalSize.height);
-    if (maxDimension < 2400) {
-      const scale = Math.min(2, 2400 / Math.max(1, maxDimension));
-      const enhanced = await ImageManipulator.manipulateAsync(
-        uri,
-        [{ resize: originalSize.width >= originalSize.height ? { width: Math.round(originalSize.width * scale) } : { height: Math.round(originalSize.height * scale) } }],
-        { compress: 1, format: ImageManipulator.SaveFormat.PNG },
-      );
-      try {
-        const second = await recognizeText(enhanced.uri);
-        const score = (value: any) => {
-          const text = String(value?.text || "");
-          // Report-date recognition outranks raw OCR length: the best general OCR
-          // pass can still omit a small printed date near the report header.
-          return text.length + (text.match(/\d+(?:[.,]\d+)?/g) || []).length * 8 +
-            (text.match(/\b(?:result|reference|range|hemoglobin|platelets|glucose|creatinine)\b/gi) || []).length * 12 +
-            (extractLabReportDate(text) ? 1500 : 0);
-        };
-        if (score(second) > score(best)) {
-          best = second;
-          bestSize = { width: Math.round(originalSize.width * scale), height: Math.round(originalSize.height * scale) };
-        }
-      } catch {}
-      try { await FileSystem.deleteAsync(enhanced.uri, { idempotent: true }); } catch {}
-    }
+    // Do not upscale and OCR every image by default. Patient files contain X-rays,
+    // clinical photos and documents that are not lab reports; repeated OCR on all of
+    // them causes severe lag. Retry with transformed copies only when the first pass
+    // is weak or does not produce recognizable lab rows.
   } catch {
     best = await recognizeText(uri);
+  }
+  const initialText = String(best?.text || "").trim();
+  const potentialLabMarker = /\b(?:hemoglobin|haemoglobin|hgb|platelets?|plt|hbs\s*ag|hbsag|hcv|hepatitis|hiv|wbc|rbc|mcv|mchc?|glucose|creatinine|bilirubin|urea|sodium|potassium|chloride|result|investigation|reference\s*range|lab(?:oratory)?\s*report)\b/i.test(initialText);
+  const initialRows = parseLabReportRows(initialText, configuredTests, gender, 10, true);
+  if (!potentialLabMarker && initialRows.length === 0) {
+    return { text: normalizeHemoglobinUnitText(initialText), structuredText: "", mode: "offline" };
   }
   const localScore = (value: any) => {
     const text = String(value?.text || "");

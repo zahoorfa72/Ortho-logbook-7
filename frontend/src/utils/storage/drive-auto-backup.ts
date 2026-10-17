@@ -90,7 +90,7 @@ async function runBackup() {
     setDriveSyncState({
       phase: "idle",
       updates: pendingTables.size,
-      message: "Changes saved on this phone · connect Google to upload",
+      message: "Backup pending: changes are safe on this phone · connect Google to upload",
     });
     return;
   }

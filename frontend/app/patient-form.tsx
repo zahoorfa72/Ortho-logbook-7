@@ -10,7 +10,6 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { extractLabReportDate, hasKnownLabTestName, isLabMetadataLine, isLikelyLabReportText, parseLabReportRows, recognizeLabText } from "@/src/utils/lab-ocr";
 import { scanPatientDocuments } from "@/src/utils/document-scanner";
 import { buildPerspectiveWarpHtml } from "@/src/utils/perspective-warp";
-import { enhanceImageWithOfflineAI, getOfflineAIModelStatus } from "@/src/utils/offline-ai-enhance";
 import { recordDiagnosticError } from "@/src/utils/problem-report";
 import { Dimensions } from "react-native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -53,31 +52,53 @@ function asBooleanFlag(value: unknown): boolean {
 
 function detectPositiveScreening(text: string): { hcvPlus: boolean; hbaSg: boolean; hiv: boolean } {
   const found = { hcvPlus: false, hbaSg: false, hiv: false };
-  const lines = String(text || "").split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-  const screeningName = /\b(?:hbsag|hba\s*sg|hepatitis\s*b\s*surface\s*antigen|hcv(?:\s*(?:antibody|ab|antigen))?|hepatitis\s*c(?:\s*(?:antibody|ab))?|hiv(?:\s*(?:1\s*\/?\s*2)?\s*(?:antibody|ab|screen))?)\b/i;
+  const lines = String(text || "").replace(/\u00a0/g, " ").split(/\r?\n/).map(line => line.replace(/\s+/g, " ").trim()).filter(Boolean);
+  const namePattern = /\b(?:h\s*b\s*s\s*a\s*g|hbs\s*ag|hbsag|hepatitis\s*b\s*(?:surface\s*)?antigen|anti\s*[- ]?\s*h\s*c\s*v|hcv(?:\s*(?:antibody|ab|antigen))?|hepatitis\s*c(?:\s*(?:antibody|ab))?|h\s*i\s*v(?:\s*[- ]?\s*1\s*\/?\s*2)?(?:\s*(?:antibody|ab|screen|ag))?)\b/i;
+  const statusPattern = /\b(?:presumptive\s+positive|non[\s-]?reactive|non[\s-]?detected|not\s+detected|negative|positive|reactive|detected|absent|normal|pos\.?|react\.?)\b|(?:^|\s)[+](?:\s|$)/i;
+  const normalizeStatus = (raw: string) => String(raw || "").toLowerCase().replace(/[\s.-]+/g, "").replace(/[^a-z+]/g, "");
+  const isPositive = (raw: string) => {
+    const status = normalizeStatus(raw);
+    if (["negative","nonreactive","notdetected","nondetected","absent","normal"].includes(status)) return false;
+    return ["positive","reactive","detected","presumptivepositive","pos","react","+"].includes(status);
+  };
+  const isNegative = (raw: string) => ["negative","nonreactive","notdetected","nondetected","absent","normal"].includes(normalizeStatus(raw));
+  const setFlag = (name: string) => {
+    if (/\b(?:h\s*b\s*s\s*a\s*g|hbs\s*ag|hbsag|hepatitis\s*b)\b/i.test(name)) found.hbaSg = true;
+    else if (/\b(?:h\s*c\s*v|hepatitis\s*c|anti\s*[- ]?\s*h\s*c\s*v)\b/i.test(name)) found.hcvPlus = true;
+    else if (/\bh\s*i\s*v\b/i.test(name)) found.hiv = true;
+  };
+
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const cells = line.includes("|") ? line.split("|").map(cell => cell.trim()) : [];
     const nameSource = cells.length >= 2 ? cells[0] : line;
-    const nameMatch = nameSource.match(screeningName) || line.match(screeningName);
-    if (!nameMatch) continue;
-    const name = nameMatch[0];
-    let resultPart = cells.length >= 2
-      ? String(cells[1] || "")
-      : line.slice(Math.max(0, line.toLowerCase().indexOf(name.toLowerCase()) + name.length));
-    // Some reports print the test name and its qualitative result on adjacent lines.
-    const qualitative = /\b(?:non[\s-]?reactive|not\s+detected|non[\s-]?detected|negative|presumptive\s+positive|positive|reactive|detected|absent|normal|pos\.?)\b/i;
-    if (!qualitative.test(resultPart)) {
-      resultPart += " " + (lines[i + 1] || "");
+    const match = nameSource.match(namePattern) || line.match(namePattern);
+    if (!match) continue;
+
+    // Prefer the cell immediately after the test name in reconstructed tables.
+    // If the OCR split columns/rows, look ahead only until another known test begins.
+    let measuredArea = cells.length >= 2 ? cells.slice(1, 3).join(" ") :
+      line.slice(Math.max(0, line.toLowerCase().indexOf(match[0].toLowerCase()) + match[0].length));
+    let statusMatch = measuredArea.match(statusPattern);
+    if (!statusMatch) {
+      for (let offset = 1; offset <= 2 && i + offset < lines.length; offset++) {
+        const next = lines[i + offset];
+        if (namePattern.test(next) || hasKnownLabTestName(next)) break;
+        const candidate = next.includes("|") ? next.split("|").slice(1, 3).join(" ") : next;
+        const candidateStatus = candidate.match(statusPattern);
+        if (candidateStatus) {
+          measuredArea += " " + candidate;
+          statusMatch = candidateStatus;
+          break;
+        }
+      }
     }
-    // Classify the first actual result status only. Reference columns often say
-    // "Non-reactive" even when the patient's result is "Reactive".
-    const status = resultPart.match(qualitative)?.[0].toLowerCase().replace(/[\s-]+/g, "") || "";
-    if (["negative", "nonreactive", "notdetected", "nondetected", "absent", "normal"].includes(status)) continue;
-    if (!["positive", "reactive", "detected", "presumptivepositive", "pos."].includes(status)) continue;
-    if (/\b(?:hbsag|hba\s*sg|hepatitis\s*b\s*surface\s*antigen)\b/i.test(name)) found.hbaSg = true;
-    else if (/\b(?:hcv|hepatitis\s*c)\b/i.test(name)) found.hcvPlus = true;
-    else if (/\bhiv\b/i.test(name)) found.hiv = true;
+    if (!statusMatch) continue;
+    const status = statusMatch[0];
+    // A negative result cell must win over a positive status printed in a reference
+    // column; the result cell is examined first when table separators are available.
+    if (isNegative(status) || !isPositive(status)) continue;
+    setFlag(match[0]);
   }
   return found;
 }
@@ -160,22 +181,10 @@ export default function PatientForm() {
   const [editingPhotoOriginal, setEditingPhotoOriginal] = useState<string | null>(null);
   const [editingPhotoUri, setEditingPhotoUri] = useState<string | null>(null);
   const [photoBusy, setPhotoBusy] = useState(false);
-  const [aiModelStatus, setAiModelStatus] = useState("AI model status will appear here.");
   const [perspectiveMode, setPerspectiveMode] = useState(false);
   const [perspectiveHtml, setPerspectiveHtml] = useState("");
   const perspectiveWebViewRef = useRef<any>(null);
-  useEffect(() => {
-    if (!perspectiveMode) return;
-    let active = true;
-    setAiModelStatus("Checking on-device AI model…");
-    void getOfflineAIModelStatus().then(status => {
-      if (!active) return;
-      setAiModelStatus(status.installed
-        ? "AI model ready on this phone (" + Math.round(status.sizeBytes / (1024 * 1024)) + " MB). No download needed."
-        : "AI model not downloaded yet (about 92 MB). Tap AI Enhance to download over the internet.");
-    }).catch(() => { if (active) setAiModelStatus("Could not check AI model. Tap AI Enhance to retry."); });
-    return () => { active = false; };
-  }, [perspectiveMode]);
+
   const [existingScanPickerVisible, setExistingScanPickerVisible] = useState(false);
   const [imagePickerReady, setImagePickerReady] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
@@ -1096,34 +1105,12 @@ export default function PatientForm() {
   const handlePerspectiveMessage = async (event: any) => {
     let message: any;
     try { message = JSON.parse(String(event?.nativeEvent?.data || "{}")); } catch { return; }
-    if (message?.type === "ai-enhance-request") {
-      setPhotoBusy(true);
-      try {
-        const result = await enhanceImageWithOfflineAI(String(message.dataUrl || ""), status => {
-          setAiModelStatus(status);
-          const js = "window.__aiEnhanceStatus && window.__aiEnhanceStatus(" + JSON.stringify(status) + ");true;";
-          perspectiveWebViewRef.current?.injectJavaScript(js);
-        }, message.mode === "high-detail" ? "high-detail" : "balanced");
-        setAiModelStatus("AI model ready. Image enhancement finished on this phone.");
-        const js = "window.__aiEnhanceComplete && window.__aiEnhanceComplete(" + JSON.stringify(result) + ", null);true;";
-        perspectiveWebViewRef.current?.injectJavaScript(js);
-      } catch (e: any) {
-        const reason = String(e?.message || e || "AI enhancement failed.");
-        void recordDiagnosticError(e, "Photo editor > AI Enhance / on-device model and inference");
-        setAiModelStatus("AI unavailable: " + reason);
-        const js = "window.__aiEnhanceComplete && window.__aiEnhanceComplete(null, " + JSON.stringify(reason) + ");true;";
-        perspectiveWebViewRef.current?.injectJavaScript(js);
-      } finally {
-        setPhotoBusy(false);
-      }
-      return;
-    }
     if (message?.type === "error") {
       void recordDiagnosticError(new Error(String(message.message || "Perspective correction failed.")), "Photo editor > Auto-Scan / perspective correction WebView");
       toast(String(message.message || "Perspective correction failed."), "error");
       return;
     }
-    if (message?.type !== "done" && message?.type !== "enhanced") return;
+    if (message?.type !== "done") return;
     setPhotoBusy(true);
     try {
       const match = String(message.dataUrl || "").match(/^data:image\/jpeg;base64,([\s\S]+)$/);
@@ -1137,7 +1124,7 @@ export default function PatientForm() {
       setCropRect(null);
       setPerspectiveMode(false);
       setPerspectiveHtml("");
-      toast(message.type === "enhanced" ? "On-device AI preview prepared. Check it against the original before saving." : "Perspective correction applied to this existing patient photo. Tap Save changes to keep it.", "success");
+      toast("Perspective correction applied to this existing patient photo. Tap Save changes to keep it.", "success");
     } catch (e: any) {
       toast("Could not save the corrected preview. " + String(e?.message || e || "Please try again."), "error");
     } finally {
@@ -1536,7 +1523,7 @@ export default function PatientForm() {
             accessibilityLabel="AI enhance and auto-scan existing patient images"
           >
             <Ionicons name="sparkles" size={19} color={colors.onBrandPrimary} />
-            <Text style={[styles.secondaryText, { color: colors.onBrandPrimary, fontFamily: fontFamily.bold }]}> AI Enhance / Auto-Scan Existing Images</Text>
+            <Text style={[styles.secondaryText, { color: colors.onBrandPrimary, fontFamily: fontFamily.bold }]}> Scan Existing Images</Text>
           </Pressable>
         </View>
         <View style={styles.photoActions}>
@@ -1575,8 +1562,8 @@ export default function PatientForm() {
             <View style={[styles.photoEditCard, { maxHeight: "82%" }]}>
               <View style={styles.photoEditHeader}>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.photoEditTitle}>AI Enhance / Auto-Scan Existing Patient Images</Text>
-                  <Text style={styles.photoEditHint}>Select any image already saved in this patient file. AI Enhance, Auto-Scan Page, and manual perspective correction are available in the editor.</Text>
+                  <Text style={styles.photoEditTitle}>Scan Existing Patient Images</Text>
+                  <Text style={styles.photoEditHint}>Select any image already saved in this patient file. Auto-Scan Page and manual perspective correction are available in the editor.</Text>
                 </View>
                 <Pressable onPress={() => setExistingScanPickerVisible(false)} style={styles.photoEditIconButton}>
                   <Ionicons name="close" size={22} color={colors.onSurface} />
@@ -1617,9 +1604,7 @@ export default function PatientForm() {
                       <Ionicons name="close" size={22} color={colors.onSurface} />
                     </Pressable>
                   </View>
-                  <View style={{ backgroundColor: colors.surfaceSecondary, borderRadius: radius.sm, paddingHorizontal: spacing.sm, paddingVertical: 6, marginBottom: spacing.xs }}>
-                    <Text style={{ color: colors.onSurfaceSecondary, fontSize: fontSize.xs, lineHeight: 17 }}>{aiModelStatus}</Text>
-                  </View>
+                  
                   <View style={{ flexDirection: "row", gap: spacing.sm, marginBottom: spacing.xs }}>
                     <Pressable
                       style={[styles.secondary, { flex: 1, backgroundColor: colors.surfaceSecondary }]}
@@ -1630,15 +1615,7 @@ export default function PatientForm() {
                       <Ionicons name="scan-outline" size={18} color={colors.brandPrimary} />
                       <Text style={styles.secondaryText}> Auto-Scan Page</Text>
                     </Pressable>
-                    <Pressable
-                      style={[styles.secondary, { flex: 1, backgroundColor: colors.surfaceSecondary }]}
-                      disabled={photoBusy}
-                      onPress={() => perspectiveWebViewRef.current?.injectJavaScript('document.getElementById("enhance").click(); true;')}
-                      testID="ai-enhance-existing-photo-button"
-                    >
-                      <Ionicons name="sparkles-outline" size={18} color={colors.brandPrimary} />
-                      <Text style={styles.secondaryText}> AI Enhance</Text>
-                    </Pressable>
+                    
                   </View>
                   <View style={{ flex: 1, minHeight: 0, overflow: "hidden", borderRadius: radius.md, backgroundColor: "#141414", marginBottom: spacing.xs }}>
                     <WebView
@@ -1722,8 +1699,8 @@ export default function PatientForm() {
                   <Text style={styles.photoToolText}>Apply Free Crop</Text>
                 </Pressable>
                 <Pressable style={styles.photoTool} disabled={photoBusy} onPress={() => { void openPerspectiveEditor(); }}>
-                  <Ionicons name="sparkles" size={20} color={colors.brandPrimary} />
-                  <Text style={styles.photoToolText}>AI Enhance / Auto-scan</Text>
+                  <Ionicons name="scan-outline" size={20} color={colors.brandPrimary} />
+                  <Text style={styles.photoToolText}>Auto-Scan Page</Text>
                 </Pressable>
                 <Pressable style={styles.photoTool} disabled={photoBusy} onPress={() => editPhoto("optimize")}>
                   <Ionicons name="sparkles-outline" size={20} color={colors.brandPrimary} />
