@@ -118,13 +118,19 @@ async function embedPhoto(uri:string, cache?: Map<string,string>, profile: "pati
         tempUris.push(inputUri);
       }
       const quality = profile === "document" ? 0.94 : 0.92;
-      const result = await Promise.race([
+      const result = await new Promise<any>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error("Image processing timed out after 45 seconds.")), 45000);
         ImageManipulator.manipulateAsync(inputUri, [], {
           compress: quality,
           format: ImageManipulator.SaveFormat.JPEG,
-        }),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Image processing timed out after 45 seconds.")), 45000)),
-      ]);
+        }).then((value) => {
+          clearTimeout(timeout);
+          resolve(value);
+        }, (error) => {
+          clearTimeout(timeout);
+          reject(error);
+        });
+      });
       tempUris.push(result.uri);
       const info = await LegacyFileSystem.getInfoAsync(result.uri);
       if (!info.exists || typeof info.size !== "number" || info.size <= 0) throw new Error("Compressed image is empty.");
