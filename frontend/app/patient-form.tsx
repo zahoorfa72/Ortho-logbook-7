@@ -243,6 +243,8 @@ export default function PatientForm() {
         ? [...new Set([...extracted.matchAll(/LAB REPORT IMAGE\s+(\d+)/gi)].map(match => photoUris[Number(match[1]) - 1]).filter(Boolean))]
         : [...new Set(recognizedPhotoUris)];
       const canonical = (value: string) => String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+      const configuredAliases = (item: any) => [String(item?.name || ""), ...String(item?.aliases || "").split(/[,;\\n]+/)].map(value => value.trim()).filter(Boolean);
+      const matchesConfiguredTest = (item: any, value: string) => configuredAliases(item).some(alias => canonical(alias) === canonical(value));
       const isHemoglobin = (value: string) => ["hemoglobin", "haemoglobin", "hgb", "hb"].includes(canonical(value));
       const reportDateForTest = (testName: string) => {
         const pages = extracted.split(/(?=LAB REPORT IMAGE\s+\d+)/i).filter(page => /LAB REPORT IMAGE\s+\d+/i.test(page));
@@ -294,7 +296,7 @@ export default function PatientForm() {
         for (const line of section.split(/\r?\n/)) {
           const cells = line.split("|").map(cell => cell.trim());
           if (cells.length < 2 || !hasKnownLabTestName(cells[0], configuredLabTests)) continue;
-          const configured = configuredLabTests.find(item => canonical(item.name) === canonical(cells[0]) ||
+          const configured = configuredLabTests.find(item => matchesConfiguredTest(item, cells[0]) ||
             (isHemoglobin(item.name) && isHemoglobin(cells[0])));
           const common = commonCandidates.find(item => canonical(item.name) === canonical(cells[0]) ||
             (isHemoglobin(item.name) && isHemoglobin(cells[0])));
@@ -313,9 +315,11 @@ export default function PatientForm() {
       const rawOnly = extracted;
       const rawLines = rawOnly.split(/\r?\n/);
       const missingResultReviews = testCandidates.filter(test => {
-        const aliases = isHemoglobin(test.name) ? ["hemoglobin", "haemoglobin", "hgb", "hb"] : [test.name];
+        const configured = configuredLabTests.find(item => canonical(item.name) === canonical(test.name));
+        const aliases = isHemoglobin(test.name) ? ["hemoglobin", "haemoglobin", "hgb", "hb", ...configuredAliases(configured || {})] : [test.name, ...configuredAliases(configured || {})];
         const aliasSeen = (line: string) => aliases.some(alias => canonical(line).includes(canonical(alias)));
         const matchingParsed = parsedRows.find(row => canonical(row.test) === canonical(test.name) ||
+          aliases.some(alias => canonical(row.test) === canonical(alias)) ||
           (isHemoglobin(row.test) && isHemoglobin(test.name)));
         const parsedValue = matchingParsed ? Number(String(matchingParsed.result).replace(",", ".")) : NaN;
         const min = Number(String(test.min ?? "").replace(",", "."));
@@ -398,8 +402,8 @@ export default function PatientForm() {
             reason = "Check result (OCR could not read a clear numeric value)";
           } else if (knownTest && resultLooksNumeric) {
             const testName = cells[0];
-            const saved = configuredLabTests.find(item => item.name.toLowerCase() === testName.toLowerCase()) ||
-              configuredLabTests.find(item => testName.toLowerCase().startsWith(item.name.toLowerCase()));
+            const saved = configuredLabTests.find(item => matchesConfiguredTest(item, testName) ||
+              (isHemoglobin(item.name) && isHemoglobin(testName)));
             const sex = /^\s*(?:m|male|man|men)\s*$/i.test(p.gender) ? "male" :
               /^\s*(?:f|female|woman|women)\s*$/i.test(p.gender) ? "female" : "";
             const savedRangeExists = !!saved && !!sex &&
