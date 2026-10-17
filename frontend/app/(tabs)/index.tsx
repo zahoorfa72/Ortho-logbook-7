@@ -501,7 +501,7 @@ export default function Logbook() {
             return { uri, ...cached };
           }
           try {
-            const result = await recognizeLabText(uri, onlineOcrKey, configuredTests, patient.gender);
+            const result = await recognizeLabText(uri, onlineOcrKey, configuredTests, patient?.gender || "");
             const text = String(result?.text || "").trim();
             const structuredText = result?.mode === "online" ? "" : String(result?.structuredText || "").trim();
             const combined = text + "\n" + structuredText;
