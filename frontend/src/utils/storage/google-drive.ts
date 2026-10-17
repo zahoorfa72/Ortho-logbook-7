@@ -584,6 +584,8 @@ async function uploadNativeBackground(
   }
   const taskId: string = await nativeUploader.startUpload(sessionUrl, token, fileUri, totalBytes);
   let lastProgress = -1;
+  let lastProgressAt = Date.now();
+  const noProgressLimitMs = 8 * 60 * 1000;
   while (true) {
     const status = await nativeUploader.getStatus(taskId);
     if (status?.status === "completed") {
@@ -595,7 +597,13 @@ async function uploadNativeBackground(
     const progress = Number(status?.progress ?? 0);
     if (progress !== lastProgress) {
       lastProgress = progress;
+      lastProgressAt = Date.now();
       onProgress?.("Uploading backup to Google Drive in background… " + progress + "%");
+    } else if (Date.now() - lastProgressAt >= noProgressLimitMs) {
+      throw new Error(
+        "Google Drive background upload made no progress for 8 minutes (last reported " +
+        progress + "%). The backup was not marked successful; local data remains on this phone. Retry on a stable connection."
+      );
     }
     await new Promise<void>(resolve => setTimeout(resolve, 1000));
   }
