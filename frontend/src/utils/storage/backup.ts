@@ -681,7 +681,7 @@ export async function exportIncrementalBackupData(changedTables: string[], onPro
    const id = rowKey(row);
    if (id === null) return true;
    const old = oldById.get(id);
-   const comparableRow = stripBackupImages(row);
+   const comparableRow = stripBackupCacheRow(row);
    const metadataChanged = !old || JSON.stringify(old) !== JSON.stringify(comparableRow);
    const patientPhotosChanged = table === "patients" && (!previous!.photoSources || previous!.photoSources[id] !== currentPhotoSignatures[id]);
    const currentImageSignature = currentImageSignatures.get(id) || "";
