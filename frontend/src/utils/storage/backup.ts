@@ -89,8 +89,15 @@ async function embedPhoto(uri:string, cache?: Map<string,string>, profile: "pati
     // Restored data URIs have already passed through this optimizer. Leave
     // them untouched to avoid generation-after-generation JPEG degradation.
     if (/^data:image\//i.test(uri)) {
-      cache?.set(cacheKey, uri);
-      return uri;
+      // A restored/previously compressed data URI is usually small. Do not
+      // repeatedly recompress those, but oversized embedded originals must
+      // still pass through the bounded resize below or they can exhaust the
+      // Android heap at the same patient index on every backup attempt.
+      const base64Payload = uri.slice(uri.indexOf(",") + 1);
+      if (base64Payload.length <= 700_000) {
+        cache?.set(cacheKey, uri);
+        return uri;
+      }
     }
     // Encode from the original local file once: preserve native resolution
     // (including small OCR text) and use high-quality JPEG compression.
