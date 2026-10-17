@@ -503,7 +503,7 @@ export function parseLabReportRows(text: string, configuredTests: LabTestDefinit
         // If the inferred result cell contains multiple numeric values, the
         // column geometry is ambiguous (often a neighboring test row/range).
         // Reject it and let the raw OCR fallback recover the result by label.
-        const numericTokens = cells[1].match(/[-+]?\\d+(?:[.,]\\d+)?/g) || [];
+        const numericTokens = cells[1].match(/[-+]?\d+(?:[.,]\d+)?/g) || [];
         if (numericTokens.length > 1) continue;
         resultRaw = resultNumber(cells[1]);
       } else {
@@ -514,7 +514,7 @@ export function parseLabReportRows(text: string, configuredTests: LabTestDefinit
       }
       let pairedLine = "";
       let pairedUnit = "";
-      if (!resultRaw) {
+      if (!resultRaw && !structured) {
         // Some OCR engines place the label and its measured value on neighboring lines.
         // Do not cross another known test label or mistake an interval for a result.
         for (let offset = 1; offset <= 2 && lineIndex + offset < sourceLines.length; offset++) {
@@ -665,9 +665,9 @@ function structureLabColumns(blocks: any[], imageWidth: number, imageHeight: num
   const knownRows = rowDetails.filter(row => row.prefix && row.labelRight !== null);
   if (!knownRows.length) return "";
 
-  const headerResult = positioned.find(item => /^result\\s*:?$/i.test(item.text.trim()));
+  const headerResult = positioned.find(item => /^result\s*:?$/i.test(item.text.trim()));
   const headerResultX = headerResult ? xCenter(headerResult) : null;
-  const qualitative = /^(?:positive|negative|reactive|nonreactive|non[\\s-]?reactive|not[\\s-]?detected|detected|absent|present|normal|abnormal)$/i;
+  const qualitative = /^(?:positive|negative|reactive|nonreactive|non[\s-]?reactive|not[\s-]?detected|detected|absent|present|normal|abnormal)$/i;
   const output: string[] = [];
 
   for (const row of knownRows) {
@@ -707,7 +707,7 @@ function structureLabColumns(blocks: any[], imageWidth: number, imageHeight: num
     }
 
     const labelCell = row.ordered
-      .filter(item => item.x / imageWidth <= chosen.center)
+      .filter(item => xCenter(item) < chosen.center - 0.001)
       .map(item => item.text)
       .join(" ")
       .trim();
@@ -719,7 +719,7 @@ function structureLabColumns(blocks: any[], imageWidth: number, imageHeight: num
     output.push(labelCell + " | " + chosen.text + " | " + after + " | ");
   }
 
-  return output.join("\\n");
+  return output.join("\n");
 }
 async function recognizeOnlineLabText(uri: string, apiKey: string): Promise<string> {
   const key = String(apiKey || "").trim();
