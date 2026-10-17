@@ -184,11 +184,11 @@ async function embedPatientPhotos(row:any, cache?: Map<string,string>){
   for(const uri of photos)embedded.push(await embedPhoto(uri, cache));
   return {
     ...row,
-    // The first photo is already present in photos_json. Duplicating its
-    // base64 payload in photo_uri almost doubles backup size and memory use.
-    // restorePatientPhotos() and the app's photo reader use photos_json first.
+    // Keep photos as an array in the structured backup. The streaming Drive
+    // writer can emit each image without joining every image into one giant
+    // photos_json string; restorePatientPhotos() converts it back to DB JSON.
     photo_uri: "",
-    photos_json: JSON.stringify(embedded),
+    photos_json: embedded,
   };
 }
 
@@ -832,9 +832,11 @@ function restorePatientPhotos(p:any){
   // v3 contains data:image/...;base64,... strings, which work directly with
   // React Native Image and therefore survive moving the backup to another phone.
   // v2 is still accepted for backward compatibility.
-  const photosJson = p.photos_json || null;
+  const photosJson = p.photos_json ?? null;
   let photos:string[]=[];
-  if(photosJson){
+  if(Array.isArray(photosJson)) {
+    photos = photosJson.filter((x:any)=>typeof x==="string"&&x.length>0);
+  } else if(photosJson) {
     try{const parsed=JSON.parse(String(photosJson));if(Array.isArray(parsed))photos=parsed.filter((x)=>typeof x==="string"&&x.length>0);}catch{}
   }
   const primary=photos[0]||p.photo_uri||"";
