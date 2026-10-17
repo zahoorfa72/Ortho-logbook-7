@@ -54,6 +54,7 @@ type LabScanStatus = {
 
 const LAB_SCAN_STATUS_STORAGE_KEY = "ortho_lab_ocr_scan_states_v1";
 const NEW_PATIENT_LAB_SCAN_QUEUE_KEY = "ortho_lab_ocr_new_patient_queue_v1";
+const LAB_OCR_PIPELINE_VERSION = "row-aware-2026-10-17-v2";
 
 type Patient = {
   id: string;
@@ -479,8 +480,7 @@ export default function Logbook() {
       let warningPercent = 10;
       try {
         // Read the current cache first, then migrate the older cache key if needed.
-        let raw = await AsyncStorage.getItem("ortho_lab_ocr_photo_cache_v4");
-        if (!raw) raw = await AsyncStorage.getItem("ortho_lab_ocr_photo_cache_v3");
+        let raw = await AsyncStorage.getItem("ortho_lab_ocr_photo_cache_v5");
         if (raw) photoCache = JSON.parse(raw);
       } catch {}
       try {
@@ -530,7 +530,7 @@ export default function Logbook() {
             checkedAt: result.checkedAt || Date.now(),
           };
         }
-        await AsyncStorage.setItem("ortho_lab_ocr_photo_cache_v4", JSON.stringify(photoCache)).catch(() => {});
+        await AsyncStorage.setItem("ortho_lab_ocr_photo_cache_v5", JSON.stringify(photoCache)).catch(() => {});
       }
       if (stopLabScansRef.current.has(patientId)) return;
 
@@ -553,7 +553,7 @@ export default function Logbook() {
         try {
           await api.put("/patients/" + patientId, {
             ...patient,
-            customData: { ...(patient.customData || {}), labOcrPossibleFlags: "", labOcrDetectedResults: "[]", labOcrDetectedAt: new Date().toISOString(), labOcrReportDate: "", labOcrPhotoSignature: photos.join("|"), labOcrDateNeedsAdmin: "false", labOcrDateManuallyConfirmed: "false" },
+            customData: { ...(patient.customData || {}), labOcrPossibleFlags: "", labOcrDetectedResults: "[]", labOcrDetectedAt: new Date().toISOString(), labOcrReportDate: "", labOcrPhotoSignature: photos.join("|"), labOcrPipelineVersion: LAB_OCR_PIPELINE_VERSION, labOcrDateNeedsAdmin: "false", labOcrDateManuallyConfirmed: "false" },
           });
           queryClient.invalidateQueries({ queryKey: ["patients"] });
         } catch {}
@@ -613,7 +613,7 @@ export default function Logbook() {
           other.unit.toLowerCase() === row.unit.toLowerCase() &&
           other.date === row.date) === index)
         .slice(0, 200);
-      const signature = photos.join("|") + "|gender:" + String(patient.gender || "") +
+      const signature = LAB_OCR_PIPELINE_VERSION + "|" + photos.join("|") + "|gender:" + String(patient.gender || "") +
         "|ranges:" + configuredTests.map(item => [item.name,item.maleMin,item.maleMax,item.femaleMin,item.femaleMax,item.unit].join(":")).join(";");
       setLabFlagsByPatient(previous => ({ ...previous, [patientId]: { signature, flags: uniqueFlags, reportDate: reportDateSummary } }));
       try {
@@ -624,6 +624,7 @@ export default function Logbook() {
             ...existingCustomData,
             labOcrPossibleFlags: uniqueFlags.join("\n"),
             labOcrDetectedResults: JSON.stringify(uniqueDetectedResults),
+            labOcrPipelineVersion: LAB_OCR_PIPELINE_VERSION,
             labOcrPhotoSignature: photos.join("|"),
             labOcrDetectedAt: new Date().toISOString(),
             labOcrReportDate: reportDateSummary,
@@ -685,7 +686,7 @@ export default function Logbook() {
     if (autoForNewPatient) autoQueuedPatientIdsRef.current.add(patientId);
     else forceRetryLabScanIdsRef.current.add(patientId);
     pendingLabScansRef.current.push(patientId);
-    saveLabScanState(patientId, { status: "queued", message: autoForNewPatient ? "New patient: waiting to scan saved photos…" : "Retry requested — waiting to scan this patient's photos…", updatedAt: new Date().toISOString() });
+    saveLabScanState(patientId, { status: "queued", message: autoForNewPatient ? "Automatic scan: waiting to read saved lab photos…" : "Retry requested — waiting to scan this patient's photos…", updatedAt: new Date().toISOString() });
     void drainLabScanQueue();
   }, [drainLabScanQueue, saveLabScanState]);
   requestLabScanRef.current = requestLabScan;
@@ -707,6 +708,19 @@ export default function Logbook() {
       for (const patientId of queuedIds) {
         if (!patientIds.has(patientId) || autoQueuedPatientIdsRef.current.has(patientId)) continue;
         requestLabScanRef.current(patientId, true);
+      }
+
+      // Upgrade existing records that were already scanned under the old parser.
+      // They have a saved photo signature; rescan each once so the new row-aware
+      // extractor replaces stale/manual-review-only results. The queue is serial.
+      for (const patient of (data || []) as Patient[]) {
+        const priorPhotoSignature = String(patient.customData?.labOcrPhotoSignature || "").trim();
+        const currentVersion = String(patient.customData?.labOcrPipelineVersion || "");
+        if (!priorPhotoSignature || currentVersion === LAB_OCR_PIPELINE_VERSION) continue;
+        if (autoQueuedPatientIdsRef.current.has(patient.id) ||
+            runningLabScansRef.current.has(patient.id) ||
+            pendingLabScansRef.current.includes(patient.id)) continue;
+        requestLabScanRef.current(patient.id, true);
       }
     }).catch(() => {});
   }, [labScanStateLoaded, labOcrEnabled, isLoading, data]);

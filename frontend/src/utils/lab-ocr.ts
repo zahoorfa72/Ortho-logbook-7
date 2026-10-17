@@ -104,17 +104,17 @@ export function isLabMetadataLine(line: string, configuredTests: LabTestDefiniti
 function findTestPrefix(line: string, configuredTests: LabTestDefinition[] = []): { name: string; end: number; configured?: LabTestDefinition } | null {
   const cleaned = line.replace(/^\s*[•*|:;\-]+\s*/, "");
   const lower = cleaned.toLowerCase();
-  for (const configured of configuredTests) {
+  for (const configured of [...configuredTests].sort((a, b) => String(b.name || "").length - String(a.name || "").length)) {
     const name = String(configured.name || "").trim();
     if (name.length < 2) continue;
     const lowerName = name.toLowerCase();
     if (cleaned.toLowerCase().startsWith(lowerName)) {
       const nextChar = cleaned.charAt(name.length);
-      if (!nextChar || /[\s:|]/.test(nextChar)) return { name: cleaned.slice(0, name.length).trim(), end: name.length, configured };
+      if (!nextChar || /[\s:|]/.test(nextChar) || "([{/%".includes(nextChar)) return { name: cleaned.slice(0, name.length).trim(), end: name.length, configured };
     }
   }
   for (const alias of TEST_ALIASES) {
-    const pattern = new RegExp("^" + alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?=$|\\s|[:|])", "i");
+    const pattern = new RegExp("^" + alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?=$|\\s|:|\\||\\(|\\[|\\{|/|%)", "i");
     const match = pattern.exec(cleaned);
     if (match) { const name = cleaned.slice(0, match[0].length).trim(); return { name, end: match[0].length, configured: configuredTestForName(name, configuredTests) }; }
   }
@@ -130,7 +130,7 @@ function findTestPrefix(line: string, configuredTests: LabTestDefinition[] = [])
 }
 
 function isNonResultLine(line: string, configuredTests: LabTestDefinition[] = []): boolean {
-  if (!line || line.length < 4 || META_LINE.test(line) || HEADER_LINE.test(line)) return true;
+  if (!line || (line.length < 4 && !findTestPrefix(line, configuredTests)) || META_LINE.test(line) || HEADER_LINE.test(line)) return true;
   if (DATE_ONLY.test(line) && !findTestPrefix(line, configuredTests)) return true;
   if (/^\s*(?:m|male|f|female)\s*[:=]?\s*\d/i.test(line) && !findTestPrefix(line, configuredTests)) return true;
   if (/^\s*(?:ref(?:erence)?|normal)\s*(?:range|interval)?\s*[:=]/i.test(line)) return true;
@@ -140,12 +140,36 @@ function isNonResultLine(line: string, configuredTests: LabTestDefinition[] = []
 export function isLikelyLabReportText(text: string, configuredTests: LabTestDefinition[] = []): boolean {
   const lines = String(text || "").split(/\r?\n/).map(line => line.replace(/\s+/g, " ").trim());
   let validRows = 0;
-  for (const line of lines) {
+  const hasMeasuredValue = (value: string) => {
+    const referenceStart = firstReferenceStart(value);
+    const measuredArea = referenceStart >= 0 ? value.slice(0, referenceStart) : value;
+    return resultNumber(measuredArea) !== null ||
+      /\b(?:positive|negative|reactive|nonreactive|non[\s-]?reactive|detected|not\s+detected)\b/i.test(measuredArea);
+  };
+
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
     if (isNonResultLine(line, configuredTests)) continue;
     const test = findTestPrefix(line, configuredTests);
     if (!test) continue;
-    const rest = line.slice(test.end);
-    if (new RegExp(NUM).test(rest) || /\b(?:positive|negative|reactive|nonreactive)\b/i.test(rest)) validRows++;
+    const rest = line.slice(test.end).replace(/^\s*\((?!\s*[-+]?\d)[^)]{1,30}\)\s*/, " ");
+    if (hasMeasuredValue(rest)) {
+      validRows++;
+      continue;
+    }
+
+    // OCR commonly splits labels and results over adjacent lines/blocks.
+    // Pair nearby values, but stop when another known test name appears.
+    for (let offset = 1; offset <= 3 && index + offset < lines.length; offset++) {
+      const nearby = lines[index + offset];
+      if (!nearby) continue;
+      if (findTestPrefix(nearby, configuredTests)) break;
+      if (isNonResultLine(nearby, configuredTests) && resultNumber(nearby) === null) continue;
+      if (hasMeasuredValue(nearby)) {
+        validRows++;
+        break;
+      }
+    }
   }
   return validRows >= 1;
 }
@@ -234,29 +258,27 @@ function firstReferenceStart(text: string): number {
 }
 
 function resultNumber(text: string): string | null {
-  const value = String(text || "").replace(/\s+/g, " ").trim();
+  const value = String(text || "").replace(/\s+/g, " ").trim()
+    .replace(/^[\s|:;]+/, "")
+    .replace(/^(?:result|value|reading)\s*[:=|]?\s*/i, "")
+    .replace(/^(?:high|low|h|l)\s*[:=|]?\s*(?=[<>≤≥]?\s*[-+]?\d)/i, "");
   if (!value || /\b(?:male|female|men|women|reference|normal|range|interval)\b/i.test(value)) return null;
 
-  // F/M (including OCR forms iF/iM) may be a sex marker, not a unit.
-  // Remove a trailing standalone marker while preserving the numeric result;
-  // the patient's gender is used separately to select the reference range.
+  // F/M (including OCR forms iF/iM) may be a sex marker, not a result.
   const withoutSexMarker = value
     .replace(/^\s*(?:i?[fm])\s+(?=[<>≤≥]?\s*[-+]?\d)/i, "")
     .replace(/(?:^|\s)(?:i?[fm])\s*$/i, "")
     .trim();
 
-  // A result cell should contain one measured scalar, optionally followed by
-  // a unit or H/L flag. Never take the first number from a cell that also
-  // contains a reference interval or multiple unrelated numbers: that was
-  // causing the lower/upper reference limit to be reported as the result.
+  const qualitative = /^(?:non[\s-]?reactive|not\s+detected|negative|positive|reactive|detected|absent|present|normal|abnormal)\b/i.exec(withoutSexMarker);
+  if (qualitative) return qualitative[0].replace(/\s+/g, " ").trim();
+
+  // Never take a reference-range endpoint or a second unrelated number as a result.
   if (INTERVAL_PATTERN.test(withoutSexMarker)) return null;
   const scalar = new RegExp("^\\s*([<>≤≥]?\\s*" + NUMBER_PATTERN + ")").exec(withoutSexMarker);
   if (!scalar) return null;
   const raw = scalar[1].replace(/[<>≤≥\s]/g, "");
   const remainder = withoutSexMarker.slice(scalar[0].length).trim();
-
-  // Scientific lab units such as 5.2 x10^9/L contain a second number as part
-  // of the unit. Remove that notation before checking for a second result.
   const remainderWithoutScientificUnit = remainder
     .replace(/[x×]\s*10\s*\^?\s*[-+]?\d+/gi, "")
     .replace(/\b(?:10\^?\d+)\b/gi, "")
@@ -444,12 +466,14 @@ export function parseLabReportRows(text: string, configuredTests: LabTestDefinit
     const sources = structuredSource ? [structuredSource, rawSection] : [page];
 
     for (const source of sources) {
-    for (const rawLine of source.split(/\r?\n/)) {
+    const sourceLines = source.split(/\r?\n/);
+    for (let lineIndex = 0; lineIndex < sourceLines.length; lineIndex++) {
+      const rawLine = sourceLines[lineIndex];
       const line = rawLine.replace(/\s+/g, " ").trim();
       if (isNonResultLine(line, configuredTests)) continue;
 
       const cells = line.includes("|") ? line.split("|").map(cell => cell.trim()) : [];
-      const structured = cells.length >= 3 ? findTestPrefix(cells[0], configuredTests) : null;
+      const structured = cells.length >= 2 ? findTestPrefix(cells[0], configuredTests) : null;
       let testPrefix: { name: string; end: number; configured?: LabTestDefinition } | null = structured || findTestPrefix(line, configuredTests);
       if (!testPrefix) continue;
 
@@ -463,12 +487,32 @@ export function parseLabReportRows(text: string, configuredTests: LabTestDefinit
         // OCR commonly mixes the male and female intervals or reads them as results.
         resultRaw = resultNumber(cells[1]);
       } else {
-        const rest = line.slice(testPrefix.end).replace(/^\s*[:|\-]+\s*/, "");
+        const rest = line.slice(testPrefix.end).replace(/^\s*\((?!\s*[-+]?\d)[^)]{1,30}\)\s*/, " ").replace(/^\s*[:|\-]+\s*/, "");
         const referenceStart = firstReferenceStart(rest);
         const resultArea = referenceStart >= 0 ? rest.slice(0, referenceStart) : rest;
         resultRaw = resultNumber(resultArea);
       }
-      unit = String(testPrefix.configured?.unit || "").trim();
+      let pairedLine = "";
+      let pairedUnit = "";
+      if (!resultRaw) {
+        // Some OCR engines place the label and its measured value on neighboring lines.
+        // Do not cross another known test label or mistake an interval for a result.
+        for (let offset = 1; offset <= 2 && lineIndex + offset < sourceLines.length; offset++) {
+          const nearby = sourceLines[lineIndex + offset].replace(/\s+/g, " ").trim();
+          if (!nearby) continue;
+          if (findTestPrefix(nearby, configuredTests)) break;
+          if (isNonResultLine(nearby, configuredTests) && resultNumber(nearby) === null) continue;
+          const referenceStart = firstReferenceStart(nearby);
+          const measuredArea = referenceStart >= 0 ? nearby.slice(0, referenceStart) : nearby;
+          const measured = resultNumber(measuredArea);
+          if (!measured) continue;
+          resultRaw = measured;
+          pairedLine = nearby;
+          pairedUnit = unitFromResultCell(measuredArea);
+          break;
+        }
+      }
+      unit = String(testPrefix.configured?.unit || pairedUnit || "").trim();
       // Never use a reference interval printed on the report for alerting.
       // Use only the saved range for this patient's sex (M/male or F/female).
       if (!resultRaw) continue;
@@ -490,7 +534,8 @@ export function parseLabReportRows(text: string, configuredTests: LabTestDefinit
         .replace(/[0-9.,+\-–—:|;]/g, " ")
         .replace(/\s+/g, " ")
         .trim();
-      const key = (normaliseName(testPrefix.name) + "|" + result + "|" + (reference?.text || "no-reference")).toLowerCase();
+      const resultKey = Number.isFinite(result) ? String(result) : normaliseName(resultRaw);
+      const key = (normaliseName(testPrefix.name) + "|" + resultKey + "|" + (reference?.text || "no-reference")).toLowerCase();
       if (seen.has(key)) continue;
       seen.add(key);
       rows.push({
@@ -499,7 +544,7 @@ export function parseLabReportRows(text: string, configuredTests: LabTestDefinit
         unit: normalizeLabUnit(testPrefix.name, cleanedUnit || testPrefix.configured?.unit || defaultUnitForTest(testPrefix.name)).slice(0, 24),
         reference: reference?.text || "",
         severity,
-        sourceLine: line,
+        sourceLine: pairedLine ? line + " | " + pairedLine : line,
       });
     }
     }
@@ -519,81 +564,146 @@ function imageSize(uri: string): Promise<{ width: number; height: number }> {
  * Rebuild table rows from OCR bounding boxes instead of trusting the OCR
  * engine's flattened text order. All coordinates are in original image pixels.
  */
-function structureLabColumns(blocks: any[], imageWidth: number, imageHeight: number): string {
+function structureLabColumns(blocks: any[], imageWidth: number, imageHeight: number, configuredTests: LabTestDefinition[] = []): string {
+  const suppliedBlocks = Array.isArray(blocks) ? blocks : [];
+  // Paragraph-level rectangles cover multiple lines and cannot safely be reused
+  // as the geometry of each individual line or table cell.
+  if (suppliedBlocks.some(block =>
+    /\r|\n/.test(String(block?.text || "")) &&
+    Number(block?.boundingBox?.height || 0) > 0
+  )) return "";
+
   const positioned: OcrPositionedLine[] = [];
-  for (const block of blocks || []) {
+  for (const block of suppliedBlocks) {
     const box = block?.boundingBox;
-    const blockText = String(block?.text || "").trim();
-    if (!box || !blockText) continue;
-    const pieces = blockText.split(/\r?\n/).map((s: string) => s.trim()).filter(Boolean);
-    const blockHeight = Number(box.height) || 1;
-    const lineHeight = blockHeight / Math.max(1, pieces.length);
-    pieces.forEach((text: string, index: number) => positioned.push({
+    const text = String(block?.text || "").trim();
+    if (!box || !text) continue;
+    positioned.push({
       text,
       x: Number(box.x) || 0,
-      y: (Number(box.y) || 0) + index * lineHeight,
+      y: Number(box.y) || 0,
       width: Number(box.width) || 0,
-      height: lineHeight,
-    }));
+      height: Number(box.height) || 1,
+    });
   }
   if (!positioned.length || !imageWidth || !imageHeight) return "";
 
-  // Use printed column headings when the OCR provides separate heading blocks.
-  const headerX = (pattern: RegExp) => {
-    const hit = positioned.find(item => pattern.test(item.text));
-    return hit ? (hit.x + hit.width / 2) / imageWidth : undefined;
+  const xCenter = (item: OcrPositionedLine) => (item.x + item.width / 2) / imageWidth;
+  const mean = (values: number[]) => values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length);
+  const median = (values: number[]) => {
+    if (!values.length) return undefined;
+    const sorted = [...values].sort((a, b) => a - b);
+    return sorted[Math.floor(sorted.length / 2)];
   };
-  const testHeader = headerX(/^(?:test(?:\s*name)?|investigation|parameter|analyte)\b/i);
-  const resultHeader = headerX(/^result\b/i);
-  const unitHeader = headerX(/^units?\b/i);
-  const refHeader = headerX(/^(?:reference|normal|biological)\b/i);
-  // Boundaries sit between column centres, not on the header text itself.
-  const testCenter = testHeader ?? 0.20;
-  const resultCenter = resultHeader ?? 0.50;
-  const unitCenter = unitHeader ?? 0.66;
-  const refCenter = refHeader ?? 0.84;
-  const testBoundary = (testCenter + resultCenter) / 2;
-  const resultBoundary = (resultCenter + unitCenter) / 2;
-  const unitBoundary = (unitCenter + refCenter) / 2;
 
-  const sorted = positioned.sort((a, b) => (a.y + a.height / 2) - (b.y + b.height / 2));
-  const typicalHeight = sorted.map(item => item.height).sort((a, b) => a - b)[Math.floor(sorted.length / 2)] || imageHeight * 0.02;
-  const rowTolerance = Math.max(typicalHeight * 0.65, imageHeight * 0.006);
-  const groups: OcrPositionedLine[][] = [];
-  for (const item of sorted) {
-    const center = item.y + item.height / 2;
-    let target = groups.find(group => {
-      const centers = group.map(line => line.y + line.height / 2);
-      const avg = centers.reduce((sum, value) => sum + value, 0) / centers.length;
-      return Math.abs(center - avg) <= Math.max(rowTolerance, Math.min(item.height, group[0].height) * 0.45);
+  // Word-level boxes are first aligned into visual rows using their y positions.
+  const typicalHeight = median(positioned.map(item => item.height)) || imageHeight * 0.02;
+  const rowTolerance = Math.max(typicalHeight * 0.58, imageHeight * 0.005);
+  const rowGroups: OcrPositionedLine[][] = [];
+  for (const item of positioned.sort((a, b) => (a.y + a.height / 2) - (b.y + b.height / 2))) {
+    const y = item.y + item.height / 2;
+    let target = rowGroups.find(group => {
+      const avgY = mean(group.map(entry => entry.y + entry.height / 2));
+      return Math.abs(y - avgY) <= Math.max(rowTolerance, Math.min(item.height, group[0].height) * 0.45);
     });
-    if (!target) { target = []; groups.push(target); }
+    if (!target) { target = []; rowGroups.push(target); }
     target.push(item);
   }
 
+  // Preserve word-to-character positions to map a multi-word recognized test label
+  // back to its visual x coordinates after combining the words for matching.
+  const rowDetails = rowGroups.map(group => {
+    const ordered = [...group].sort((a, b) => a.x - b.x);
+    let cursor = 0;
+    const spans = ordered.map((item, index) => {
+      if (index) cursor += 1;
+      const start = cursor;
+      cursor += item.text.length;
+      return { item, start, end: cursor };
+    });
+    const text = ordered.map(item => item.text).join(" ");
+    const prefix = findTestPrefix(text, configuredTests);
+    let labelLeft: number | null = null;
+    let labelRight: number | null = null;
+    if (prefix) {
+      const labelStart = text.toLowerCase().indexOf(prefix.name.toLowerCase());
+      const labelEnd = labelStart >= 0 ? labelStart + prefix.name.length : prefix.end;
+      const labelSpans = spans.filter(span => span.end > Math.max(0, labelStart) && span.start < labelEnd);
+      if (labelSpans.length) {
+        labelLeft = Math.min(...labelSpans.map(span => span.item.x / imageWidth));
+        labelRight = Math.max(...labelSpans.map(span => (span.item.x + span.item.width) / imageWidth));
+      }
+    }
+    return { ordered, spans, text, prefix, labelLeft, labelRight };
+  });
+
+  const knownRows = rowDetails.filter(row => row.prefix && row.labelRight !== null);
+  // Never manufacture a table if no known test label was recognized.
+  if (!knownRows.length) return "";
+
+  const testRight = Math.max(...knownRows.map(row => row.labelRight!));
+  const candidateX: number[] = [];
+  const qualitative = /^(?:positive|negative|reactive|nonreactive|non[\s-]?reactive|detected|absent|present|normal|abnormal)$/i;
+  for (const row of knownRows) {
+    const prefix = row.prefix!;
+    for (const span of row.spans) {
+      if (span.start < prefix.end) continue;
+      const value = span.item.text.trim();
+      // Collect measured scalars and qualitative results only after the recognized
+      // test label. Reference-range numbers remain farther right and form their
+      // own cluster(s), which keeps them out of the measured-result cell.
+      if (resultNumber(value) !== null || qualitative.test(value)) {
+        const center = xCenter(span.item);
+        if (center > testRight + 0.025) candidateX.push(center);
+      }
+    }
+  }
+
+  candidateX.sort((a, b) => a - b);
+  const clusters: number[][] = [];
+  for (const value of candidateX) {
+    const last = clusters[clusters.length - 1];
+    if (last && Math.abs(value - mean(last)) <= 0.055) last.push(value);
+    else clusters.push([value]);
+  }
+  const resultCenters = clusters.map(mean);
+  const headerCenter = (pattern: RegExp) => {
+    const item = positioned.find(value => pattern.test(value.text.trim()));
+    return item ? xCenter(item) : undefined;
+  };
+  const resultCenter = headerCenter(/^result\s*:?$/i) ??
+    resultCenters.find(value => value > testRight + 0.035);
+  if (resultCenter === undefined) return "";
+
+  // Column positions arrange the row only. Clinical classification continues to use
+  // the saved sex-specific ranges, never reference endpoints read from the image.
+  const laterCenters = resultCenters.filter(value => value > resultCenter + 0.07);
+  const unitCenter = headerCenter(/^units?\s*:?$/i) ?? Math.max(resultCenter + 0.15, 0.66);
+  const referenceCenter = headerCenter(/^(?:reference|normal|biological|ref)\s*:?$/i) ??
+    laterCenters[0] ?? Math.max(unitCenter + 0.18, 0.84);
+  const testBoundary = Math.min((testRight + resultCenter) / 2, resultCenter - 0.025);
+  const resultBoundary = (resultCenter + unitCenter) / 2;
+  const unitBoundary = (unitCenter + referenceCenter) / 2;
+
   const output: string[] = [];
-  for (const group of groups) {
+  for (const row of rowDetails) {
     const cells = ["", "", "", ""];
-    for (const item of group.sort((a, b) => a.x - b.x)) {
-      const xCenter = (item.x + item.width / 2) / imageWidth;
-      const column = xCenter < testBoundary ? 0 : xCenter < resultBoundary ? 1 : xCenter < unitBoundary ? 2 : 3;
+    for (const item of row.ordered) {
+      const center = xCenter(item);
+      const column = center < testBoundary ? 0 : center < resultBoundary ? 1 : center < unitBoundary ? 2 : 3;
       cells[column] = (cells[column] + " " + item.text).trim();
     }
-    // If geometry doesn't reveal separate cells, retain the row for manual
-    // review rather than inventing column assignments.
+    // Preserve rows whose geometry does not fit the inferred grid; raw-text parsing
+    // can still extract from them without pretending they are aligned table cells.
     if (!cells[0] || !cells[1]) {
-      const fallback = group.map(item => item.text).join(" | ").trim();
-      if (fallback) output.push(fallback);
+      output.push(row.text);
       continue;
     }
-    const row = [cells[0], cells[1], cells[2], cells[3]].filter(Boolean).join(" | ");
-    if (row && !/^(?:test(?:\s*name)?|investigation|parameter|result|units?|reference(?:\s*range)?|normal\s*range)\b/i.test(row)) {
-      output.push(row);
-    }
+    const structured = cells.filter(Boolean).join(" | ");
+    if (structured) output.push(structured);
   }
   return output.join("\n");
 }
-
 async function recognizeOnlineLabText(uri: string, apiKey: string): Promise<string> {
   const key = String(apiKey || "").trim();
   if (!key) return "";
@@ -621,7 +731,7 @@ async function recognizeOnlineLabText(uri: string, apiKey: string): Promise<stri
     const payload: any = await response.json();
     if (payload?.IsErroredOnProcessing) return "";
     return Array.isArray(payload?.ParsedResults)
-      ? payload.ParsedResults.map((item: any) => String(item?.ParsedText || "")).filter(Boolean).join("\\n").trim()
+      ? payload.ParsedResults.map((item: any) => String(item?.ParsedText || "")).filter(Boolean).join("\n").trim()
       : "";
   } catch {
     // Network, service, or API-key errors fall back to offline OCR silently.
@@ -782,7 +892,7 @@ export async function recognizeLabText(
   let structuredText = "";
   try {
     const size = bestSize || await imageSize(uri);
-    structuredText = structureLabColumns(best?.blocks || [], size.width, size.height);
+    structuredText = structureLabColumns(best?.blocks || [], size.width, size.height, configuredTests);
   } catch {
     // Raw on-device OCR text remains available if image geometry is unavailable.
   }

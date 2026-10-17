@@ -30,6 +30,7 @@ import { Segmented } from "@/src/components/Segmented";
 import { useToast } from "@/src/components/toast";
 import { formatInventoryLabel } from "@/src/utils/inventory-label";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
+const LAB_OCR_PIPELINE_VERSION = "row-aware-2026-10-17-v2";
 
 type Patient = {
   id: string; mrNo: string; name: string; gender: string; age: string;
@@ -219,6 +220,7 @@ export default function PatientForm() {
     // saved photo again. Administrators can explicitly force a fresh scan.
     const hasCachedScan = !forceRescan && automatic &&
       String(p.customData?.labOcrPhotoScanComplete || "") === "true" &&
+      p.customData?.labOcrPipelineVersion === LAB_OCR_PIPELINE_VERSION &&
       p.customData?.labOcrPhotoSignature === photoSignature;
     const cachedExtracted = hasCachedScan ? String(p.customData?.labOcrExtractedText || "") : null;
     if (labOcrBusy) {
@@ -489,7 +491,7 @@ export default function PatientForm() {
         hcvPlus: prev.hcvPlus || positiveScreening.hcvPlus,
         hbaSg: prev.hbaSg || positiveScreening.hbaSg,
         hiv: prev.hiv || positiveScreening.hiv,
-        customData: { ...(prev.customData || {}), labOcrExtractedText: extracted, labOcrPhotoSignature: photoSignature, labOcrPhotoScanComplete: "true", labOcrPossibleFlags: candidates.join("\n"), labOcrNeedsReview: uncertain.join("\n"), labOcrOnlineTestNameHelp: onlineHelp.join("\n") },
+        customData: { ...(prev.customData || {}), labOcrExtractedText: extracted, labOcrPhotoSignature: photoSignature, labOcrPhotoScanComplete: "true", labOcrPipelineVersion: LAB_OCR_PIPELINE_VERSION, labOcrPossibleFlags: candidates.join("\n"), labOcrNeedsReview: uncertain.join("\n"), labOcrOnlineTestNameHelp: onlineHelp.join("\n") },
       }));
       const newlyTicked = [
         positiveScreening.hcvPlus && !p.hcvPlus ? "HCV+" : "",
@@ -601,7 +603,7 @@ export default function PatientForm() {
     // classifier excludes ordinary clinical photos from lab-result parsing.
     const uris = [...new Set(p.photos)].filter(Boolean);
     if (!uris.length || (isEdit && !ready)) return;
-    const signature = uris.join("|");
+    const signature = LAB_OCR_PIPELINE_VERSION + "|" + uris.join("|");
     if (lastAutoLabScan.current === signature) return;
     const timer = setTimeout(() => {
       // Mark the set only when the scan can start; if another scan is busy,

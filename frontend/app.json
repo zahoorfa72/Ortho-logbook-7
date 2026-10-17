@@ -74,6 +74,7 @@
           "cameraPermission": "Scan patient photos, lab reports and paper records with automatic page-edge correction."
         }
       ],
+      "./plugins/with-ocr-word-boxes",
       "./plugins/with-drive-background-upload"
     ],
     "experiments": {
