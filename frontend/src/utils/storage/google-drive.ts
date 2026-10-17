@@ -1,7 +1,7 @@
 import { GoogleSignin, statusCodes } from "@react-native-google-signin/google-signin";
 import { NativeModules, Platform } from "react-native";
 import * as FileSystem from "expo-file-system/legacy";
-import { exportUnencryptedBackup, exportIncrementalBackup, commitIncrementalSnapshotCache, type BackupFilter } from "@/src/utils/storage/backup";
+import { exportUnencryptedBackup, exportUnencryptedBackupData, exportIncrementalBackup, commitIncrementalSnapshotCache, type BackupFilter } from "@/src/utils/storage/backup";
 import { markBackupTaken } from "@/src/utils/backup-reminder";
 import { storage } from "@/src/utils/storage";
 
@@ -698,6 +698,82 @@ async function writeBackupTextInChunks(uri: string, content: string, chunkChars 
   if (first) await writer.writeTextChunk(uri, "", false);
 }
 
+async function writeBackupObjectToFile(uri: string, value: any): Promise<void> {
+  const writer = NativeModules.DriveBackgroundUpload;
+  if (!writer?.writeTextChunk) throw new Error("This Android build is missing the safe large-backup file writer. Install the latest APK and retry.");
+  let buffer = "";
+  let first = true;
+  const flush = async () => {
+    if (!buffer) return;
+    await writer.writeTextChunk(uri, buffer, !first);
+    first = false;
+    buffer = "";
+  };
+  const append = async (part: string) => {
+    for (let offset = 0; offset < part.length; offset += 16 * 1024) {
+      buffer += part.slice(offset, offset + 16 * 1024);
+      if (buffer.length >= 64 * 1024) await flush();
+    }
+  };
+  const writeValue = async (item: any): Promise<void> => {
+    if (item === null || typeof item !== "object") {
+      const encoded = JSON.stringify(item);
+      await append(encoded === undefined ? "null" : encoded);
+      return;
+    }
+    if (Array.isArray(item)) {
+      await append("[");
+      for (let i = 0; i < item.length; i++) {
+        if (i) await append(",");
+        await writeValue(item[i]);
+      }
+      await append("]");
+      return;
+    }
+    await append("{");
+    let firstKey = true;
+    for (const key of Object.keys(item)) {
+      const child = item[key];
+      if (child === undefined || typeof child === "function" || typeof child === "symbol") continue;
+      if (!firstKey) await append(",");
+      firstKey = false;
+      await append(JSON.stringify(key));
+      await append(":");
+      await writeValue(child);
+    }
+    await append("}");
+  };
+  await writeValue(value);
+  await flush();
+  if (first) await writer.writeTextChunk(uri, "", false);
+}
+
+async function uploadStagedJsonFile(uri: string, totalBytes: number, existingId?: string, onProgress?: (stage: string) => void, fileName: string = BACKUP_NAME) {
+  const token = await accessToken();
+  const target = existingId
+    ? DRIVE_UPLOAD + "/" + encodeURIComponent(existingId) + "?uploadType=resumable&fields=id,name,modifiedTime,size"
+    : DRIVE_UPLOAD + "?uploadType=resumable&fields=id,name,modifiedTime,size";
+  const response = await fetchWithTimeout(target, {
+    method: existingId ? "PATCH" : "POST",
+    headers: {
+      Authorization: "Bearer " + token,
+      "Content-Type": "application/json; charset=UTF-8",
+      "X-Upload-Content-Type": "application/json",
+      "X-Upload-Content-Length": String(totalBytes),
+    },
+    body: JSON.stringify({ name: fileName, mimeType: "application/json" }),
+  }, 30000);
+  if (!response.ok) {
+    let message = "Google Drive could not start upload (HTTP " + response.status + ").";
+    try { const data = await response.json(); message = data?.error?.message || message; } catch {}
+    throw new Error(message);
+  }
+  const sessionUrl = response.headers.get("Location");
+  if (!sessionUrl) throw new Error("Google Drive did not provide an upload session. Reconnect your Google account and retry.");
+  const uploaded = await uploadNativeBackground(sessionUrl, token, uri, totalBytes, onProgress);
+  return await verifyUploadedFile(uploaded, fileName, totalBytes, existingId);
+}
+
 async function uploadContent(backupText: string, existingId?: string, onProgress?: (stage: string) => void, fileName: string = BACKUP_NAME) {
   const token = await accessToken();
   // The native uploader receives a file URI, not the backup string. Use it for
@@ -1119,63 +1195,103 @@ export async function backupToGoogleDrive(
   filter: BackupFilter = { type: "all" },
   options: { skipIfUnchanged?: boolean; onProgress?: (stage: string) => void; preferDriveOnMigration?: boolean; backupTextOverride?: string; localChanges?: any } = {},
 ) {
-  // Google Drive backup is intentionally plain JSON at the user's request.
-  // Local phone/file backups remain encrypted by exportBackup().
   options.onProgress?.("Preparing backup data…");
-  let backupText = options.backupTextOverride || await exportUnencryptedBackup(filter, options.onProgress);
   const isMasterBackup = filter.type === "all";
+  const migrationMarker = String((await storage.secureGet(MASTER_MIGRATION_KEY, "")) || "");
+  const priorBackup = isMasterBackup && migrationMarker !== "1" && !options.backupTextOverride
+    ? await findLatestBackup()
+    : null;
+  const freshDriveBaseline = isMasterBackup && migrationMarker !== "1" && !priorBackup?.id && !options.backupTextOverride;
+  const canStream = Platform.OS === "android" &&
+    !!NativeModules.DriveBackgroundUpload?.writeTextChunk &&
+    !!NativeModules.DriveBackgroundUpload?.startUpload &&
+    !!NativeModules.DriveBackgroundUpload?.getStatus &&
+    !options.backupTextOverride &&
+    (migrationMarker === "1" || freshDriveBaseline);
+
+  let backupText: string | null = null;
+  let stagedFileUri: string | null = null;
+  let stagedFileSize = 0;
   let migrationComplete = true;
   let cleanupSafe = true;
   let migrationAttempted = false;
-  if (isMasterBackup && String((await storage.secureGet(MASTER_MIGRATION_KEY, "")) || "") !== "1") {
-    migrationAttempted = true;
-    options.onProgress?.("Merging existing Drive backups into the master…");
-    const migration = await mergeLegacyDriveHistory(backupText, options.onProgress, options.preferDriveOnMigration === true);
-    const mergedMaster = parseDownloadedBackup(migration.backupText);
-    if (options.localChanges) applyIncrementalToMaster(mergedMaster, options.localChanges, options.localChanges._rowDelta !== true);
-    mergedMaster.version = Math.max(Number(mergedMaster.version || 0), 7);
-    mergedMaster.createdAt = new Date().toISOString();
-    mergedMaster.filter = { type: "all" };
-    delete mergedMaster.incremental;
-    delete mergedMaster.changedTables;
-    delete mergedMaster._rowDelta;
-    delete mergedMaster.deletedIds;
-    delete mergedMaster.fullTables;
-    backupText = JSON.stringify(mergedMaster);
-    migrationComplete = migration.complete;
-    cleanupSafe = migration.cleanupSafe;
+
+  if (canStream) {
+    options.onProgress?.("Preparing large backup in small pieces…");
+    const backupData = await exportUnencryptedBackupData(filter, options.onProgress);
+    if (!FileSystem.cacheDirectory) throw new Error("Device cache storage is unavailable for the Drive backup.");
+    stagedFileUri = FileSystem.cacheDirectory + "ortho-drive-stream-" + Date.now() + ".json";
+    try {
+      await writeBackupObjectToFile(stagedFileUri, backupData);
+      const info = await FileSystem.getInfoAsync(stagedFileUri);
+      if (!info.exists || typeof info.size !== "number" || info.size <= 0) {
+        throw new Error("The streamed backup file is missing or empty. Local data remains unchanged.");
+      }
+      stagedFileSize = info.size;
+    } catch (error: any) {
+      try { await FileSystem.deleteAsync(stagedFileUri, { idempotent: true }); } catch {}
+      stagedFileUri = null;
+      throw new Error("Could not prepare the large backup in safe chunks: " + String(error?.message || error) + ". Local data remains on this phone; retry after installing the latest APK.");
+    }
+    migrationAttempted = freshDriveBaseline;
+  } else {
+    backupText = options.backupTextOverride || await exportUnencryptedBackup(filter, options.onProgress);
+    if (isMasterBackup && migrationMarker !== "1") {
+      migrationAttempted = true;
+      options.onProgress?.("Merging existing Drive backups into the master…");
+      const migration = await mergeLegacyDriveHistory(backupText, options.onProgress, options.preferDriveOnMigration === true);
+      const mergedMaster = parseDownloadedBackup(migration.backupText);
+      if (options.localChanges) applyIncrementalToMaster(mergedMaster, options.localChanges, options.localChanges._rowDelta !== true);
+      mergedMaster.version = Math.max(Number(mergedMaster.version || 0), 7);
+      mergedMaster.createdAt = new Date().toISOString();
+      mergedMaster.filter = { type: "all" };
+      delete mergedMaster.incremental;
+      delete mergedMaster.changedTables;
+      delete mergedMaster._rowDelta;
+      delete mergedMaster.deletedIds;
+      delete mergedMaster.fullTables;
+      backupText = JSON.stringify(mergedMaster);
+      migrationComplete = migration.complete;
+      cleanupSafe = migration.cleanupSafe;
+    }
   }
+
   options.onProgress?.("Checking whether backup changed…");
-  const contentHash = await backupContentHash(backupText, options.onProgress);
+  const contentHash = stagedFileUri
+    ? "streamed-" + stagedFileSize + "-" + Date.now()
+    : await backupContentHash(backupText as string, options.onProgress);
   const fileName = driveBackupName(filter);
-  // Find only this exact scope so a month/year backup can never overwrite the
-  // all-time backup or another month.
   options.onProgress?.("Finding the master Drive backup…");
   let existing = await findBackupByName(fileName);
-  // Upgrade path: reuse the legacy full backup only for an all-time request.
   if (!existing && filter.type === "all") existing = await findBackupByName(BACKUP_NAME);
   const previousHash = await storage.getItem(LAST_DRIVE_CONTENT_HASH_KEY + ":" + fileName, "");
   const previousSuccess = await getLastDriveBackupStatus();
-  if (existing?.id && previousSuccess && options.skipIfUnchanged && previousHash === contentHash &&
-      (!isMasterBackup || (!migrationAttempted && String((await storage.secureGet(MASTER_MIGRATION_KEY, "")) || "") === "1"))) {
+  if (!stagedFileUri && existing?.id && previousSuccess && options.skipIfUnchanged && previousHash === contentHash &&
+      (!isMasterBackup || (!migrationAttempted && migrationMarker === "1"))) {
     return { skipped: true, completedAt: previousSuccess, accountEmail: getConnectedGoogleAccount(), name: fileName };
   }
 
   options.onProgress?.("Uploading backup to Google Drive…");
-  const result = await uploadContent(backupText, existing?.id, options.onProgress, fileName);
+  let result: any;
+  try {
+    result = stagedFileUri
+      ? await uploadStagedJsonFile(stagedFileUri, stagedFileSize, existing?.id, options.onProgress, fileName)
+      : await uploadContent(backupText as string, existing?.id, options.onProgress, fileName);
+  } finally {
+    if (stagedFileUri) {
+      try { await FileSystem.deleteAsync(stagedFileUri, { idempotent: true }); } catch {}
+    }
+  }
   await markBackupTaken();
   const completedAt = new Date().toISOString();
   await storage.secureSet(LAST_DRIVE_BACKUP_KEY, completedAt);
   await storage.setItem(LAST_DRIVE_CONTENT_HASH_KEY + ":" + fileName, contentHash);
-  let cleanupFailures: string[] = [];
+  const cleanupFailures: string[] = [];
   if (isMasterBackup && migrationAttempted && migrationComplete && cleanupSafe && result?.id) {
-    // Verify the newly merged master before recording migration as complete.
-    // Keep every legacy backup in Drive: users may need them for recovery, and
-    // cleanup must never risk deleting the only copy of older patient records.
     const verifiedMaster = await downloadDriveJsonValidated(String(result.id));
     if (!verifiedMaster || verifiedMaster.app !== "Ortho Logbook" ||
         !Array.isArray(verifiedMaster.patients) || !Array.isArray(verifiedMaster.inventory)) {
-      throw new Error("The merged all-time backup could not be verified. Older Drive backups were kept; retry backup after checking the connection.");
+      throw new Error("The all-time backup could not be verified. Older Drive backups were kept; retry backup after checking the connection.");
     }
     await storage.secureSet(MASTER_MIGRATION_KEY, "1");
   }
