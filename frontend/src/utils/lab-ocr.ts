@@ -3,7 +3,7 @@ import { Image } from "react-native";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as FileSystem from "expo-file-system/legacy";
 
-export type LabTestDefinition = { id: string; name: string; maleMin: string; maleMax: string; femaleMin: string; femaleMax: string; unit: string };
+export type LabTestDefinition = { id: string; name: string; maleMin: string; maleMax: string; femaleMin: string; femaleMax: string; unit: string; aliases?: string };
 
 export type ParsedLabRow = {
   test: string;
@@ -89,12 +89,17 @@ function canonicalTestName(value: string): string {
   return group ? normaliseName(group[0]) : normal;
 }
 
+function configuredAliases(item: LabTestDefinition): string[] {
+  return [String(item.name || ""), ...String(item.aliases || "").split(/[,;\n]+/)]
+    .map(value => value.trim()).filter(Boolean);
+}
+
 function configuredTestForName(name: string, configuredTests: LabTestDefinition[]): LabTestDefinition | undefined {
   const key = canonicalTestName(name);
-  return configuredTests.find(item => {
-    const configured = canonicalTestName(item.name || "");
-    return configured === key || normaliseName(item.name || "").startsWith(normaliseName(name) + " ");
-  });
+  return configuredTests.find(item => configuredAliases(item).some(alias => {
+    const aliasKey = canonicalTestName(alias);
+    return aliasKey === key || normaliseName(alias) === normaliseName(name);
+  }));
 }
 
 export function hasKnownLabTestName(line: string, configuredTests: LabTestDefinition[] = []): boolean { return !!findTestPrefix(line, configuredTests); }
@@ -104,7 +109,14 @@ export function isLabMetadataLine(line: string, configuredTests: LabTestDefiniti
 function findTestPrefix(line: string, configuredTests: LabTestDefinition[] = []): { name: string; end: number; configured?: LabTestDefinition } | null {
   const cleaned = line.replace(/^\s*[•*|:;\-]+\s*/, "");
   const lower = cleaned.toLowerCase();
-  for (const configured of [...configuredTests].sort((a, b) => String(b.name || "").length - String(a.name || "").length)) {
+  const configuredVariants = configuredTests.flatMap(configured => configuredAliases(configured).map(alias => ({ configured, alias })))
+    .sort((a, b) => b.alias.length - a.alias.length);
+  for (const { configured, alias } of configuredVariants) {
+    const tokens = normaliseName(alias).split(" ").filter(Boolean);
+    if (!tokens.length) continue;
+    // Accept common lab formatting differences: "Hb", "H.B.", "H-B" and
+    // multi-word names with inconsistent spaces or punctuation.
+    const flexible = tokens.map(token => token.replace(/[.*+?^${}()|[\]\\]/g, "\\  for (const configured of [...configuredTests].sort((a, b) => String(b.name || "").length - String(a.name || "").length)) {
     const name = String(configured.name || "").trim();
     if (name.length < 2) continue;
     const lowerName = name.toLowerCase();
@@ -112,6 +124,9 @@ function findTestPrefix(line: string, configuredTests: LabTestDefinition[] = [])
       const nextChar = cleaned.charAt(name.length);
       if (!nextChar || /[\s:|]/.test(nextChar) || "([{/%".includes(nextChar)) return { name: cleaned.slice(0, name.length).trim(), end: name.length, configured };
     }
+  }")).join("[\\s._/-]*");
+    const match = new RegExp("^" + flexible + "(?=$|\\s|:|\\||\\(|\\[|\\{|/|%)", "i").exec(cleaned);
+    if (match) return { name: cleaned.slice(0, match[0].length).trim(), end: match[0].length, configured };
   }
   for (const alias of TEST_ALIASES) {
     const pattern = new RegExp("^" + alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?=$|\\s|:|\\||\\(|\\[|\\{|/|%)", "i");

@@ -17,13 +17,14 @@ export type LabTestDefinition = {
   femaleMin: string;
   femaleMax: string;
   unit: string;
+  aliases?: string;
 };
 
 const STORAGE_KEY = "ortho_lab_test_definitions_v1";
 const WARNING_THRESHOLD_KEY = "ortho_lab_warning_threshold_percent_v1";
 const OLD_RESULT_DAYS_KEY = "ortho_lab_old_result_days_v1";
 const ONLINE_OCR_KEY = "ortho_lab_online_ocr_api_key_v1";
-const blank = (): LabTestDefinition => ({ id: "", name: "", maleMin: "", maleMax: "", femaleMin: "", femaleMax: "", unit: "" });
+const blank = (): LabTestDefinition => ({ id: "", name: "", maleMin: "", maleMax: "", femaleMin: "", femaleMax: "", unit: "", aliases: "" });
 
 export default function LabTestSettingsScreen() {
   const { user } = useAuth();
@@ -135,6 +136,8 @@ export default function LabTestSettingsScreen() {
       </View>
       <Pressable disabled={thresholdBusy} onPress={saveWarningThreshold} style={styles.action}><Text style={styles.actionText}>{thresholdBusy ? "Saving…" : "Save warning threshold"}</Text></Pressable>
       {field("Test name", "name", "e.g. Hemoglobin")}
+      {field("Other report labels / OCR aliases", "aliases", "e.g. Hb, HGB, Haemoglobin (comma-separated)")}
+      <Text style={styles.help}>Enter abbreviations or alternate spellings that this laboratory uses for the same test. The app matches these labels to this saved test and uses its saved sex-specific range and unit. Do not add a different test as an alias.</Text>
       <Text style={styles.section}>Old lab-result alert</Text>
       <Text style={styles.help}>Show an OLD LAB RESULT alert outside the Patient Form when a report date is this many days or more before the patient was first added to this app. Example: 10 days. The report date and patient-added date are required.</Text>
       <View style={styles.field}>
@@ -155,6 +158,7 @@ export default function LabTestSettingsScreen() {
         <View style={{ flex: 1 }}>
           <Text style={styles.itemTitle}>{item.name}</Text>
           <Text style={styles.help}>Male: {item.maleMin}–{item.maleMax} {item.unit} · Female: {item.femaleMin}–{item.femaleMax} {item.unit}</Text>
+          {item.aliases?.trim() ? <Text style={styles.help}>Recognized labels: {item.aliases}</Text> : null}
         </View>
         <Pressable onPress={() => edit(item)} style={styles.iconBtn}><Ionicons name="create-outline" size={21} color={colors.brandPrimary}/></Pressable>
         <Pressable onPress={() => remove(item)} style={styles.iconBtn}><Ionicons name="trash-outline" size={21} color={colors.error}/></Pressable>
