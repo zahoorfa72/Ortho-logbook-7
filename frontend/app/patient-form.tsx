@@ -195,8 +195,16 @@ export default function PatientForm() {
     AsyncStorage.getItem("ortho_lab_warning_threshold_percent_v1").then(value => { const n = Number(value); if (value && Number.isInteger(n) && n >= 1 && n <= 100) setLabWarningThreshold(n); }).catch(() => setLabWarningThreshold(10));
   }, []);
 
-  const analyzeLabPhotos = async (photoUris: string[] = [...new Set(p.photos)], automatic = false) => {
+  const analyzeLabPhotos = async (photoUris: string[] = [...new Set(p.photos)], automatic = false, forceRescan = false) => {
     if (!labOcrEnabled || !photoUris.length) return;
+    const photoSignature = [...new Set(photoUris)].filter(Boolean).join("|");
+    // Reuse the last completed scan for an unchanged photo set. This prevents
+    // reopening a patient from running several expensive OCR passes on every
+    // saved photo again. Administrators can explicitly force a fresh scan.
+    const hasCachedScan = !forceRescan && automatic &&
+      p.customData?.labOcrPhotoScanComplete === true &&
+      p.customData?.labOcrPhotoSignature === photoSignature;
+    const cachedExtracted = hasCachedScan ? String(p.customData?.labOcrExtractedText || "") : null;
     if (labOcrBusy) {
       // The automatic-scan effect may have queued a new photo set while another
       // scan was finishing. Clear its signature so the effect retries when idle.
@@ -211,8 +219,11 @@ export default function PatientForm() {
       const recognizedPhotoUris: string[] = [];
       let onlineOcrKey = "";
       try { onlineOcrKey = (await AsyncStorage.getItem("ortho_lab_online_ocr_api_key_v1")) || ""; } catch {}
-      for (let i = 0; i < photoUris.length; i++) {
+      if (cachedExtracted === null) for (let i = 0; i < photoUris.length; i++) {
         try {
+          // Yield between photos so the form can repaint and respond while a
+          // large patient file is being checked.
+          await new Promise<void>(resolve => setTimeout(resolve, 0));
           const result = await recognizeLabText(photoUris[i], onlineOcrKey, configuredLabTests, p.gender);
           const text = String(result?.text || "").trim();
           const structuredText = result?.mode === "online" ? "" : String(result?.structuredText || "").trim();
@@ -233,16 +244,28 @@ export default function PatientForm() {
           // must not prevent readable pages from being checked.
         }
       }
-      const extracted = pages.join("\n\n");
+      const extracted = cachedExtracted !== null ? cachedExtracted : pages.join("\n\n");
       if (!extracted.trim()) {
         setLabOcrText("");
         setLabOcrFindings([]);
-        if (automatic) toast("Lab text could not be read from the saved photos. Retake the lab report clearly; no abnormality can be confirmed.", "info");
-        else toast("No readable text found. Retake the report in good light with the full page in focus.", "error");
+        if (cachedExtracted === null) {
+          // Cache the completed negative scan too, so ordinary clinical photos
+          // do not make the app repeat full OCR whenever the patient is opened.
+          setP(prev => ({ ...prev, customData: {
+            ...(prev.customData || {}),
+            labOcrPhotoSignature: photoSignature,
+            labOcrPhotoScanComplete: true,
+            labOcrExtractedText: "",
+          }}));
+        }
+        if (automatic && cachedExtracted === null) toast("Lab text could not be read from the saved photos. Retake the lab report clearly; no abnormality can be confirmed.", "info");
+        else if (!automatic) toast("No readable lab text found. Use Rescan lab photos after checking the image.", "error");
         return;
       }
       const parsedRows = parseLabReportRows(extracted, configuredLabTests, p.gender, labWarningThreshold, true);
-      const reviewSourcePhotos = [...new Set(recognizedPhotoUris)];
+      const reviewSourcePhotos = cachedExtracted !== null
+        ? [...new Set([...extracted.matchAll(/LAB REPORT IMAGE\s+(\d+)/gi)].map(match => photoUris[Number(match[1]) - 1]).filter(Boolean))]
+        : [...new Set(recognizedPhotoUris)];
       const canonical = (value: string) => String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
       const isHemoglobin = (value: string) => ["hemoglobin", "haemoglobin", "hgb", "hb"].includes(canonical(value));
       const reportDateForTest = (testName: string) => {
@@ -450,7 +473,7 @@ export default function PatientForm() {
         hcvPlus: prev.hcvPlus || positiveScreening.hcvPlus,
         hbaSg: prev.hbaSg || positiveScreening.hbaSg,
         hiv: prev.hiv || positiveScreening.hiv,
-        customData: { ...(prev.customData || {}), labOcrExtractedText: extracted, labOcrPossibleFlags: candidates.join("\n"), labOcrNeedsReview: uncertain.join("\n"), labOcrOnlineTestNameHelp: onlineHelp.join("\n") },
+        customData: { ...(prev.customData || {}), labOcrExtractedText: extracted, labOcrPhotoSignature: photoSignature, labOcrPhotoScanComplete: true, labOcrPossibleFlags: candidates.join("\n"), labOcrNeedsReview: uncertain.join("\n"), labOcrOnlineTestNameHelp: onlineHelp.join("\n") },
       }));
       const newlyTicked = [
         positiveScreening.hcvPlus && !p.hcvPlus ? "HCV+" : "",
@@ -1733,7 +1756,10 @@ export default function PatientForm() {
         {labOcrEnabled ? (
           <View style={{ marginTop: spacing.md, marginBottom: spacing.md }}>
             <Text style={styles.section}>Automatic lab report check</Text>
-            <Text style={styles.hint}>{labOcrBusy ? "Automatically checking existing patient-file pictures for laboratory reports…" : "No photo needs to be added or selected. Existing patient-file pictures are checked automatically; only pictures recognized as laboratory reports are used for lab-result analysis."}</Text>
+            <Text style={styles.hint}>{labOcrBusy ? "Checking saved pictures for lab reports…" : "Saved photos are checked automatically. Unchanged photos use the previous scan to keep the app responsive; use Rescan if a clear test name or result was missed."}</Text>
+            <Pressable disabled={labOcrBusy || !p.photos.length} onPress={() => { lastAutoLabScan.current = ""; void analyzeLabPhotos([...new Set(p.photos)], false, true); }} style={{ alignSelf: "flex-start", marginTop: spacing.xs, paddingVertical: spacing.sm, paddingHorizontal: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md }}>
+              <Text style={{ color: colors.brandPrimary, fontFamily: fontFamily.semibold }}>{labOcrBusy ? "Scanning…" : "Rescan lab photos"}</Text>
+            </Pressable>
             {labOcrText ? <View style={{ marginTop: spacing.sm, padding: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md }}>
               {labOcrFindings.length ? <><Text style={[styles.label, { marginTop: spacing.xs }]}>Lab results to verify</Text>{labOcrFindings.map((finding, i) => { const isWarning = finding.startsWith("WARNING:"); const tone = isWarning ? (colors.warning || "#B7791F") : (colors.error || "#B91C1C"); return <Text key={i} style={{ color: tone, marginTop: spacing.xs, fontFamily: isWarning ? fontFamily.medium : fontFamily.bold }}>{finding}</Text>; })}</> : <Text style={{ color: colors.onSurfaceSecondary, marginTop: spacing.sm }}>{labWarningsEnabled ? "No confirmed out-of-range result was extracted. OCR can miss abnormal values; verify every printed test and date against the original image. If any row is unreadable or missing a saved reference range, ask an administrator to review it." : "No larger alerts were detected. Mild warnings are disabled in Settings; this does not prove that every result is normal."}</Text>}
               <Pressable onPress={() => setShowLabRawText(value => !value)} style={{ marginTop: spacing.md, paddingVertical: spacing.sm, flexDirection: "row", alignItems: "center", gap: spacing.xs }}>
