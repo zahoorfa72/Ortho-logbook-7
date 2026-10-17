@@ -8,6 +8,7 @@ import { Asset, requestPermissionsAsync } from "expo-media-library";
 import * as FileSystem from "expo-file-system/legacy";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { extractLabReportDate, hasKnownLabTestName, isLabMetadataLine, isLikelyLabReportText, parseLabReportRows, recognizeLabText } from "@/src/utils/lab-ocr";
+import { detectScreeningStatuses } from "@/src/utils/screening-status";
 import { scanPatientDocuments } from "@/src/utils/document-scanner";
 import { buildPerspectiveWarpHtml } from "@/src/utils/perspective-warp";
 import { recordDiagnosticError } from "@/src/utils/problem-report";
@@ -50,58 +51,6 @@ function asBooleanFlag(value: unknown): boolean {
   return /^(?:true|1|yes|positive|reactive)$/i.test(String(value).trim());
 }
 
-function detectPositiveScreening(text: string): { hcvPlus: boolean; hbaSg: boolean; hiv: boolean } {
-  const found = { hcvPlus: false, hbaSg: false, hiv: false };
-  const lines = String(text || "").replace(/\u00a0/g, " ").split(/\r?\n/).map(line => line.replace(/\s+/g, " ").trim()).filter(Boolean);
-  const namePattern = /\b(?:h\s*b\s*s\s*a\s*g|hbs\s*ag|hbsag|hepatitis\s*b\s*(?:surface\s*)?antigen|anti\s*[- ]?\s*h\s*c\s*v|hcv(?:\s*(?:antibody|ab|antigen))?|hepatitis\s*c(?:\s*(?:antibody|ab))?|h\s*i\s*v(?:\s*[- ]?\s*1\s*\/?\s*2)?(?:\s*(?:antibody|ab|screen|ag))?)\b/i;
-  const statusPattern = /\b(?:presumptive\s+positive|non[\s-]?reactive|non[\s-]?detected|not\s+detected|negative|positive|reactive|detected|absent|normal|pos\.?|react\.?)\b|(?:^|\s)[+](?:\s|$)/i;
-  const normalizeStatus = (raw: string) => String(raw || "").toLowerCase().replace(/[\s.-]+/g, "").replace(/[^a-z+]/g, "");
-  const isPositive = (raw: string) => {
-    const status = normalizeStatus(raw);
-    if (["negative","nonreactive","notdetected","nondetected","absent","normal"].includes(status)) return false;
-    return ["positive","reactive","detected","presumptivepositive","pos","react","+"].includes(status);
-  };
-  const isNegative = (raw: string) => ["negative","nonreactive","notdetected","nondetected","absent","normal"].includes(normalizeStatus(raw));
-  const setFlag = (name: string) => {
-    if (/\b(?:h\s*b\s*s\s*a\s*g|hbs\s*ag|hbsag|hepatitis\s*b)\b/i.test(name)) found.hbaSg = true;
-    else if (/\b(?:h\s*c\s*v|hepatitis\s*c|anti\s*[- ]?\s*h\s*c\s*v)\b/i.test(name)) found.hcvPlus = true;
-    else if (/\bh\s*i\s*v\b/i.test(name)) found.hiv = true;
-  };
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const cells = line.includes("|") ? line.split("|").map(cell => cell.trim()) : [];
-    const nameSource = cells.length >= 2 ? cells[0] : line;
-    const match = nameSource.match(namePattern) || line.match(namePattern);
-    if (!match) continue;
-
-    // Prefer the cell immediately after the test name in reconstructed tables.
-    // If the OCR split columns/rows, look ahead only until another known test begins.
-    let measuredArea = cells.length >= 2 ? cells.slice(1, 3).join(" ") :
-      line.slice(Math.max(0, line.toLowerCase().indexOf(match[0].toLowerCase()) + match[0].length));
-    let statusMatch = measuredArea.match(statusPattern);
-    if (!statusMatch) {
-      for (let offset = 1; offset <= 2 && i + offset < lines.length; offset++) {
-        const next = lines[i + offset];
-        if (namePattern.test(next) || hasKnownLabTestName(next)) break;
-        const candidate = next.includes("|") ? next.split("|").slice(1, 3).join(" ") : next;
-        const candidateStatus = candidate.match(statusPattern);
-        if (candidateStatus) {
-          measuredArea += " " + candidate;
-          statusMatch = candidateStatus;
-          break;
-        }
-      }
-    }
-    if (!statusMatch) continue;
-    const status = statusMatch[0];
-    // A negative result cell must win over a positive status printed in a reference
-    // column; the result cell is examined first when table separators are available.
-    if (isNegative(status) || !isPositive(status)) continue;
-    setFlag(match[0]);
-  }
-  return found;
-}
 const empty = (): Patient => ({
   id: "", mrNo: "", name: "", gender: "", age: "", diagnosis: "",
   procedure: "", procedureII: "", implant: "", implantII: "", address: "", fileName: "",
@@ -488,26 +437,52 @@ export default function PatientForm() {
       const pendingManualReviews = missingResultReviews.filter(item =>
         !alreadyVerifiedNames.has(normalizeReviewTestName(item.test))
       );
+      const screeningStatuses = detectScreeningStatuses(extracted);
+      const screeningLabels: Array<[keyof typeof screeningStatuses, string]> = [
+        ["hcvPlus", "HCV+"],
+        ["hbaSg", "HBsAg"],
+        ["hiv", "HIV"],
+      ];
+      const screeningConflicts = screeningLabels
+        .filter(([key]) => screeningStatuses[key] === "conflict")
+        .map(([, label]) => label);
+      uncertain.push(...screeningConflicts.map(label =>
+        label + ": conflicting positive/negative results were found across the saved report text; administrator must verify the original report"
+      ));
       setShowLabRawText(false);
       setLabOcrText(extracted);
       setLabManualReviews(pendingManualReviews);
       setLabOcrFindings([...candidates, ...uncertain.map(item => "REVIEW: " + item),
         ...pendingManualReviews.map(item => "REVIEW: " + item.test + " result not confidently recognized — admin must verify against the original report")]);
       setLabOcrOnlineHelp(onlineHelp);
-      const positiveScreening = detectPositiveScreening(extracted);
+      // Only a clearly recognized result changes a screening checkbox. Clear
+      // negatives remove stale ticks; unreadable or conflicting results preserve
+      // the current value and are flagged for manual verification.
+      const applyScreeningStatus = (status: typeof screeningStatuses.hcvPlus, current: boolean | undefined) =>
+        status === "positive" ? true : status === "negative" ? false : current;
       setP(prev => ({
         ...prev,
-        hcvPlus: prev.hcvPlus || positiveScreening.hcvPlus,
-        hbaSg: prev.hbaSg || positiveScreening.hbaSg,
-        hiv: prev.hiv || positiveScreening.hiv,
+        hcvPlus: applyScreeningStatus(screeningStatuses.hcvPlus, prev.hcvPlus),
+        hbaSg: applyScreeningStatus(screeningStatuses.hbaSg, prev.hbaSg),
+        hiv: applyScreeningStatus(screeningStatuses.hiv, prev.hiv),
         customData: { ...(prev.customData || {}), labOcrExtractedText: extracted, labOcrPhotoSignature: photoSignature, labOcrPhotoScanComplete: "true", labOcrPipelineVersion: LAB_OCR_PIPELINE_VERSION, labOcrPossibleFlags: candidates.join("\n"), labOcrNeedsReview: uncertain.join("\n"), labOcrOnlineTestNameHelp: onlineHelp.join("\n") },
       }));
       const newlyTicked = [
-        positiveScreening.hcvPlus && !p.hcvPlus ? "HCV+" : "",
-        positiveScreening.hbaSg && !p.hbaSg ? "HbAsg" : "",
-        positiveScreening.hiv && !p.hiv ? "HIV" : "",
+        screeningStatuses.hcvPlus === "positive" && !p.hcvPlus ? "HCV+" : "",
+        screeningStatuses.hbaSg === "positive" && !p.hbaSg ? "HBsAg" : "",
+        screeningStatuses.hiv === "positive" && !p.hiv ? "HIV" : "",
       ].filter(Boolean);
-      if (newlyTicked.length) toast("Possible positive screening result (" + newlyTicked.join(", ") + "). Verify the original lab report.", "info");
+      const newlyCleared = [
+        screeningStatuses.hcvPlus === "negative" && !!p.hcvPlus ? "HCV+" : "",
+        screeningStatuses.hbaSg === "negative" && !!p.hbaSg ? "HBsAg" : "",
+        screeningStatuses.hiv === "negative" && !!p.hiv ? "HIV" : "",
+      ].filter(Boolean);
+      const screeningMessages = [
+        newlyTicked.length ? "Possible positive screening result detected for " + newlyTicked.join(", ") + "; verify the original report." : "",
+        newlyCleared.length ? "Clear negative/non-reactive result found; checkbox cleared for " + newlyCleared.join(", ") + ". Verify the original report." : "",
+        screeningConflicts.length ? "Conflicting screening results need manual review: " + screeningConflicts.join(", ") + "." : "",
+      ].filter(Boolean);
+      if (screeningMessages.length) toast(screeningMessages.join(" "), "info");
       const alertCandidates = candidates.filter(row => row.startsWith("ALERT:"));
       if (!automatic) {
         const scanMessage = alertCandidates.length
