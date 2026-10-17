@@ -469,12 +469,18 @@ export function parseLabReportRows(text: string, configuredTests: LabTestDefinit
     const structuredSource = structuredSection.trim() ? structuredSection : "";
     // Process reconstructed rows first, then raw OCR lines as a fallback for
     // tests the column geometry missed. Duplicate test/result pairs are removed below.
-    const structuredTestKeys = new Set<string>();
+    // Pass 1: index only tests whose structured row actually contains a
+    // usable measured result. A label-only/badly aligned row must not block
+    // pass 2 from finding that test's result in the original OCR text.
+    const structuredResultKeys = new Set<string>();
     if (structuredSource) {
       for (const structuredLine of structuredSource.split(/\r?\n/)) {
         const cells = structuredLine.split("|").map(cell => cell.trim());
         const structuredPrefix = cells.length >= 2 ? findTestPrefix(cells[0], configuredTests) : null;
-        if (structuredPrefix) structuredTestKeys.add(canonicalTestName(structuredPrefix.name));
+        const numericTokens = cells.length >= 2 ? (cells[1].match(/[-+]?\d+(?:[.,]\d+)?/g) || []) : [];
+        if (structuredPrefix && numericTokens.length <= 1 && resultNumber(cells[1]) !== null) {
+          structuredResultKeys.add(canonicalTestName(structuredPrefix.name));
+        }
       }
     }
     const sources = structuredSource
@@ -496,7 +502,7 @@ export function parseLabReportRows(text: string, configuredTests: LabTestDefinit
       // The row geometry has already attempted this test. Never parse the flat
       // raw text as a fallback for it, because the next numeric token may belong
       // to a different CBC row (e.g. WBC vs neutrophils or Hb vs platelets).
-      if (sourceIndex > 0 && structuredTestKeys.has(canonicalTestName(testPrefix.name))) continue;
+      if (sourceIndex > 0 && structuredResultKeys.has(canonicalTestName(testPrefix.name))) continue;
 
       let resultRaw: string | null = null;
       let unit = "";
