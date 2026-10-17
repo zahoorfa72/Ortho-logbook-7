@@ -1,6 +1,6 @@
 import { router } from "expo-router";
 import { useEffect, useState } from "react";
-import { Pressable, ScrollView, Text, View, Switch } from "react-native";
+import { DeviceEventEmitter, Pressable, ScrollView, Text, View, Switch } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -81,8 +81,11 @@ export default function SettingsScreen() {
             value={labOcrEnabled}
             onValueChange={async value => {
               setLabOcrEnabled(value);
-              try { await AsyncStorage.setItem("ortho_lab_ocr_enabled", value ? "true" : "false"); triggerAutomaticDriveBackup("appSettings"); }
-              catch { setLabOcrEnabled(!value); toast("Could not save the lab reader setting.", "error"); }
+              try {
+                await AsyncStorage.setItem("ortho_lab_ocr_enabled", value ? "true" : "false");
+                DeviceEventEmitter.emit("ortho_lab_ocr_enabled_changed", value);
+                triggerAutomaticDriveBackup("appSettings");
+              } catch { setLabOcrEnabled(!value); toast("Could not save the lab reader setting.", "error"); }
             }}
             trackColor={{ false: colors.border, true: colors.brandPrimary }}
             thumbColor={labOcrEnabled ? colors.onBrandPrimary : colors.muted}

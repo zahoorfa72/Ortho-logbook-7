@@ -247,24 +247,77 @@ export function setColorScheme(scheme: ColorScheme | null) {
 
 setColorScheme(themes.dark ? null : defaultScheme);
 
+function hexRgb(value: unknown): [number, number, number] | null {
+  const raw = String(value ?? "").trim().replace(/^#/, "");
+  const expanded = /^[\da-f]{3}$/i.test(raw) ? raw.split("").map(char => char + char).join("") : raw;
+  if (!/^[\da-f]{6}(?:[\da-f]{2})?$/i.test(expanded)) return null;
+  return [
+    Number.parseInt(expanded.slice(0, 2), 16),
+    Number.parseInt(expanded.slice(2, 4), 16),
+    Number.parseInt(expanded.slice(4, 6), 16),
+  ];
+}
+
+function luminance(rgb: [number, number, number]): number {
+  const channels = rgb.map(value => {
+    const channel = value / 255;
+    return channel <= 0.04045 ? channel / 12.92 : Math.pow((channel + 0.055) / 1.055, 2.4);
+  });
+  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+}
+
+function contrastRatio(foreground: unknown, backgroundRgb: [number, number, number]): number {
+  const foregroundRgb = hexRgb(foreground);
+  if (!foregroundRgb) return 0;
+  const first = luminance(foregroundRgb);
+  const second = luminance(backgroundRgb);
+  return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+}
+
+function readableColor(preferred: unknown, backgrounds: string[], fallback: string, minimumContrast: number): string {
+  const backgroundRgb = backgrounds.map(hexRgb).filter((value): value is [number, number, number] => !!value);
+  if (!backgroundRgb.length) return hexRgb(preferred) ? String(preferred) : fallback;
+  if (hexRgb(preferred) && backgroundRgb.every(background => contrastRatio(preferred, background) >= minimumContrast)) {
+    return String(preferred);
+  }
+  const candidates = [fallback, "#1C1C1E", "#000000", "#555555", "#FFFFFF", "#B8B8B8"];
+  let best = fallback;
+  let bestScore = -1;
+  for (const candidate of candidates) {
+    if (!hexRgb(candidate)) continue;
+    const score = Math.min(...backgroundRgb.map(background => contrastRatio(candidate, background)));
+    if (score > bestScore) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
 export function useTheme() {
   const system = useColorScheme();
   const scheme: ColorScheme = system === "dark" && themes.dark ? "dark" : "light";
   const { branding, setBranding, resetBranding } = useContext(ThemeContext);
+  const base = themes[scheme] ?? themes.light;
+  const safeBackground = hexRgb(branding.background) ? branding.background : base.surface;
+  const safeSurface = hexRgb(branding.surface) ? branding.surface : base.surfaceSecondary;
+  // Old branding backups can contain low-contrast or blank text colors. Choose
+  // readable foregrounds at render time without changing the saved branding.
+  const safeText = readableColor(branding.text, [safeBackground, safeSurface], base.onSurface, 4.5);
+  const safeMuted = readableColor(branding.mutedText, [safeBackground, safeSurface], base.muted, 3);
   const colors = useMemo(() => ({
-    ...(themes[scheme] ?? themes.light),
-    // apply branded overrides
-    surface: branding.background,
-    surfaceSecondary: branding.surface,
-    onSurface: branding.text,
-    muted: branding.mutedText,
+    ...base,
+    surface: safeBackground,
+    surfaceSecondary: safeSurface,
+    onSurface: safeText,
+    muted: safeMuted,
     brand: branding.primary,
     brandPrimary: branding.primary,
     onBrandPrimary: branding.onPrimary,
     brandSecondary: branding.secondary,
     brandTertiary: branding.tertiary,
     onBrandTertiary: branding.onTertiary,
-  }), [branding, scheme]);
+  }), [base, branding, safeBackground, safeSurface, safeText, safeMuted]);
   return { scheme, colors, branding, setBranding, resetBranding };
 }
 

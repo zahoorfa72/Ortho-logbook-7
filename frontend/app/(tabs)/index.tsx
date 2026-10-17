@@ -7,6 +7,7 @@ import { extractLabReportDate, isLikelyLabReportText, parseLabReportRows, recogn
 import {
   ActivityIndicator,
   Alert,
+  DeviceEventEmitter,
   FlatList,
   Pressable,
   RefreshControl,
@@ -54,7 +55,7 @@ type LabScanStatus = {
 
 const LAB_SCAN_STATUS_STORAGE_KEY = "ortho_lab_ocr_scan_states_v1";
 const NEW_PATIENT_LAB_SCAN_QUEUE_KEY = "ortho_lab_ocr_new_patient_queue_v1";
-const LAB_OCR_PIPELINE_VERSION = "admin-fuzzy-viral-2026-10-17-v3";
+const LAB_OCR_PIPELINE_VERSION = "row-aware-2026-10-17-v4-admin-aliases";
 
 type Patient = {
   id: string;
@@ -343,6 +344,7 @@ export default function Logbook() {
   const [pdfYear, setPdfYear] = useState("");
   const [reminder, setReminder] = useState<ReminderState>({ show: false, lastBackupIso: null, reason: null });
   const [labOcrEnabled, setLabOcrEnabled] = useState(false);
+  const labOcrEnabledRef = useRef(false);
   const [labWarningsEnabled, setLabWarningsEnabled] = useState(true);
   const [labResultsHiddenByPatient, setLabResultsHiddenByPatient] = useState<Record<string, boolean>>({});
   const [labBranchesExpandedByPatient, setLabBranchesExpandedByPatient] = useState<Record<string, boolean>>({});
@@ -367,7 +369,25 @@ export default function Logbook() {
   const requestLabScanRef = useRef<(patientId: string, autoForNewPatient?: boolean) => void>(() => {});
 
   useEffect(() => {
-    AsyncStorage.getItem("ortho_lab_ocr_enabled").then(value => setLabOcrEnabled(value === "true")).catch(() => setLabOcrEnabled(false));
+    const subscription = DeviceEventEmitter.addListener("ortho_lab_ocr_enabled_changed", (value: unknown) => {
+      const enabled = value === true || value === "true";
+      // Update the ref synchronously so an in-flight image loop stops before
+      // starting the next OCR pass, even while Settings covers this screen.
+      labOcrEnabledRef.current = enabled;
+      setLabOcrEnabled(enabled);
+    });
+    return () => subscription.remove();
+  }, []);
+
+  useEffect(() => {
+    AsyncStorage.getItem("ortho_lab_ocr_enabled").then(value => {
+      const enabled = value === "true";
+      labOcrEnabledRef.current = enabled;
+      setLabOcrEnabled(enabled);
+    }).catch(() => {
+      labOcrEnabledRef.current = false;
+      setLabOcrEnabled(false);
+    });
     AsyncStorage.getItem("ortho_lab_warnings_enabled").then(value => setLabWarningsEnabled(value !== "false")).catch(() => setLabWarningsEnabled(true));
     AsyncStorage.getItem("ortho_lab_results_hidden_by_patient_v1").then(raw => { if (raw) { try { const parsed = JSON.parse(raw); if (parsed && typeof parsed === "object") setLabResultsHiddenByPatient(parsed); } catch {} } }).catch(() => {});
     AsyncStorage.getItem("ortho_lab_old_result_days_v1").then(raw => { const value = Number(raw); if (raw && Number.isInteger(value) && value >= 1 && value <= 3650) setOldLabResultDays(value); }).catch(() => {});
@@ -383,6 +403,19 @@ export default function Logbook() {
   // Refresh admin-configured age threshold when the Logbook screen returns from Settings.
   useFocusEffect(useCallback(() => {
     let cancelled = false;
+    // Settings is a separate screen; refresh this value on focus so disabling
+    // auto-scan really pauses the still-mounted dashboard screen.
+    AsyncStorage.getItem("ortho_lab_ocr_enabled").then(value => {
+      if (cancelled) return;
+      const enabled = value === "true";
+      labOcrEnabledRef.current = enabled;
+      setLabOcrEnabled(enabled);
+    }).catch(() => {
+      if (!cancelled) {
+        labOcrEnabledRef.current = false;
+        setLabOcrEnabled(false);
+      }
+    });
     AsyncStorage.getItem("ortho_lab_test_definitions_v1").then(raw => { if (!cancelled && raw) { try { const parsed = JSON.parse(raw); if (Array.isArray(parsed)) setConfiguredLabTestDefinitions(parsed); } catch {} } }).catch(() => {});
     AsyncStorage.getItem(LAB_OLD_RESULT_DAYS_KEY).then(raw => {
       const value = Number(raw);
@@ -485,8 +518,8 @@ export default function Logbook() {
       saveLabScanState(patientId, { status: "failed", message: "Patient record is not available in the current list.", updatedAt: new Date().toISOString() });
       return;
     }
-    if (!labOcrEnabled) {
-      saveLabScanState(patientId, { status: "failed", message: "Lab reader is disabled. Enable Offline Lab Report Reader in Settings, then Retry.", updatedAt: new Date().toISOString() });
+    if (!labOcrEnabledRef.current) {
+      saveLabScanState(patientId, { status: "stopped", message: "Automatic lab scanning is off. Enable it in Settings to resume.", updatedAt: new Date().toISOString() });
       return;
     }
     runningLabScansRef.current.add(patientId);
@@ -524,7 +557,7 @@ export default function Logbook() {
       } catch {}
       let unreadableImages = 0;
       for (let offset = 0; offset < photos.length; offset += 1) {
-        if (stopLabScansRef.current.has(patientId)) return;
+        if (stopLabScansRef.current.has(patientId) || !labOcrEnabledRef.current) return;
         const batch = photos.slice(offset, offset + 1);
         const results = await Promise.all(batch.map(async uri => {
           const key = labPhotoCacheKey(uri);
@@ -551,7 +584,7 @@ export default function Logbook() {
             return { uri, text: "", structuredText: "", isReport: false, reportDate: "", checkedAt: Date.now() };
           }
         }));
-        if (stopLabScansRef.current.has(patientId)) return;
+        if (stopLabScansRef.current.has(patientId) || !labOcrEnabledRef.current) return;
         for (const result of results) {
           photoCache[labPhotoCacheKey(result.uri)] = {
             text: result.text, structuredText: result.structuredText, isReport: result.isReport,
@@ -561,7 +594,7 @@ export default function Logbook() {
         }
         await AsyncStorage.setItem("ortho_lab_ocr_photo_cache_v5", JSON.stringify(photoCache)).catch(() => {});
       }
-      if (stopLabScansRef.current.has(patientId)) return;
+      if (stopLabScansRef.current.has(patientId) || !labOcrEnabledRef.current) return;
 
       const reportPages: Array<{ text: string; reportDate: string }> = [];
       for (const uri of photos) {
@@ -695,10 +728,10 @@ export default function Logbook() {
   const drainLabScanQueue = useCallback(async () => {
     // Keep new-patient OCR independent of dashboard focus so opening Settings,
     // patient details, or another in-app screen does not interrupt the queue.
-    if (scanQueueRunningRef.current) return;
+    if (scanQueueRunningRef.current || !labOcrEnabledRef.current) return;
     scanQueueRunningRef.current = true;
     try {
-      while (pendingLabScansRef.current.length) {
+      while (labOcrEnabledRef.current && pendingLabScansRef.current.length) {
         const patientId = pendingLabScansRef.current.shift()!;
         if (stopLabScansRef.current.has(patientId)) continue;
         activeLabScanRef.current = patientId;
@@ -707,11 +740,12 @@ export default function Logbook() {
       }
     } finally {
       scanQueueRunningRef.current = false;
-      if (pendingLabScansRef.current.length) void drainLabScanQueue();
+      if (labOcrEnabledRef.current && pendingLabScansRef.current.length) void drainLabScanQueue();
     }
   }, [runOnePatientLabScan]);
 
   const requestLabScan = useCallback((patientId: string, autoForNewPatient = false) => {
+    if (!labOcrEnabledRef.current) return;
     stopLabScansRef.current.delete(patientId);
     if (runningLabScansRef.current.has(patientId) || pendingLabScansRef.current.includes(patientId)) return;
     if (autoForNewPatient) autoQueuedPatientIdsRef.current.add(patientId);
@@ -731,7 +765,30 @@ export default function Logbook() {
   }, [removeNewPatientQueueEntry, saveLabScanState]);
 
   useEffect(() => {
-    if (!labScanStateLoaded || !labOcrEnabled || isLoading || !Array.isArray(data)) return;
+    if (labOcrEnabled) {
+      labOcrEnabledRef.current = true;
+      return;
+    }
+    labOcrEnabledRef.current = false;
+    // Drop in-memory work immediately; leave the saved new-patient queue intact
+    // so it can resume when the administrator enables scanning again.
+    for (const patientId of pendingLabScansRef.current.splice(0)) {
+      autoQueuedPatientIdsRef.current.delete(patientId);
+      forceRetryLabScanIdsRef.current.delete(patientId);
+    }
+    for (const patientId of runningLabScansRef.current) {
+      stopLabScansRef.current.add(patientId);
+      saveLabScanState(patientId, {
+        status: "stopped",
+        message: "Scan paused because automatic lab scanning is off.",
+        updatedAt: new Date().toISOString(),
+      });
+    }
+    if (activeLabScanRef.current) stopLabScansRef.current.add(activeLabScanRef.current);
+  }, [labOcrEnabled, saveLabScanState]);
+
+  useEffect(() => {
+    if (!labScanStateLoaded || !labOcrEnabled || !labOcrEnabledRef.current || isLoading || !Array.isArray(data)) return;
     AsyncStorage.getItem(NEW_PATIENT_LAB_SCAN_QUEUE_KEY).then(raw => {
       let queuedIds: string[] = [];
       try { const parsed = raw ? JSON.parse(raw) : []; if (Array.isArray(parsed)) queuedIds = parsed.map(String); } catch {}

@@ -267,10 +267,13 @@ export default function PatientForm() {
         )) || pages.find(page => page.split(/\r?\n/).some(rawLineMatches)) || "";
         return extractLabReportDate(matchingPage) || extractLabReportDate(extracted);
       };
+      const genderKind = /^\s*(?:m|male|man|men)\s*$/i.test(p.gender)
+        ? "male"
+        : /^\s*(?:f|female|woman|women)\s*$/i.test(p.gender) ? "female" : "";
       const configuredCandidates = configuredLabTests.map(item => ({
         name: String(item.name || "").trim(), unit: String(item.unit || ""),
-        min: /^\s*(?:m|male|man|men)\s*$/i.test(p.gender) ? item.maleMin : item.femaleMin,
-        max: /^\s*(?:m|male|man|men)\s*$/i.test(p.gender) ? item.maleMax : item.femaleMax
+        min: genderKind === "male" ? item.maleMin : genderKind === "female" ? item.femaleMin : "",
+        max: genderKind === "male" ? item.maleMax : genderKind === "female" ? item.femaleMax : ""
       }));
       const commonCandidates = [
         { name: "Hemoglobin", unit: "g/dL" }, { name: "Haemoglobin", unit: "g/dL" },
@@ -281,7 +284,7 @@ export default function PatientForm() {
         { name: "Neutrophils", unit: "%" }, { name: "Lymphocytes", unit: "%" },
         { name: "Creatinine", unit: "mg/dL" }, { name: "Glucose", unit: "mg/dL" }
       ].map(item => ({ ...item, min: "", max: "" }));
-      const genderIsMale = /^\s*(?:m|male|man|men)\s*$/i.test(p.gender);
+      const genderIsMale = genderKind === "male";
       const observedCandidates: Array<{ name: string; unit: string; min: string; max: string }> = [];
       // OCR may identify test names, but it must never teach or overwrite saved
       // reference ranges. The patient's saved sex-specific range and saved unit

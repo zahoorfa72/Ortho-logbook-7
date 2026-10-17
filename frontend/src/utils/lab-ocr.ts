@@ -95,10 +95,23 @@ function configuredAliases(item: LabTestDefinition): string[] {
 }
 
 function configuredTestForName(name: string, configuredTests: LabTestDefinition[]): LabTestDefinition | undefined {
+  const nameNormal = normaliseName(name);
   const key = canonicalTestName(name);
+  const isKnownEquivalence = TEST_EQUIVALENCE_GROUPS.some(group => group.some(label => normaliseName(label) === key));
   return configuredTests.find(item => configuredAliases(item).some(alias => {
+    const aliasNormal = normaliseName(alias);
     const aliasKey = canonicalTestName(alias);
-    return aliasKey === key || normaliseName(alias) === normaliseName(name);
+    if (aliasKey === key || aliasNormal === nameNormal) return true;
+    // Admin labels often include an abbreviation in parentheses, e.g.
+    // "Hemoglobin (Hb)". Link that abbreviation to the saved definition without
+    // using any reference interval from the photographed report.
+    if (!isKnownEquivalence) return false;
+    const aliasTokens = aliasNormal.split(" ").filter(Boolean);
+    const nameTokens = nameNormal.split(" ").filter(Boolean);
+    return nameTokens.some(token =>
+      canonicalTestName(token) === key &&
+      aliasTokens.some(aliasToken => canonicalTestName(aliasToken) === key)
+    );
   }));
 }
 

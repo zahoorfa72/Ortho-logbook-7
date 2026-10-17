@@ -128,7 +128,7 @@ export default function RootLayout() {
 
                   <KeyboardAvoidingView
                     style={{ flex: 1 }}
-                    behavior={Platform.OS === "ios" ? "padding" : "height"}
+                    behavior={Platform.OS === "ios" ? "padding" : undefined}
                     keyboardVerticalOffset={0}
                   >
                   <Stack screenOptions={{ headerShown: false }}>
