@@ -137,8 +137,8 @@ async function runBackup() {
     // not lose edits. All actual records remain in local SQLite.
     batch.forEach((name) => pendingTables.add(name));
     await persistPendingTables();
-    console.warn("[drive-auto-backup] sync failed:", error);
     const details = error instanceof Error ? error.message : String(error || "Unknown error");
+    console.warn("[drive-auto-backup] sync failed:", details);
     setDriveSyncState({
       phase: "error",
       updates: pendingTables.size,
