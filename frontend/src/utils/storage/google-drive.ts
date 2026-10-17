@@ -1052,8 +1052,8 @@ function applyIncrementalToMaster(local: any, incoming: any, preserveCurrent = f
   if (Object.prototype.hasOwnProperty.call(incoming, "appSettings")) local.appSettings = incoming.appSettings;
 }
 
-async function mergeLegacyDriveHistory(localText: string, onProgress?: (stage: string) => void, preferDrive = false) {
-  const local = parseDownloadedBackup(localText);
+async function mergeLegacyDriveHistory(localInput: string | any, onProgress?: (stage: string) => void, preferDrive = false, returnData = false) {
+  const local = typeof localInput === "string" ? parseDownloadedBackup(localInput) : localInput;
   const candidates = (await findLatestBackupCandidates()).filter((file: any) => {
     const name = String(file.name || "");
     return name === BACKUP_NAME ||
@@ -1160,7 +1160,7 @@ async function mergeLegacyDriveHistory(localText: string, onProgress?: (stage: s
   delete local._rowDelta;
   delete local.deletedIds;
   delete local.fullTables;
-  return { backupText: JSON.stringify(local), complete, cleanupSafe, mergedFiles, candidateCount: candidates.length };
+  return { backupText: returnData ? "" : JSON.stringify(local), backupData: local, complete, cleanupSafe, mergedFiles, candidateCount: candidates.length };
 }
 
 async function deleteDuplicateDriveBackups(masterFileId: string): Promise<string[]> {
@@ -1198,16 +1198,11 @@ export async function backupToGoogleDrive(
   options.onProgress?.("Preparing backup data…");
   const isMasterBackup = filter.type === "all";
   const migrationMarker = String((await storage.secureGet(MASTER_MIGRATION_KEY, "")) || "");
-  const priorBackup = isMasterBackup && migrationMarker !== "1" && !options.backupTextOverride
-    ? await findLatestBackup()
-    : null;
-  const freshDriveBaseline = isMasterBackup && migrationMarker !== "1" && !priorBackup?.id && !options.backupTextOverride;
-  const canStream = Platform.OS === "android" &&
+  const canStream = isMasterBackup && Platform.OS === "android" &&
     !!NativeModules.DriveBackgroundUpload?.writeTextChunk &&
     !!NativeModules.DriveBackgroundUpload?.startUpload &&
     !!NativeModules.DriveBackgroundUpload?.getStatus &&
-    !options.backupTextOverride &&
-    (migrationMarker === "1" || freshDriveBaseline);
+    !options.backupTextOverride;
 
   let backupText: string | null = null;
   let stagedFileUri: string | null = null;
@@ -1218,7 +1213,24 @@ export async function backupToGoogleDrive(
 
   if (canStream) {
     options.onProgress?.("Preparing large backup in small pieces…");
-    const backupData = await exportUnencryptedBackupData(filter, options.onProgress);
+    let backupData: any = await exportUnencryptedBackupData(filter, options.onProgress);
+    if (migrationMarker !== "1") {
+      migrationAttempted = true;
+      options.onProgress?.("Merging older Drive backups without building one oversized string…");
+      const migration = await mergeLegacyDriveHistory(backupData, options.onProgress, options.preferDriveOnMigration === true, true);
+      backupData = migration.backupData;
+      if (options.localChanges) applyIncrementalToMaster(backupData, options.localChanges, options.localChanges._rowDelta !== true);
+      backupData.version = Math.max(Number(backupData.version || 0), 7);
+      backupData.createdAt = new Date().toISOString();
+      backupData.filter = { type: "all" };
+      delete backupData.incremental;
+      delete backupData.changedTables;
+      delete backupData._rowDelta;
+      delete backupData.deletedIds;
+      delete backupData.fullTables;
+      migrationComplete = migration.complete;
+      cleanupSafe = migration.cleanupSafe;
+    }
     if (!FileSystem.cacheDirectory) throw new Error("Device cache storage is unavailable for the Drive backup.");
     stagedFileUri = FileSystem.cacheDirectory + "ortho-drive-stream-" + Date.now() + ".json";
     try {
@@ -1233,7 +1245,6 @@ export async function backupToGoogleDrive(
       stagedFileUri = null;
       throw new Error("Could not prepare the large backup in safe chunks: " + String(error?.message || error) + ". Local data remains on this phone; retry after installing the latest APK.");
     }
-    migrationAttempted = freshDriveBaseline;
   } else {
     backupText = options.backupTextOverride || await exportUnencryptedBackup(filter, options.onProgress);
     if (isMasterBackup && migrationMarker !== "1") {
