@@ -1,6 +1,9 @@
 package __PACKAGE__
 
 import android.content.Intent
+import android.net.Uri
+import java.io.File
+import java.io.FileOutputStream
 import android.os.Build
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
@@ -11,6 +14,23 @@ import com.facebook.react.bridge.ReactMethod
 class DriveBackgroundUploadModule(private val context: ReactApplicationContext) :
   ReactContextBaseJavaModule(context) {
   override fun getName() = "DriveBackgroundUpload"
+
+  @ReactMethod
+  fun writeTextChunk(fileUri: String, text: String, append: Boolean, promise: Promise) {
+    try {
+      val uri = Uri.parse(fileUri)
+      val path = uri.path ?: throw IllegalArgumentException("Backup file path is invalid.")
+      val file = File(path)
+      file.parentFile?.mkdirs()
+      FileOutputStream(file, append).use { stream ->
+        stream.write(text.toByteArray(Charsets.UTF_8))
+        stream.flush()
+      }
+      promise.resolve(true)
+    } catch (error: Exception) {
+      promise.reject("DRIVE_BACKUP_STAGE_FAILED", error.message, error)
+    }
+  }
 
   @ReactMethod
   fun startUpload(url: String, token: String, fileUri: String, totalBytes: Double, promise: Promise) {

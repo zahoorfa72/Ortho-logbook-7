@@ -674,21 +674,28 @@ async function verifyUploadedFile(
 }
 
 async function writeBackupTextInChunks(uri: string, content: string, chunkChars = 64 * 1024): Promise<void> {
-  // Keep each native-bridge argument small. This writes the large JSON string to
-  // cache in bounded pieces so uploads never need an equally large Uint8Array copy.
+  // Expo's writeAsStringAsync does not provide a portable append option. Use the
+  // native module's real append writer so each chunk is added to the same file,
+  // rather than overwriting the previous chunk and silently backing up only the tail.
+  const writer = NativeModules.DriveBackgroundUpload;
+  if (!writer?.writeTextChunk) {
+    throw new Error("This Android build is missing the safe large-backup file writer. Install the latest APK before retrying Drive backup.");
+  }
   chunkChars = Math.max(8 * 1024, Math.floor(chunkChars));
   let offset = 0;
   let first = true;
   while (offset < content.length) {
-    const end = Math.min(offset + chunkChars, content.length);
-    await FileSystem.writeAsStringAsync(uri, content.slice(offset, end), {
-      encoding: FileSystem.EncodingType.UTF8,
-      append: !first,
-    });
+    let end = Math.min(offset + chunkChars, content.length);
+    // Do not split a UTF-16 surrogate pair across native UTF-8 writes.
+    if (end < content.length && end > offset) {
+      const last = content.charCodeAt(end - 1);
+      if (last >= 0xD800 && last <= 0xDBFF) end--;
+    }
+    await writer.writeTextChunk(uri, content.slice(offset, end), !first);
     first = false;
     offset = end;
   }
-  if (first) await FileSystem.writeAsStringAsync(uri, "", { encoding: FileSystem.EncodingType.UTF8 });
+  if (first) await writer.writeTextChunk(uri, "", false);
 }
 
 async function uploadContent(backupText: string, existingId?: string, onProgress?: (stage: string) => void, fileName: string = BACKUP_NAME) {
