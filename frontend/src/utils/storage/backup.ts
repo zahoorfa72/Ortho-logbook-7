@@ -561,10 +561,25 @@ function rowImageSignature(row: any): string {
  const add = (text: string) => {
   found = true;
   total += text.length;
-  for (let i = 0; i < text.length; i++) {
-   const code = text.charCodeAt(i);
+  // Medical photos can be several megabytes encoded as base64. Walking every
+  // character of every image (and nested trash/history snapshot) on each sync
+  // blocks the JS thread and makes the backup spinner appear frozen. Hash a
+  // bounded, evenly distributed sample plus the exact length instead. This is
+  // only a change detector; the actual full image data is still uploaded.
+  const sampleLimit = 4096;
+  const step = Math.max(1, Math.ceil(text.length / sampleLimit));
+  const addCode = (code: number) => {
    h1 = Math.imul(h1 ^ code, 0x01000193) >>> 0;
    h2 = Math.imul(h2 ^ (code + 1), 0x85ebca6b) >>> 0;
+  };
+  addCode(text.length & 0xffff);
+  addCode((text.length >>> 16) & 0xffff);
+  if (text.length <= sampleLimit) {
+   for (let i = 0; i < text.length; i++) addCode(text.charCodeAt(i));
+  } else {
+   // Include the beginning and end, then sample throughout the complete value.
+   for (let i = 0; i < text.length; i += step) addCode(text.charCodeAt(i));
+   for (let i = Math.max(0, text.length - 64); i < text.length; i++) addCode(text.charCodeAt(i));
   }
   h1 = Math.imul(h1 ^ 0xff, 0x01000193) >>> 0;
   h2 = Math.imul(h2 ^ 0x9d, 0xc2b2ae35) >>> 0;
