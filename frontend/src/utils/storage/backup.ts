@@ -214,7 +214,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
  for(let i=0;i<patients.length;i++){
    const patient = patients[i];
    const patientId = String(patient.id ?? "");
-   const sourceSignature = JSON.stringify([String(patient.photo_uri || ""), String(patient.photos_json || "")]);
+   const sourceSignature = photoSourceSignature(patient);
    const previous = previousPatientsById.get(patientId);
    if (patientId && previous && previousPhotoSources?.[patientId] === sourceSignature &&
        typeof previous.photos_json === "string") {
@@ -434,6 +434,32 @@ function rowKey(row: any): string | null {
  return row && row.id !== undefined && row.id !== null && String(row.id) !== "" ? String(row.id) : null;
 }
 
+// Keep original photo bytes out of the local comparison cache. Hash source strings
+// in-place instead of JSON-stringifying potentially huge base64 data URIs.
+function photoSourceSignature(row: any): string {
+ const values = [String(row?.photo_uri || ""), String(row?.photos_json || "")];
+ let h1 = 0x811c9dc5;
+ let h2 = 0x9e3779b9;
+ let total = 0;
+ for (let field = 0; field < values.length; field++) {
+  const value = values[field];
+  total += value.length;
+  for (let i = 0; i < value.length; i++) {
+   const code = value.charCodeAt(i);
+   h1 = Math.imul(h1 ^ code, 0x01000193) >>> 0;
+   h2 = Math.imul(h2 ^ (code + field + 1), 0x85ebca6b) >>> 0;
+  }
+  h1 = Math.imul(h1 ^ 0xff, 0x01000193) >>> 0;
+  h2 = Math.imul(h2 ^ 0x9d, 0xc2b2ae35) >>> 0;
+ }
+ return total + ":" + h1.toString(16) + ":" + h2.toString(16);
+}
+
+function stripPatientPhotoPayload(row: any): any {
+ const { photo_uri: _photoUri, photos_json: _photosJson, ...metadata } = row || {};
+ return metadata;
+}
+
 export async function exportIncrementalBackup(changedTables: string[], onProgress?: (stage: string) => void, baselineKey = ""): Promise<string> {
  const allowed = new Set([
   "patients","procedures","inventoryCategories","inventory","patientImplants",
@@ -463,7 +489,7 @@ export async function exportIncrementalBackup(changedTables: string[], onProgres
   if (!previousRows) {
    // First sync for this table, or a changed full-backup baseline: use a
    // complete table snapshot. This is slower once but remains restorable.
-   nextTables[table] = currentRows;
+   nextTables[table] = table === "patients" ? currentRows.map(stripPatientPhotoPayload) : currentRows;
    if (canDiff) fullTables.push(table);
    continue;
   }
@@ -471,24 +497,36 @@ export async function exportIncrementalBackup(changedTables: string[], onProgres
   const newById = new Map<string, any>();
   for (const row of previousRows) { const id = rowKey(row); if (id !== null) oldById.set(id, row); }
   for (const row of currentRows) { const id = rowKey(row); if (id !== null) newById.set(id, row); }
+  const currentPhotoSignatures: Record<string, string> = {};
+  if (table === "patients") {
+   const sourceRows = db.getAllSync<any>("SELECT id,photo_uri,photos_json FROM patients");
+   for (const source of sourceRows) {
+    if (source?.id != null) currentPhotoSignatures[String(source.id)] = photoSourceSignature(source);
+   }
+  }
   const changedRows = currentRows.filter((row) => {
    const id = rowKey(row);
    if (id === null) return true;
    const old = oldById.get(id);
-   return !old || JSON.stringify(old) !== JSON.stringify(row);
+   const comparableRow = table === "patients" ? stripPatientPhotoPayload(row) : row;
+   const metadataChanged = !old || JSON.stringify(old) !== JSON.stringify(comparableRow);
+   const photosChanged = table === "patients" && (!previous!.photoSources || previous!.photoSources[id] !== currentPhotoSignatures[id]);
+   return metadataChanged || photosChanged;
   });
   deletedIds[table] = Array.from(oldById.keys()).filter((id) => !newById.has(id));
   (backup as any)[table] = table === "patients" ? changedRows.map((row) => {
-   const old = oldById.get(String(row.id ?? ""));
-   if (old && old.photo_uri === row.photo_uri && old.photos_json === row.photos_json) {
-    // Patient details changed but the photos did not: leave photo bytes out of
-    // the delta; restore merges these metadata fields with the saved photo.
-    const { photo_uri: _photoUri, photos_json: _photosJson, ...withoutPhotos } = row;
-    return withoutPhotos;
+   const id = String(row.id ?? "");
+   const old = oldById.get(id);
+   const oldPhotoSignature = previous!.photoSources?.[id];
+   if (old && oldPhotoSignature && oldPhotoSignature === currentPhotoSignatures[id]) {
+    // Patient metadata changed but the image source did not. Keep the original
+    // photo in the master and omit its bytes from this delta.
+    return stripPatientPhotoPayload(row);
    }
    return row;
   }) : changedRows;
-  nextTables[table] = currentRows;
+  // Never persist base64 patient images in the local diff cache.
+  nextTables[table] = table === "patients" ? currentRows.map(stripPatientPhotoPayload) : currentRows;
  }
  const effectiveTables = tables.filter((table) => {
   if (table === "branding" || table === "appSettings") {
@@ -516,7 +554,7 @@ export async function exportIncrementalBackup(changedTables: string[], onProgres
    const id = String(row.id ?? "");
    if (!id) continue;
    currentIds.add(id);
-   nextPhotoSources[id] = JSON.stringify([String(row.photo_uri || ""), String(row.photos_json || "")]);
+   nextPhotoSources[id] = photoSourceSignature(row);
   }
   for (const id of Object.keys(nextPhotoSources)) if (!currentIds.has(id)) delete nextPhotoSources[id];
  }
