@@ -477,7 +477,9 @@ export default function Logbook() {
       let onlineOcrKey = "";
       let warningPercent = 10;
       try {
-        const raw = await AsyncStorage.getItem("ortho_lab_ocr_photo_cache_v4");
+        // Read the current cache first, then migrate the older cache key if needed.
+        let raw = await AsyncStorage.getItem("ortho_lab_ocr_photo_cache_v4");
+        if (!raw) raw = await AsyncStorage.getItem("ortho_lab_ocr_photo_cache_v3");
         if (raw) photoCache = JSON.parse(raw);
       } catch {}
       try {
@@ -527,7 +529,7 @@ export default function Logbook() {
             checkedAt: result.checkedAt || Date.now(),
           };
         }
-        await AsyncStorage.setItem("ortho_lab_ocr_photo_cache_v3", JSON.stringify(photoCache)).catch(() => {});
+        await AsyncStorage.setItem("ortho_lab_ocr_photo_cache_v4", JSON.stringify(photoCache)).catch(() => {});
       }
       if (stopLabScansRef.current.has(patientId)) return;
 
