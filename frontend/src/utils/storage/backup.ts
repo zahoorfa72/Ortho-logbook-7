@@ -81,22 +81,66 @@ function photoMime(uri:string){
 // paths are not portable between phones, so the actual photo bytes are stored
 // inside the encrypted backup.
 async function embedPhoto(uri:string, cache?: Map<string,string>, profile: "patient" | "document" = "patient"):Promise<string>{
-  if(!uri)return "";
+  if (!uri) return "";
   const cacheKey = profile + ":" + uri;
   const cached = cache?.get(cacheKey);
   if (cached) return cached;
+
   try {
-    // Restored data URIs have already passed through this optimizer. Leave
-    // them untouched to avoid generation-after-generation JPEG degradation.
-    if (/^data:image\//i.test(uri)) {
-      // Preserve existing embedded image bytes exactly. Never degrade an
-      // already-stored/restored image just to make the backup fit in memory.
+    // Keep already-small embedded images byte-for-byte. Larger images are
+    // encoded as high-quality JPEG at their ORIGINAL dimensions: no resize,
+    // crop, filters, sharpening, or repeated generations of compression.
+    const isDataImage = /^data:image\//i.test(uri);
+    const estimatedBytes = isDataImage
+      ? Math.floor(((uri.split(",")[1] || "").length * 3) / 4)
+      : 0;
+    const targetBytes = 2.2 * 1024 * 1024;
+    if (isDataImage && estimatedBytes > 0 && estimatedBytes <= targetBytes) {
       cache?.set(cacheKey, uri);
       return uri;
     }
-    // Embed the original file bytes verbatim. Do not resize, transcode, or
-    // recompress clinical photographs/documents during backup: that can blur
-    // small lab text and permanently lower image quality.
+
+    // Progressive high-quality encoding aims for about 2.2 MB but prioritizes
+    // legibility. It never changes dimensions. Stop early as soon as the target
+    // is reached; if even the safest quality is too large, keep the best result.
+    const qualities = profile === "document" ? [0.94, 0.91, 0.88] : [0.92, 0.89, 0.86];
+    let bestUri = "";
+    let bestSize = Number.POSITIVE_INFINITY;
+    for (const quality of qualities) {
+      const result = await ImageManipulator.manipulateAsync(
+        uri,
+        [],
+        { compress: quality, format: ImageManipulator.SaveFormat.JPEG }
+      );
+      const info = await LegacyFileSystem.getInfoAsync(result.uri);
+      const size = info.exists && typeof info.size === "number" ? info.size : Number.POSITIVE_INFINITY;
+      if (size < bestSize) {
+        bestUri = result.uri;
+        bestSize = size;
+      }
+      if (size <= targetBytes) {
+        bestUri = result.uri;
+        break;
+      }
+    }
+
+    if (bestUri) {
+      const base64 = await LegacyFileSystem.readAsStringAsync(bestUri, {
+        encoding: LegacyFileSystem.EncodingType.Base64,
+      });
+      if (base64) {
+        const portable = "data:image/jpeg;base64," + base64;
+        cache?.set(cacheKey, portable);
+        return portable;
+      }
+    }
+
+    // If the platform cannot process a provider/content URI, retain original
+    // bytes rather than risk losing a medical report.
+    if (isDataImage) {
+      cache?.set(cacheKey, uri);
+      return uri;
+    }
     const base64 = await LegacyFileSystem.readAsStringAsync(uri, {
       encoding: LegacyFileSystem.EncodingType.Base64,
     });
@@ -107,11 +151,11 @@ async function embedPhoto(uri:string, cache?: Map<string,string>, profile: "pati
       : path.endsWith(".heic") || path.endsWith(".heif") ? "image/heic"
       : path.endsWith(".gif") ? "image/gif"
       : "image/jpeg";
-    const portable = `data:${mime};base64,${base64}`;
+    const portable = "data:" + mime + ";base64," + base64;
     cache?.set(cacheKey, portable);
     return portable;
-  } catch {
-    throw new Error("Could not optimize the original patient photo for backup. Please make sure the photo is still available on this device and try again");
+  } catch (error) {
+    throw new Error("Could not safely compress this image for backup without changing its dimensions. Please keep the original and try again.");
   }
 }
 async function embedOptionalPhoto(uri: string, cache?: Map<string,string>): Promise<string> {
