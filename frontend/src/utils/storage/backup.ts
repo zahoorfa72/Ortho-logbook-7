@@ -150,6 +150,22 @@ function whereForFilter(filter: BackupFilter, column: string) {
   return { sql: "", args: [] };
 }
 
+// Bound concurrent photo work to avoid many full-resolution images being
+// decoded/compressed at once on low-memory Android devices.
+async function mapWithConcurrency<T, R>(items: T[], concurrency: number, mapper: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const output = new Array<R>(items.length);
+  let next = 0;
+  const workers = Math.min(items.length, Math.max(1, Math.floor(concurrency) || 1));
+  await Promise.all(Array.from({ length: workers }, async () => {
+    while (true) {
+      const index = next++;
+      if (index >= items.length) return;
+      output[index] = await mapper(items[index], index);
+    }
+  }));
+  return output;
+}
+
 async function createBackupData(filter: BackupFilter = { type: "all" }, onProgress?: (stage: string) => void, changedTables?: string[], previousPatientRows?: any[], previousPhotoSources?: Record<string, string>):Promise<BackupData>{
  initializeDatabase();
  const include = (name: string) => !changedTables || changedTables.includes(name);
@@ -243,7 +259,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
    }
  }
 
- const trashRows = include("trash") ? await Promise.all(db.getAllSync<any>("SELECT * FROM deleted_records ORDER BY deleted_at DESC").map(async (entry:any) => {
+ const trashRows = include("trash") ? await mapWithConcurrency(db.getAllSync<any>("SELECT * FROM deleted_records ORDER BY deleted_at DESC"), 2, async (entry:any) => {
    let payload:any = {};
    try { payload = JSON.parse(String(entry.payload_json || "{}")); } catch { payload = {}; }
    for (const patient of Array.isArray(payload.patients) ? payload.patients : []) {
@@ -289,22 +305,22 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
      } catch {}
    }
    return { ...entry, payload_json: JSON.stringify(payload) };
- })) : [];
+ }) : [];
 
  return {
   version:BACKUP_VERSION,app:BACKUP_APP,createdAt:new Date().toISOString(),
   patients:embeddedPatients,
   procedures:include("procedures") ? db.getAllSync<any>("SELECT * FROM procedures ORDER BY name COLLATE NOCASE") : [],
   inventoryCategories:include("inventoryCategories") ? db.getAllSync<any>("SELECT * FROM inventory_categories ORDER BY name COLLATE NOCASE") : [],
-  inventory:include("inventory") ? await Promise.all(db.getAllSync<any>("SELECT id,name,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,low_stock_triggered_at,low_stock_since FROM inventory ORDER BY COALESCE(category,''),name COLLATE NOCASE,COALESCE(size,'')").map(async (row:any) => ({
+  inventory:include("inventory") ? await mapWithConcurrency(db.getAllSync<any>("SELECT id,name,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,low_stock_triggered_at,low_stock_since FROM inventory ORDER BY COALESCE(category,''),name COLLATE NOCASE,COALESCE(size,'')"), 2, async (row:any) => ({
     ...row,
     bill_image: typeof row.bill_image === "string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(row.bill_image)
       ? await embedOptionalPhoto(row.bill_image, compressedPhotoCache)
       : row.bill_image,
-  }))) : [],
+  })) : [],
   patientImplants:include("patientImplants") ? db.getAllSync<any>("SELECT * FROM patient_implants ORDER BY created_at ASC") : [],
   patientCustomFields:include("patientCustomFields") ? db.getAllSync<any>("SELECT * FROM patient_custom_fields ORDER BY sort_order ASC,label COLLATE NOCASE") : [],
-  implantRecords:include("implantRecords") ? await Promise.all(db.getAllSync<any>("SELECT * FROM implant_records ORDER BY created_at ASC").map(async (row:any) => {
+  implantRecords:include("implantRecords") ? await mapWithConcurrency(db.getAllSync<any>("SELECT * FROM implant_records ORDER BY created_at ASC"), 2, async (row:any) => {
     let billFiles = row.bill_files_json;
     try {
       const parsed = JSON.parse(String(row.bill_files_json || "[]"));
@@ -319,7 +335,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
       }
     } catch {}
     return { ...row, bill_files_json: billFiles };
-  })) : [],
+  }) : [],
   expenses:include("expenses") ? (()=>{const f=whereForFilter(filter,"date");return db.getAllSync<any>(`SELECT * FROM expenses${f.sql} ORDER BY date DESC, created_at DESC`,f.args);})() : [],
   users:include("users") ? db.getAllSync<any>("SELECT * FROM users ORDER BY created_at ASC") : [],
   patientHistory:embeddedHistory,
