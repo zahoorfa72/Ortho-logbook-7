@@ -1,6 +1,7 @@
 import * as SQLite from "expo-sqlite";
 import {
   backupIncrementalToGoogleDrive,
+  getLastDriveBackupStatus,
   getConnectedGoogleAccount,
   restoreGoogleAccountSilently,
 } from "@/src/utils/storage/google-drive";
@@ -25,6 +26,8 @@ let backupPaused = false;
 let disposed = false;
 let initialized = false;
 const pendingTables = new Set<string>();
+let pendingWriteQueue: Promise<void> = Promise.resolve();
+let retryAttempt = 0;
 const tableMap: Record<string, string> = {
   patients: "patients",
   procedures: "procedures",
@@ -42,12 +45,18 @@ const tableMap: Record<string, string> = {
   deleted_records: "trash",
 };
 
-async function persistPendingTables() {
-  try {
-    await storage.setItem(DIRTY_TABLES_KEY, JSON.stringify(Array.from(pendingTables)));
-  } catch (error) {
-    console.warn("[drive-auto-backup] could not persist pending table list", error);
-  }
+function persistPendingTables(): Promise<void> {
+  // Serialize writes so a slower older AsyncStorage write cannot overwrite a
+  // newer pending-table snapshot and silently lose a queued table.
+  const snapshot = JSON.stringify(Array.from(pendingTables));
+  pendingWriteQueue = pendingWriteQueue.then(async () => {
+    try {
+      await storage.setItem(DIRTY_TABLES_KEY, snapshot);
+    } catch (error) {
+      console.warn("[drive-auto-backup] could not persist pending table list", error);
+    }
+  });
+  return pendingWriteQueue;
 }
 
 async function loadPendingTables() {
@@ -66,7 +75,10 @@ async function loadPendingTables() {
 
 function scheduleBackup(tableName?: string) {
   if (disposed) return;
-  if (tableName) pendingTables.add(tableName);
+  if (tableName) {
+    pendingTables.add(tableName);
+    retryAttempt = 0;
+  }
   void persistPendingTables();
   if (!pendingTables.size || uploading || backupPaused) return;
   if (timer) clearTimeout(timer);
@@ -110,6 +122,7 @@ async function runBackup() {
     const result = await backupIncrementalToGoogleDrive(batch, (message) => {
       setDriveSyncState({ phase: "uploading", updates: batch.length, message });
     });
+    retryAttempt = 0;
     const completedAt = result.completedAt
       ? new Date(result.completedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
       : "";
@@ -133,8 +146,9 @@ async function runBackup() {
       setDriveSyncState({ phase: "success", updates: 0, message: successMessage });
     }
   } catch (error) {
-    // Retain failed table names so the next connection/foreground retry does
-    // not lose edits. All actual records remain in local SQLite.
+    // Retain failed table names. Use backoff rather than rebuilding a large
+    // photo backup every seven seconds while the network is unavailable.
+    retryAttempt = Math.min(retryAttempt + 1, 6);
     batch.forEach((name) => pendingTables.add(name));
     await persistPendingTables();
     const details = error instanceof Error ? error.message : String(error || "Unknown error");
@@ -148,7 +162,7 @@ async function runBackup() {
     uploading = false;
     if (pendingTables.size && !disposed && !backupPaused) {
       if (timer) clearTimeout(timer);
-      const delay = refreshRequested ? 0 : DEBOUNCE_MS;
+      const delay = refreshRequested ? 0 : retryAttempt > 0 ? Math.min(300000, 30000 * (2 ** (retryAttempt - 1))) : DEBOUNCE_MS;
       refreshRequested = false;
       timer = setTimeout(() => {
         timer = null;
@@ -179,6 +193,7 @@ export function setAutomaticDriveBackupPaused(paused: boolean) {
 
 export function refreshAutomaticDriveBackup() {
   void loadPendingTables().then(async () => {
+    retryAttempt = 0;
     ALL_SYNC_TABLES.forEach((name) => pendingTables.add(name));
     await persistPendingTables();
     if (timer) {
@@ -205,11 +220,14 @@ export function startAutomaticDriveBackup() {
   disposed = false;
   setDriveSyncRefreshHandler(refreshAutomaticDriveBackup);
   const unregisterRefresh = () => setDriveSyncRefreshHandler(null);
-  void loadPendingTables().then(() => {
-    // A startup integrity pass compares local records with the last confirmed
-    // cache. It may inspect every table, but Drive is updated only if the row
-    // diff finds real changes. Foreground/scroll events do not force a new pass.
-    ALL_SYNC_TABLES.forEach((name) => pendingTables.add(name));
+  void loadPendingTables().then(async () => {
+    // Do not rescan/recompress every patient photo on every app launch. A first
+    // install with no successful Drive backup queues a full baseline; otherwise
+    // only persisted or actual database changes are retried.
+    if (!pendingTables.size && !(await getLastDriveBackupStatus())) {
+      ALL_SYNC_TABLES.forEach((name) => pendingTables.add(name));
+      await persistPendingTables();
+    }
     scheduleBackup();
   });
   const subscription = SQLite.addDatabaseChangeListener((event: any) => {

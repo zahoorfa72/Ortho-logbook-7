@@ -13,7 +13,7 @@ import { useAuth } from "@/src/auth/AuthContext";
 import { Segmented } from "@/src/components/Segmented";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 import { backupToGoogleDrive, connectGoogleAccount, disconnectGoogleAccount, getConnectedGoogleAccount, restoreLatestFromGoogleDrive, listGoogleDriveBackups, restoreGoogleDriveBackupById } from "@/src/utils/storage/google-drive";
-import { triggerAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-backup";
+import { refreshAutomaticDriveBackup, triggerAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-backup";
 
  // Selective restore reads from the single complete Drive master snapshot.
  // Period restores merge only records belonging to that period and never wipe
@@ -141,7 +141,9 @@ export default function BackupRestoreScreen() {
       setDriveStatus("Connecting Google account…");
       const email = await connectGoogleAccount();
       setGoogleAccount(email);
-      triggerAutomaticDriveBackup();
+      // A newly connected/switched Google account needs a complete comparison
+      // so the correct account receives a full baseline and pending changes.
+      refreshAutomaticDriveBackup();
       Alert.alert("Google account connected", "Google account connected. Automatic backup will start shortly.");
     } catch (error) {
       Alert.alert("Google connection failed", error instanceof Error ? error.message : "Unable to connect Google.");
