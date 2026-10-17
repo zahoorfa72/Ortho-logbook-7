@@ -54,7 +54,7 @@ type LabScanStatus = {
 
 const LAB_SCAN_STATUS_STORAGE_KEY = "ortho_lab_ocr_scan_states_v1";
 const NEW_PATIENT_LAB_SCAN_QUEUE_KEY = "ortho_lab_ocr_new_patient_queue_v1";
-const LAB_OCR_PIPELINE_VERSION = "row-aware-2026-10-17-v2";
+const LAB_OCR_PIPELINE_VERSION = "admin-fuzzy-viral-2026-10-17-v3";
 
 type Patient = {
   id: string;

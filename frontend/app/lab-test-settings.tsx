@@ -121,7 +121,7 @@ export default function LabTestSettingsScreen() {
       <Text style={styles.title}>Lab Test Reference Ranges</Text><View style={styles.back}/>
     </View>
     <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xxl }}>
-      <Text style={styles.help}>Add the exact test names used by your laboratory and the reference interval printed by that lab. These settings are saved locally on this phone. OCR must not guess a test name or treat dates and report headers as tests.</Text>
+      <Text style={styles.help}>For strongest automatic results, add each test your lab reports, enter its alternate labels/abbreviations, assign its branch, and save the correct male/female limits and unit. These admin definitions are used first when matching OCR labels and deciding abnormal results. The scanner will leave uncertain results unclassified rather than invent a value.</Text>
       <Text style={styles.section}>Online OCR (optional)</Text>
       <Text style={styles.help}>When a key is saved, the app tries OCR.space online and uses its text only if it appears more complete than offline OCR. If internet or the service fails, offline OCR continues. Lab images are sent to OCR.space while online OCR is enabled. Obtain an API key from ocr.space; do not paste a Google/GitHub key here.</Text>
       <View style={styles.field}>
@@ -148,7 +148,7 @@ export default function LabTestSettingsScreen() {
       {field("Main test branch / category", "category", "e.g. CBC, LFT, RFT, Viral markers")}
       <Text style={styles.help}>Group related tests under one main branch. On the patient list, each branch stays collapsed until opened and then shows its out-of-range results.</Text>
       {field("Other report labels / OCR aliases", "aliases", "e.g. Hb, HGB, Haemoglobin (comma-separated)") }
-      <Text style={styles.help}>Enter abbreviations or alternate spellings that this laboratory uses for the same test. The app matches these labels to this saved test and uses its saved sex-specific range and unit. Do not add a different test as an alias.</Text>
+      <Text style={styles.help}>Enter all labels this laboratory may print for the same test (abbreviations, alternate spellings, and common OCR misspellings). Exact admin labels are preferred; the scanner can cautiously recover small spelling errors in longer configured names. Saved male/female ranges and the saved unit take priority over ranges read from the image. Do not add a different test as an alias.</Text>
       <Text style={styles.section}>Male reference range</Text>
       <View style={styles.two}>{field("From (minimum)", "maleMin", "12")}{field("To (maximum)", "maleMax", "16")}</View>
       <Text style={styles.section}>Female reference range</Text>

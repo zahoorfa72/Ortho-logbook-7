@@ -102,6 +102,50 @@ function configuredTestForName(name: string, configuredTests: LabTestDefinition[
   }));
 }
 
+// Conservative edit-distance matching helps recover common OCR misspellings
+// in admin-configured test names (for example "hemoglobln"). Short labels such
+// as HIV, HCV, Hb and WBC still require an exact match to avoid false matches.
+function editDistance(a: string, b: string): number {
+  const previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i++) {
+    let diagonal = previous[0];
+    previous[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const above = previous[j];
+      previous[j] = Math.min(
+        previous[j] + 1,
+        previous[j - 1] + 1,
+        diagonal + (a[i - 1] === b[j - 1] ? 0 : 1),
+      );
+      diagonal = above;
+    }
+  }
+  return previous[b.length];
+}
+
+function fuzzyConfiguredTestPrefix(cleaned: string, configuredTests: LabTestDefinition[]) {
+  const words = cleaned.split(/\s+/).filter(Boolean);
+  let best: { name: string; end: number; configured: LabTestDefinition; distance: number } | null = null;
+  for (const configured of configuredTests) {
+    for (const alias of configuredAliases(configured)) {
+      const aliasWords = normaliseName(alias).split(" ").filter(Boolean);
+      if (!aliasWords.length) continue;
+      const candidate = words.slice(0, aliasWords.length).join(" ");
+      if (!candidate) continue;
+      const expected = aliasWords.join(" ");
+      const compactExpected = expected.replace(/\s/g, "");
+      const compactCandidate = normaliseName(candidate).replace(/\s/g, "");
+      if (compactExpected.length < 5 || compactCandidate.length < 5) continue;
+      const maxDistance = compactExpected.length >= 10 ? 2 : 1;
+      const distance = editDistance(compactExpected, compactCandidate);
+      if (distance > maxDistance || (best && distance >= best.distance)) continue;
+      const end = words.slice(0, aliasWords.length).join(" ").length;
+      best = { name: cleaned.slice(0, end).trim(), end, configured, distance };
+    }
+  }
+  return best ? { name: best.name, end: best.end, configured: best.configured } : null;
+}
+
 export function hasKnownLabTestName(line: string, configuredTests: LabTestDefinition[] = []): boolean { return !!findTestPrefix(line, configuredTests); }
 
 export function isLabMetadataLine(line: string, configuredTests: LabTestDefinition[] = []): boolean { return isNonResultLine(line, configuredTests); }
@@ -124,6 +168,10 @@ function findTestPrefix(line: string, configuredTests: LabTestDefinition[] = [])
     const match = pattern.exec(cleaned);
     if (match) { const name = cleaned.slice(0, match[0].length).trim(); return { name, end: match[0].length, configured: configuredTestForName(name, configuredTests) }; }
   }
+  // Use only admin-configured labels for cautious typo recovery; this does not
+  // fuzzy-match arbitrary text or short infectious-disease abbreviations.
+  const fuzzy = fuzzyConfiguredTestPrefix(cleaned, configuredTests);
+  if (fuzzy) return fuzzy;
   // A known test may be prefixed by a short lab code, but never infer arbitrary words.
   const normal = normaliseName(lower);
   for (const alias of TEST_ALIASES) {
@@ -351,6 +399,15 @@ function unitFromResultCell(value: string): string {
   return match?.[0]?.replace(/\s+/g, "") || "";
 }
 
+function qualitativePositiveForViralMarker(testName: string, resultRaw: string): ParsedLabRow["severity"] | null {
+  const test = normaliseName(testName);
+  const result = normaliseName(resultRaw);
+  const isViralMarker = /(?:hbsag|hepatitis b surface antigen|hcv|hepatitis c|hiv|human immunodeficiency)/.test(test);
+  if (!isViralMarker) return null;
+  if (/^(?:positive|reactive|detected|present)$/.test(result)) return "ALERT";
+  return null;
+}
+
 function classifyDeviation(resultRaw: string, reference: ReferenceInterval, warningPercent = 10): ParsedLabRow["severity"] | null {
   const result = numericValue(resultRaw);
   if (!Number.isFinite(result)) return null;
@@ -553,7 +610,10 @@ export function parseLabReportRows(text: string, configuredTests: LabTestDefinit
 
       // When includeNormal is true, missing sex-specific ranges are retained as
       // unclassified rows for the age-of-report check only; never label them normal.
-      const severity = reference ? (classifyDeviation(resultRaw, reference, warningPercent) || "") : "";
+      // Positive viral screening results must alert even though these tests use
+      // qualitative values rather than numeric reference intervals.
+      const severity = qualitativePositiveForViralMarker(testPrefix.name, resultRaw) ||
+        (reference ? classifyDeviation(resultRaw, reference, warningPercent) : null) || "";
       if (!severity && !includeNormal) continue;
       const result = numericValue(resultRaw);
       const cleanedUnit = unit
