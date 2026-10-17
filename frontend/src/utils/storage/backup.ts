@@ -537,6 +537,20 @@ function stripBackupImages(value: any, key = ""): any {
  return output;
 }
 
+// Comparison caches must never re-serialize potentially huge nested JSON columns.
+// Their full contents are hashed separately, so cache rows keep only lightweight metadata.
+function stripBackupCacheRow(value: any): any {
+ if (Array.isArray(value)) return value.map(stripBackupCacheRow);
+ if (!value || typeof value !== "object") return value;
+ const output: Record<string, any> = {};
+ for (const [key, child] of Object.entries(value)) {
+  const normalized = key.toLowerCase();
+  if (BACKUP_IMAGE_KEYS.has(normalized) || BACKUP_NESTED_JSON_KEYS.has(normalized)) continue;
+  output[key] = stripBackupCacheRow(child);
+ }
+ return output;
+}
+
 // Hash only media fields for comparison-cache entries. Image bytes stay in the
 // real Drive backup but are never copied into the local diff cache.
 function rowImageSignature(row: any): string {
@@ -571,7 +585,10 @@ function rowImageSignature(row: any): string {
    return;
   }
   if (BACKUP_NESTED_JSON_KEYS.has(normalized) && typeof value === "string") {
-   try { visit(JSON.parse(value), normalized); } catch {}
+   // Hash original nested JSON as-is; parsing and re-stringifying huge
+   // trash/history payloads can exceed the JS/native string limit.
+   add(normalized);
+   add(value);
    return;
   }
   if (Array.isArray(value)) { for (const item of value) visit(item); return; }
@@ -620,9 +637,9 @@ export async function exportIncrementalBackupData(changedTables: string[], onPro
       }
      }
     }
-    nextTables[table] = rows.map((row) => stripBackupImages(row));
+    nextTables[table] = rows.map((row) => stripBackupCacheRow(row));
    } else {
-    nextTables[table] = stripBackupImages(rows);
+    nextTables[table] = stripBackupCacheRow(rows);
    }
   }
  }
@@ -645,7 +662,7 @@ export async function exportIncrementalBackupData(changedTables: string[], onPro
   if (!previousRows) {
    // First sync for this table, or a changed full-backup baseline: use a
    // complete table snapshot. This is slower once but remains restorable.
-   nextTables[table] = currentRows.map((row) => stripBackupImages(row));
+   nextTables[table] = currentRows.map((row) => stripBackupCacheRow(row));
    if (canDiff) fullTables.push(table);
    continue;
   }
@@ -694,7 +711,7 @@ export async function exportIncrementalBackupData(changedTables: string[], onPro
   });
   // Keep cache records lightweight: the Drive payload retains media, while this
   // local comparison cache retains only metadata plus media signatures.
-  nextTables[table] = currentRows.map((row) => stripBackupImages(row));
+  nextTables[table] = currentRows.map((row) => stripBackupCacheRow(row));
  }
  const effectiveTables = tables.filter((table) => {
   if (table === "branding" || table === "appSettings") {
@@ -757,7 +774,7 @@ export async function prepareIncrementalSnapshotCacheFromBackupData(baselineKey:
  const photoSources: Record<string, string> = {};
  for (const table of tableNames) {
   const rows = Array.isArray((backup as any)[table]) ? (backup as any)[table] as any[] : [];
-  tables[table] = rows.map((row) => stripBackupImages(row));
+  tables[table] = rows.map((row) => stripBackupCacheRow(row));
   if (table === "patients") {
    const sourceRows = db.getAllSync<any>("SELECT id,photo_uri,photos_json FROM patients");
    const currentIds = new Set<string>();
