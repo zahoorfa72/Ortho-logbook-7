@@ -672,7 +672,7 @@ async function writeBackupTextInChunks(uri: string, content: string): Promise<vo
 
 async function uploadContent(backupText: string, existingId?: string, onProgress?: (stage: string) => void, fileName: string = BACKUP_NAME) {
   const token = await accessToken();
-  let useNativeBackground = Platform.OS === "android" && !!NativeModules.DriveBackgroundUpload?.startUpload;
+  let useNativeBackground = Platform.OS === "android" && !!NativeModules.DriveBackgroundUpload?.startUpload && backupText.length <= 256 * 1024;
   let stagedFileUri: string | null = null;
   let totalBytes = 0;
   let bytes: Uint8Array | null = null;
