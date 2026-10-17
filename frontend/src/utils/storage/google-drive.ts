@@ -278,11 +278,31 @@ export async function restoreGoogleDriveBackupById(fileId: string) {
   const recoveryWarnings: string[] = [];
   let appliedIncrementals = 0;
 
+  // Download incremental journals in small parallel batches. The old loop
+  // fetched every journal serially, adding one full network round-trip per file
+  // to restore time. Apply results in their original order below so merge
+  // semantics and deletion ordering remain unchanged, without loading every
+  // journal into memory at once.
+  const recoveredDeltas: Array<{ data?: any; warning?: string; error?: string } | null> = new Array(deltas.length).fill(null);
+  for (let batchStart = 0; batchStart < deltas.length; batchStart += 3) {
+    const batch = deltas.slice(batchStart, batchStart + 3);
+    const results = await Promise.all(batch.map(async (item: any) => {
+      try {
+        const recovered = await downloadIncrementalWithRecovery(String(item.id), String(item.name || "An incremental backup"));
+        return { data: recovered.data, warning: recovered.warning };
+      } catch (error: any) {
+        return { error: String(error?.message || (String(item.name || "An incremental backup") + " could not be recovered.")) };
+      }
+    }));
+    results.forEach((result, index) => { recoveredDeltas[batchStart + index] = result; });
+  }
+
   for (let deltaIndex = 0; deltaIndex < deltas.length; deltaIndex++) {
     const deltaFile = deltas[deltaIndex];
     let delta: any;
     try {
-      const recovered = await downloadIncrementalWithRecovery(String(deltaFile.id), String(deltaFile.name || "An incremental backup"));
+      const recovered = recoveredDeltas[deltaIndex];
+      if (!recovered || recovered.error) throw new Error(recovered?.error || "Incremental backup could not be recovered.");
       delta = recovered.data;
       if (recovered.warning) recoveryWarnings.push(recovered.warning);
     } catch (error: any) {

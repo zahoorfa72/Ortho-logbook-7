@@ -1164,6 +1164,14 @@ export default function Logbook() {
         <FlatList
           data={filtered}
           keyExtractor={(item) => item.id}
+          // Keep the visible patient list responsive on lower-memory Android
+          // phones. The default render window can mount many expensive lab
+          // result cards at once; smaller batches reduce JS/UI thread stalls.
+          initialNumToRender={6}
+          maxToRenderPerBatch={5}
+          updateCellsBatchingPeriod={40}
+          windowSize={7}
+          removeClippedSubviews={true}
           contentContainerStyle={{
             padding: spacing.lg,
             paddingBottom: bottomChrome + 96,
