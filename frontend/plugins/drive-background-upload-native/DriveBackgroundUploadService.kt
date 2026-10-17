@@ -111,7 +111,17 @@ class DriveBackgroundUploadService : Service() {
                 break
               }
               if (checked.third >= total) {
-                throw IllegalStateException("Google Drive received all backup bytes but has not finalized the file yet. Retrying the final confirmation.")
+                // A 308 with the complete byte range is not a completed upload.
+                // Re-send the final chunk to prompt Drive to finalize the session;
+                // otherwise offset would become total and the loop would exit at 99%.
+                stalls++
+                if (stalls >= 8) {
+                  throw IllegalStateException("Google Drive received all backup bytes but did not finalize the file after repeated final-chunk retries. Local records are unchanged; retry on a stable connection.")
+                }
+                Thread.sleep(1000L * stalls)
+                offset = maxOf(0L, total - CHUNK_SIZE)
+                setProgress(((offset * 100) / total).toInt())
+                continue
               }
               offset = checked.third.coerceIn(0L, total)
               stalls = 0
