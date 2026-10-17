@@ -327,12 +327,20 @@ function resultNumber(text: string): string | null {
   const qualitative = /^(?:non[\s-]?reactive|not\s+detected|negative|positive|reactive|detected|absent|present|normal|abnormal)\b/i.exec(withoutSexMarker);
   if (qualitative) return qualitative[0].replace(/\s+/g, " ").trim();
 
+  // Repair common OCR digit/letter confusions only inside numeric tokens.
+  // Do not rewrite test names or qualitative words such as "Positive".
+  const numericText = withoutSexMarker
+    .replace(/^([<>≤≥]?\s*)[Oo](?=\d|[.,]\d)/, (_match, prefix) => prefix + "0")
+    .replace(/([0-9])[Oo](?=[0-9.,])/g, (_match, digit) => digit + "0")
+    .replace(/^([<>≤≥]?\s*)[Il|](?=\d|[.,]\d)/, (_match, prefix) => prefix + "1")
+    .replace(/([0-9])[Il|](?=[0-9.,])/g, (_match, digit) => digit + "1");
+
   // Never take a reference-range endpoint or a second unrelated number as a result.
-  if (INTERVAL_PATTERN.test(withoutSexMarker)) return null;
-  const scalar = new RegExp("^\\s*([<>≤≥]?\\s*" + NUMBER_PATTERN + ")").exec(withoutSexMarker);
+  if (INTERVAL_PATTERN.test(numericText)) return null;
+  const scalar = new RegExp("^\\s*([<>≤≥]?\\s*" + NUMBER_PATTERN + ")").exec(numericText);
   if (!scalar) return null;
   const raw = scalar[1].replace(/[<>≤≥\s]/g, "");
-  const remainder = withoutSexMarker.slice(scalar[0].length).trim();
+  const remainder = numericText.slice(scalar[0].length).trim();
   const remainderWithoutScientificUnit = remainder
     .replace(/[x×]\s*10\s*\^?\s*[-+]?\d+/gi, "")
     .replace(/\b(?:10\^?\d+)\b/gi, "")
@@ -873,7 +881,7 @@ export async function recognizeLabText(
       (text.match(/\d+(?:[.,]\d+)?/g) || []).length * 3 +
       (text.match(/\b(?:result|reference|range|hemoglobin|haemoglobin|platelets|glucose|creatinine)\b/gi) || []).length * 10 +
       parsedRows.length * 160 + matchedNames * 90 + flagged * 35 +
-      (extractLabReportDate(text) ? 1000 : 0);
+      (extractLabReportDate(text) ? 25 : 0);
   };
   // If the first read is weak, retry sideways images at both orientations and
   // keep the OCR pass that reads the most text/numbers/lab terms.
@@ -956,7 +964,7 @@ export async function recognizeLabText(
     (value.match(/\d+(?:[.,]\d+)?/g) || []).length * 8 +
     (value.match(/\b(?:result|reference|range|hemoglobin|platelets|glucose|creatinine)\b/gi) || []).length * 12 +
     parseLabReportRows(value, configuredTests, gender, 10, true).length * 160 +
-    (extractLabReportDate(value) ? 1800 : 0);
+    (extractLabReportDate(value) ? 25 : 0);
   if (onlineText && (
     qualityScore(onlineText) > qualityScore(text) ||
     (isLikelyLabReportText(onlineText) && !isLikelyLabReportText(text))
