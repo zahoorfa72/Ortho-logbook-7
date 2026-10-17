@@ -30,7 +30,7 @@ import { Segmented } from "@/src/components/Segmented";
 import { useToast } from "@/src/components/toast";
 import { formatInventoryLabel } from "@/src/utils/inventory-label";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
-const LAB_OCR_PIPELINE_VERSION = "row-aware-2026-10-17-v2";
+const LAB_OCR_PIPELINE_VERSION = "row-aware-2026-10-17-v3";
 
 type Patient = {
   id: string; mrNo: string; name: string; gender: string; age: string;
@@ -200,7 +200,7 @@ export default function PatientForm() {
           // Yield between photos so the form can repaint and respond while a
           // large patient file is being checked.
           await new Promise<void>(resolve => setTimeout(resolve, 0));
-          const result = await recognizeLabText(photoUris[i], onlineOcrKey, configuredLabTests, p.gender);
+          const result = await recognizeLabText(photoUris[i], onlineOcrKey, configuredLabTests, p.gender, automatic);
           const text = String(result?.text || "").trim();
           const structuredText = result?.mode === "online" ? "" : String(result?.structuredText || "").trim();
           // Prefer rows reconstructed from OCR bounding-box positions. Keep the
@@ -1226,7 +1226,7 @@ export default function PatientForm() {
       cropDragStartRef.current = null;
       cropResizeStartRef.current = null;
       if (action === "crop") toast("Freeform crop applied. You can adjust again before saving.", "success");
-      else if (action === "optimize") toast("Photo optimized for sharp display and a manageable file size.", "success");
+      else if (action === "optimize") toast("Photo compressed to a manageable file size.", "success");
     } catch (e: any) {
       toast(e?.message || "Could not edit photo.", "error");
     } finally {
@@ -1484,10 +1484,10 @@ export default function PatientForm() {
         <View style={{ marginTop: spacing.sm, marginBottom: spacing.sm, padding: spacing.md, borderWidth: 1, borderColor: colors.brandPrimary, borderRadius: radius.md, backgroundColor: colors.surfaceSecondary }}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm, marginBottom: spacing.xs }}>
             <Ionicons name="sparkles" size={22} color={colors.brandPrimary} />
-            <Text style={{ color: colors.brandPrimary, fontFamily: fontFamily.bold, fontSize: fontSize.base }}>AI IMAGE TOOLS</Text>
+            <Text style={{ color: colors.brandPrimary, fontFamily: fontFamily.bold, fontSize: fontSize.base }}>DOCUMENT SCANNING</Text>
           </View>
           <Text style={{ color: colors.onSurfaceSecondary, fontSize: fontSize.xs, marginBottom: spacing.sm }}>
-            Enhance, auto-detect document edges, and correct perspective on photos already saved in this patient file. Processing stays on this phone; AI model setup needs internet once.
+            Scan existing patient photos, detect document edges, and correct perspective. Image enhancement AI is disabled to keep the app responsive.
           </Text>
           <Pressable
             style={[styles.secondary, { backgroundColor: colors.brandPrimary, justifyContent: "center" }, photoBusy && { opacity: 0.5 }]}
@@ -1495,7 +1495,7 @@ export default function PatientForm() {
             disabled={photoBusy || cameraOpen}
             testID="open-ai-image-tools-button"
             accessibilityRole="button"
-            accessibilityLabel="AI enhance and auto-scan existing patient images"
+            accessibilityLabel="Scan existing patient images"
           >
             <Ionicons name="sparkles" size={19} color={colors.onBrandPrimary} />
             <Text style={[styles.secondaryText, { color: colors.onBrandPrimary, fontFamily: fontFamily.bold }]}> Scan Existing Images</Text>
@@ -1572,7 +1572,7 @@ export default function PatientForm() {
                 <View style={{ flex: 1, minHeight: 0, flexShrink: 1 }}>
                   <View style={styles.photoEditHeader}>
                     <View>
-                      <Text style={styles.photoEditTitle}>AI IMAGE TOOLS · PERSPECTIVE CORRECTION</Text>
+                      <Text style={styles.photoEditTitle}>DOCUMENT PERSPECTIVE CORRECTION</Text>
                       <Text style={styles.photoEditHint}>Move all four corners to the paper edges, then apply the correction.</Text>
                     </View>
                     <Pressable onPress={() => { setPerspectiveMode(false); setPerspectiveHtml(""); }} disabled={photoBusy} style={styles.photoEditIconButton}>
@@ -1679,7 +1679,7 @@ export default function PatientForm() {
                 </Pressable>
                 <Pressable style={styles.photoTool} disabled={photoBusy} onPress={() => editPhoto("optimize")}>
                   <Ionicons name="sparkles-outline" size={20} color={colors.brandPrimary} />
-                  <Text style={styles.photoToolText}>Optimize Photo</Text>
+                  <Text style={styles.photoToolText}>Compress Photo</Text>
                 </Pressable>
                 <Pressable style={styles.photoTool} disabled={photoBusy} onPress={resetPhotoEdits}>
                   <Ionicons name="refresh-circle-outline" size={20} color={colors.onSurface} />

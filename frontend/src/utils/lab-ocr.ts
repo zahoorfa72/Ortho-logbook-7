@@ -463,11 +463,20 @@ export function parseLabReportRows(text: string, configuredTests: LabTestDefinit
     const structuredSource = structuredSection.trim() ? structuredSection : "";
     // Process reconstructed rows first, then raw OCR lines as a fallback for
     // tests the column geometry missed. Duplicate test/result pairs are removed below.
+    const structuredTestKeys = new Set<string>();
+    if (structuredSource) {
+      for (const structuredLine of structuredSource.split(/\r?\n/)) {
+        const cells = structuredLine.split("|").map(cell => cell.trim());
+        const structuredPrefix = cells.length >= 2 ? findTestPrefix(cells[0], configuredTests) : null;
+        if (structuredPrefix) structuredTestKeys.add(canonicalTestName(structuredPrefix.name));
+      }
+    }
     const sources = structuredSource
       ? [structuredSource, ...(rawSection.trim() ? [rawSection] : [])]
       : [page];
 
-    for (const source of sources) {
+    for (let sourceIndex = 0; sourceIndex < sources.length; sourceIndex++) {
+    const source = sources[sourceIndex];
     const sourceLines = source.split(/\r?\n/);
     for (let lineIndex = 0; lineIndex < sourceLines.length; lineIndex++) {
       const rawLine = sourceLines[lineIndex];
@@ -478,6 +487,10 @@ export function parseLabReportRows(text: string, configuredTests: LabTestDefinit
       const structured = cells.length >= 2 ? findTestPrefix(cells[0], configuredTests) : null;
       let testPrefix: { name: string; end: number; configured?: LabTestDefinition } | null = structured || findTestPrefix(line, configuredTests);
       if (!testPrefix) continue;
+      // The row geometry has already attempted this test. Never parse the flat
+      // raw text as a fallback for it, because the next numeric token may belong
+      // to a different CBC row (e.g. WBC vs neutrophils or Hb vs platelets).
+      if (sourceIndex > 0 && structuredTestKeys.has(canonicalTestName(testPrefix.name))) continue;
 
       let resultRaw: string | null = null;
       let unit = "";
@@ -573,8 +586,7 @@ function imageSize(uri: string): Promise<{ width: number; height: number }> {
  */
 function structureLabColumns(blocks: any[], imageWidth: number, imageHeight: number, configuredTests: LabTestDefinition[] = []): string {
   const suppliedBlocks = Array.isArray(blocks) ? blocks : [];
-  // Paragraph-level rectangles cover multiple lines and cannot safely be reused
-  // as the geometry of each individual line or table cell.
+  // Paragraph boxes contain multiple baselines; do not pretend they are word geometry.
   if (suppliedBlocks.some(block =>
     /\r|\n/.test(String(block?.text || "")) &&
     Number(block?.boundingBox?.height || 0) > 0
@@ -596,6 +608,7 @@ function structureLabColumns(blocks: any[], imageWidth: number, imageHeight: num
   if (!positioned.length || !imageWidth || !imageHeight) return "";
 
   const xCenter = (item: OcrPositionedLine) => (item.x + item.width / 2) / imageWidth;
+  const yCenter = (item: OcrPositionedLine) => item.y + item.height / 2;
   const mean = (values: number[]) => values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length);
   const median = (values: number[]) => {
     if (!values.length) return undefined;
@@ -603,31 +616,30 @@ function structureLabColumns(blocks: any[], imageWidth: number, imageHeight: num
     return sorted[Math.floor(sorted.length / 2)];
   };
 
-  // Word-level boxes are first aligned into visual rows using their y positions.
+  // Rebuild baselines first. Use a tight tolerance and the nearest baseline,
+  // not the first row that happens to overlap a tall OCR bounding box.
   const typicalHeight = median(positioned.map(item => item.height)) || imageHeight * 0.02;
-  const rowTolerance = Math.max(typicalHeight * 0.58, imageHeight * 0.005);
+  const rowTolerance = Math.max(typicalHeight * 0.32, imageHeight * 0.0025);
   const rowGroups: OcrPositionedLine[][] = [];
-  for (const item of positioned.sort((a, b) => (a.y + a.height / 2) - (b.y + b.height / 2))) {
-    const y = item.y + item.height / 2;
+  for (const item of [...positioned].sort((a, b) => yCenter(a) - yCenter(b))) {
+    const y = yCenter(item);
     const itemIsTestLabel = !!findTestPrefix(item.text, configuredTests);
-    let target = rowGroups.find(group => {
-      const avgY = mean(group.map(entry => entry.y + entry.height / 2));
-      const closeVertically = Math.abs(y - avgY) <= Math.max(rowTolerance, Math.min(item.height, group[0].height) * 0.45);
-      if (!closeVertically) return false;
-
-      // Never merge two different test labels into one visual row. This was a
-      // dangerous source of cross-row values (e.g. hemoglobin receiving the
-      // platelet count) when OCR boxes for adjacent CBC rows overlap vertically.
+    let bestGroup: OcrPositionedLine[] | null = null;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (const group of rowGroups) {
+      const avgY = mean(group.map(yCenter));
+      const distance = Math.abs(y - avgY);
+      const tolerance = Math.max(rowTolerance, Math.min(item.height, median(group.map(entry => entry.height)) || item.height) * 0.25);
+      if (distance > tolerance || distance >= bestDistance) continue;
       const existingText = group.map(entry => entry.text).join(" ");
-      if (itemIsTestLabel && findTestPrefix(existingText, configuredTests)) return false;
-      return true;
-    });
-    if (!target) { target = []; rowGroups.push(target); }
-    target.push(item);
+      if (itemIsTestLabel && findTestPrefix(existingText, configuredTests)) continue;
+      bestGroup = group;
+      bestDistance = distance;
+    }
+    if (bestGroup) bestGroup.push(item);
+    else rowGroups.push([item]);
   }
 
-  // Preserve word-to-character positions to map a multi-word recognized test label
-  // back to its visual x coordinates after combining the words for matching.
   const rowDetails = rowGroups.map(group => {
     const ordered = [...group].sort((a, b) => a.x - b.x);
     let cursor = 0;
@@ -639,86 +651,75 @@ function structureLabColumns(blocks: any[], imageWidth: number, imageHeight: num
     });
     const text = ordered.map(item => item.text).join(" ");
     const prefix = findTestPrefix(text, configuredTests);
-    let labelLeft: number | null = null;
-    let labelRight: number | null = null;
-    if (prefix) {
-      const labelStart = text.toLowerCase().indexOf(prefix.name.toLowerCase());
-      const labelEnd = labelStart >= 0 ? labelStart + prefix.name.length : prefix.end;
-      const labelSpans = spans.filter(span => span.end > Math.max(0, labelStart) && span.start < labelEnd);
-      if (labelSpans.length) {
-        labelLeft = Math.min(...labelSpans.map(span => span.item.x / imageWidth));
-        labelRight = Math.max(...labelSpans.map(span => (span.item.x + span.item.width) / imageWidth));
-      }
-    }
-    return { ordered, spans, text, prefix, labelLeft, labelRight };
+    if (!prefix) return { ordered, spans, text, prefix: null as ReturnType<typeof findTestPrefix>, labelRight: null as number | null };
+
+    const labelStart = text.toLowerCase().indexOf(prefix.name.toLowerCase());
+    const labelEnd = labelStart >= 0 ? labelStart + prefix.name.length : prefix.end;
+    const labelSpans = spans.filter(span => span.end > Math.max(0, labelStart) && span.start < labelEnd);
+    const labelRight = labelSpans.length
+      ? Math.max(...labelSpans.map(span => (span.item.x + span.item.width) / imageWidth))
+      : null;
+    return { ordered, spans, text, prefix, labelRight };
   });
 
   const knownRows = rowDetails.filter(row => row.prefix && row.labelRight !== null);
-  // Never manufacture a table if no known test label was recognized.
   if (!knownRows.length) return "";
 
-  const testRight = Math.max(...knownRows.map(row => row.labelRight!));
-  const candidateX: number[] = [];
-  const qualitative = /^(?:positive|negative|reactive|nonreactive|non[\s-]?reactive|detected|absent|present|normal|abnormal)$/i;
+  const headerResult = positioned.find(item => /^result\\s*:?$/i.test(item.text.trim()));
+  const headerResultX = headerResult ? xCenter(headerResult) : null;
+  const qualitative = /^(?:positive|negative|reactive|nonreactive|non[\\s-]?reactive|not[\\s-]?detected|detected|absent|present|normal|abnormal)$/i;
+  const output: string[] = [];
+
   for (const row of knownRows) {
     const prefix = row.prefix!;
-    for (const span of row.spans) {
-      if (span.start < prefix.end) continue;
-      const value = span.item.text.trim();
-      // Collect measured scalars and qualitative results only after the recognized
-      // test label. Reference-range numbers remain farther right and form their
-      // own cluster(s), which keeps them out of the measured-result cell.
-      if (resultNumber(value) !== null || qualitative.test(value)) {
-        const center = xCenter(span.item);
-        if (center > testRight + 0.025) candidateX.push(center);
-      }
-    }
-  }
-
-  candidateX.sort((a, b) => a - b);
-  const clusters: number[][] = [];
-  for (const value of candidateX) {
-    const last = clusters[clusters.length - 1];
-    if (last && Math.abs(value - mean(last)) <= 0.055) last.push(value);
-    else clusters.push([value]);
-  }
-  const resultCenters = clusters.map(mean);
-  const headerCenter = (pattern: RegExp) => {
-    const item = positioned.find(value => pattern.test(value.text.trim()));
-    return item ? xCenter(item) : undefined;
-  };
-  const resultCenter = headerCenter(/^result\s*:?$/i) ??
-    resultCenters.find(value => value > testRight + 0.035);
-  if (resultCenter === undefined) return "";
-
-  // Column positions arrange the row only. Clinical classification continues to use
-  // the saved sex-specific ranges, never reference endpoints read from the image.
-  const laterCenters = resultCenters.filter(value => value > resultCenter + 0.07);
-  const unitCenter = headerCenter(/^units?\s*:?$/i) ?? Math.max(resultCenter + 0.15, 0.66);
-  const referenceCenter = headerCenter(/^(?:reference|normal|biological|ref)\s*:?$/i) ??
-    laterCenters[0] ?? Math.max(unitCenter + 0.18, 0.84);
-  const testBoundary = Math.min((testRight + resultCenter) / 2, resultCenter - 0.025);
-  const resultBoundary = (resultCenter + unitCenter) / 2;
-  const unitBoundary = (unitCenter + referenceCenter) / 2;
-
-  const output: string[] = [];
-  for (const row of rowDetails) {
-    const cells = ["", "", "", ""];
-    for (const item of row.ordered) {
+    const labelRight = row.labelRight!;
+    const candidates: Array<{ item: OcrPositionedLine; text: string; center: number }> = [];
+    for (let index = 0; index < row.ordered.length; index++) {
+      const item = row.ordered[index];
       const center = xCenter(item);
-      const column = center < testBoundary ? 0 : center < resultBoundary ? 1 : center < unitBoundary ? 2 : 3;
-      cells[column] = (cells[column] + " " + item.text).trim();
+      if (center <= labelRight + 0.002) continue;
+      let valueText = item.text.trim();
+      let parsed = resultNumber(valueText);
+      if (!parsed && index + 1 < row.ordered.length) {
+        const next = row.ordered[index + 1];
+        const combined = valueText + " " + next.text.trim();
+        const combinedParsed = resultNumber(combined);
+        if (combinedParsed && /^(?:non|not)$/i.test(valueText)) {
+          valueText = combined;
+          parsed = combinedParsed;
+        }
+      }
+      if (parsed !== null || qualitative.test(valueText)) candidates.push({ item, text: valueText, center });
     }
-    // Preserve rows whose geometry does not fit the inferred grid; raw-text parsing
-    // can still extract from them without pretending they are aligned table cells.
-    if (!cells[0] || !cells[1]) {
-      output.push(row.text);
+
+    // A result header is the strongest column anchor. Without one, take the
+    // left-most valid measured value after the test label; reference ranges are
+    // farther right and are never used to infer a neighbouring test's result.
+    candidates.sort((a, b) => headerResultX !== null
+      ? Math.abs(a.center - headerResultX) - Math.abs(b.center - headerResultX)
+      : a.center - b.center);
+    const chosen = candidates[0];
+    if (!chosen) {
+      // Keep the test name visible for review, but deliberately leave its result
+      // blank so downstream parsing cannot borrow a value from an adjacent row.
+      output.push(row.text.slice(0, Math.max(prefix.end, 1)).trim() + " |  |  | ");
       continue;
     }
-    const structured = cells.filter(Boolean).join(" | ");
-    if (structured) output.push(structured);
+
+    const labelCell = row.ordered
+      .filter(item => item.x / imageWidth <= chosen.center)
+      .map(item => item.text)
+      .join(" ")
+      .trim();
+    const after = row.ordered
+      .filter(item => xCenter(item) > chosen.center && item !== chosen.item)
+      .map(item => item.text)
+      .join(" ")
+      .trim();
+    output.push(labelCell + " | " + chosen.text + " | " + after + " | ");
   }
-  return output.join("\n");
+
+  return output.join("\\n");
 }
 async function recognizeOnlineLabText(uri: string, apiKey: string): Promise<string> {
   const key = String(apiKey || "").trim();
@@ -760,6 +761,7 @@ export async function recognizeLabText(
   onlineApiKey = "",
   configuredTests: LabTestDefinition[] = [],
   gender = "",
+  fastMode = false,
 ): Promise<{ text: string; structuredText: string; mode: "online" | "offline" }> {
   // Run on-device OCR on the original and, for small/blurry-looking captures,
   // an enlarged high-quality copy. Upscaling cannot restore lost detail, but
@@ -803,7 +805,7 @@ export async function recognizeLabText(
   };
   // If the first read is weak, retry sideways images at both orientations and
   // keep the OCR pass that reads the most text/numbers/lab terms.
-  if (localScore(best) < 220 || parseLabReportRows(String(best?.text || ""), configuredTests, gender, 10, true).length === 0) {
+  if (!fastMode && (localScore(best) < 220 || parseLabReportRows(String(best?.text || ""), configuredTests, gender, 10, true).length === 0)) {
     for (const degrees of [90, 270]) {
       let rotatedUri = "";
       try {
@@ -822,7 +824,7 @@ export async function recognizeLabText(
   // from farther away, where the full-page OCR often loses small test values.
   // Keep the original full-page OCR blocks for table geometry and append crop text
   // as a fallback source so labels/results split across crops are not silently lost.
-  try {
+  if (!fastMode) try {
     const size = originalDimensions || await imageSize(uri);
     const rowCount = parseLabReportRows(String(best?.text || ""), configuredTests, gender, 10, true).length;
     if ((rowCount < Math.min(3, Math.max(1, configuredTests.length)) && localScore(best) < 420) || localScore(best) < 220) {
@@ -853,7 +855,7 @@ export async function recognizeLabText(
   // Always read the header separately, even if the full-page pass found a date:
   // a full-page read can mistake DOB/other dates for the report date or misread
   // a clear printed date such as 06-Oct-2026.
-  if (!extractLabReportDate(String(best?.text || ""))) {
+  if (!fastMode && !extractLabReportDate(String(best?.text || ""))) {
     let headerUri = "";
     try {
       const size = originalDimensions || await imageSize(uri);
@@ -876,7 +878,7 @@ export async function recognizeLabText(
   let mode: "online" | "offline" = "offline";
   // Optional cloud OCR is attempted only when the admin explicitly saves a key.
   // If it is unavailable or returns less readable text, retain the offline result.
-  const onlineText = await recognizeOnlineLabText(uri, onlineApiKey);
+  const onlineText = fastMode ? "" : await recognizeOnlineLabText(uri, onlineApiKey);
   const qualityScore = (value: string) =>
     (isLikelyLabReportText(value) ? 80 : 0) +
     (value.match(/\d+(?:[.,]\d+)?/g) || []).length * 8 +
