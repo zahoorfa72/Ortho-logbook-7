@@ -477,7 +477,7 @@ export default function Logbook() {
       let onlineOcrKey = "";
       let warningPercent = 10;
       try {
-        const raw = await AsyncStorage.getItem("ortho_lab_ocr_photo_cache_v3");
+        const raw = await AsyncStorage.getItem("ortho_lab_ocr_photo_cache_v4");
         if (raw) photoCache = JSON.parse(raw);
       } catch {}
       try {
@@ -491,9 +491,9 @@ export default function Logbook() {
         if (raw && Number.isInteger(parsed) && parsed >= 1 && parsed <= 100) warningPercent = parsed;
       } catch {}
       let unreadableImages = 0;
-      for (let offset = 0; offset < photos.length; offset += 2) {
+      for (let offset = 0; offset < photos.length; offset += 1) {
         if (stopLabScansRef.current.has(patientId)) return;
-        const batch = photos.slice(offset, offset + 2);
+        const batch = photos.slice(offset, offset + 1);
         const results = await Promise.all(batch.map(async uri => {
           const key = labPhotoCacheKey(uri);
           const cached = photoCache[key];
@@ -501,7 +501,7 @@ export default function Logbook() {
             return { uri, ...cached };
           }
           try {
-            const result = await recognizeLabText(uri, onlineOcrKey);
+            const result = await recognizeLabText(uri, onlineOcrKey, configuredTests, patient.gender);
             const text = String(result?.text || "").trim();
             const structuredText = result?.mode === "online" ? "" : String(result?.structuredText || "").trim();
             const combined = text + "\n" + structuredText;
