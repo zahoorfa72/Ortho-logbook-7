@@ -62,8 +62,6 @@
     "expo-ocr-kit": "0.1.4",
     "@uzimandias/react-native-pdf-to-image": "0.1.0",
     "react-native-document-scanner-plugin": "2.0.4",
-    "onnxruntime-react-native": "1.24.3",
-    "jpeg-js": "0.4.4",
     "buffer": "6.0.3"
   },
   "devDependencies": {
