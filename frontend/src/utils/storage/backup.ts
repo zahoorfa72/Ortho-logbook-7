@@ -280,8 +280,14 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
  const historyAll=include("patientHistory") ? db.getAllSync<any>("SELECT * FROM patient_history ORDER BY created_at ASC") : [];
  const history=filter.type==="all" ? historyAll : historyAll.filter((h:any)=>selectedPatientIds.has(h.patient_id));
  const embeddedHistory:any[]=[];
+ onProgress?.("Processing patient history… 0/" + history.length);
  for (let historyIndex = 0; historyIndex < history.length; historyIndex++) {
    const h = history[historyIndex];
+   if (historyIndex % 3 === 0) {
+     onProgress?.("Processing patient history… " + (historyIndex + 1) + "/" + history.length);
+     // Yield to React Native so the progress message and cancel/back UI remain responsive.
+     await new Promise<void>((resolve) => setTimeout(resolve, 0));
+   }
    try {
      const snap = JSON.parse(String(h.snapshot_json || ""));
      // Historical patient snapshots can contain another copy of every photo.
@@ -316,7 +322,13 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
    }
  }
 
- const trashRows = include("trash") ? await mapWithConcurrency(db.getAllSync<any>("SELECT * FROM deleted_records ORDER BY deleted_at DESC"), 2, async (entry:any) => {
+ const trashSourceRows = include("trash") ? db.getAllSync<any>("SELECT * FROM deleted_records ORDER BY deleted_at DESC") : [];
+ onProgress?.("Processing deleted records and trash… 0/" + trashSourceRows.length);
+ const trashRows = include("trash") ? await mapWithConcurrency(trashSourceRows, 2, async (entry:any, trashIndex:number) => {
+   if (trashIndex % 2 === 0) {
+     onProgress?.("Processing deleted records and trash… " + (trashIndex + 1) + "/" + trashSourceRows.length);
+     await new Promise<void>((resolve) => setTimeout(resolve, 0));
+   }
    let payload:any = {};
    try { payload = JSON.parse(String(entry.payload_json || "{}")); } catch { payload = {}; }
    for (const patient of Array.isArray(payload.patients) ? payload.patients : []) {
