@@ -463,7 +463,9 @@ export function parseLabReportRows(text: string, configuredTests: LabTestDefinit
     const structuredSource = structuredSection.trim() ? structuredSection : "";
     // Process reconstructed rows first, then raw OCR lines as a fallback for
     // tests the column geometry missed. Duplicate test/result pairs are removed below.
-    const sources = structuredSource ? [structuredSource] : [page];
+    const sources = structuredSource
+      ? [structuredSource, ...(rawSection.trim() ? [rawSection] : [])]
+      : [page];
 
     for (const source of sources) {
     const sourceLines = source.split(/\r?\n/);
@@ -485,6 +487,11 @@ export function parseLabReportRows(text: string, configuredTests: LabTestDefinit
         // OCR is trusted only for the test label and measured result. Units and
         // reference intervals are taken from the saved test definition because
         // OCR commonly mixes the male and female intervals or reads them as results.
+        // If the inferred result cell contains multiple numeric values, the
+        // column geometry is ambiguous (often a neighboring test row/range).
+        // Reject it and let the raw OCR fallback recover the result by label.
+        const numericTokens = cells[1].match(/[-+]?\\d+(?:[.,]\\d+)?/g) || [];
+        if (numericTokens.length > 1) continue;
         resultRaw = resultNumber(cells[1]);
       } else {
         const rest = line.slice(testPrefix.end).replace(/^\s*\((?!\s*[-+]?\d)[^)]{1,30}\)\s*/, " ").replace(/^\s*[:|\-]+\s*/, "");

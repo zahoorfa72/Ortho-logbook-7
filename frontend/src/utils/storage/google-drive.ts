@@ -1450,7 +1450,13 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
       const parsed = await downloadDriveJsonValidated(String(journalFile.id));
       // Never mix changes that belong to a different master baseline. A manual
       // full backup may have replaced the baseline since the journal was written.
-      if (parsed?.incremental === true && parsed?._baselineKey === baselineKey) journal = parsed;
+      // The full master is updated in place, so its modifiedTime changes even
+      // though the file ID (and the journal's baseline identity) is unchanged.
+      // Keep the prior journal when it belongs to this same master file; otherwise
+      // the next edit would overwrite older un-compacted changes.
+      const journalBaseline = String(parsed?._baselineKey || "");
+      if (parsed?.incremental === true &&
+          (journalBaseline === baselineKey || journalBaseline.startsWith(String(base.id) + ":"))) journal = parsed;
     } catch (error) {
       // Keep the old journal file until a replacement has been verified. If it
       // cannot be read, start a fresh delta based on the confirmed full master.
