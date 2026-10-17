@@ -692,7 +692,7 @@ export async function recognizeLabText(
   };
   // If the first read is weak, retry sideways images at both orientations and
   // keep the OCR pass that reads the most text/numbers/lab terms.
-  if (localScore(best) < 220 || parseLabReportRows(String(best?.text || ""), configuredTests, gender, 10, true).length < Math.min(3, Math.max(1, configuredTests.length)) || !extractLabReportDate(String(best?.text || ""))) {
+  if (localScore(best) < 220 || parseLabReportRows(String(best?.text || ""), configuredTests, gender, 10, true).length === 0) {
     for (const degrees of [90, 270]) {
       let rotatedUri = "";
       try {
@@ -714,7 +714,7 @@ export async function recognizeLabText(
   try {
     const size = originalDimensions || await imageSize(uri);
     const rowCount = parseLabReportRows(String(best?.text || ""), configuredTests, gender, 10, true).length;
-    if (rowCount < Math.min(5, Math.max(2, configuredTests.length)) || localScore(best) < 420) {
+    if ((rowCount < Math.min(3, Math.max(1, configuredTests.length)) && localScore(best) < 420) || localScore(best) < 220) {
       const bandHeight = Math.max(1, Math.round(size.height * 0.56));
       const starts = [0, Math.max(0, size.height - bandHeight)];
       const cropTexts: string[] = [];
@@ -742,7 +742,7 @@ export async function recognizeLabText(
   // Always read the header separately, even if the full-page pass found a date:
   // a full-page read can mistake DOB/other dates for the report date or misread
   // a clear printed date such as 06-Oct-2026.
-  {
+  if (!extractLabReportDate(String(best?.text || ""))) {
     let headerUri = "";
     try {
       const size = originalDimensions || await imageSize(uri);
