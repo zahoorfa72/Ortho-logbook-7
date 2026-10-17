@@ -243,7 +243,7 @@ export default function PatientForm() {
         ? [...new Set([...extracted.matchAll(/LAB REPORT IMAGE\s+(\d+)/gi)].map(match => photoUris[Number(match[1]) - 1]).filter(Boolean))]
         : [...new Set(recognizedPhotoUris)];
       const canonical = (value: string) => String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
-      const configuredAliases = (item: any) => [String(item?.name || ""), ...String(item?.aliases || "").split(/[,;\\n]+/)].map(value => value.trim()).filter(Boolean);
+      const configuredAliases = (item: any) => [String(item?.name || ""), ...String(item?.aliases || "").split(/[,;\n]+/)].map(value => value.trim()).filter(Boolean);
       const matchesConfiguredTest = (item: any, value: string) => configuredAliases(item).some(alias => canonical(alias) === canonical(value));
       const isHemoglobin = (value: string) => ["hemoglobin", "haemoglobin", "hgb", "hb"].includes(canonical(value));
       const reportDateForTest = (testName: string) => {
