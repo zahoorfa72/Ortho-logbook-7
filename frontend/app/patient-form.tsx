@@ -44,23 +44,39 @@ type SelectedImplant = { id: string; inventoryId: string; name: string; category
 
 const today = () => new Date().toISOString().slice(0, 10);
 
+function asBooleanFlag(value: unknown): boolean {
+  if (value === true || value === 1) return true;
+  if (value === false || value === 0 || value == null) return false;
+  return /^(?:true|1|yes|positive|reactive)$/i.test(String(value).trim());
+}
+
 function detectPositiveScreening(text: string): { hcvPlus: boolean; hbaSg: boolean; hiv: boolean } {
   const found = { hcvPlus: false, hbaSg: false, hiv: false };
   const lines = String(text || "").split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-  for (const line of lines) {
+  const screeningName = /\b(?:hbsag|hba\s*sg|hepatitis\s*b\s*surface\s*antigen|hcv(?:\s*(?:antibody|ab|antigen))?|hepatitis\s*c(?:\s*(?:antibody|ab))?|hiv(?:\s*(?:1\s*\/?\s*2)?\s*(?:antibody|ab|screen))?)\b/i;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     const cells = line.includes("|") ? line.split("|").map(cell => cell.trim()) : [];
-    const candidates = cells.length >= 2 ? [cells[0] + " " + cells[1]] : [line];
-    for (const candidate of candidates) {
-      const name = candidate.match(/\b(?:hbsag|hba\s*sg|hepatitis\s*b\s*surface\s*antigen|hcv(?:\s*(?:antibody|ab|antigen))?|hepatitis\s*c(?:\s*(?:antibody|ab))?|hiv(?:\s*(?:1\s*\/?\s*2)?\s*(?:antibody|ab|screen))?)\b/i)?.[0] || "";
-      if (!name) continue;
-      const resultPart = cells.length >= 2 ? cells[1] : candidate.slice(candidate.toLowerCase().indexOf(name.toLowerCase()) + name.length);
-      if (/\b(?:negative|non[\s-]?reactive|not\s+detected|non[\s-]?detected|absent|normal)\b/i.test(resultPart)) continue;
-      const positive = /\b(?:positive|reactive|detected|presumptive\s+positive|pos\.?)\b/i.test(resultPart);
-      if (!positive) continue;
-      if (/\b(?:hbsag|hba\s*sg|hepatitis\s*b\s*surface\s*antigen)\b/i.test(name)) found.hbaSg = true;
-      else if (/\b(?:hcv|hepatitis\s*c)\b/i.test(name)) found.hcvPlus = true;
-      else if (/\bhiv\b/i.test(name)) found.hiv = true;
+    const nameSource = cells.length >= 2 ? cells[0] : line;
+    const nameMatch = nameSource.match(screeningName) || line.match(screeningName);
+    if (!nameMatch) continue;
+    const name = nameMatch[0];
+    let resultPart = cells.length >= 2
+      ? String(cells[1] || "")
+      : line.slice(Math.max(0, line.toLowerCase().indexOf(name.toLowerCase()) + name.length));
+    // Some reports print the test name and its qualitative result on adjacent lines.
+    const qualitative = /\b(?:non[\s-]?reactive|not\s+detected|non[\s-]?detected|negative|presumptive\s+positive|positive|reactive|detected|absent|normal|pos\.?)\b/i;
+    if (!qualitative.test(resultPart)) {
+      resultPart += " " + (lines[i + 1] || "");
     }
+    // Classify the first actual result status only. Reference columns often say
+    // "Non-reactive" even when the patient's result is "Reactive".
+    const status = resultPart.match(qualitative)?.[0].toLowerCase().replace(/[\s-]+/g, "") || "";
+    if (["negative", "nonreactive", "notdetected", "nondetected", "absent", "normal"].includes(status)) continue;
+    if (!["positive", "reactive", "detected", "presumptivepositive", "pos."].includes(status)) continue;
+    if (/\b(?:hbsag|hba\s*sg|hepatitis\s*b\s*surface\s*antigen)\b/i.test(name)) found.hbaSg = true;
+    else if (/\b(?:hcv|hepatitis\s*c)\b/i.test(name)) found.hcvPlus = true;
+    else if (/\bhiv\b/i.test(name)) found.hiv = true;
   }
   return found;
 }
@@ -202,7 +218,7 @@ export default function PatientForm() {
     // reopening a patient from running several expensive OCR passes on every
     // saved photo again. Administrators can explicitly force a fresh scan.
     const hasCachedScan = !forceRescan && automatic &&
-      p.customData?.labOcrPhotoScanComplete === true &&
+      String(p.customData?.labOcrPhotoScanComplete || "") === "true" &&
       p.customData?.labOcrPhotoSignature === photoSignature;
     const cachedExtracted = hasCachedScan ? String(p.customData?.labOcrExtractedText || "") : null;
     if (labOcrBusy) {
@@ -254,7 +270,7 @@ export default function PatientForm() {
           setP(prev => ({ ...prev, customData: {
             ...(prev.customData || {}),
             labOcrPhotoSignature: photoSignature,
-            labOcrPhotoScanComplete: true,
+            labOcrPhotoScanComplete: "false",
             labOcrExtractedText: "",
           }}));
         }
@@ -473,7 +489,7 @@ export default function PatientForm() {
         hcvPlus: prev.hcvPlus || positiveScreening.hcvPlus,
         hbaSg: prev.hbaSg || positiveScreening.hbaSg,
         hiv: prev.hiv || positiveScreening.hiv,
-        customData: { ...(prev.customData || {}), labOcrExtractedText: extracted, labOcrPhotoSignature: photoSignature, labOcrPhotoScanComplete: true, labOcrPossibleFlags: candidates.join("\n"), labOcrNeedsReview: uncertain.join("\n"), labOcrOnlineTestNameHelp: onlineHelp.join("\n") },
+        customData: { ...(prev.customData || {}), labOcrExtractedText: extracted, labOcrPhotoSignature: photoSignature, labOcrPhotoScanComplete: "true", labOcrPossibleFlags: candidates.join("\n"), labOcrNeedsReview: uncertain.join("\n"), labOcrOnlineTestNameHelp: onlineHelp.join("\n") },
       }));
       const newlyTicked = [
         positiveScreening.hcvPlus && !p.hcvPlus ? "HCV+" : "",
@@ -521,7 +537,35 @@ export default function PatientForm() {
     id: string; title: string; deleted_at: string; expires_at: string; patient: { mrNo: string; name: string };
   } | null>({
     queryKey: ["trash-patient-match", p.mrNo.trim().toLocaleLowerCase(), p.name.trim().toLocaleLowerCase()],
-    queryFn: () => api.get("/trash/patient-match?mrNo=" + encodeURIComponent(p.mrNo.trim()) + "&name=" + encodeURIComponent(p.name.trim())),
+    queryFn: async () => {
+      const mrNo = p.mrNo.trim();
+      const name = p.name.trim();
+      const url = "/trash/patient-match?mrNo=" + encodeURIComponent(mrNo) + "&name=" + encodeURIComponent(name);
+      try {
+        const direct: any = await api.get(url);
+        const match = direct?.patient ? direct : direct?.match?.patient ? direct.match : direct;
+        if (match?.id && match?.patient?.mrNo && match?.patient?.name) return match;
+      } catch {
+        // Older deployments may not expose the dedicated match endpoint.
+      }
+      // Fallback: inspect Trash titles so the suggestion still works on older APIs.
+      try {
+        const entries = await api.get<Array<{ id: string; kind: string; title: string; deleted_at: string; expires_at: string }>>("/trash");
+        const norm = (value: unknown) => String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
+        const wantedName = norm(name);
+        const wantedMr = norm(mrNo);
+        const entry = (Array.isArray(entries) ? entries : []).find(item => {
+          const title = String(item.title || "");
+          const normalizedTitle = norm(title);
+          const tokens = normalizedTitle.split(" ");
+          const patientKind = /patient/i.test(String(item.kind || ""));
+          const hasMr = wantedMr.length > 0 && tokens.includes(wantedMr);
+          return patientKind && hasMr && wantedName.length > 0 && normalizedTitle.includes(wantedName);
+        });
+        if (entry) return { ...entry, patient: { mrNo, name } };
+      } catch {}
+      return null;
+    },
     enabled: !isEdit && user?.role === "admin" && !!p.mrNo.trim() && !!p.name.trim(),
     staleTime: 0,
     retry: false,
@@ -575,7 +619,20 @@ export default function PatientForm() {
       ? source.photos
       : source.photoUri ? [source.photoUri] : [];
     const customData = source.customData || {};
-    setP({ ...source, photos, customData });
+    // Older API records may contain the literal strings "true"/"false".
+    // Normalize them to booleans before rendering or applying OCR flags.
+    const readFlag = (primary: unknown, fallback: unknown) =>
+      primary === undefined || primary === null || primary === ""
+        ? asBooleanFlag(fallback)
+        : asBooleanFlag(primary);
+    setP({
+      ...source,
+      photos,
+      customData,
+      hcvPlus: readFlag((source as any).hcvPlus, customData.hcvPlus),
+      hbaSg: readFlag((source as any).hbaSg, customData.hbaSg),
+      hiv: readFlag((source as any).hiv, customData.hiv),
+    });
     setReady(true);
   }, [isEdit, detailedExisting, existing]);
 
@@ -1923,7 +1980,7 @@ export default function PatientForm() {
         ] as const).map(([key, label]) => (
           <Pressable
             key={key}
-            onPress={() => setP(prev => ({ ...prev, [key]: !prev[key] }))}
+            onPress={() => setP(prev => ({ ...prev, [key]: !asBooleanFlag(prev[key]) }))}
             style={styles.screeningRow}
             testID={"patient-screening-" + key}
           >

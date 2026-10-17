@@ -334,6 +334,7 @@ export default function Logbook() {
   const stopLabScansRef = useRef<Set<string>>(new Set());
   const scanQueueRunningRef = useRef(false);
   const autoQueuedPatientIdsRef = useRef<Set<string>>(new Set());
+  const forceRetryLabScanIdsRef = useRef<Set<string>>(new Set());
   const requestLabScanRef = useRef<(patientId: string, autoForNewPatient?: boolean) => void>(() => {});
 
   useEffect(() => {
@@ -669,7 +670,8 @@ export default function Logbook() {
         const patientId = pendingLabScansRef.current.shift()!;
         if (stopLabScansRef.current.has(patientId)) continue;
         activeLabScanRef.current = patientId;
-        await runOnePatientLabScan(patientId, true);
+        const forceRetry = forceRetryLabScanIdsRef.current.delete(patientId);
+        await runOnePatientLabScan(patientId, forceRetry);
       }
     } finally {
       scanQueueRunningRef.current = false;
@@ -681,6 +683,7 @@ export default function Logbook() {
     stopLabScansRef.current.delete(patientId);
     if (runningLabScansRef.current.has(patientId) || pendingLabScansRef.current.includes(patientId)) return;
     if (autoForNewPatient) autoQueuedPatientIdsRef.current.add(patientId);
+    else forceRetryLabScanIdsRef.current.add(patientId);
     pendingLabScansRef.current.push(patientId);
     saveLabScanState(patientId, { status: "queued", message: autoForNewPatient ? "New patient: waiting to scan saved photos…" : "Retry requested — waiting to scan this patient's photos…", updatedAt: new Date().toISOString() });
     void drainLabScanQueue();
@@ -690,6 +693,7 @@ export default function Logbook() {
   const stopLabScan = useCallback((patientId: string) => {
     stopLabScansRef.current.add(patientId);
     pendingLabScansRef.current = pendingLabScansRef.current.filter(id => id !== patientId);
+    forceRetryLabScanIdsRef.current.delete(patientId);
     saveLabScanState(patientId, { status: "stopped", message: "Scan stopped by administrator. Tap Retry to continue.", updatedAt: new Date().toISOString() });
     void removeNewPatientQueueEntry(patientId);
   }, [removeNewPatientQueueEntry, saveLabScanState]);
