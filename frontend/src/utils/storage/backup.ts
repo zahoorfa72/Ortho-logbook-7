@@ -513,7 +513,77 @@ function stripPatientPhotoPayload(row: any): any {
  return metadata;
 }
 
-export async function exportIncrementalBackup(changedTables: string[], onProgress?: (stage: string) => void, baselineKey = ""): Promise<string> {
+const BACKUP_IMAGE_KEYS = new Set(["photo_uri", "photouri", "photos_json", "photos", "bill_image", "bill_files_json"]);
+const BACKUP_NESTED_JSON_KEYS = new Set(["snapshot_json", "payload_json"]);
+const IMAGE_SIGNATURE_TABLES = new Set(["inventory", "inventoryPurchaseReceipts", "stockReceipts", "implantRecords", "patientHistory", "trash"]);
+
+function stripBackupImages(value: any, key = ""): any {
+ if (Array.isArray(value)) return value.map((item) => stripBackupImages(item));
+ if (!value || typeof value !== "object") {
+  if (BACKUP_NESTED_JSON_KEYS.has(key.toLowerCase()) && typeof value === "string") {
+   try { return JSON.stringify(stripBackupImages(JSON.parse(value))); } catch {}
+  }
+  return value;
+ }
+ const output: Record<string, any> = {};
+ for (const [childKey, child] of Object.entries(value)) {
+  const normalized = childKey.toLowerCase();
+  if (BACKUP_IMAGE_KEYS.has(normalized)) continue;
+  if (BACKUP_NESTED_JSON_KEYS.has(normalized) && typeof child === "string") {
+   try { output[childKey] = JSON.stringify(stripBackupImages(JSON.parse(child))); continue; } catch {}
+  }
+  output[childKey] = stripBackupImages(child, childKey);
+ }
+ return output;
+}
+
+// Hash only media fields for comparison-cache entries. Image bytes stay in the
+// real Drive backup but are never copied into the local diff cache.
+function rowImageSignature(row: any): string {
+ let h1 = 0x811c9dc5;
+ let h2 = 0x9e3779b9;
+ let total = 0;
+ let found = false;
+ const add = (text: string) => {
+  found = true;
+  total += text.length;
+  for (let i = 0; i < text.length; i++) {
+   const code = text.charCodeAt(i);
+   h1 = Math.imul(h1 ^ code, 0x01000193) >>> 0;
+   h2 = Math.imul(h2 ^ (code + 1), 0x85ebca6b) >>> 0;
+  }
+  h1 = Math.imul(h1 ^ 0xff, 0x01000193) >>> 0;
+  h2 = Math.imul(h2 ^ 0x9d, 0xc2b2ae35) >>> 0;
+ };
+ const addImageValue = (value: any): void => {
+  if (typeof value === "string") { add(value); return; }
+  if (Array.isArray(value)) { add("["); for (const item of value) addImageValue(item); add("]"); return; }
+  if (value && typeof value === "object") {
+   for (const key of Object.keys(value).sort()) { add(key); addImageValue(value[key]); }
+  }
+ };
+ const visit = (value: any, key = ""): void => {
+  const normalized = key.toLowerCase();
+  if (BACKUP_IMAGE_KEYS.has(normalized)) {
+   if (value === null || value === undefined || value === "") return;
+   add(normalized);
+   addImageValue(value);
+   return;
+  }
+  if (BACKUP_NESTED_JSON_KEYS.has(normalized) && typeof value === "string") {
+   try { visit(JSON.parse(value), normalized); } catch {}
+   return;
+  }
+  if (Array.isArray(value)) { for (const item of value) visit(item); return; }
+  if (value && typeof value === "object") {
+   for (const [childKey, child] of Object.entries(value)) visit(child, childKey);
+  }
+ };
+ visit(row);
+ return found ? total + ":" + h1.toString(16) + ":" + h2.toString(16) : "";
+}
+
+export async function exportIncrementalBackupData(changedTables: string[], onProgress?: (stage: string) => void, baselineKey = ""): Promise<BackupData> {
  const allowed = new Set([
   "patients","procedures","inventoryCategories","inventory","patientImplants",
   "patientCustomFields","implantRecords","expenses","users","patientHistory",
@@ -531,6 +601,7 @@ export async function exportIncrementalBackup(changedTables: string[], onProgres
  const nextTables: Record<string, any> = canDiff ? { ...previous!.tables } : {};
  const deletedIds: Record<string, string[]> = {};
  const fullTables: string[] = [];
+ const currentRowsForCache: Record<string, any[]> = {};
  for (const table of tables) {
   if (table === "branding" || table === "appSettings") {
    nextTables[table] = (backup as any)[table] ?? null;
@@ -538,11 +609,19 @@ export async function exportIncrementalBackup(changedTables: string[], onProgres
    continue;
   }
   const currentRows = Array.isArray((backup as any)[table]) ? (backup as any)[table] as any[] : [];
+  currentRowsForCache[table] = currentRows;
+  const currentImageSignatures = new Map<string, string>();
+  if (IMAGE_SIGNATURE_TABLES.has(table)) {
+   for (const row of currentRows) {
+    const id = rowKey(row);
+    if (id !== null) currentImageSignatures.set(id, rowImageSignature(row));
+   }
+  }
   const previousRows = canDiff && Array.isArray(previous!.tables[table]) ? previous!.tables[table] : null;
   if (!previousRows) {
    // First sync for this table, or a changed full-backup baseline: use a
    // complete table snapshot. This is slower once but remains restorable.
-   nextTables[table] = table === "patients" ? currentRows.map(stripPatientPhotoPayload) : currentRows;
+   nextTables[table] = currentRows.map(stripBackupImages);
    if (canDiff) fullTables.push(table);
    continue;
   }
@@ -561,25 +640,37 @@ export async function exportIncrementalBackup(changedTables: string[], onProgres
    const id = rowKey(row);
    if (id === null) return true;
    const old = oldById.get(id);
-   const comparableRow = table === "patients" ? stripPatientPhotoPayload(row) : row;
+   const comparableRow = stripBackupImages(row);
    const metadataChanged = !old || JSON.stringify(old) !== JSON.stringify(comparableRow);
-   const photosChanged = table === "patients" && (!previous!.photoSources || previous!.photoSources[id] !== currentPhotoSignatures[id]);
-   return metadataChanged || photosChanged;
+   const patientPhotosChanged = table === "patients" && (!previous!.photoSources || previous!.photoSources[id] !== currentPhotoSignatures[id]);
+   const currentImageSignature = currentImageSignatures.get(id) || "";
+   const previousImageSignature = previous!.photoSources?.["images:" + table + ":" + id];
+   const rowImagesChanged = IMAGE_SIGNATURE_TABLES.has(table) &&
+     (currentImageSignature !== "" || previousImageSignature !== undefined) &&
+     currentImageSignature !== previousImageSignature;
+   return metadataChanged || patientPhotosChanged || rowImagesChanged;
   });
   deletedIds[table] = Array.from(oldById.keys()).filter((id) => !newById.has(id));
-  (backup as any)[table] = table === "patients" ? changedRows.map((row) => {
+  (backup as any)[table] = changedRows.map((row) => {
    const id = String(row.id ?? "");
    const old = oldById.get(id);
-   const oldPhotoSignature = previous!.photoSources?.[id];
-   if (old && oldPhotoSignature && oldPhotoSignature === currentPhotoSignatures[id]) {
-    // Patient metadata changed but the image source did not. Keep the original
-    // photo in the master and omit its bytes from this delta.
-    return stripPatientPhotoPayload(row);
+   if (table === "patients") {
+    const oldPhotoSignature = previous!.photoSources?.[id];
+    if (old && oldPhotoSignature && oldPhotoSignature === currentPhotoSignatures[id]) {
+     // Patient metadata changed but the image source did not. Keep the original
+     // photo in the master and omit its bytes from this delta.
+     return stripBackupImages(row);
+    }
+   } else if (IMAGE_SIGNATURE_TABLES.has(table)) {
+    const oldImageSignature = previous!.photoSources?.["images:" + table + ":" + id];
+    const currentImageSignature = currentImageSignatures.get(id) || "";
+    if (old && oldImageSignature === currentImageSignature) return stripBackupImages(row);
    }
    return row;
-  }) : changedRows;
-  // Never persist base64 patient images in the local diff cache.
-  nextTables[table] = table === "patients" ? currentRows.map(stripPatientPhotoPayload) : currentRows;
+  });
+  // Keep cache records lightweight: the Drive payload retains media, while this
+  // local comparison cache retains only metadata plus media signatures.
+  nextTables[table] = currentRows.map(stripBackupImages);
  }
  const effectiveTables = tables.filter((table) => {
   if (table === "branding" || table === "appSettings") {
@@ -600,6 +691,17 @@ export async function exportIncrementalBackup(changedTables: string[], onProgres
  // Track the source URIs separately from portable compressed photo bytes. This
  // lets future backups reuse unchanged photo payloads without recompressing them.
  const nextPhotoSources: Record<string, string> = canDiff && previous!.photoSources ? { ...previous!.photoSources } : {};
+ for (const table of tables) {
+  if (!IMAGE_SIGNATURE_TABLES.has(table)) continue;
+  const prefix = "images:" + table + ":";
+  for (const key of Object.keys(nextPhotoSources)) if (key.startsWith(prefix)) delete nextPhotoSources[key];
+  for (const row of currentRowsForCache[table] || []) {
+   const id = rowKey(row);
+   if (id === null) continue;
+   const signature = rowImageSignature(row);
+   if (signature) nextPhotoSources[prefix + id] = signature;
+  }
+ }
  if (tables.includes("patients")) {
   const sourceRows = db.getAllSync<any>("SELECT id,photo_uri,photos_json FROM patients");
   const currentIds = new Set<string>();
@@ -613,7 +715,45 @@ export async function exportIncrementalBackup(changedTables: string[], onProgres
  }
  // Do not persist the new baseline until the upload succeeds.
  pendingDeltaCacheText = JSON.stringify({ baselineKey, tables: nextTables, photoSources: nextPhotoSources });
- return JSON.stringify(backup);
+ return backup;
+}
+
+export async function exportIncrementalBackup(changedTables: string[], onProgress?: (stage: string) => void, baselineKey = ""): Promise<string> {
+ return JSON.stringify(await exportIncrementalBackupData(changedTables, onProgress, baselineKey));
+}
+
+export async function prepareIncrementalSnapshotCacheFromBackupData(baselineKey: string, backup: BackupData): Promise<void> {
+ const tableNames = [
+  "patients", "procedures", "inventoryCategories", "inventory", "patientImplants",
+  "patientCustomFields", "implantRecords", "expenses", "users", "patientHistory",
+  "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts", "trash",
+ ];
+ const tables: Record<string, any> = {};
+ const photoSources: Record<string, string> = {};
+ for (const table of tableNames) {
+  const rows = Array.isArray((backup as any)[table]) ? (backup as any)[table] as any[] : [];
+  tables[table] = rows.map(stripBackupImages);
+  if (table === "patients") {
+   const sourceRows = db.getAllSync<any>("SELECT id,photo_uri,photos_json FROM patients");
+   const currentIds = new Set<string>();
+   for (const row of sourceRows) {
+    const id = String(row.id ?? "");
+    if (!id) continue;
+    currentIds.add(id);
+    photoSources[id] = photoSourceSignature(row);
+   }
+  } else if (IMAGE_SIGNATURE_TABLES.has(table)) {
+   for (const row of rows) {
+    const id = rowKey(row);
+    if (id === null) continue;
+    const signature = rowImageSignature(row);
+    if (signature) photoSources["images:" + table + ":" + id] = signature;
+   }
+  }
+ }
+ tables.branding = (backup as any).branding ?? null;
+ tables.appSettings = (backup as any).appSettings ?? null;
+ pendingDeltaCacheText = JSON.stringify({ baselineKey, tables, photoSources });
 }
 
 function parseHeader(text:string):any{
