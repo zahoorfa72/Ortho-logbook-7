@@ -216,13 +216,19 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
    const patientId = String(patient.id ?? "");
    const sourceSignature = photoSourceSignature(patient);
    const previous = previousPatientsById.get(patientId);
-   if (patientId && previous && previousPhotoSources?.[patientId] === sourceSignature &&
+   if (changedTables?.includes("patients") && patientId && previous &&
+       previousPhotoSources?.[patientId] === sourceSignature) {
+     // For incremental sync, unchanged original photo bytes are already in the
+     // confirmed master. Keep row metadata for diff/deletion detection, but do
+     // not read or duplicate every unchanged image into the new delta.
+     embeddedPatients.push({...patient, photo_uri: "", photos_json: ""});
+   } else if (!changedTables?.includes("patients") && patientId && previous &&
+       previousPhotoSources?.[patientId] === sourceSignature &&
        typeof previous.photos_json === "string") {
-     // Reuse the already-compressed, portable photo bytes when this patient's
-     // photo source has not changed. Editing another field won't recompress it.
+     // A full export may reuse a confirmed portable copy when available.
      embeddedPatients.push({...patient, photo_uri: previous.photo_uri || "", photos_json: previous.photos_json});
    } else {
-     onProgress?.(`Compressing changed patient photos… ${i+1}/${patients.length}`);
+     onProgress?.("Reading original patient photos… " + (i + 1) + "/" + patients.length);
      embeddedPatients.push(await embedPatientPhotos(patient, compressedPhotoCache));
    }
  }
