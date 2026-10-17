@@ -26,7 +26,7 @@ class DriveBackgroundUploadService : Service() {
     const val PREFS = "ortho_drive_background_upload"
     private const val CHANNEL = "ortho_drive_backup_upload"
     private const val NOTIFICATION_ID = 4872
-    private const val CHUNK_SIZE = 512 * 1024
+    private const val CHUNK_SIZE = 2 * 1024 * 1024
   }
 
   private lateinit var taskId: String
@@ -99,14 +99,32 @@ class DriveBackgroundUploadService : Service() {
           }
           if (response.first == 308) {
             val next = parseRange(response.third)
-            if (next <= offset) {
+            if (next >= total) {
+              // A 308 must not silently end the loop at 100% bytes without
+              // Drive confirming that the file was finalized. Query the
+              // resumable session before deciding the upload is complete.
+              val checked = queryOffset()
+              if (checked.first) {
+                finalResult = checked.second
+                offset = total
+                setProgress(100)
+                break
+              }
+              if (checked.third >= total) {
+                throw IllegalStateException("Google Drive received all backup bytes but has not finalized the file yet. Retrying the final confirmation.")
+              }
+              offset = checked.third.coerceIn(0L, total)
+              stalls = 0
+            } else if (next <= offset) {
               stalls++
               if (stalls >= 8) throw IllegalStateException("Google Drive has not confirmed upload progress. Retry on a stable connection.")
               val checked = queryOffset()
               if (checked.first) {
                 finalResult = checked.second
                 offset = total
-              } else if (checked.third > offset) {
+                setProgress(100)
+                break
+              } else if (checked.third > offset && checked.third < total) {
                 offset = checked.third
                 stalls = 0
               } else {
@@ -142,6 +160,11 @@ class DriveBackgroundUploadService : Service() {
           setProgress(((offset * 100) / total).toInt())
         }
       }
+    }
+    if (offset < total || finalResult.length() == 0) {
+      // Do not report a completed task merely because the byte offset reached
+      // the end. Google Drive must return the final file metadata.
+      throw IllegalStateException("Google Drive upload reached the end of the file but did not confirm completion. Retry the backup; local records are unchanged.")
     }
     return finalResult
   }
