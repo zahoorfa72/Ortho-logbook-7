@@ -173,11 +173,12 @@ async function runBackup() {
       (Array.isArray((result as any).snapshotFailures) && (result as any).snapshotFailures.length
         ? " · Range snapshot pending: " + (result as any).snapshotFailures.join("; ")
         : " · monthly backup checked");
-    if (pendingTables.size) {
-      setDriveSyncState({ phase: "waiting", updates: pendingTables.size, message: "New changes detected · syncing again…" });
-    } else {
-      setDriveSyncState({ phase: "success", updates: 0, message: successMessage });
-    }
+    // Always show the confirmed upload result, even if new edits arrived
+    // during the transfer. Those newer edits remain queued and are synced next.
+    const queuedMessage = pendingTables.size
+      ? " · " + pendingTables.size + " newer change group(s) queued"
+      : "";
+    setDriveSyncState({ phase: "success", updates: 0, message: successMessage + queuedMessage });
   } catch (error) {
     // Retain failed table names. Use backoff rather than rebuilding a large
     // photo backup every seven seconds while the network is unavailable.

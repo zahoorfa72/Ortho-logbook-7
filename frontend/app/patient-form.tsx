@@ -765,30 +765,77 @@ export default function PatientForm() {
   // We copy/normalize every newly added photo immediately so the saved patient
   // record never depends on the gallery app or a temporary URI.
   const persistPhoto = async (sourceUri: string) => {
-    if (!sourceUri || sourceUri.startsWith("data:")) return sourceUri;
+    if (!sourceUri) return sourceUri;
+    if (sourceUri.startsWith("data:")) {
+      // New picker/scanner results are file URIs. Keep legacy embedded photos
+      // unchanged here; backup/restore still understands data URIs.
+      return sourceUri;
+    }
     const directory = String(FileSystem.documentDirectory || "") + "patient-photos/";
     await FileSystem.makeDirectoryAsync(directory, { intermediates: true }).catch(() => {});
-    // Keep patient pictures sharp while avoiding very large camera files.
+    const targetBytes = 1.5 * 1024 * 1024;
     const dimensions = await new Promise<{ width: number; height: number }>((resolve, reject) => {
       Image.getSize(sourceUri, (width, height) => resolve({ width, height }), reject);
     });
-    const actions: any[] = [];
-    // Preserve the selected photo's original orientation and crop. Never rotate
-    // landscape photos just because they are wider than they are tall. Only
-    // resize extremely large files, keeping enough pixels for small lab text.
     const longest = Math.max(dimensions.width, dimensions.height);
-    if (longest > 4000) {
-      actions.push(dimensions.width >= dimensions.height
-        ? { resize: { width: 4000 } }
-        : { resize: { height: 4000 } });
+    // Try the original pixel dimensions first. Only reduce dimensions if a
+    // high-quality JPEG still exceeds 1.5 MB; every attempt starts from the
+    // original photo, never from an already-lossy intermediate.
+    const attempts: Array<{ edge: number; quality: number }> = [
+      { edge: longest, quality: 0.96 },
+      { edge: longest, quality: 0.92 },
+      { edge: longest, quality: 0.88 },
+      ...[4000, 3600, 3200, 2800, 2400, 2200, 2000, 1800, 1600].filter(edge => edge < longest).map(edge => ({ edge, quality: 0.90 })),
+      ...[1400, 1200].filter(edge => edge < longest).map(edge => ({ edge, quality: 0.86 })),
+    ];
+    let normalizedUri = "";
+    let normalizedSize = 0;
+    let lastError: unknown = null;
+    for (const attempt of attempts) {
+      try {
+        const actions: any[] = [];
+        if (attempt.edge < longest) {
+          actions.push(dimensions.width >= dimensions.height
+            ? { resize: { width: attempt.edge } }
+            : { resize: { height: attempt.edge } });
+        }
+        const normalized = await ImageManipulator.manipulateAsync(sourceUri, actions, {
+          compress: attempt.quality,
+          format: ImageManipulator.SaveFormat.JPEG,
+        });
+        const info = await FileSystem.getInfoAsync(normalized.uri);
+        if (!info.exists || typeof info.size !== "number" || info.size <= 0) {
+          await FileSystem.deleteAsync(normalized.uri, { idempotent: true }).catch(() => {});
+          continue;
+        }
+        if (info.size <= targetBytes) {
+          normalizedUri = normalized.uri;
+          normalizedSize = info.size;
+          break;
+        }
+        await FileSystem.deleteAsync(normalized.uri, { idempotent: true }).catch(() => {});
+      } catch (error) {
+        lastError = error;
+      }
     }
-    const normalized = await ImageManipulator.manipulateAsync(sourceUri, actions, {
-      compress: 0.98, format: ImageManipulator.SaveFormat.JPEG,
-    });
+    if (!normalizedUri) {
+      throw new Error("Could not compress this photo below 1.5 MB. The original has not been changed; try a clearer crop or another image.");
+    }
     const filename = "patient-photo-" + Date.now() + "-" + Math.random().toString(36).slice(2, 10) + ".jpg";
     const destination = directory + filename;
-    await FileSystem.copyAsync({ from: normalized.uri, to: destination });
-    return destination;
+    try {
+      await FileSystem.copyAsync({ from: normalizedUri, to: destination });
+      const savedInfo = await FileSystem.getInfoAsync(destination);
+      if (!savedInfo.exists || typeof savedInfo.size !== "number" || savedInfo.size > targetBytes) {
+        await FileSystem.deleteAsync(destination, { idempotent: true }).catch(() => {});
+        throw new Error("Saved photo did not meet the 1.5 MB size limit.");
+      }
+      return destination;
+    } catch (error: any) {
+      throw new Error(String(error?.message || lastError || "Could not save the compressed photo."));
+    } finally {
+      await FileSystem.deleteAsync(normalizedUri, { idempotent: true }).catch(() => {});
+    }
   };
 
   // Gallery keeps multi-select. Scan Document detects page edges and straightens paper records.

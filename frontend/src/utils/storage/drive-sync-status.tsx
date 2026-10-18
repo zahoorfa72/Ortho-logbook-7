@@ -51,7 +51,7 @@ export function DriveSyncIndicator() {
   })).current;
   useEffect(() => subscribeDriveSync(setState), []);
 
-  // Keep a clear confirmation long enough to read; errors remain visible until resolved.
+  // Keep the confirmed upload visible long enough to notice; a new sync state replaces it.
   useEffect(() => {
     if (state.phase !== "success") return;
     const timer = setTimeout(() => setDriveSyncState({ phase: "idle", updates: 0, message: "" }), 7000);
