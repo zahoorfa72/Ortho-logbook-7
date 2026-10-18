@@ -1663,7 +1663,7 @@ async function backupToGoogleDriveUnlocked(
   await storage.secureSet(LAST_DRIVE_BACKUP_KEY, completedAt);
   await storage.setItem(LAST_DRIVE_CONTENT_HASH_KEY + ":" + fileName, contentHash);
   const cleanupFailures: string[] = [];
-  if (isMasterBackup && migrationAttempted && migrationComplete && result?.id) {
+  if (isMasterBackup && result?.id) {
     if (stagedFileUri) {
       await verifyStreamedDriveFile(String(result.id), fileName, stagedFileSize);
     } else {
