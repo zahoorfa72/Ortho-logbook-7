@@ -808,10 +808,15 @@ export default function PatientForm() {
     const longest = Math.max(dimensions.width, dimensions.height);
     // Start each attempt from the original image. Preserve original pixel dimensions
     // whenever high-quality JPEG encoding can meet the size target.
+    // Try high-quality, full-resolution encodes first. If the photo is still
+    // above 1.5 MiB, reduce resolution gradually and then lower JPEG quality
+    // in small steps. Every attempt starts from the original source, never from
+    // a previously compressed copy, to avoid cumulative quality loss.
     const attempts: Array<{ edge: number; quality: number }> = [
-      { edge: longest, quality: 0.96 }, { edge: longest, quality: 0.92 }, { edge: longest, quality: 0.88 },
-      ...[4000, 3600, 3200, 2800, 2400, 2200, 2000, 1800, 1600].filter(edge => edge < longest).map(edge => ({ edge, quality: 0.90 })),
-      ...[1400, 1200].filter(edge => edge < longest).map(edge => ({ edge, quality: 0.86 })),
+      ...[0.96, 0.92, 0.88, 0.84, 0.80].map(quality => ({ edge: longest, quality })),
+      ...[4000, 3600, 3200, 3000, 2800, 2600, 2400, 2200, 2000, 1800, 1600, 1400, 1200, 1000, 900]
+        .filter(edge => edge < longest)
+        .flatMap(edge => [0.92, 0.86, 0.80, 0.76].map(quality => ({ edge, quality }))),
     ];
     let normalizedUri = "";
     let lastError: unknown = null;
@@ -830,7 +835,7 @@ export default function PatientForm() {
           await FileSystem.deleteAsync(normalized.uri, { idempotent: true }).catch(() => {});
         } catch (error) { lastError = error; }
       }
-      if (!normalizedUri) throw new Error("Could not compress this photo below 1.5 MB. The original has not been changed; try a clearer crop or another image.");
+      if (!normalizedUri) throw new Error("This image could not be reduced below 1.5 MB without risking excessive detail loss. The original has not been changed. Try cropping empty margins or choose a less noisy scan.");
       const filename = "patient-photo-" + Date.now() + "-" + Math.random().toString(36).slice(2, 10) + ".jpg";
       const destination = directory + filename;
       try {
@@ -867,7 +872,7 @@ export default function PatientForm() {
       try {
         result = await ImagePicker.launchImageLibraryAsync({
           mediaTypes: ["images"], allowsEditing: false, allowsMultipleSelection: true,
-          selectionLimit: 20, quality: 0.9,
+          selectionLimit: 20, quality: 1,
         });
       } catch (firstError: any) {
         // Android can recreate the Activity while the JS screen is still
@@ -880,7 +885,7 @@ export default function PatientForm() {
         }
         result = await ImagePicker.launchImageLibraryAsync({
           mediaTypes: ["images"], allowsEditing: false, allowsMultipleSelection: true,
-          selectionLimit: 20, quality: 0.9,
+          selectionLimit: 20, quality: 1,
         });
       }
       if (result.canceled) return;
@@ -1060,7 +1065,7 @@ export default function PatientForm() {
     if (!cameraRef.current || !cameraReady || cameraTaking) return;
     setCameraTaking(true);
     try {
-      const result = await cameraRef.current.takePictureAsync({ quality: 0.9 });
+      const result = await cameraRef.current.takePictureAsync({ quality: 1 });
       if (!result?.uri) throw new Error("The camera did not return a photo.");
       const permanentUri = await persistPhoto(result.uri);
       setP((x) => ({ ...x, photos: [...x.photos, permanentUri] }));
@@ -1338,6 +1343,20 @@ export default function PatientForm() {
     if (!editingPhotoUri) return;
     setPhotoBusy(true);
     try {
+      if (action === "optimize") {
+        const optimizedUri = await persistPhoto(editingPhotoUri);
+        const info = await FileSystem.getInfoAsync(optimizedUri);
+        if (!info.exists || typeof info.size !== "number" || info.size <= 0 || info.size > 1.5 * 1024 * 1024) {
+          throw new Error("The compressed photo did not pass the 1.5 MB verification. Your current edit was not replaced.");
+        }
+        setEditingPhotoUri(optimizedUri);
+        loadEditingPhotoDimensions(optimizedUri);
+        setCropRect(null);
+        cropDragStartRef.current = null;
+        cropResizeStartRef.current = null;
+        toast("Photo optimized and verified at " + (info.size / (1024 * 1024)).toFixed(2) + " MB.", "success");
+        return;
+      }
       let actions: any[] = [];
       if (action === "rotate") actions = [{ rotate: 90 }];
       else if (action === "crop") {
@@ -1384,7 +1403,10 @@ export default function PatientForm() {
     try {
       // AI/perspective previews are first written to cache. Copy them into the
       // app's permanent documents directory before storing the URI anywhere.
-      const permanent = await persistPhoto(editingPhotoUri);
+      const permanentDirectory = String(FileSystem.documentDirectory || "") + "patient-photos/";
+      const permanent = editingPhotoUri.startsWith(permanentDirectory)
+        ? editingPhotoUri
+        : await persistPhoto(editingPhotoUri);
       const updatedPhotos = p.photos.map((value, index) =>
         index === editingPhotoIndex ? permanent : value
       );
