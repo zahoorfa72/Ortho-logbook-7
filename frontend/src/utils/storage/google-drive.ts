@@ -256,30 +256,28 @@ async function findBackupByName(name: string) {
 
 export async function listGoogleDriveBackups(): Promise<Array<{id:string;name:string;modifiedTime:string;size?:string}>> {
   const files = await findLatestBackupCandidates();
-  // The active system exposes one rolling master only. Older monthly/year/date
-  // files are read solely by the one-time migration/recovery path, never offered
-  // as separate active backups.
-  const master = files.find((file:any) => file?.id && String(file.name || "") === BACKUP_NAME);
-  if (!master) return [];
-  let modifiedTime = String(master.modifiedTime || "");
-  try {
-    const journalFile = await findBackupByName("Ortho Logbook Backup Changes.orbackup");
-    if (journalFile?.id) {
-      const journal = await downloadDriveJsonValidated(String(journalFile.id));
-      const baseline = String(journal?._baselineKey || "");
-      if (journal?.incremental === true && baseline.startsWith(String(master.id) + ":") && journalFile.modifiedTime) {
-        modifiedTime = String(journalFile.modifiedTime);
-      }
-    }
-  } catch (error) {
-    console.warn("[drive-backup] could not determine rolling master update time", error);
-  }
-  return [{
-    id: String(master.id),
-    name: BACKUP_NAME,
-    modifiedTime,
-    size: master.size == null ? undefined : String(master.size),
-  }];
+  // Expose the rolling full master plus each completed monthly/year/date archive.
+  // Change journals are implementation details and must not be offered as backups.
+  const backups = files.filter((file: any) => {
+    if (!file?.id) return false;
+    const name = String(file.name || "");
+    return name === BACKUP_NAME ||
+      /^Ortho Logbook Backup - Month \\d{4}-\\d{2}\\.orbackup$/.test(name) ||
+      /^Ortho Logbook Backup - Year \\d{4}\\.orbackup$/.test(name) ||
+      /^Ortho Logbook Backup - Date \\d{4}-\\d{2}-\\d{2}\\.orbackup$/.test(name) ||
+      name === "Ortho Logbook Backup - All Time.orbackup";
+  }).map((file: any) => ({
+    id: String(file.id),
+    name: String(file.name || "Ortho Logbook Backup"),
+    modifiedTime: String(file.modifiedTime || ""),
+    size: file.size == null ? undefined : String(file.size),
+  }));
+  return backups.sort((a, b) => {
+    // Keep the rolling master first, then newest archived period first.
+    if (a.name === BACKUP_NAME) return -1;
+    if (b.name === BACKUP_NAME) return 1;
+    return Date.parse(b.modifiedTime || "") - Date.parse(a.modifiedTime || "");
+  });
 }
 
 export async function restoreGoogleDriveBackupById(fileId: string) {
@@ -2026,6 +2024,10 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
   const currentMonthName = driveBackupName({ type: "all" });
   const base = await findBackupByName(currentMonthName);
   if (!base?.id) return ensureGoogleDriveBaselineUnlocked(onProgress);
+  // Finalize the previous month as its own dated snapshot once that month has
+  // ended. This call was missing from the active sync path, so the archive
+  // helper existed but normal backups did not reliably create monthly files.
+  await archiveCompletedMonths(onProgress);
   const baselineKey = String(base.id) + ":" + String(base.modifiedTime || "");
   const canStreamIncremental = Platform.OS === "android" &&
     !!NativeModules.DriveBackgroundUpload?.writeTextChunk &&
