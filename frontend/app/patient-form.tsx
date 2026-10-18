@@ -31,8 +31,8 @@ import { PrimaryButton } from "@/src/components/PrimaryButton";
 import { Segmented } from "@/src/components/Segmented";
 import { useToast } from "@/src/components/toast";
 import { formatInventoryLabel } from "@/src/utils/inventory-label";
-import { createPatientImagePdfFile, getPatientImageArchive, openPatientImageArchivePdf } from "@/src/utils/storage/patient-image-archive";
-import { deletePatientImagePdfFromDrive, downloadPatientImageArchiveForPatient } from "@/src/utils/storage/google-drive";
+import { archivePatientImagesForPatient, createPatientImagePdfFile, getPatientImageArchive, openPatientImageArchivePdf } from "@/src/utils/storage/patient-image-archive";
+import { deletePatientImagePdfFromDrive, downloadPatientImageArchiveForPatient, uploadPatientImageArchivesToDrive } from "@/src/utils/storage/google-drive";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 const LAB_OCR_PIPELINE_VERSION = "row-aware-2026-10-17-v4-admin-aliases";
 
@@ -1162,9 +1162,25 @@ export default function PatientForm() {
       const oldUrisRaw = p.customData?.drivePatientImportedImageUris || "[]";
       let oldImportedUris: string[] = [];
       try { const parsed = JSON.parse(oldUrisRaw); if (Array.isArray(parsed)) oldImportedUris = parsed.filter((x:any)=>typeof x === "string"); } catch {}
-      if (oldStamp === archive.sourceStamp && oldImportedUris.length) {
-        toast("These exact Drive images are already saved in this patient's file.", "info");
-        return;
+      // Only skip when the previously imported image files are still actually
+      // attached to this patient. Stale customData alone must never claim that
+      // images exist when the patient file is empty or those files are gone.
+      if (oldStamp === archive.sourceStamp && oldImportedUris.length > 0) {
+        const attached = new Set((p.photos || []).map(uri => String(uri)));
+        const stillPresent = oldImportedUris.every(uri => attached.has(uri));
+        let readable = stillPresent;
+        if (readable) {
+          for (const uri of oldImportedUris) {
+            if (/^(file|content):\/\//i.test(uri)) {
+              const info = await FileSystem.getInfoAsync(uri).catch(() => ({ exists: false } as any));
+              if (!info.exists) { readable = false; break; }
+            }
+          }
+        }
+        if (readable) {
+          toast("These exact Drive images are already saved in this patient's file.", "info");
+          return;
+        }
       }
       const outputDir = String(FileSystem.cacheDirectory || FileSystem.documentDirectory || "") + "ortho-drive-patient-images/";
       await FileSystem.makeDirectoryAsync(outputDir, { intermediates: true });
@@ -1256,22 +1272,50 @@ export default function PatientForm() {
   };
 
   const removePhoto = (idx: number) => {
-    const remove = () => setP((x) => {
+    // Removing an image from the patient record must not prompt about, or
+    // silently modify, the separately archived Drive PDF. PDF changes require
+    // the explicit admin approval action shown in this patient file.
+    setP((x) => {
       const photos = x.photos.filter((_, i) => i !== idx);
       return { ...x, photos, photoUri: photos[0] || "" };
     });
-    if (patientArchiveOnDrive) {
-      Alert.alert(
-        "Remove image from patient and Drive PDF?",
-        "This image is included in this patient's saved Google Drive PDF. If you continue and save this record, the next successful backup will update the same PDF and remove the deleted image. Other patient images will be kept.",
-        [
-          { text: "Cancel", style: "cancel" },
-          { text: "Remove image", style: "destructive", onPress: remove },
-        ],
-      );
+  };
+
+  const approveAndUpdateDrivePatientPdf = async () => {
+    if (photoBusy) return;
+    if (user?.role !== "admin") {
+      toast("Only an administrator can approve changes to the saved Drive PDF.", "error");
       return;
     }
-    remove();
+    const patientId = String(id || p.id || "");
+    if (!patientId || patientId === "unsaved-patient") {
+      toast("Save this patient before updating the Drive PDF.", "error");
+      return;
+    }
+    Alert.alert(
+      "Admin approval: update patient PDF?",
+      p.photos.length
+        ? "Replace this patient's existing Google Drive PDF with the current patient images? The existing Drive PDF will be updated in place; no extra copy will be created."
+        : "This patient currently has no images. Remove the images from this patient's existing Google Drive PDF? The change will happen only after you approve.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Approve PDF update", style: "destructive", onPress: () => { void (async () => {
+          setPhotoBusy(true);
+          try {
+            await archivePatientImagesForPatient(patientId);
+            await uploadPatientImageArchivesToDrive();
+            const latest = await getPatientImageArchive(patientId);
+            setPatientArchiveAvailable(!!latest);
+            setPatientArchiveOnDrive(!!latest?.driveFileId);
+            toast("Admin-approved patient PDF update completed.", "success");
+          } catch (error: any) {
+            toast(error?.message || "The patient PDF could not be updated. The current Drive PDF was kept if upload did not complete.", "error");
+          } finally {
+            setPhotoBusy(false);
+          }
+        })(); } },
+      ],
+    );
   };
   const loadEditingPhotoDimensions = (uri: string) => {
     Image.getSize(uri, (width, height) => setEditingPhotoDimensions({ width, height }), () => setEditingPhotoDimensions(null));
@@ -1823,7 +1867,19 @@ export default function PatientForm() {
             testID="download-patient-archive-from-drive-button"
           >
             <Ionicons name="cloud-download-outline" size={18} color={colors.brandPrimary} />
-            <Text style={[styles.secondaryText, { color: colors.brandPrimary }]}>{photoBusy ? "Downloading images…" : "Download patient images from Drive"}</Text>
+            <Text style={styles.secondaryText}>{photoBusy ? "Downloading images…" : "Download patient images from Drive"}</Text>
+          </Pressable>
+        ) : null}
+        {isEdit && user?.role === "admin" && (patientArchiveOnDrive || patientArchiveAvailable || p.photos.length > 0) ? (
+          <Pressable
+            style={[styles.secondary, { marginTop: spacing.sm, justifyContent: "center", borderColor: colors.warning }, photoBusy && { opacity: 0.5 }]}
+            onPress={approveAndUpdateDrivePatientPdf}
+            disabled={photoBusy}
+            accessibilityRole="button"
+            testID="admin-approve-update-patient-drive-pdf-button"
+          >
+            <Ionicons name="shield-checkmark-outline" size={18} color={colors.warning} />
+            <Text style={styles.secondaryText}>{photoBusy ? "Updating PDF…" : p.photos.length ? "Admin: approve & update Drive PDF" : "Admin: approve removal of PDF images"}</Text>
           </Pressable>
         ) : null}
 
