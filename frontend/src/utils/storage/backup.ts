@@ -9,7 +9,7 @@ import { db, initializeDatabase, markInventoryResetDone, repairDatabaseData } fr
 import { storage } from "@/src/utils/storage";
 import type { BrandingConfig } from "@/src/theme";
 
-const BACKUP_VERSION = 10;
+const BACKUP_VERSION = 11;
 const BACKUP_APP = "Ortho Logbook";
 
 type BackupData = {
@@ -1052,7 +1052,7 @@ export async function prepareIncrementalSnapshotCacheFromBackupData(baselineKey:
 
 function parseHeader(text:string):any{
  let b:any;try{b=JSON.parse(text);}catch{throw new Error("The selected backup file is not valid.");}
- if(!b||![2,3,4,5,6,7,8,9,10].includes(b.version)||b.app!==BACKUP_APP)throw new Error("Invalid or unsupported Ortho Logbook backup.");
+ if(!b||![2,3,4,5,6,7,8,9,10,11].includes(b.version)||b.app!==BACKUP_APP)throw new Error("Invalid or unsupported Ortho Logbook backup.");
  if(b.encrypted===true){
   if(b.algorithm!=="XSalsa20-Poly1305"||b.kdf!=="SHA-256"||!b.createdAt||!b.salt||!b.nonce||!b.ciphertext)throw new Error("The backup file is incomplete or damaged.");
  } else if(!Array.isArray(b.patients)||!Array.isArray(b.inventory)||!Array.isArray(b.users)){
@@ -1084,7 +1084,7 @@ export async function decryptBackup(text:string,password:string):Promise<BackupD
   const plain=nacl.secretbox.open(cipherBytes,hexToBytes(b.nonce),key);
   if(!plain)throw new Error("Incorrect backup password or damaged backup.");
   const data=JSON.parse(bytesToString(plain)) as BackupData;
-  if(!data||![2,3,4,5,6,7,8,9,10].includes(data.version)||data.app!==BACKUP_APP)throw new Error("The decrypted backup is invalid.");
+  if(!data||![2,3,4,5,6,7,8,9,10,11].includes(data.version)||data.app!==BACKUP_APP)throw new Error("The decrypted backup is invalid.");
   for(const keyName of ["patients","procedures","inventory","expenses","users","patientHistory","inventoryMovements"]){
     if(!Array.isArray((data as any)[keyName]))throw new Error("The backup is incomplete or damaged.");
   }
@@ -1164,7 +1164,7 @@ function restoreJsonArray(value:any){try{const parsed=JSON.parse(String(value ??
 
 export async function restoreBackup(backup:BackupData){
  initializeDatabase({ skipInventoryReset: true });
- if(!backup||![2,3,4,5,6,7,8,9,10].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
+ if(!backup||![2,3,4,5,6,7,8,9,10,11].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
  backup = materializeBackupPhotoReferences(backup);
  const patients=restoreArray((backup as any).patients);
  const procedures=restoreArray((backup as any).procedures);
@@ -1379,7 +1379,7 @@ export async function restoreBackup(backup:BackupData){
 //   matching name + category + size and summing quantities.
 export async function mergeBackup(backup: BackupData) {
  initializeDatabase({ skipInventoryReset: true });
- if(!backup||![2,3,4,5,6,7,8,9,10].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
+ if(!backup||![2,3,4,5,6,7,8,9,10,11].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
  backup = materializeBackupPhotoReferences(backup);
  const stats = { patients: 0, procedures: 0, inventory: 0, inventoryCategories: 0, patientImplants: 0, expenses: 0, users: 0, patientHistory: 0, inventoryMovements: 0, stockReceipts: 0 };
  db.withTransactionSync(() => {
