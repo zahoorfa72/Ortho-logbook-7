@@ -1358,12 +1358,16 @@ function applyIncrementalToMaster(local: any, incoming: any, preserveCurrent = f
 
 async function mergeLegacyDriveHistory(localInput: string | any, onProgress?: (stage: string) => void, preferDrive = false, returnData = false) {
   const local = typeof localInput === "string" ? parseDownloadedBackup(localInput) : localInput;
-  const candidates = (await findLatestBackupCandidates()).filter((file: any) => {
+  const allCandidates = (await findLatestBackupCandidates()).filter((file: any) => {
     const name = String(file.name || "");
     return name === BACKUP_NAME ||
       name === "Ortho Logbook Backup - All Time.orbackup" ||
       /Ortho Logbook Backup - (Month|Year|Date) /i.test(name);
   });
+  // Bound migration to the rolling master, or one newest legacy snapshot if no
+  // master exists. Never loop through every historical monthly full backup.
+  const rollingMaster = allCandidates.find((file: any) => String(file.name || "") === BACKUP_NAME);
+  const candidates = rollingMaster ? [rollingMaster] : allCandidates.slice(0, 1);
   const tables = [
     "patients", "procedures", "inventoryCategories", "inventory", "patientImplants",
     "patientCustomFields", "implantRecords", "expenses", "users", "patientHistory",
@@ -1432,7 +1436,10 @@ async function mergeLegacyDriveHistory(localInput: string | any, onProgress?: (s
   // still-required deletion journal appear older than the master. Validate the
   // journal's baseline ID after downloading it instead.
   const deltas = (await listIncrementalFiles())
-    .filter((file: any) => file?.id)
+    .filter((file: any) => file?.id && (
+      String(file.name || "") === "Ortho Logbook Backup Changes.orbackup" ||
+      (!rollingMaster && /^Ortho Logbook Backup - Month \\d{4}-\\d{2} Changes\\.orbackup$/i.test(String(file.name || "")))
+    ))
     .sort((a: any, b: any) => Date.parse(String(a.modifiedTime || "")) - Date.parse(String(b.modifiedTime || "")));
   for (let index = 0; index < deltas.length; index++) {
     const deltaFile = deltas[index];
@@ -1540,10 +1547,14 @@ async function backupToGoogleDriveUnlocked(
       seededCacheForLocalSnapshot = true;
     }
     if (migrationMarker !== "1") {
+      // Bounded one-time merge: only the current master (or one newest legacy
+      // snapshot) and the single rolling change journal are considered.
       migrationAttempted = true;
-      options.onProgress?.("Merging older Drive backups without building one oversized string…");
+      options.onProgress?.("Checking the current master and latest changes…");
       const migration = await mergeLegacyDriveHistory(backupData, options.onProgress, options.preferDriveOnMigration === true, true);
       backupData = migration.backupData;
+      migrationComplete = true;
+      cleanupSafe = false;
       if (options.localChanges) applyIncrementalToMaster(backupData, options.localChanges, options.localChanges._rowDelta !== true);
       pruneBackupPhotoAssets(backupData);
       backupData.version = Math.max(Number(backupData.version || 0), 7);
@@ -1554,8 +1565,6 @@ async function backupToGoogleDriveUnlocked(
       delete backupData._rowDelta;
       delete backupData.deletedIds;
       delete backupData.fullTables;
-      migrationComplete = migration.complete;
-      cleanupSafe = migration.cleanupSafe;
     }
     pruneBackupPhotoAssets(backupData);
     if (!FileSystem.cacheDirectory) throw new Error("Device cache storage is unavailable for the Drive backup.");
@@ -1577,23 +1586,29 @@ async function backupToGoogleDriveUnlocked(
       ? JSON.stringify(options.backupDataOverride)
       : await exportUnencryptedBackup(filter, options.onProgress));
     if (isMasterBackup && migrationMarker !== "1") {
+      // Bounded one-time merge: current master (or one newest legacy snapshot)
+      // plus the rolling journal only, not the entire historical backup directory.
       migrationAttempted = true;
-      options.onProgress?.("Merging existing Drive backups into the master…");
+      options.onProgress?.("Checking the current master and latest changes…");
       const migration = await mergeLegacyDriveHistory(backupText, options.onProgress, options.preferDriveOnMigration === true);
-      const mergedMaster = parseDownloadedBackup(migration.backupText);
-      if (options.localChanges) applyIncrementalToMaster(mergedMaster, options.localChanges, options.localChanges._rowDelta !== true);
-      mergedMaster.version = Math.max(Number(mergedMaster.version || 0), 7);
-      mergedMaster.createdAt = new Date().toISOString();
-      mergedMaster.filter = { type: "all" };
-      delete mergedMaster.incremental;
-      delete mergedMaster.changedTables;
-      delete mergedMaster._rowDelta;
-      delete mergedMaster.deletedIds;
-      delete mergedMaster.fullTables;
-      pruneBackupPhotoAssets(mergedMaster);
-      backupText = JSON.stringify(mergedMaster);
-      migrationComplete = migration.complete;
-      cleanupSafe = migration.cleanupSafe;
+      migrationComplete = true;
+      cleanupSafe = false;
+      const initialMaster = parseDownloadedBackup(migration.backupText);
+      if (!initialMaster || initialMaster.app !== "Ortho Logbook" ||
+          !Array.isArray(initialMaster.patients) || !Array.isArray(initialMaster.inventory)) {
+        throw new Error("The first full backup is incomplete; existing Drive backups were not changed.");
+      }
+      if (options.localChanges) applyIncrementalToMaster(initialMaster, options.localChanges, options.localChanges._rowDelta !== true);
+      initialMaster.version = Math.max(Number(initialMaster.version || 0), 7);
+      initialMaster.createdAt = new Date().toISOString();
+      initialMaster.filter = { type: "all" };
+      delete initialMaster.incremental;
+      delete initialMaster.changedTables;
+      delete initialMaster._rowDelta;
+      delete initialMaster.deletedIds;
+      delete initialMaster.fullTables;
+      pruneBackupPhotoAssets(initialMaster);
+      backupText = JSON.stringify(initialMaster);
     }
   }
 
@@ -1628,7 +1643,7 @@ async function backupToGoogleDriveUnlocked(
   await storage.secureSet(LAST_DRIVE_BACKUP_KEY, completedAt);
   await storage.setItem(LAST_DRIVE_CONTENT_HASH_KEY + ":" + fileName, contentHash);
   const cleanupFailures: string[] = [];
-  if (isMasterBackup && migrationAttempted && migrationComplete && cleanupSafe && result?.id) {
+  if (isMasterBackup && migrationAttempted && migrationComplete && result?.id) {
     if (stagedFileUri) {
       await verifyStreamedDriveFile(String(result.id), fileName, stagedFileSize);
     } else {
@@ -1640,11 +1655,7 @@ async function backupToGoogleDriveUnlocked(
     }
     await storage.secureSet(MASTER_MIGRATION_KEY, "1");
   }
-  if (isMasterBackup && migrationAttempted && migrationComplete && cleanupSafe && result?.id) {
-    // Only delete legacy files when this upload explicitly merged and verified
-    // their records. If migration was not confirmed, retain every old backup.
-    cleanupFailures.push(...await cleanupLegacyNonMonthlyBackups(String(result.id)));
-  }
+  // Legacy backup files are retained as recovery copies; no history-wide cleanup.
   if (isMasterBackup && seededCacheForLocalSnapshot && result?.id) {
     await commitIncrementalSnapshotCache(String(result.id) + ":" + String(result.modifiedTime || ""));
   }
@@ -2337,33 +2348,9 @@ export function backupIncrementalToGoogleDrive(changedTables: string[], onProgre
 }
 
 export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) => void) {
-  // A freshly reinstalled app has no local migration marker. Compose the
-  // master in memory from all Drive history and deltas, then restore that result
-  // directly. Do not upload a full snapshot before restoring: that can stall
-  // the login screen at an upload percentage and can overwrite the source.
-  const migrationDone = String((await storage.secureGet(MASTER_MIGRATION_KEY, "")) || "") === "1";
-  if (!migrationDone) {
-    const localText = await exportUnencryptedBackup({ type: "all" });
-    onProgress?.("Merging older backups into the master…");
-    const migration = await mergeLegacyDriveHistory(localText, onProgress, true);
-    if (!migration.candidateCount) {
-      throw new Error("No complete Ortho Logbook backup was found in this Google Drive account. Your phone was not changed.");
-    }
-    const merged = parseDownloadedBackup(migration.backupText);
-    if (!merged || merged.app !== "Ortho Logbook" || !Array.isArray(merged.patients) || !Array.isArray(merged.inventory)) {
-      throw new Error("Drive backup history could not be merged into a valid all-time backup. Your phone has not been changed.");
-    }
-    await downloadPatientImageArchivesFromDrive(merged, onProgress);
-    return {
-      backupText: JSON.stringify(merged),
-      name: "Merged Ortho Logbook Master Backup",
-      modifiedTime: new Date().toISOString(),
-      appliedIncrementals: 0,
-      recoveryWarnings: migration.complete ? [] : ["Some older backup files could not be read. Original Drive backup files were retained."],
-    };
-  }
-
-  onProgress?.("Searching Google Drive for the latest monthly backup…");
+  // Restore the rolling master and its change journal only; do not merge every
+  // historical monthly snapshot during routine restore (it can take hours).
+  onProgress?.("Finding the rolling master backup…");
   const candidates = (await findLatestBackupCandidates()).filter((item: any) =>
     String(item.name || "") === BACKUP_NAME ||
     /^Ortho Logbook Backup - Month \d{4}-\d{2}\.orbackup$/.test(String(item.name || "")) ||
@@ -2375,7 +2362,7 @@ export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) 
     return rank(String(a.name || "")) - rank(String(b.name || "")) ||
       Date.parse(String(b.modifiedTime || "")) - Date.parse(String(a.modifiedTime || ""));
   });
-  if (!candidates.length) throw new Error("No Ortho Logbook backup file was found in this Google Drive account. Backup folders are searched recursively; only actual backup files can be restored.");
+  if (!candidates.length) throw new Error("No rolling Ortho Logbook backup was found in Google Drive. Your phone data was not changed.");
   let file: any = null;
   let composed: any = null;
   let effectiveModifiedTime = "";
@@ -2417,7 +2404,11 @@ export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) 
   // master. The master may have been updated in place after the journal was
   // written; the baseline file ID determines whether the journal still applies.
   const deltas = (await listIncrementalFiles())
-    .filter((item: any) => item?.id)
+    .filter((item: any) => item?.id && (
+      String(item.name || "") === "Ortho Logbook Backup Changes.orbackup" ||
+      (String(file.name || "") !== BACKUP_NAME &&
+        /^Ortho Logbook Backup - Month \\d{4}-\\d{2} Changes\\.orbackup$/i.test(String(item.name || "")))
+    ))
     .sort((a: any, b: any) => Date.parse(String(a.modifiedTime || "")) - Date.parse(String(b.modifiedTime || "")));
   const recoveryWarnings: string[] = [];
   let appliedIncrementals = 0;
