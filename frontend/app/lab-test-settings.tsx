@@ -195,8 +195,8 @@ export default function LabTestSettingsScreen() {
         <Pressable onPress={addBranch} style={styles.branchAdd}><Text style={styles.primaryText}>Add</Text></Pressable>
       </View>
       <View style={styles.branchList}>
-        {branches.map(branch => <Pressable key={branch} onPress={() => update({ category: branch })} style={[styles.branchChip, form.category.toLocaleLowerCase() === branch.toLocaleLowerCase() ? styles.branchChipSelected : null]}>
-          <Text style={[styles.branchChipText, form.category.toLocaleLowerCase() === branch.toLocaleLowerCase() ? styles.branchChipTextSelected : null]}>{branch}</Text>
+        {branches.map(branch => <Pressable key={branch} onPress={() => update({ category: branch })} style={[styles.branchChip, (form.category || "").toLocaleLowerCase() === branch.toLocaleLowerCase() ? styles.branchChipSelected : null]}>
+          <Text style={[styles.branchChipText, (form.category || "").toLocaleLowerCase() === branch.toLocaleLowerCase() ? styles.branchChipTextSelected : null]}>{branch}</Text>
         </Pressable>)}
       </View>
       {field("Test name", "name", "e.g. Hemoglobin")}
