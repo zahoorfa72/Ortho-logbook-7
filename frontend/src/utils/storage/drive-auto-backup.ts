@@ -221,13 +221,12 @@ export function startAutomaticDriveBackup() {
   setDriveSyncRefreshHandler(refreshAutomaticDriveBackup);
   const unregisterRefresh = () => setDriveSyncRefreshHandler(null);
   void loadPendingTables().then(async () => {
-    // Do not rescan/recompress every patient photo on every app launch. A first
-    // install with no successful Drive backup queues a full baseline; otherwise
-    // only persisted or actual database changes are retried.
-    if (!pendingTables.size && !(await getLastDriveBackupStatus())) {
-      ALL_SYNC_TABLES.forEach((name) => pendingTables.add(name));
-      await persistPendingTables();
-    }
+    // Reconcile every syncable table once at app startup. The incremental
+    // exporter compares metadata and image signatures with the last confirmed
+    // snapshot, so this detects writes missed while Android suspended the app
+    // without re-uploading unchanged photos or creating a new backup file.
+    ALL_SYNC_TABLES.forEach((name) => pendingTables.add(name));
+    await persistPendingTables();
     scheduleBackup();
   });
   const subscription = SQLite.addDatabaseChangeListener((event: any) => {
