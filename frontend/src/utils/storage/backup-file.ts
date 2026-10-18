@@ -118,11 +118,18 @@ export async function pickBackupFile() {
   let backupText: string;
   try {
     backupText = await readPickedFile(file.uri);
-  } catch {
+  } catch (error) {
+    // Keep the Android provider's actual failure reason. Hiding it behind a
+    // generic message made Drive/Downloads import errors impossible to diagnose.
+    const detail = error instanceof Error ? error.message : String(error || "unknown file-read error");
     throw new Error(
-      "Could not open the selected file. Please copy the .orbackup file to your phone's internal storage (e.g. the Downloads folder) and try again.",
+      "Could not read the selected backup (" + detail + "). Re-select the original .orbackup file from Downloads or Files and try again.",
     );
   }
+
+  // Some Android document providers prepend a UTF-8 BOM. JSON.parse rejects
+  // that invisible character, even when the backup itself is otherwise valid.
+  backupText = backupText.replace(/^\\uFEFF/, "").trimStart();
 
   // Quick pre-check so we can give a much clearer error than "invalid JSON".
   const trimmed = backupText.trim();
