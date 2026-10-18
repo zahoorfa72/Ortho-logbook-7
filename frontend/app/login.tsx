@@ -12,7 +12,7 @@ import { PrimaryButton } from "@/src/components/PrimaryButton";
 import { useToast } from "@/src/components/toast";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 import { db, initializeDatabase } from "@/src/db/database";
-import { decryptBackup, getBackupInfo, restoreBackup } from "@/src/utils/storage/backup";
+import { decryptBackup, getBackupInfo, mergeBackup, restoreBackup } from "@/src/utils/storage/backup";
 import { restoreLatestFromGoogleDrive, connectGoogleAccount } from "@/src/utils/storage/google-drive";
 import { queryClient } from "@/src/query-client";
 import { storage } from "@/src/utils/storage";
@@ -58,29 +58,48 @@ export default function Login() {
       Alert.alert(
         "Restore clinic backup?",
         "Latest backup: " + remote.name + "\nModified: " + new Date(remote.modifiedTime).toLocaleString() +
-          "\n\nThis replaces the local database with the Drive backup. Continue only if this is the intended backup.",
+          "\n\nChoose Merge to add missing records without replacing this phone's current records, or Replace only if you intentionally want the backup to replace the current clinic data. Patient image PDFs referenced by the backup are downloaded and verified before import.",
         [
           { text: "Cancel", style: "cancel", onPress: () => setAutomaticDriveBackupPaused(false) },
           {
-            text: "Restore",
+            text: "Merge (recommended)",
+            onPress: async () => {
+              try {
+                setDriveRestoreLoading(true);
+                setDriveRestoreMessage("Merging records, settings and patient PDFs…");
+                const backup = await decryptBackup(remote.backupText, "");
+                const result = await mergeBackup(backup);
+                queryClient.clear();
+                initializeDatabase();
+                setAdminExists(Number(db.getFirstSync<any>("SELECT COUNT(*) AS n FROM users WHERE role='admin' AND disabled=0")?.n || 0) > 0);
+                Alert.alert("Merge complete", "Backup merged without intentionally replacing existing records.\nPatients added: " + result.patients +
+                  "\nInventory items added: " + result.inventory + "\nUsers added: " + result.users +
+                  "\n\nExisting records were kept where IDs already matched. Log in with your existing account.");
+              } catch (error: any) {
+                Alert.alert("Google Drive merge failed", googleDriveRestoreErrorMessage(error));
+              } finally {
+                setDriveRestoreLoading(false);
+                setDriveRestoreMessage("");
+                setAutomaticDriveBackupPaused(false);
+              }
+            },
+          },
+          {
+            text: "Replace",
             style: "destructive",
             onPress: async () => {
               try {
                 setDriveRestoreLoading(true);
-                setDriveRestoreMessage("Restoring patients, photos and settings…");
+                setDriveRestoreMessage("Restoring patients, settings and patient PDFs…");
                 const backup = await decryptBackup(remote.backupText, "");
                 const result = await restoreBackup(backup);
                 await storage.secureRemove("ortho_current_user");
                 queryClient.clear();
                 initializeDatabase();
                 setAdminExists(Number(db.getFirstSync<any>("SELECT COUNT(*) AS n FROM users WHERE role='admin' AND disabled=0")?.n || 0) > 0);
-                Alert.alert(
-                  "Restore complete",
-                  "Clinic backup restored.\nPatients: " + result.patients +
-                    "\nInventory items: " + result.inventory +
-                    "\nUsers: " + result.users +
-                    "\n\nNow log in with an account from the backup.",
-                );
+                Alert.alert("Replace restore complete", "Clinic backup restored.\nPatients: " + result.patients +
+                  "\nInventory items: " + result.inventory + "\nUsers: " + result.users +
+                  "\n\nNow log in with an account from the backup.");
               } catch (error: any) {
                 Alert.alert("Google Drive restore failed", googleDriveRestoreErrorMessage(error));
               } finally {

@@ -6,6 +6,7 @@ import { triggerAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-back
 import { extractLabReportDate, isLikelyLabReportText, parseLabReportRows, recognizeLabText } from "@/src/utils/lab-ocr";
 import {
   ActivityIndicator,
+  Linking,
   Alert,
   DeviceEventEmitter,
   FlatList,
@@ -44,6 +45,7 @@ import {
   type ReminderState,
 } from "@/src/utils/backup-reminder";
 import { buildPatientListHtml, generateAndSharePdf } from "@/src/utils/pdf";
+import { getPatientImageArchive } from "@/src/utils/storage/patient-image-archive";
 
 type LabScanStatus = {
   status: "not-scanned" | "queued" | "scanning" | "success" | "failed" | "stopped";
@@ -1351,6 +1353,33 @@ export default function Logbook() {
                 {chip(item.procedure, "px")}
                 {chip(item.procedureII || "", "px2")}
               </View>
+              {Array.isArray(item.photos) && item.photos.length > 0 ? (
+                <Pressable
+                  accessibilityRole="button"
+                  testID={`patient-image-pdf-${item.id}`}
+                  onPress={async (event: any) => {
+                    event?.stopPropagation?.();
+                    try {
+                      const archive = await getPatientImageArchive(String(item.id));
+                      if (!archive) {
+                        Alert.alert("Patient image PDF not ready", "This patient's images have not yet been archived to a PDF. Patient image PDFs are generated for records at least 30 days old. Open Sync & Backup and run Google Drive backup to create and upload eligible PDFs.");
+                        return;
+                      }
+                      if (!archive.driveFileId) {
+                        Alert.alert("Patient PDF not uploaded", "The PDF exists on this phone but has not been verified in Google Drive yet. Open Sync & Backup, connect the correct Google account, and run Google Drive backup.");
+                        return;
+                      }
+                      await Linking.openURL("https://drive.google.com/file/d/" + encodeURIComponent(archive.driveFileId) + "/view");
+                    } catch (error: any) {
+                      Alert.alert("Could not open patient PDF", String(error?.message || "Please check the Google Drive connection and try again."));
+                    }
+                  }}
+                  style={{ alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: spacing.xs, marginTop: spacing.sm, paddingVertical: spacing.xs, paddingHorizontal: spacing.sm, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.border }}
+                >
+                  <Ionicons name="document-attach-outline" size={16} color={colors.brandPrimary} />
+                  <Text style={{ fontFamily: fontFamily.semibold, fontSize: fontSize.xs, color: colors.brandPrimary }}>Open patient image PDF in Drive</Text>
+                </Pressable>
+              ) : null}
               {infectionResults(item).length ? (
                 <View style={styles.infectionRow}>
                   {infectionResults(item).map(label => <Text key={label} style={styles.infectionText}>{label}</Text>)}
