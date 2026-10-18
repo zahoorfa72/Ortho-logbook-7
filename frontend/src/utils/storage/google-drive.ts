@@ -1763,6 +1763,11 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
   });
 
   const migrationNeeded = String((await storage.secureGet(MASTER_MIGRATION_KEY, "")) || "") !== "1";
+  // A failed monthly archive must be retried even when the master has no new
+  // rows; otherwise a month file can remain missing forever after one failure.
+  // The cursor advances only after the month file is verified, so this is a
+  // no-op for already completed months.
+  await archiveCompletedMonths(onProgress);
   if (!hasActualChanges && !migrationNeeded) {
     await commitIncrementalSnapshotCache(baselineKey);
     return { skipped: true, completedAt: new Date().toISOString(), name: "No changes", accountEmail: getConnectedGoogleAccount() };
@@ -1797,10 +1802,7 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
     return { ...migrated, skipped: false, completedAt: new Date().toISOString(), name: "Ortho Logbook Backup - All Time.orbackup", accountEmail: getConnectedGoogleAccount(), snapshotFailures: [] };
   }
 
-  // Archive each completed month once. These files contain period-filtered data,
-  // never another full all-time master. The original master remains the baseline.
-  await archiveCompletedMonths(onProgress);
-
+  // Month archive reconciliation ran above, before the no-change early return.
   const JOURNAL_NAME = "Ortho Logbook Incremental Journal.orbackup";
   onProgress?.("Preparing the small change journal…");
   let journalFile = await findBackupByName(JOURNAL_NAME);
