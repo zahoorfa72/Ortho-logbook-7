@@ -1753,7 +1753,11 @@ async function downloadDriveJson(fileId: string, onProgress?: (message: string) 
           ? "Downloading master backup: " + percent + "% (" + (loaded / 1048576).toFixed(1) + " / " + (total / 1048576).toFixed(1) + " MB)"
           : "Downloading master backup: " + (loaded / 1048576).toFixed(1) + " MB received" + (currentStatus ? " · " + currentStatus : ""));
       } else if (Date.now() - lastProgressAt > 10 * 60 * 1000) {
-        throw new Error("Google Drive download has shown no progress for 10 minutes. The restore was stopped safely; retry on a stable connection.");
+        // Do not cancel a native foreground-service download just because Android
+        // paused this JavaScript loop while the app was backgrounded. The native
+        // service owns retry/resume and may still be waiting for mobile data.
+        onProgress?.("Background download is still running; waiting for the native service to resume the connection…");
+        lastProgressAt = Date.now();
       }
       if (status?.status === "completed") {
         onProgress?.("Backup file downloaded. Validating contents…");

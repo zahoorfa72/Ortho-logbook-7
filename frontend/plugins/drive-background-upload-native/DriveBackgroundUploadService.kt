@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.IBinder
 import android.content.pm.ServiceInfo
 import java.io.File
+import java.io.FileOutputStream
 import java.io.RandomAccessFile
 import java.net.HttpURLConnection
 import java.net.URL
@@ -40,20 +41,37 @@ class DriveBackgroundUploadService : Service() {
   override fun onBind(intent: Intent?): IBinder? = null
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-    if (intent?.action != ACTION_START && intent?.action != ACTION_DOWNLOAD) {
+    // Android may recreate a foreground service after reclaiming the app process.
+    // Rehydrate an active download from private preferences so the partial file
+    // can resume rather than leaving a dead "running" task behind.
+    val command = intent ?: run {
+      val savedTask = prefs.getString("activeDownloadTaskId", null)
+      if (savedTask.isNullOrBlank()) {
+        stopSelf(startId)
+        return START_NOT_STICKY
+      }
+      Intent(this, DriveBackgroundUploadService::class.java).apply {
+        action = ACTION_DOWNLOAD
+        putExtra(EXTRA_TASK_ID, savedTask)
+        putExtra(EXTRA_URL, prefs.getString("$savedTask.url", ""))
+        putExtra(EXTRA_TOKEN, prefs.getString("$savedTask.token", ""))
+        putExtra(EXTRA_FILE_URI, prefs.getString("$savedTask.fileUri", ""))
+      }
+    }
+    if (command.action != ACTION_START && command.action != ACTION_DOWNLOAD) {
       stopSelf(startId)
       return START_NOT_STICKY
     }
-    taskId = intent.getStringExtra(EXTRA_TASK_ID) ?: run { stopSelf(startId); return START_NOT_STICKY }
-    if (intent.action == ACTION_DOWNLOAD) {
-      startBackgroundDownload(intent, startId)
-      return START_NOT_STICKY
+    taskId = command.getStringExtra(EXTRA_TASK_ID) ?: run { stopSelf(startId); return START_NOT_STICKY }
+    if (command.action == ACTION_DOWNLOAD) {
+      startBackgroundDownload(command, startId)
+      return START_STICKY
     }
-    uploadUrl = intent.getStringExtra(EXTRA_URL) ?: run { fail("Missing Drive upload session URL"); stopSelf(startId); return START_NOT_STICKY }
-    token = intent.getStringExtra(EXTRA_TOKEN) ?: run { fail("Missing Google access token"); stopSelf(startId); return START_NOT_STICKY }
-    val uri = Uri.parse(intent.getStringExtra(EXTRA_FILE_URI) ?: "")
+    uploadUrl = command.getStringExtra(EXTRA_URL) ?: run { fail("Missing Drive upload session URL"); stopSelf(startId); return START_NOT_STICKY }
+    token = command.getStringExtra(EXTRA_TOKEN) ?: run { fail("Missing Google access token"); stopSelf(startId); return START_NOT_STICKY }
+    val uri = Uri.parse(command.getStringExtra(EXTRA_FILE_URI) ?: "")
     file = File(uri.path ?: "")
-    total = intent.getLongExtra(EXTRA_TOTAL_BYTES, 0L)
+    total = command.getLongExtra(EXTRA_TOTAL_BYTES, 0L)
     if (!file.isFile || total <= 0L || file.length() != total) {
       fail("Backup file is missing or its size changed before upload.")
       stopSelf(startId)
@@ -93,6 +111,15 @@ class DriveBackgroundUploadService : Service() {
     val uri = Uri.parse(intent.getStringExtra(EXTRA_FILE_URI) ?: "")
     file = File(uri.path ?: "")
     file.parentFile?.mkdirs()
+    // Persist enough private task state for Android to restart this foreground
+    // service if the app process is reclaimed during a long restore.
+    prefs.edit()
+      .putString("activeDownloadTaskId", taskId)
+      .putString("$taskId.url", uploadUrl)
+      .putString("$taskId.token", token)
+      .putString("$taskId.fileUri", uri.toString())
+      .putString("$taskId.status", "running")
+      .apply()
     ensureChannel()
     val notification = notification(0, "Downloading Ortho Logbook backup…")
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -100,8 +127,6 @@ class DriveBackgroundUploadService : Service() {
     } else {
       startForeground(NOTIFICATION_ID, notification)
     }
-    prefs.edit().putString("$taskId.status", "running").putInt("$taskId.progress", 0)
-      .putLong("$taskId.uploadedBytes", 0L).putLong("$taskId.totalBytes", 0L).apply()
     Thread {
       try {
         downloadToFile()
@@ -111,6 +136,7 @@ class DriveBackgroundUploadService : Service() {
         fail(error.message ?: "Google Drive background download failed.")
         updateNotification(prefs.getInt("$taskId.progress", 0), "Download failed — open Ortho Logbook to retry")
       } finally {
+        prefs.edit().remove("activeDownloadTaskId").remove("$taskId.token").apply()
         stopForeground(STOP_FOREGROUND_DETACH)
         stopSelf()
       }
@@ -118,44 +144,77 @@ class DriveBackgroundUploadService : Service() {
   }
 
   private fun downloadToFile() {
-    val connection = URL(uploadUrl).openConnection() as HttpURLConnection
-    try {
-      connection.requestMethod = "GET"
-      connection.connectTimeout = 30000
-      connection.readTimeout = 120000
-      connection.setRequestProperty("Authorization", "Bearer " + token)
-      val code = connection.responseCode
-      if (code !in 200..299) {
-        val detail = try { connection.errorStream?.bufferedReader()?.use { it.readText() } ?: "" } catch (_: Exception) { "" }
-        throw IllegalStateException("Google Drive download failed (HTTP " + code + "): " + detail.take(240))
-      }
-      val totalBytes = connection.contentLengthLong.coerceAtLeast(0L)
-      prefs.edit().putLong("$taskId.totalBytes", totalBytes).apply()
-      var received = 0L
-      connection.inputStream.buffered().use { input ->
-        file.outputStream().buffered().use { output ->
-          val buffer = ByteArray(128 * 1024)
-          while (true) {
-            val count = input.read(buffer)
-            if (count < 0) break
-            output.write(buffer, 0, count)
-            received += count
-            val percent = if (totalBytes > 0) ((received * 100L) / totalBytes).toInt().coerceIn(0, 99) else 0
-            prefs.edit().putInt("$taskId.progress", percent).putLong("$taskId.uploadedBytes", received).apply()
-            val message = if (totalBytes > 0) "Downloading backup… " + String.format(java.util.Locale.US, "%.1f", received.toDouble() * 100.0 / totalBytes.toDouble()) + "%"
-              else "Downloading backup… " + String.format(java.util.Locale.US, "%.1f", received.toDouble() / 1048576.0) + " MB"
-            updateNotification(percent, message)
-          }
-          output.flush()
+    var failures = 0
+    var lastError: Exception? = null
+    while (failures < 12) {
+      val existingBytes = if (file.isFile) file.length().coerceAtLeast(0L) else 0L
+      val connection = URL(uploadUrl).openConnection() as HttpURLConnection
+      try {
+        connection.requestMethod = "GET"
+        connection.connectTimeout = 30000
+        connection.readTimeout = 180000
+        connection.setRequestProperty("Authorization", "Bearer " + token)
+        if (existingBytes > 0L) connection.setRequestProperty("Range", "bytes=" + existingBytes + "-")
+        val code = connection.responseCode
+        if (code == 401 || code == 403) {
+          val detail = try { connection.errorStream?.bufferedReader()?.use { it.readText() } ?: "" } catch (_: Exception) { "" }
+          throw IllegalStateException("Google Drive authorization failed (HTTP " + code + "). Reconnect Google Drive, then retry. " + detail.take(160))
         }
+        if (code !in 200..299) {
+          val detail = try { connection.errorStream?.bufferedReader()?.use { it.readText() } ?: "" } catch (_: Exception) { "" }
+          throw IllegalStateException("Google Drive download failed (HTTP " + code + "): " + detail.take(240))
+        }
+        val append = code == 206 && existingBytes > 0L
+        val rangeHeader = connection.getHeaderField("Content-Range") ?: ""
+        val rangeMatch = Regex("bytes\\s+(\\d+)-(\\d+)/(\\d+|\\*)", RegexOption.IGNORE_CASE).find(rangeHeader)
+        if (append && rangeMatch != null && rangeMatch.groupValues[1].toLong() != existingBytes) {
+          file.delete()
+          throw IllegalStateException("Google Drive resumed at an unexpected byte offset; restarting from byte zero.")
+        }
+        // If the server ignores Range and returns 200, restart from byte zero
+        // instead of appending a duplicate copy to the partial backup.
+        val writeAppend = append && (rangeMatch == null || rangeMatch.groupValues[1].toLong() == existingBytes)
+        val rangeTotal = if (rangeMatch != null && rangeMatch.groupValues[3] != "*") rangeMatch.groupValues[3].toLongOrNull() ?: 0L else 0L
+        val contentLength = connection.contentLengthLong.coerceAtLeast(0L)
+        val totalBytes = if (rangeTotal > 0L) rangeTotal else if (writeAppend) existingBytes + contentLength else contentLength
+        prefs.edit().putLong("$taskId.totalBytes", totalBytes).apply()
+        var received = if (writeAppend) existingBytes else 0L
+        connection.inputStream.buffered().use { input ->
+          FileOutputStream(file, writeAppend).buffered().use { output ->
+            val buffer = ByteArray(128 * 1024)
+            while (true) {
+              val count = input.read(buffer)
+              if (count < 0) break
+              output.write(buffer, 0, count)
+              received += count
+              val percent = if (totalBytes > 0L) ((received * 100L) / totalBytes).toInt().coerceIn(0, 99) else 0
+              prefs.edit().putInt("$taskId.progress", percent).putLong("$taskId.uploadedBytes", received).apply()
+              val message = if (totalBytes > 0L) "Downloading backup… " + String.format(java.util.Locale.US, "%.1f", received.toDouble() * 100.0 / totalBytes.toDouble()) + "%"
+                else "Downloading backup… " + String.format(java.util.Locale.US, "%.1f", received.toDouble() / 1048576.0) + " MB"
+              updateNotification(percent, message)
+            }
+            output.flush()
+          }
+        }
+        if (!file.isFile || file.length() == 0L || (totalBytes > 0L && file.length() != totalBytes)) {
+          throw IllegalStateException("Downloaded backup is incomplete (" + file.length() + " of " + totalBytes + " bytes); resuming automatically.")
+        }
+        prefs.edit().putLong("$taskId.uploadedBytes", file.length()).putLong("$taskId.totalBytes", totalBytes).apply()
+        return
+      } catch (error: Exception) {
+        lastError = error
+        val message = error.message ?: ""
+        if (message.contains("authorization failed") || message.contains("HTTP 401") || message.contains("HTTP 403")) throw error
+        failures += 1
+        if (failures >= 12) break
+        val delay = minOf(2000L * (1L shl (failures - 1).coerceIn(0, 4)), 30000L)
+        updateNotification(prefs.getInt("$taskId.progress", 0), "Connection interrupted; resuming backup download (" + failures + "/12)…")
+        try { Thread.sleep(delay) } catch (_: InterruptedException) { Thread.currentThread().interrupt(); throw IllegalStateException("Background backup download was interrupted.") }
+      } finally {
+        connection.disconnect()
       }
-      if (!file.isFile || file.length() == 0L || (totalBytes > 0 && file.length() != totalBytes)) {
-        throw IllegalStateException("Downloaded backup file size did not match Google Drive metadata.")
-      }
-      prefs.edit().putLong("$taskId.uploadedBytes", received).putLong("$taskId.totalBytes", totalBytes).apply()
-    } finally {
-      connection.disconnect()
     }
+    throw IllegalStateException("Background backup download stopped after 12 retries: " + (lastError?.message ?: "network unavailable") + ". Reopen Ortho Logbook and retry; downloaded bytes were retained for resume.")
   }
 
   private fun uploadResumable(): JSONObject {
