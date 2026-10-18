@@ -128,6 +128,51 @@ export async function installPatientImageArchivePdf(
   all[String(metadata.patientId)] = { ...all[String(metadata.patientId)], ...metadata, localUri: target };
   await writeArchives(all);
 }
+export async function archivePatientImagesForPatient(patientId: string, onProgress?: (stage: string) => void): Promise<PatientImageArchive> {
+  initializeDatabase();
+  const id = String(patientId || "").trim();
+  if (!id) throw new Error("Save this patient before creating an image PDF.");
+  if (!FileSystem.documentDirectory) throw new Error("Private phone storage is unavailable for patient image archives.");
+  const patient = db.getFirstSync<any>("SELECT id,name,mr_no,date,created_at FROM patients WHERE id=?", [id]);
+  if (!patient) throw new Error("This patient is not available in the phone database. Refresh the patient list and try again.");
+  const row = db.getFirstSync<any>("SELECT photo_uri,photos_json FROM patients WHERE id=?", [id]) || {};
+  const sources = getPhotoSources(row);
+  if (!sources.length) throw new Error("No readable patient images are saved for this patient on this phone.");
+  const name = String(patient.name || "Patient");
+  const mrNo = String(patient.mr_no || "");
+  const stamp = await stampFor(id, name, mrNo, String(patient.created_at || patient.date || ""), sources);
+  const all = await readArchives();
+  const existing = all[id];
+  if (existing?.sourceStamp === stamp) {
+    const info = await FileSystem.getInfoAsync(existing.localUri);
+    if (info.exists && Number(info.size || 0) > 8) return existing;
+  }
+  onProgress?.("Creating this patient's image PDF…");
+  await FileSystem.makeDirectoryAsync(ARCHIVE_DIR, { intermediates: true });
+  const embedded: string[] = [];
+  for (const source of sources) {
+    embedded.push(await toEmbeddableImage(source));
+    await new Promise<void>(resolve => setTimeout(resolve, 0));
+  }
+  const generated = await Print.printToFileAsync({ html: makeHtml(name, mrNo, embedded), base64: false });
+  const fileName = fileNameFor(name, mrNo, id);
+  try {
+    const info = await FileSystem.getInfoAsync(generated.uri);
+    if (!info.exists || Number(info.size || 0) < 8) throw new Error("The generated patient image PDF is empty.");
+    await installPatientImageArchivePdf({
+      patientId: id, patientName: name, mrNo, fileName, sourceStamp: stamp,
+      archivedAt: new Date().toISOString(), imageCount: embedded.length,
+      driveFileId: existing?.sourceStamp === stamp ? existing.driveFileId : undefined,
+      driveSourceStamp: existing?.sourceStamp === stamp ? existing.driveSourceStamp : undefined,
+    }, generated.uri);
+  } finally {
+    try { await FileSystem.deleteAsync(generated.uri, { idempotent: true }); } catch {}
+  }
+  const saved = await getPatientImageArchive(id);
+  if (!saved) throw new Error("The patient PDF was generated but could not be verified in phone storage.");
+  return saved;
+}
+
 export async function archiveEligiblePatientImages(onProgress?: (stage: string) => void): Promise<boolean> {
   initializeDatabase();
   if (!FileSystem.documentDirectory) throw new Error("Private phone storage is unavailable for patient image archives.");

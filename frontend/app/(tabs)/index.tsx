@@ -45,7 +45,7 @@ import {
   type ReminderState,
 } from "@/src/utils/backup-reminder";
 import { buildPatientListHtml, generateAndSharePdf } from "@/src/utils/pdf";
-import { getPatientImageArchive } from "@/src/utils/storage/patient-image-archive";
+import { ensurePatientImagePdfOnDrive } from "@/src/utils/storage/google-drive";
 
 type LabScanStatus = {
   status: "not-scanned" | "queued" | "scanning" | "success" | "failed" | "stopped";
@@ -1360,16 +1360,8 @@ export default function Logbook() {
                   onPress={async (event: any) => {
                     event?.stopPropagation?.();
                     try {
-                      const archive = await getPatientImageArchive(String(item.id));
-                      if (!archive) {
-                        Alert.alert("Patient image PDF not ready", "This patient's images have not yet been archived to a PDF. Patient image PDFs are generated for records at least 30 days old. Open Sync & Backup and run Google Drive backup to create and upload eligible PDFs.");
-                        return;
-                      }
-                      if (!archive.driveFileId) {
-                        Alert.alert("Patient PDF not uploaded", "The PDF exists on this phone but has not been verified in Google Drive yet. Open Sync & Backup, connect the correct Google account, and run Google Drive backup.");
-                        return;
-                      }
-                      await Linking.openURL("https://drive.google.com/file/d/" + encodeURIComponent(archive.driveFileId) + "/view");
+                      const result = await ensurePatientImagePdfOnDrive(String(item.id));
+                      await Linking.openURL(result.url);
                     } catch (error: any) {
                       Alert.alert("Could not open patient PDF", String(error?.message || "Please check the Google Drive connection and try again."));
                     }

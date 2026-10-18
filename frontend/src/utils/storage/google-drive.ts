@@ -4,7 +4,7 @@ import * as FileSystem from "expo-file-system/legacy";
 import { exportUnencryptedBackup, exportUnencryptedBackupData, exportIncrementalBackup, exportIncrementalBackupData, prepareIncrementalSnapshotCacheFromBackupData, commitIncrementalSnapshotCache, pruneBackupPhotoAssets, type BackupFilter } from "@/src/utils/storage/backup";
 import { markBackupTaken } from "@/src/utils/backup-reminder";
 import { storage } from "@/src/utils/storage";
-import { archiveEligiblePatientImages, getLocalPatientImageArchives, installPatientImageArchivePdf, setPatientImageArchiveDriveState, type PatientImageArchive } from "@/src/utils/storage/patient-image-archive";
+import { archiveEligiblePatientImages, archivePatientImagesForPatient, getLocalPatientImageArchives, installPatientImageArchivePdf, setPatientImageArchiveDriveState, type PatientImageArchive } from "@/src/utils/storage/patient-image-archive";
 
 const LAST_DRIVE_BACKUP_KEY = "ortho_drive_last_successful_backup";
 const LAST_DRIVE_CONTENT_HASH_KEY = "ortho_drive_last_uploaded_content_hash";
@@ -980,6 +980,41 @@ async function uploadPatientPdf(archive: PatientImageArchive, folderId: string, 
   }
   return verified;
 }
+export async function ensurePatientImagePdfOnDrive(patientId: string, onProgress?: (stage: string) => void): Promise<{ fileId: string; fileName: string; url: string }> {
+  return queueDriveOperation(async () => {
+    const archive = await archivePatientImagesForPatient(patientId, onProgress);
+    onProgress?.("Checking the Patient Image PDFs folder in Google Drive…");
+    const folder = await getOrCreatePatientImagePdfFolder();
+    const folderId = String(folder.id);
+    const local = await FileSystem.getInfoAsync(archive.localUri);
+    if (!local.exists || Number(local.size || 0) < 8) throw new Error("The patient's local PDF is missing or empty.");
+    let remote: any = null;
+    if (archive.driveFileId && archive.driveSourceStamp === archive.sourceStamp) {
+      try {
+        const verified = await verifyPatientPdf(archive.driveFileId);
+        if (verified.name === archive.fileName &&
+            Number(verified.size || 0) === Number(local.size || 0) &&
+            String(verified.appProperties?.orthoPatientId || "") === archive.patientId &&
+            String(verified.appProperties?.orthoSourceStamp || "") === archive.sourceStamp &&
+            (Array.isArray(verified.parents) ? verified.parents : []).includes(folderId)) remote = verified;
+      } catch { remote = null; }
+    }
+    if (!remote) remote = await findPatientPdfInFolder(archive.fileName, folderId);
+    if (remote && remote.mimeType === "application/pdf" &&
+        Number(remote.size || 0) === Number(local.size || 0) &&
+        String(remote.appProperties?.orthoPatientId || "") === archive.patientId &&
+        String(remote.appProperties?.orthoSourceStamp || "") === archive.sourceStamp &&
+        (Array.isArray(remote.parents) ? remote.parents : []).includes(folderId)) {
+      await setPatientImageArchiveDriveState(archive.fileName, archive.sourceStamp, String(remote.id));
+      return { fileId: String(remote.id), fileName: archive.fileName, url: "https://drive.google.com/file/d/" + encodeURIComponent(String(remote.id)) + "/view" };
+    }
+    onProgress?.("Uploading this patient's PDF to Google Drive…");
+    const verified = await uploadPatientPdf(archive, folderId, remote);
+    await setPatientImageArchiveDriveState(archive.fileName, archive.sourceStamp, String(verified.id));
+    return { fileId: String(verified.id), fileName: archive.fileName, url: "https://drive.google.com/file/d/" + encodeURIComponent(String(verified.id)) + "/view" };
+  }, onProgress);
+}
+
 export async function uploadPatientImageArchivesToDrive(onProgress?: (stage: string) => void): Promise<void> {
   // Always provision the folder as part of Drive backup setup, even if no patient
   // images have crossed the 30-day archive threshold yet.
