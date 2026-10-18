@@ -54,7 +54,7 @@ export default function TrashScreen() {
 
   return <View style={styles.container}>
     <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
-      <Pressable onPress={() => router.back()} style={styles.headerBtn}><Ionicons name="arrow-back" size={24} color={colors.onSurface}/></Pressable>
+      <Pressable onPress={() => router.canGoBack() ? router.back() : router.replace("/settings" as any)} style={styles.headerBtn}><Ionicons name="arrow-back" size={24} color={colors.onSurface}/></Pressable>
       <Text style={styles.headerTitle}>Trash</Text>
       <Pressable onPress={() => void refetch()} style={styles.headerBtn}><Ionicons name="refresh-outline" size={21} color={colors.onSurface}/></Pressable>
     </View>
