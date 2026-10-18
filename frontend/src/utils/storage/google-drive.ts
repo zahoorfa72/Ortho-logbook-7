@@ -236,45 +236,30 @@ async function findBackupByName(name: string) {
 
 export async function listGoogleDriveBackups(): Promise<Array<{id:string;name:string;modifiedTime:string;size?:string}>> {
   const files = await findLatestBackupCandidates();
-  // The backup picker now shows monthly full snapshots only. Legacy all-time
-  // files remain untouched until a monthly snapshot is safely confirmed.
-  const masters = files.filter((file:any) => file.id && (
-    String(file.name || "") === BACKUP_NAME ||
-    String(file.name || "") === "Ortho Logbook Backup - All Time.orbackup" ||
-    /^Ortho Logbook Backup - Month \d{4}-\d{2}\.orbackup$/.test(String(file.name || "")) ||
-    /^Ortho Logbook Backup - (Year|Date) /.test(String(file.name || ""))
-  ));
-
-  // Display the latest journal time for the rolling master, while keeping legacy month journals readable.
-  const journalTimeByMaster = new Map<string, string>();
-  for (const master of masters) {
-    const masterName = String(master.name || "");
-    const match = /^Ortho Logbook Backup - Month (\d{4}-\d{2})\.orbackup$/.exec(masterName);
-    if (!match && masterName !== BACKUP_NAME) continue;
-    try {
-      const journalName = masterName === BACKUP_NAME ? "Ortho Logbook Backup Changes.orbackup" : "Ortho Logbook Backup - Month " + match![1] + " Changes.orbackup";
-      const journalFile = await findBackupByName(journalName);
-      if (!journalFile?.id) continue;
+  // The active system exposes one rolling master only. Older monthly/year/date
+  // files are read solely by the one-time migration/recovery path, never offered
+  // as separate active backups.
+  const master = files.find((file:any) => file?.id && String(file.name || "") === BACKUP_NAME);
+  if (!master) return [];
+  let modifiedTime = String(master.modifiedTime || "");
+  try {
+    const journalFile = await findBackupByName("Ortho Logbook Backup Changes.orbackup");
+    if (journalFile?.id) {
       const journal = await downloadDriveJsonValidated(String(journalFile.id));
       const baseline = String(journal?._baselineKey || "");
       if (journal?.incremental === true && baseline.startsWith(String(master.id) + ":") && journalFile.modifiedTime) {
-        journalTimeByMaster.set(String(master.id), String(journalFile.modifiedTime));
+        modifiedTime = String(journalFile.modifiedTime);
       }
-    } catch (error) {
-      console.warn("[drive-backup] could not determine monthly journal time", error);
     }
+  } catch (error) {
+    console.warn("[drive-backup] could not determine rolling master update time", error);
   }
-
-  return masters
-    .map((file:any) => {
-      const masterTime = String(file.modifiedTime || "");
-      const effectiveTime = journalTimeByMaster.get(String(file.id)) || masterTime;
-      return {id:String(file.id),name:String(file.name || "Ortho Logbook Backup"),modifiedTime:effectiveTime,size:file.size == null ? undefined : String(file.size)};
-    })
-    .sort((a,b) => {
-      const rank = (name: string) => name === BACKUP_NAME ? 0 : /all time/i.test(name) ? 1 : /^Ortho Logbook Backup - Month /.test(name) ? 2 : 3;
-      return rank(a.name) - rank(b.name) || Date.parse(b.modifiedTime || "") - Date.parse(a.modifiedTime || "");
-    });
+  return [{
+    id: String(master.id),
+    name: BACKUP_NAME,
+    modifiedTime,
+    size: master.size == null ? undefined : String(master.size),
+  }];
 }
 
 export async function restoreGoogleDriveBackupById(fileId: string) {
