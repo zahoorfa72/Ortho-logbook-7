@@ -2004,9 +2004,12 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
     journalText = JSON.stringify(combined);
     journalBytes = new TextEncoder().encode(journalText).length;
   }
-  // Compact after a bounded number of edits or if photo changes make the
-  // journal large. Most small edits only upload this journal, not the master.
-  const shouldCompact = combined._updateCount >= 20 || journalBytes >= 8 * 1024 * 1024;
+  // Keep routine edits in the rolling journal. Rebuilding the complete master
+  // after only 20 small edits made Drive appear to restart a huge upload even
+  // when each edit changed just one row. Compact only after a substantial
+  // accumulated journal or a large number of edits; until then PATCH the same
+  // journal file in place and leave the full photo-heavy master untouched.
+  const shouldCompact = combined._updateCount >= 100 || journalBytes >= 32 * 1024 * 1024;
 
   if (hasActualChanges) {
     onProgress?.("Uploading only changed records to Google Drive…");
