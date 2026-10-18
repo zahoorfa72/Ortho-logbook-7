@@ -31,7 +31,7 @@ export default function AdminPinScreen() {
     return (
       <View style={styles.container}>
         <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
-          <Pressable onPress={() => router.back()} style={styles.headerBtn}>
+          <Pressable onPress={() => router.canGoBack() ? router.back() : router.replace("/settings" as any)} style={styles.headerBtn}>
             <Ionicons name="arrow-back" size={24} color={colors.onSurface} />
           </Pressable>
           <Text style={styles.headerTitle}>Admin PIN</Text>
@@ -64,7 +64,7 @@ export default function AdminPinScreen() {
     try {
       await setAdminPin(pin);
       toast(existing ? "Admin PIN updated." : "Admin PIN set.", "success");
-      router.back();
+      router.canGoBack() ? router.back() : router.replace("/settings" as any);
     } catch (e: any) {
       toast(e?.message || "Could not save PIN.", "error");
     } finally {
@@ -79,13 +79,13 @@ export default function AdminPinScreen() {
     }
     await clearAdminPin();
     toast("Admin PIN removed.", "success");
-    router.back();
+    router.canGoBack() ? router.back() : router.replace("/settings" as any);
   };
 
   return (
     <View style={styles.container}>
       <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
-        <Pressable onPress={() => router.back()} style={styles.headerBtn} testID="pin-back">
+        <Pressable onPress={() => router.canGoBack() ? router.back() : router.replace("/settings" as any)} style={styles.headerBtn} testID="pin-back">
           <Ionicons name="arrow-back" size={24} color={colors.onSurface} />
         </Pressable>
         <Text style={styles.headerTitle}>{existing ? "Change Admin PIN" : "Set Admin PIN"}</Text>
