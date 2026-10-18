@@ -894,8 +894,9 @@ async function verifyPatientPdf(fileId: string): Promise<any> {
 }
 async function uploadPatientPdf(archive: PatientImageArchive, folderId: string, existing?: any): Promise<any> {
   const info = await FileSystem.getInfoAsync(archive.localUri);
+  if (!info.exists) throw new Error("Patient PDF is missing: " + archive.fileName);
   const size = Number(info.size || 0);
-  if (!info.exists || size < 8) throw new Error("Patient PDF is missing or empty: " + archive.fileName);
+  if (size < 8) throw new Error("Patient PDF is empty: " + archive.fileName);
   const token = await accessToken();
   const fields = "id,name,mimeType,size,modifiedTime,parents,appProperties";
   const target = existing?.id
