@@ -22,6 +22,7 @@ export type LabTestDefinition = {
 };
 
 const STORAGE_KEY = "ortho_lab_test_definitions_v1";
+const BRANCHES_KEY = "ortho_lab_test_branches_v1";
 const WARNING_THRESHOLD_KEY = "ortho_lab_warning_threshold_percent_v1";
 const OLD_RESULT_DAYS_KEY = "ortho_lab_old_result_days_v1";
 const ONLINE_OCR_KEY = "ortho_lab_online_ocr_api_key_v1";
@@ -34,6 +35,8 @@ export default function LabTestSettingsScreen() {
   const insets = useSafeAreaInsets();
   const toast = useToast();
   const [tests, setTests] = useState<LabTestDefinition[]>([]);
+  const [branches, setBranches] = useState<string[]>([]);
+  const [newBranch, setNewBranch] = useState("");
   const [form, setForm] = useState<LabTestDefinition>(blank());
   const [editingId, setEditingId] = useState("");
   const [busy, setBusy] = useState(false);
@@ -44,8 +47,44 @@ export default function LabTestSettingsScreen() {
   const [onlineOcrKey, setOnlineOcrKey] = useState("");
   const [onlineKeyBusy, setOnlineKeyBusy] = useState(false);
 
-  useEffect(() => { AsyncStorage.getItem(STORAGE_KEY).then(raw => { if (raw) { try { setTests(JSON.parse(raw)); } catch {} } }).catch(() => {}); AsyncStorage.getItem(WARNING_THRESHOLD_KEY).then(raw => { if (raw && Number.isFinite(Number(raw))) setWarningPercent(String(Math.max(1, Math.min(100, Math.round(Number(raw)))))); }).catch(() => {}); AsyncStorage.getItem(ONLINE_OCR_KEY).then(raw => setOnlineOcrKey(raw || "")).catch(() => {}); AsyncStorage.getItem(OLD_RESULT_DAYS_KEY).then(raw => { if (raw && Number.isFinite(Number(raw))) setOldResultDays(String(Math.max(1, Math.min(3650, Math.round(Number(raw)))))); }).catch(() => {}); }, []);
+  useEffect(() => {
+    Promise.all([AsyncStorage.getItem(STORAGE_KEY), AsyncStorage.getItem(BRANCHES_KEY)]).then(([rawTests, rawBranches]) => {
+      let loadedTests: LabTestDefinition[] = [];
+      let loadedBranches: string[] = [];
+      try { if (rawTests) loadedTests = JSON.parse(rawTests); } catch {}
+      try { if (rawBranches) loadedBranches = JSON.parse(rawBranches); } catch {}
+      const unique = new Map<string, string>();
+      for (const name of [...loadedBranches, ...loadedTests.map(item => item.category || "")]) {
+        const clean = String(name || "").trim();
+        if (clean) unique.set(clean.toLocaleLowerCase(), clean);
+      }
+      setTests(loadedTests);
+      setBranches(Array.from(unique.values()).sort((a, b) => a.localeCompare(b)));
+    }).catch(() => {});
+    AsyncStorage.getItem(WARNING_THRESHOLD_KEY).then(raw => { if (raw && Number.isFinite(Number(raw))) setWarningPercent(String(Math.max(1, Math.min(100, Math.round(Number(raw)))))); }).catch(() => {});
+    AsyncStorage.getItem(ONLINE_OCR_KEY).then(raw => setOnlineOcrKey(raw || "")).catch(() => {});
+    AsyncStorage.getItem(OLD_RESULT_DAYS_KEY).then(raw => { if (raw && Number.isFinite(Number(raw))) setOldResultDays(String(Math.max(1, Math.min(3650, Math.round(Number(raw)))))); }).catch(() => {});
+  }, []);
   const update = (patch: Partial<LabTestDefinition>) => setForm(current => ({ ...current, ...patch }));
+  const addBranch = async () => {
+    const name = newBranch.trim().replace(/\s+/g, " ");
+    if (!name) { toast("Enter a branch name, for example CBC or LFT.", "error"); return; }
+    if (branches.some(branch => branch.toLocaleLowerCase() === name.toLocaleLowerCase())) {
+      setForm(current => ({ ...current, category: branches.find(branch => branch.toLocaleLowerCase() === name.toLocaleLowerCase()) || name }));
+      setNewBranch("");
+      toast("That branch already exists; it is selected.", "success");
+      return;
+    }
+    const next = [...branches, name].sort((a, b) => a.localeCompare(b));
+    try {
+      await AsyncStorage.setItem(BRANCHES_KEY, JSON.stringify(next));
+      triggerAutomaticDriveBackup("appSettings");
+      setBranches(next);
+      setForm(current => ({ ...current, category: name }));
+      setNewBranch("");
+      toast("Branch created. You can assign tests to it now.", "success");
+    } catch { toast("Could not save the branch.", "error"); }
+  };
   const save = async () => {
     const name = form.name.trim();
     if (!name) { toast("Enter a test name.", "error"); return; }
@@ -59,8 +98,13 @@ export default function LabTestSettingsScreen() {
     const next = editingId ? tests.map(item => item.id === editingId ? nextItem : item) : [...tests, nextItem];
     setBusy(true);
     try {
+      const category = String(nextItem.category || "").trim();
+      const nextBranches = category && !branches.some(branch => branch.toLocaleLowerCase() === category.toLocaleLowerCase())
+        ? [...branches, category].sort((a, b) => a.localeCompare(b)) : branches;
       await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      await AsyncStorage.setItem(BRANCHES_KEY, JSON.stringify(nextBranches));
       triggerAutomaticDriveBackup("appSettings");
+      setBranches(nextBranches);
       setTests(next); setForm(blank()); setEditingId("");
       toast("Lab test and reference ranges saved on this device.", "success");
     } catch { toast("Could not save the lab test settings.", "error"); }
@@ -144,9 +188,20 @@ export default function LabTestSettingsScreen() {
       </View>
       <Pressable disabled={oldDaysBusy} onPress={saveOldResultDays} style={styles.action}><Text style={styles.actionText}>{oldDaysBusy ? "Saving…" : "Save old-result alert"}</Text></Pressable>
 
+      <Text style={styles.section}>Test branches</Text>
+      <Text style={styles.help}>Create clear groups such as CBC, LFT, RFT, Viral Markers, or any custom branch used by your laboratory. Select a branch before saving each test. Branches only organize tests; they do not replace or change the saved sex-specific reference ranges used by automatic lab scanning.</Text>
+      <View style={styles.branchCreate}>
+        <TextInput value={newBranch} onChangeText={setNewBranch} placeholder="New branch name (e.g. CBC)" placeholderTextColor={colors.muted} autoCapitalize="words" style={[styles.input, { flex: 1 }]} />
+        <Pressable onPress={addBranch} style={styles.branchAdd}><Text style={styles.primaryText}>Add</Text></Pressable>
+      </View>
+      <View style={styles.branchList}>
+        {branches.map(branch => <Pressable key={branch} onPress={() => update({ category: branch })} style={[styles.branchChip, form.category.toLocaleLowerCase() === branch.toLocaleLowerCase() ? styles.branchChipSelected : null]}>
+          <Text style={[styles.branchChipText, form.category.toLocaleLowerCase() === branch.toLocaleLowerCase() ? styles.branchChipTextSelected : null]}>{branch}</Text>
+        </Pressable>)}
+      </View>
       {field("Test name", "name", "e.g. Hemoglobin")}
-      {field("Main test branch / category", "category", "e.g. CBC, LFT, RFT, Viral markers")}
-      <Text style={styles.help}>Group related tests under one main branch. On the patient list, each branch stays collapsed until opened and then shows its out-of-range results.</Text>
+      {field("Assigned branch", "category", "Choose a branch above or type a new one")}
+      <Text style={styles.help}>Each test belongs to the branch shown here. The scanner still matches test names/aliases and uses the saved male/female range first, regardless of branch.</Text>
       {field("Other report labels / OCR aliases", "aliases", "e.g. Hb, HGB, Haemoglobin (comma-separated)") }
       <Text style={styles.help}>Enter all labels this laboratory may print for the same test (abbreviations, alternate spellings, and common OCR misspellings). Exact admin labels are preferred; the scanner can cautiously recover small spelling errors in longer configured names. Saved male/female ranges and the saved unit take priority over ranges read from the image. Do not add a different test as an alias.</Text>
       <Text style={styles.section}>Male reference range</Text>
@@ -160,6 +215,7 @@ export default function LabTestSettingsScreen() {
       {tests.map(item => <View key={item.id} style={styles.item}>
         <View style={{ flex: 1 }}>
           <Text style={styles.itemTitle}>{item.name}</Text>
+          {item.category?.trim() ? <Text style={styles.branchLabel}>Branch: {item.category}</Text> : <Text style={styles.branchLabel}>Branch: Not assigned</Text>}
           <Text style={styles.help}>Male: {item.maleMin}–{item.maleMax} {item.unit} · Female: {item.femaleMin}–{item.femaleMax} {item.unit}</Text>
           {item.aliases?.trim() ? <Text style={styles.help}>Recognized labels: {item.aliases}</Text> : null}
         </View>
@@ -181,6 +237,14 @@ const useStyles = makeStyles(colors => ({
   label: { fontFamily: fontFamily.medium, fontSize: fontSize.sm, color: colors.onSurface, marginBottom: spacing.xs },
   input: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, backgroundColor: colors.surface, color: colors.onSurface, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, minHeight: 46, fontFamily: fontFamily.regular, fontSize: fontSize.base },
   two: { flexDirection: "row", gap: spacing.sm },
+  branchCreate: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginBottom: spacing.sm },
+  branchAdd: { backgroundColor: colors.brandPrimary, paddingHorizontal: spacing.lg, minHeight: 46, borderRadius: radius.md, alignItems: "center", justifyContent: "center" },
+  branchList: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginBottom: spacing.md },
+  branchChip: { borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, borderRadius: radius.md, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
+  branchChipSelected: { backgroundColor: colors.brandPrimary, borderColor: colors.brandPrimary },
+  branchChipText: { color: colors.onSurface, fontFamily: fontFamily.medium, fontSize: fontSize.sm },
+  branchChipTextSelected: { color: colors.onBrandPrimary },
+  branchLabel: { color: colors.brandPrimary, fontFamily: fontFamily.semibold, fontSize: fontSize.sm, marginTop: spacing.xs },
   primary: { backgroundColor: colors.brandPrimary, padding: spacing.md, borderRadius: radius.md, alignItems: "center", marginTop: spacing.sm },
   primaryText: { color: colors.onBrandPrimary, fontFamily: fontFamily.semibold, fontSize: fontSize.base },
   action: { borderWidth: 1, borderColor: colors.border, padding: spacing.md, borderRadius: radius.md, alignItems: "center", marginTop: spacing.sm },
