@@ -1,7 +1,6 @@
 import * as SQLite from "expo-sqlite";
 import {
   backupIncrementalToGoogleDrive,
-  getLastDriveBackupStatus,
   getConnectedGoogleAccount,
   restoreGoogleAccountSilently,
 } from "@/src/utils/storage/google-drive";
