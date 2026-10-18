@@ -224,28 +224,22 @@ export async function listGoogleDriveBackups(): Promise<Array<{id:string;name:st
     /^Ortho Logbook Backup - Month \d{4}-\d{2}\.orbackup$/.test(String(file.name || ""))
   );
 
-  // Small automatic edits are stored in the rolling incremental journal so we
-  // do not re-upload every patient/photo for each change. The master file's
-  // Drive modifiedTime can therefore look hours old even though the journal is
-  // current. Report the effective backup time in the restore picker by checking
-  // whether the journal belongs to this exact master baseline.
-  let journalTimeByMaster = new Map<string, string>();
-  try {
-    const journalFile = await findBackupByName("Ortho Logbook Incremental Journal.orbackup");
-    if (journalFile?.id) {
+  // Show each monthly file's effective time by checking its own change journal.
+  const journalTimeByMaster = new Map<string, string>();
+  for (const master of masters) {
+    const match = /^Ortho Logbook Backup - Month (\\d{4}-\\d{2})\\.orbackup$/.exec(String(master.name || ""));
+    if (!match) continue;
+    try {
+      const journalFile = await findBackupByName("Ortho Logbook Backup - Month " + match[1] + " Changes.orbackup");
+      if (!journalFile?.id) continue;
       const journal = await downloadDriveJsonValidated(String(journalFile.id));
       const baseline = String(journal?._baselineKey || "");
-      for (const master of masters) {
-        const masterBaselinePrefix = String(master.id) + ":" + String(master.modifiedTime || "");
-        if (journal?.incremental === true && baseline === masterBaselinePrefix && journalFile.modifiedTime) {
-          journalTimeByMaster.set(String(master.id), String(journalFile.modifiedTime));
-        }
+      if (journal?.incremental === true && baseline.startsWith(String(master.id) + ":") && journalFile.modifiedTime) {
+        journalTimeByMaster.set(String(master.id), String(journalFile.modifiedTime));
       }
+    } catch (error) {
+      console.warn("[drive-backup] could not determine monthly journal time", error);
     }
-  } catch (error) {
-    // Listing/restoring the verified full master remains available if journal
-    // metadata is temporarily unavailable; restore itself will report warnings.
-    console.warn("[drive-backup] could not determine latest journal time for restore picker", error);
   }
 
   return masters
@@ -1388,7 +1382,10 @@ export async function backupToGoogleDrive(
       }
     }
     await storage.secureSet(MASTER_MIGRATION_KEY, "1");
-    // Keep monthly archives, but remove obsolete all-time/year/date backups and the legacy journal.
+  }
+  if (isMasterBackup && result?.id && (!migrationAttempted || (migrationComplete && cleanupSafe))) {
+    // A verified full monthly snapshot is now the baseline. Keep monthly history,
+    // but remove legacy all-time/year/date files and the old rolling journal.
     cleanupFailures.push(...await cleanupLegacyNonMonthlyBackups(String(result.id)));
   }
   if (isMasterBackup && seededCacheForLocalSnapshot && result?.id) {
