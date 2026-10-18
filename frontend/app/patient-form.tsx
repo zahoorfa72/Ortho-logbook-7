@@ -31,7 +31,7 @@ import { Segmented } from "@/src/components/Segmented";
 import { useToast } from "@/src/components/toast";
 import { formatInventoryLabel } from "@/src/utils/inventory-label";
 import { createPatientImagePdfFile, getPatientImageArchive, openPatientImageArchivePdf } from "@/src/utils/storage/patient-image-archive";
-import { ensurePatientImagePdfOnDrive } from "@/src/utils/storage/google-drive";
+import { deletePatientImagePdfFromDrive, ensurePatientImagePdfOnDrive } from "@/src/utils/storage/google-drive";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 const LAB_OCR_PIPELINE_VERSION = "row-aware-2026-10-17-v4-admin-aliases";
 
@@ -1571,10 +1571,15 @@ export default function PatientForm() {
 
   const del = useMutation({
     mutationFn: () => api.del("/patients/" + id),
-    onSuccess: () => {
+    onSuccess: async () => {
       qc.invalidateQueries({ queryKey: ["patients"] });
       qc.invalidateQueries({ queryKey: ["inventory"] });
-      toast("Record deleted.", "success");
+      try {
+        await deletePatientImagePdfFromDrive(String(id));
+        toast("Record deleted and its Google Drive image PDF removed.", "success");
+      } catch (error: any) {
+        toast("Record deleted, but its Drive PDF could not be removed: " + String(error?.message || error), "error");
+      }
       router.back();
     },
     onError: (e: any) => toast(e?.message || "Could not delete.", "error"),

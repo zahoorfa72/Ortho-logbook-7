@@ -45,7 +45,7 @@ import {
   type ReminderState,
 } from "@/src/utils/backup-reminder";
 import { buildPatientListHtml, generateAndSharePdf } from "@/src/utils/pdf";
-import { ensurePatientImagePdfOnDrive } from "@/src/utils/storage/google-drive";
+import { deletePatientImagePdfFromDrive, ensurePatientImagePdfOnDrive } from "@/src/utils/storage/google-drive";
 
 type LabScanStatus = {
   status: "not-scanned" | "queued" | "scanning" | "success" | "failed" | "stopped";
@@ -970,6 +970,14 @@ export default function Logbook() {
               const result = await api.post<{ success: boolean; deleted: number }>("/patients-bulk-delete", { ids: idsToDelete });
               if (result.deleted !== idsToDelete.length) {
                 throw new Error(`Only ${result.deleted} of ${idsToDelete.length} selected patient record(s) were deleted.`);
+              }
+              let pdfCleanupFailures = 0;
+              for (const patientId of idsToDelete) {
+                try { await deletePatientImagePdfFromDrive(String(patientId)); }
+                catch { pdfCleanupFailures++; }
+              }
+              if (pdfCleanupFailures) {
+                Alert.alert("Patient records deleted", "The selected records were moved to Trash, but " + pdfCleanupFailures + " Drive patient PDF(s) could not be deleted. Reconnect Google Drive and retry the PDF cleanup.");
               }
               // Refresh directly from SQLite after the transaction has committed.
               setSelectedIds([]);

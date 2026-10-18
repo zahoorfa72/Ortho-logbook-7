@@ -4,7 +4,7 @@ import * as FileSystem from "expo-file-system/legacy";
 import { exportUnencryptedBackup, exportUnencryptedBackupData, exportIncrementalBackup, exportIncrementalBackupData, prepareIncrementalSnapshotCacheFromBackupData, commitIncrementalSnapshotCache, pruneBackupPhotoAssets, type BackupFilter } from "@/src/utils/storage/backup";
 import { markBackupTaken } from "@/src/utils/backup-reminder";
 import { storage } from "@/src/utils/storage";
-import { archiveEligiblePatientImages, archivePatientImagesForPatient, getLocalPatientImageArchives, installPatientImageArchivePdf, setPatientImageArchiveDriveState, type PatientImageArchive } from "@/src/utils/storage/patient-image-archive";
+import { archiveEligiblePatientImages, archivePatientImagesForPatient, getLocalPatientImageArchives, installPatientImageArchivePdf, removePatientImageArchive, setPatientImageArchiveDriveState, type PatientImageArchive } from "@/src/utils/storage/patient-image-archive";
 
 const LAST_DRIVE_BACKUP_KEY = "ortho_drive_last_successful_backup";
 const LAST_DRIVE_CONTENT_HASH_KEY = "ortho_drive_last_uploaded_content_hash";
@@ -1012,9 +1012,29 @@ export async function ensurePatientImagePdfOnDrive(patientId: string, onProgress
   }, onProgress);
 }
 
+
+export async function deletePatientImagePdfFromDrive(patientId: string): Promise<void> {
+  const id = String(patientId || "").trim();
+  if (!id) return;
+  await queueDriveOperation(async () => {
+    const folder = await findPatientImagePdfFolder();
+    if (folder?.id) {
+      const q = encodeURIComponent("'" + escapeDriveQuery(String(folder.id)) + "' in parents and appProperties has { key='orthoPatientId' and value='" + escapeDriveQuery(id.slice(0, 100)) + "' } and trashed = false");
+      const response = await driveRequest(DRIVE_API + "?q=" + q + "&spaces=drive&pageSize=100&includeItemsFromAllDrives=true&supportsAllDrives=true&fields=files(id,name,mimeType,appProperties)");
+      const data = await response.json();
+      const files = Array.isArray(data.files) ? data.files : [];
+      for (const file of files) {
+        if (!file?.id || file.mimeType !== "application/pdf" ||
+            String(file.appProperties?.orthoPatientId || "") !== id.slice(0, 100)) continue;
+        await driveRequest(DRIVE_API + "/" + encodeURIComponent(String(file.id)) + "?supportsAllDrives=true", { method: "DELETE" });
+      }
+    }
+    await removePatientImageArchive(id);
+  });
+}
+
 export async function uploadPatientImageArchivesToDrive(onProgress?: (stage: string) => void): Promise<void> {
-  // Always provision the folder as part of Drive backup setup, even if no patient
-  // images have crossed the 30-day archive threshold yet.
+  // Provision the folder and upload PDFs for every patient with saved images, including newly added records.
   onProgress?.("Checking the Patient Image PDFs folder in Google Drive…");
   const folder = await getOrCreatePatientImagePdfFolder();
   const archives = await getLocalPatientImageArchives();

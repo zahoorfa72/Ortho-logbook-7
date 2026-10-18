@@ -7,7 +7,6 @@ import { db, initializeDatabase } from "@/src/db/database";
 
 const ARCHIVE_KEY = "ortho_patient_image_archives_v1";
 const ARCHIVE_DIR = (FileSystem.documentDirectory || "") + "patient-image-archives/";
-const ONE_MONTH_MS = 30 * 24 * 60 * 60 * 1000;
 
 export type PatientImageArchive = {
   patientId: string;
@@ -66,12 +65,6 @@ async function stampFor(id: string, name: string, mrNo: string, createdAt: strin
   }
   return Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256,
     JSON.stringify([id, name, mrNo, createdAt, signatures]));
-}
-function patientAgeDate(row: any): number {
-  const created = Date.parse(String(row?.created_at || ""));
-  if (Number.isFinite(created)) return created;
-  const date = Date.parse(String(row?.date || ""));
-  return Number.isFinite(date) ? date : 0;
 }
 function makeHtml(name: string, mrNo: string, images: string[]): string {
   const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -180,11 +173,10 @@ export async function archiveEligiblePatientImages(onProgress?: (stage: string) 
   const patients = db.getAllSync<any>("SELECT id,name,mr_no,date,created_at FROM patients ORDER BY created_at ASC");
   const archives = await readArchives();
   let changed = false;
-  const now = Date.now();
   for (let i = 0; i < patients.length; i++) {
     const patient = patients[i];
     const id = String(patient.id || "");
-    if (!id || now - patientAgeDate(patient) < ONE_MONTH_MS) continue;
+    if (!id) continue;
     const row = db.getFirstSync<any>("SELECT photo_uri,photos_json FROM patients WHERE id=?", [id]) || {};
     const sources = getPhotoSources(row);
     if (!sources.length) continue;
@@ -250,6 +242,18 @@ export async function createPatientImagePdfFile(patient: { id?: string; name?: s
     return target;
   } finally {
     try { await FileSystem.deleteAsync(generated.uri, { idempotent: true }); } catch {}
+  }
+}
+
+export async function removePatientImageArchive(patientId: string): Promise<void> {
+  const id = String(patientId || "").trim();
+  if (!id) return;
+  const all = await readArchives();
+  const item = all[id];
+  delete all[id];
+  await writeArchives(all);
+  if (item?.localUri) {
+    try { await FileSystem.deleteAsync(item.localUri, { idempotent: true }); } catch {}
   }
 }
 
