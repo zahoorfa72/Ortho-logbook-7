@@ -17,7 +17,7 @@ type BackupData = {
   patients:any[]; procedures:any[]; inventoryCategories:any[]; inventory:any[]; patientImplants:any[]; patientCustomFields:any[]; implantRecords:any[]; expenses:any[]; users:any[];
   patientHistory:any[]; inventoryMovements:any[]; inventoryPurchaseReceipts:any[]; stockReceipts:any[]; trash?:any[];
   branding?: BrandingConfig | null;
-  appSettings?: { googleOAuthClientId: string | null; googleCloudProjectId: string | null; googleAccountEmail: string | null; labOcrEnabled?: string | null; labWarningsEnabled?: string | null; labTestDefinitions?: string | null; labResultsHiddenByPatient?: string | null };
+  appSettings?: { googleOAuthClientId: string | null; googleCloudProjectId: string | null; googleAccountEmail: string | null; labOcrEnabled?: string | null; labWarningsEnabled?: string | null; labTestDefinitions?: string | null; labTestBranches?: string | null; labResultsHiddenByPatient?: string | null };
   filter?: BackupFilter;
   incremental?: boolean;
   changedTables?: string[];
@@ -33,6 +33,7 @@ async function restoreLabSettings(settings: BackupData["appSettings"] | undefine
     ["labOcrEnabled", "ortho_lab_ocr_enabled"],
     ["labWarningsEnabled", "ortho_lab_warnings_enabled"],
     ["labTestDefinitions", "ortho_lab_test_definitions_v1"],
+    ["labTestBranches", "ortho_lab_test_branches_v1"],
     ["labResultsHiddenByPatient", "ortho_lab_results_hidden_by_patient_v1"],
   ];
   for (const [field, key] of mappings) {
@@ -168,7 +169,7 @@ async function embedPhoto(uri:string, cache?: Map<string,string>, profile: "pati
       // result reached rather than generating a visibly degraded thumbnail.
       // Patient attachments are often lab reports too; keep a strict 0.88
       // minimum quality rather than forcing a tiny file at the expense of text.
-      const qualities = profile === "document" ? [0.95, 0.92, 0.90, 0.88] : [0.94, 0.92, 0.90, 0.88];
+      const qualities = profile === "document" ? [0.97, 0.95, 0.94, 0.92] : [0.96, 0.95, 0.94, 0.92];
       let selectedSize = 0;
       for (const quality of qualities) {
         const result = await new Promise<any>((resolve, reject) => {
@@ -329,6 +330,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
    labOcrEnabled: await AsyncStorage.getItem("ortho_lab_ocr_enabled"),
    labWarningsEnabled: await AsyncStorage.getItem("ortho_lab_warnings_enabled"),
    labTestDefinitions: await AsyncStorage.getItem("ortho_lab_test_definitions_v1"),
+   labTestBranches: await AsyncStorage.getItem("ortho_lab_test_branches_v1"),
    labResultsHiddenByPatient: await AsyncStorage.getItem("ortho_lab_results_hidden_by_patient_v1"),
  } : undefined;
  const pf=whereForFilter(filter, "date");
