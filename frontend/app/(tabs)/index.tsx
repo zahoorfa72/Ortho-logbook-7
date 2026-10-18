@@ -1365,7 +1365,7 @@ export default function Logbook() {
               {(
                 <Pressable
                   accessibilityRole="button"
-                  testID={`patient-image-pdf-${item.id}`
+                  testID={`patient-image-pdf-${item.id}`}
                   onPress={async (event: any) => {
                     event?.stopPropagation?.();
                     try {
