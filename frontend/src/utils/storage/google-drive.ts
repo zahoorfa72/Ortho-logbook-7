@@ -1692,57 +1692,62 @@ function nextMonthKey(month: string): string {
   return monthKeyFromDate(date);
 }
 
+async function archiveMonthSnapshot(month: string, onProgress?: (stage: string) => void) {
+  const name = "Ortho Logbook Backup - Month " + month + ".orbackup";
+  const existing = await findBackupByName(name);
+  onProgress?.("Preparing monthly backup " + month + "…");
+  let uploaded: any;
+  const canStreamMonth = Platform.OS === "android" &&
+    !!NativeModules.DriveBackgroundUpload?.writeTextChunk &&
+    !!NativeModules.DriveBackgroundUpload?.startUpload &&
+    !!NativeModules.DriveBackgroundUpload?.getStatus &&
+    !!FileSystem.cacheDirectory;
+  if (canStreamMonth) {
+    const monthData = await exportUnencryptedBackupData({ type: "month", value: month }, onProgress);
+    const stageUri = FileSystem.cacheDirectory + "ortho-drive-month-" + month + "-" + Date.now() + ".json";
+    try {
+      await writeBackupObjectToFile(stageUri, monthData, onProgress);
+      const info = await FileSystem.getInfoAsync(stageUri);
+      if (!info.exists || typeof info.size !== "number" || info.size <= 0) {
+        throw new Error("The monthly backup file is missing or empty.");
+      }
+      onProgress?.("Uploading monthly backup " + month + "…");
+      uploaded = await uploadStagedJsonFile(stageUri, info.size, existing?.id, onProgress, name);
+    } finally {
+      try { await FileSystem.deleteAsync(stageUri, { idempotent: true }); } catch {}
+    }
+  } else {
+    const text = await exportUnencryptedBackup({ type: "month", value: month }, onProgress);
+    onProgress?.("Uploading monthly backup " + month + "…");
+    uploaded = await uploadContent(text, existing?.id, onProgress, name);
+  }
+  if (!uploaded?.id) throw new Error("Google Drive did not confirm the monthly archive for " + month + ". Local data remains safe.");
+  const verified = await downloadDriveJsonValidated(String(uploaded.id));
+  if (!verified || verified.app !== "Ortho Logbook" || !Array.isArray(verified.patients) || !Array.isArray(verified.inventory) ||
+      verified.filter?.type !== "month" || String(verified.filter?.value || "") !== month) {
+    throw new Error("The monthly archive for " + month + " could not be verified. Local data remains safe; monthly archiving will retry.");
+  }
+}
+
 async function archiveCompletedMonths(onProgress?: (stage: string) => void) {
   const currentMonth = monthKeyFromDate(new Date());
   let cursor = String((await storage.secureGet(MONTH_ARCHIVE_CURSOR_KEY, "")) || "");
-  if (!/^\d{4}-\d{2}$/.test(cursor)) {
-    // Create the current month's archive on the first successful sync too;
-    // then keep one rolling file per month and advance only after verification.
+  // Older builds advanced this cursor past the current month immediately after
+  // its first upload. Recover that state so the current month's file is refreshed
+  // on every real sync instead of staying stale for the rest of the month.
+  if (!/^\d{4}-\d{2}$/.test(cursor) || cursor > currentMonth) {
     cursor = currentMonth;
     await storage.secureSet(MONTH_ARCHIVE_CURSOR_KEY, cursor);
   }
   let guard = 0;
-  // Include the current month, not only closed months. The same named file is
-  // updated in place after later edits, so there is still only one file/month.
-  while (cursor <= currentMonth && guard++ < 120) {
-    const month = cursor;
-    const name = "Ortho Logbook Backup - Month " + month + ".orbackup";
-    const existing = await findBackupByName(name);
-    onProgress?.("Preparing monthly backup " + month + "…");
-    let uploaded: any;
-    const canStreamMonth = Platform.OS === "android" &&
-      !!NativeModules.DriveBackgroundUpload?.writeTextChunk &&
-      !!NativeModules.DriveBackgroundUpload?.startUpload &&
-      !!NativeModules.DriveBackgroundUpload?.getStatus &&
-      !!FileSystem.cacheDirectory;
-    if (canStreamMonth) {
-      const monthData = await exportUnencryptedBackupData({ type: "month", value: month }, onProgress);
-      const stageUri = FileSystem.cacheDirectory + "ortho-drive-month-" + month + "-" + Date.now() + ".json";
-      try {
-        await writeBackupObjectToFile(stageUri, monthData, onProgress);
-        const info = await FileSystem.getInfoAsync(stageUri);
-        if (!info.exists || typeof info.size !== "number" || info.size <= 0) {
-          throw new Error("The monthly backup file is missing or empty.");
-        }
-        onProgress?.("Uploading monthly backup " + month + "…");
-        uploaded = await uploadStagedJsonFile(stageUri, info.size, existing?.id, onProgress, name);
-      } finally {
-        try { await FileSystem.deleteAsync(stageUri, { idempotent: true }); } catch {}
-      }
-    } else {
-      const text = await exportUnencryptedBackup({ type: "month", value: month }, onProgress);
-      onProgress?.("Uploading monthly backup " + month + "…");
-      uploaded = await uploadContent(text, existing?.id, onProgress, name);
-    }
-    if (!uploaded?.id) throw new Error("Google Drive did not confirm the monthly archive for " + month + ". Local data remains safe.");
-    const verified = await downloadDriveJsonValidated(String(uploaded.id));
-    if (!verified || verified.app !== "Ortho Logbook" || !Array.isArray(verified.patients) || !Array.isArray(verified.inventory) ||
-        verified.filter?.type !== "month" || String(verified.filter?.value || "") !== month) {
-      throw new Error("The monthly archive for " + month + " could not be verified. Local data remains safe; monthly archiving will retry.");
-    }
+  // Archive closed months once, then refresh the current month's same named file
+  // in place on every sync. The cursor always points at the current/open month.
+  while (cursor < currentMonth && guard++ < 120) {
+    await archiveMonthSnapshot(cursor, onProgress);
     cursor = nextMonthKey(cursor);
     await storage.secureSet(MONTH_ARCHIVE_CURSOR_KEY, cursor);
   }
+  await archiveMonthSnapshot(currentMonth, onProgress);
 }
 
 export async function backupIncrementalToGoogleDrive(changedTables: string[], onProgress?: (stage: string) => void) {
