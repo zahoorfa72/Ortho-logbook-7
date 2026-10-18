@@ -253,7 +253,7 @@ async function embedOptionalPhoto(uri: string, cache?: Map<string,string>): Prom
   }
 }
 
-async function embedPatientPhotos(row:any, cache?: Map<string,string>){
+async function embedPatientPhotos(row:any, cache?: Map<string,string>, onProgress?: (stage: string) => void, context = "patient"){
   const raw = row.photos_json;
   let photos:string[]=[];
   if(raw){
@@ -264,12 +264,15 @@ async function embedPatientPhotos(row:any, cache?: Map<string,string>){
   }
   if(!photos.length && row.photo_uri)photos=[String(row.photo_uri)];
   const embedded:string[]=[];
-  for(const uri of photos)embedded.push(await embedPhoto(uri, cache));
+  for(let photoIndex=0;photoIndex<photos.length;photoIndex++){
+    onProgress?.("Compressing " + context + " image " + (photoIndex+1) + "/" + photos.length + "…");
+    embedded.push(await embedPhoto(photos[photoIndex], cache));
+    // Yield between full-resolution images so the progress label can refresh
+    // and Android does not queue multiple native image allocations at once.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  }
   return {
     ...row,
-    // Keep photos as an array in the structured backup. The streaming Drive
-    // writer can emit each image without joining every image into one giant
-    // photos_json string; restorePatientPhotos() converts it back to DB JSON.
     photo_uri: "",
     photos_json: embedded,
   };
@@ -374,7 +377,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
      embeddedPatients.push({...patient, photo_uri: previous.photo_uri || "", photos_json: previous.photos_json});
    } else {
      onProgress?.("Reading original patient photos… " + (i + 1) + "/" + patients.length);
-     embeddedPatients.push(await embedPatientPhotos(patientWithPhotos, compressedPhotoCache));
+     embeddedPatients.push(await embedPatientPhotos(patientWithPhotos, compressedPhotoCache, onProgress, "patient " + (i + 1) + "/" + patients.length));
      onProgress?.("Patient photos prepared " + (i + 1) + "/" + patients.length);
      // Yield after each patient so progress updates and Back remain responsive
      // on phones with large reports.
@@ -466,7 +469,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
    try { payload = JSON.parse(rawPayload); } catch { payload = {}; }
    if (payloadRow) payloadRow.payload_json = "";
    for (const patient of Array.isArray(payload.patients) ? payload.patients : []) {
-     const embedded = await embedPatientPhotos(patient, compressedPhotoCache);
+     const embedded = await embedPatientPhotos(patient, compressedPhotoCache, onProgress, "trash patient " + (trashIndex + 1) + "/" + trashSourceRows.length);
      Object.assign(patient, embedded);
    }
    for (const table of ["inventory", "inventory_purchase_receipts", "stock_receipts"]) {
