@@ -1834,16 +1834,19 @@ function decodeBackupBase64(value: string): string {
 }
 
 async function downloadDriveJsonValidated(fileId: string, onProgress?: (message: string) => void): Promise<any> {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      return parseDownloadedBackup(await downloadDriveJson(fileId, onProgress));
-    } catch (error) {
-      lastError = error;
-      if (attempt < 3) await new Promise<void>(resolve => setTimeout(resolve, attempt * 900));
-    }
+  // Do not restart a multi-hundred-MB download just because parsing/validation
+  // failed after the bytes were already received. The old retry loop wrapped
+  // both download and JSON parsing, so an invalid/too-large JSON parse at 99%
+  // restarted the entire transfer up to three times and looked like progress
+  // was resetting. Download once, then validate that same downloaded payload.
+  const raw = await downloadDriveJson(fileId, onProgress);
+  onProgress?.("Master backup downloaded. Checking file contents…");
+  try {
+    return parseDownloadedBackup(raw);
+  } catch (error: any) {
+    const detail = String(error?.message || error || "Unknown validation error");
+    throw new Error("The master backup finished downloading, but validation failed: " + detail + " The downloaded file was kept on the phone; retrying will not silently restart the same download.");
   }
-  throw lastError instanceof Error ? lastError : new Error("Google Drive backup could not be parsed.");
 }
 
 // If an incremental JSON document was truncated, recover complete table
