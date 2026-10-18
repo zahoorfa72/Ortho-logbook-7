@@ -1796,9 +1796,9 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
       }
     }
     await commitIncrementalSnapshotCache(String(migratedBase.id) + ":" + String(migratedBase.modifiedTime || ""));
-    // The first confirmed master contains all pre-existing data. Month archives
-    // begin only after a later calendar-month rollover.
-    await storage.secureSet(MONTH_ARCHIVE_CURSOR_KEY, monthKeyFromDate(new Date()));
+    // backupToGoogleDrive already created and verified the current month archive.
+    // Do not reset its cursor here: doing so made the next automatic sync upload
+    // the same large monthly file again immediately after reaching 100%.
     return { ...migrated, skipped: false, completedAt: new Date().toISOString(), name: "Ortho Logbook Backup - All Time.orbackup", accountEmail: getConnectedGoogleAccount(), snapshotFailures: [] };
   }
 
