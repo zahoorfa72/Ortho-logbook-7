@@ -154,7 +154,9 @@ async function embedPhoto(uri:string, cache?: Map<string,string>, profile: "pati
       // JPEG quality. Keep original pixel dimensions; never resize medical text.
       // Stop as soon as the file is near 2 MB, otherwise keep the best quality
       // result reached rather than generating a visibly degraded thumbnail.
-      const qualities = profile === "document" ? [0.95, 0.92, 0.89, 0.86] : [0.94, 0.91, 0.88, 0.85];
+      // Patient attachments are often lab reports too; keep a strict 0.88
+      // minimum quality rather than forcing a tiny file at the expense of text.
+      const qualities = profile === "document" ? [0.95, 0.92, 0.90, 0.88] : [0.94, 0.92, 0.90, 0.88];
       let selectedSize = 0;
       for (const quality of qualities) {
         const result = await new Promise<any>((resolve, reject) => {
