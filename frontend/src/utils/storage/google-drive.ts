@@ -262,9 +262,9 @@ export async function listGoogleDriveBackups(): Promise<Array<{id:string;name:st
     if (!file?.id) return false;
     const name = String(file.name || "");
     return name === BACKUP_NAME ||
-      /^Ortho Logbook Backup - Month \\d{4}-\\d{2}\\.orbackup$/.test(name) ||
-      /^Ortho Logbook Backup - Year \\d{4}\\.orbackup$/.test(name) ||
-      /^Ortho Logbook Backup - Date \\d{4}-\\d{2}-\\d{2}\\.orbackup$/.test(name) ||
+      /^Ortho Logbook Backup - Month \d{4}-\d{2}\.orbackup$/.test(name) ||
+      /^Ortho Logbook Backup - Year \d{4}\.orbackup$/.test(name) ||
+      /^Ortho Logbook Backup - Date \d{4}-\d{2}-\d{2}\.orbackup$/.test(name) ||
       name === "Ortho Logbook Backup - All Time.orbackup";
   }).map((file: any) => ({
     id: String(file.id),
@@ -2306,7 +2306,7 @@ export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) 
     .filter((item: any) => item?.id && (
       String(item.name || "") === "Ortho Logbook Backup Changes.orbackup" ||
       (String(file.name || "") !== BACKUP_NAME &&
-        /^Ortho Logbook Backup - Month \\d{4}-\\d{2} Changes\\.orbackup$/i.test(String(item.name || "")))
+        /^Ortho Logbook Backup - Month \d{4}-\d{2} Changes\.orbackup$/i.test(String(item.name || "")))
     ))
     .sort((a: any, b: any) => Date.parse(String(a.modifiedTime || "")) - Date.parse(String(b.modifiedTime || "")));
   const recoveryWarnings: string[] = [];
