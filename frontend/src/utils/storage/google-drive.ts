@@ -933,12 +933,28 @@ async function uploadPatientPdf(archive: PatientImageArchive, folderId: string, 
     appProperties: { orthoPatientId: archive.patientId.slice(0, 100), orthoSourceStamp: archive.sourceStamp.slice(0, 100) },
   };
   if (!existing?.id) metadata.parents = [folderId];
-  const response = await fetchWithTimeout(target, {
-    method: existing?.id ? "PATCH" : "POST",
-    headers: { Authorization: "Bearer " + token, "Content-Type": "application/json; charset=UTF-8",
-      "X-Upload-Content-Type": "application/pdf", "X-Upload-Content-Length": String(size) },
-    body: JSON.stringify(metadata),
-  }, 30000);
+  let response: Response | null = null;
+  let lastSessionError: any = null;
+  // Session creation can fail transiently on mobile data. Retry network exceptions only;
+  // HTTP responses are handled below and are never blindly replayed.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      response = await fetchWithTimeout(target, {
+        method: existing?.id ? "PATCH" : "POST",
+        headers: { Authorization: "Bearer " + token, "Content-Type": "application/json; charset=UTF-8",
+          "X-Upload-Content-Type": "application/pdf", "X-Upload-Content-Length": String(size) },
+        body: JSON.stringify(metadata),
+      }, 30000);
+      lastSessionError = null;
+      break;
+    } catch (error: any) {
+      lastSessionError = error;
+      if (attempt < 2) await new Promise<void>(resolve => setTimeout(resolve, 700 * (attempt + 1)));
+    }
+  }
+  if (!response) {
+    throw new Error("Google Drive could not start uploading patient PDF " + archive.fileName + " after 3 network attempts: " + String(lastSessionError?.message || lastSessionError || "network error") + ". Local PDF remains on this phone.");
+  }
   if (!response.ok) {
     let message = "Google Drive could not start patient PDF upload (HTTP " + response.status + ").";
     try { const body = await response.json(); message = body?.error?.message || message; } catch {}
@@ -1293,19 +1309,6 @@ async function backupContentHash(backupText: string, onProgress?: (stage: string
 }
 
 
-function mergeRowsPreservingCurrent(currentRows: any[], oldRows: any[], table: string): any[] {
-  const rows = new Map<string, any>();
-  const keyFor = (row: any) => {
-    if (table === "inventory") return "item:" + [row?.name, row?.category, row?.size].map((v) => String(v || "").trim().toLowerCase()).join("|");
-    if (row?.id !== undefined && row?.id !== null && String(row.id) !== "") return "id:" + String(row.id);
-    return "row:" + JSON.stringify(row);
-  };
-  for (const row of oldRows || []) rows.set(keyFor(row), row);
-  for (const row of currentRows || []) rows.set(keyFor(row), row);
-  return Array.from(rows.values());
-}
-
-
 function mergeRowsByRecency(currentRows: any[], incomingRows: any[], table: string): any[] {
   const rows = new Map<string, any>();
   const keyFor = (row: any) => table === "inventory"
@@ -1401,155 +1404,6 @@ function applyIncrementalToMaster(local: any, incoming: any, preserveCurrent = f
   }
   if (Object.prototype.hasOwnProperty.call(incoming, "branding")) local.branding = incoming.branding;
   if (Object.prototype.hasOwnProperty.call(incoming, "appSettings")) local.appSettings = incoming.appSettings;
-}
-
-async function mergeLegacyDriveHistory(localInput: string | any, onProgress?: (stage: string) => void, preferDrive = false, returnData = false) {
-  const local = typeof localInput === "string" ? parseDownloadedBackup(localInput) : localInput;
-  const allCandidates = (await findLatestBackupCandidates()).filter((file: any) => {
-    const name = String(file.name || "");
-    return name === BACKUP_NAME ||
-      name === "Ortho Logbook Backup - All Time.orbackup" ||
-      /Ortho Logbook Backup - (Month|Year|Date) /i.test(name);
-  });
-  // Bound migration to the rolling master, or one newest legacy snapshot if no
-  // master exists. Never loop through every historical monthly full backup.
-  const rollingMaster = allCandidates.find((file: any) => String(file.name || "") === BACKUP_NAME);
-  const candidates = rollingMaster ? [rollingMaster] : allCandidates.slice(0, 1);
-  const tables = [
-    "patients", "procedures", "inventoryCategories", "inventory", "patientImplants",
-    "patientCustomFields", "implantRecords", "expenses", "users", "patientHistory",
-    "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts", "trash",
-  ];
-  let complete = true;
-  let mergedFiles = 0;
-  const orderedCandidates = preferDrive
-    ? [...candidates].sort((a: any, b: any) => Date.parse(String(a.modifiedTime || "")) - Date.parse(String(b.modifiedTime || "")))
-    : candidates;
-  for (let index = 0; index < orderedCandidates.length; index++) {
-    const file = orderedCandidates[index];
-    onProgress?.("Merging old backup history… " + (index + 1) + "/" + candidates.length);
-    let old: any;
-    try {
-      old = await downloadDriveJsonValidated(String(file.id));
-      if (!old || old.app !== "Ortho Logbook" || !Array.isArray(old.patients) || !Array.isArray(old.inventory)) {
-        complete = false;
-        continue;
-      }
-    } catch (error) {
-      console.warn("[drive-backup] legacy snapshot could not be merged; keeping it in Drive", file.name, error);
-      complete = false;
-      continue;
-    }
-    if (old.incremental === true) continue;
-    if (old.photoAssets && typeof old.photoAssets === "object") {
-      local.photoAssets = { ...(old.photoAssets as Record<string, string>), ...(local.photoAssets || {}) };
-    }
-    for (const table of tables) {
-      if (!Array.isArray(old[table]) || !Array.isArray(local[table])) continue;
-      local[table] = preferDrive
-        ? mergeRowsPreservingCurrent(old[table], local[table], table)
-        : mergeRowsPreservingCurrent(local[table], old[table], table);
-    }
-    // A new installation's empty branding/settings object must not hide the
-    // real values from Drive. Keep existing local values when present, but fill
-    // missing OAuth/project/account metadata from each historical backup.
-    if (Object.prototype.hasOwnProperty.call(old, "branding")) {
-      const localBranding = local.branding;
-      const localBrandingEmpty = !localBranding || (typeof localBranding === "object" && !Array.isArray(localBranding) && Object.keys(localBranding).length === 0);
-      if (!Object.prototype.hasOwnProperty.call(local, "branding") || (preferDrive && localBrandingEmpty)) local.branding = old.branding;
-    }
-    if (Object.prototype.hasOwnProperty.call(old, "appSettings")) {
-      local.appSettings = {
-        ...(old.appSettings && typeof old.appSettings === "object" ? old.appSettings : {}),
-        ...(local.appSettings && typeof local.appSettings === "object" ? local.appSettings : {}),
-      };
-      for (const key of ["googleOAuthClientId", "googleCloudProjectId", "googleAccountEmail"]) {
-        if (!local.appSettings[key] && old.appSettings?.[key]) local.appSettings[key] = old.appSettings[key];
-      }
-    }
-    mergedFiles++;
-  }
-  // Merge legacy incremental rows before moving their timestamps behind the
-  // master file. If there is no old full baseline, preserve current local rows
-  // and only fill missing IDs. Keep the current phone authoritative.
-  const fullBaseline = candidates
-    .filter((file: any) => String(file.name || "") === "Ortho Logbook Backup - All Time.orbackup" || String(file.name || "") === BACKUP_NAME)
-    .sort((a: any, b: any) => Date.parse(String(b.modifiedTime || "")) - Date.parse(String(a.modifiedTime || "")))[0];
-  const hasFullBaseline = !!fullBaseline;
-  const baselineTime = fullBaseline ? Date.parse(String(fullBaseline.modifiedTime || "")) :
-    Math.max(0, ...candidates.map((file: any) => Date.parse(String(file.modifiedTime || ""))).filter(Number.isFinite));
-  // Do not filter a rolling journal only by Drive modifiedTime. Updating a
-  // master file can advance its timestamp without changing its ID, making a
-  // still-required deletion journal appear older than the master. Validate the
-  // journal's baseline ID after downloading it instead.
-  const deltas = (await listIncrementalFiles())
-    .filter((file: any) => file?.id && (
-      String(file.name || "") === "Ortho Logbook Backup Changes.orbackup" ||
-      (!rollingMaster && /^Ortho Logbook Backup - Month \\d{4}-\\d{2} Changes\\.orbackup$/i.test(String(file.name || "")))
-    ))
-    .sort((a: any, b: any) => Date.parse(String(a.modifiedTime || "")) - Date.parse(String(b.modifiedTime || "")));
-  for (let index = 0; index < deltas.length; index++) {
-    const deltaFile = deltas[index];
-    onProgress?.("Merging saved changes… " + (index + 1) + "/" + deltas.length);
-    try {
-      const recovered = await downloadIncrementalWithRecovery(String(deltaFile.id), String(deltaFile.name || "Incremental backup"));
-      if (recovered.warning) complete = false;
-      const delta = recovered.data;
-      if (delta?.incremental === true) {
-        const deltaBaseline = String(delta._baselineKey || "");
-        const matchesBaseline = hasFullBaseline && deltaBaseline.startsWith(String(fullBaseline?.id || "") + ":");
-        const isLegacyDeltaAfterBaseline = !deltaBaseline && (!hasFullBaseline ||
-          Date.parse(String(deltaFile.modifiedTime || "")) > baselineTime);
-        // A keyed journal belongs to this master file even if the master's
-        // Drive modifiedTime moved forward later. Keep its tombstones so a
-        // deleted patient cannot be resurrected during restore.
-        if (!hasFullBaseline || matchesBaseline || isLegacyDeltaAfterBaseline) {
-          applyIncrementalToMaster(local, delta, !hasFullBaseline);
-        }
-      }
-    } catch (error) {
-      complete = false;
-      console.warn("[drive-backup] incremental history could not be merged; retaining legacy files", deltaFile.name, error);
-    }
-  }
-
-  pruneBackupPhotoAssets(local);
-  const cleanupSafe = complete;
-  local.version = Math.max(Number(local.version || 0), 7);
-  local.filter = { type: "all" };
-  delete local.incremental;
-  delete local.changedTables;
-  delete local._rowDelta;
-  delete local.deletedIds;
-  delete local.fullTables;
-  return { backupText: returnData ? "" : JSON.stringify(local), backupData: local, complete, cleanupSafe, mergedFiles, candidateCount: candidates.length };
-}
-
-async function deleteDuplicateDriveBackups(masterFileId: string): Promise<string[]> {
-  const failures: string[] = [];
-  const candidates = await findLatestBackupCandidates();
-  for (const file of candidates) {
-    if (!file?.id || String(file.id) === masterFileId) continue;
-    try {
-      await driveRequest(DRIVE_API + "/" + encodeURIComponent(String(file.id)) + "?supportsAllDrives=true", {
-        method: "DELETE",
-      });
-    } catch (error: any) {
-      failures.push(String(file.name || file.id) + ": " + String(error?.message || "could not move to trash"));
-    }
-  }
-  // Incremental deltas are also redundant after every applicable delta has
-  // been merged into and verified in the master backup.
-  const deltas = await listIncrementalFiles();
-  for (const file of deltas) {
-    if (!file?.id) continue;
-    try {
-      await driveRequest(DRIVE_API + "/" + encodeURIComponent(String(file.id)) + "?supportsAllDrives=true", { method: "DELETE" });
-    } catch (error: any) {
-      failures.push(String(file.name || file.id) + ": " + String(error?.message || "could not delete old incremental backup"));
-    }
-  }
-  return failures;
 }
 
 async function cleanupLegacyNonMonthlyBackups(_keepFileId: string): Promise<string[]> {

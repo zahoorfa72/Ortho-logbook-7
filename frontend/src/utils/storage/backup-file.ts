@@ -71,6 +71,33 @@ export async function saveBackupToPhone(password: string, filter: BackupFilter =
   return fileUri;
 }
 
+// Export archived patient-image PDFs independently of the encrypted database backup.
+// Files are copied byte-for-byte into a user-selected phone folder; source PDFs are not recompressed.
+export async function savePatientImageArchivesToPhone(): Promise<{ saved: number; folderUri: string }> {
+  const archives = await getLocalPatientImageArchives();
+  if (!archives.length) throw new Error("There are no archived patient-image PDFs on this phone yet.");
+  const permissions = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
+  if (!permissions.granted) throw new Error("Download cancelled. Please choose a folder in the phone's File Manager.");
+  const folderUri = await getOrCreateSafFolder(permissions.directoryUri, "Patient Image PDFs");
+  let saved = 0;
+  for (const archive of archives) {
+    const sourceInfo: any = await FileSystem.getInfoAsync(archive.localUri);
+    if (!sourceInfo.exists || Number(sourceInfo.size || 0) < 8) {
+      throw new Error("Patient PDF is missing or empty: " + archive.fileName + ". " + saved + " PDF(s) were saved before this error.");
+    }
+    const existing = await findSafChild(folderUri, archive.fileName);
+    const target = existing || await FileSystem.StorageAccessFramework.createFileAsync(folderUri, archive.fileName, "application/pdf");
+    const base64 = await FileSystem.readAsStringAsync(archive.localUri, { encoding: FileSystem.EncodingType.Base64 });
+    await FileSystem.writeAsStringAsync(target, base64, { encoding: FileSystem.EncodingType.Base64 });
+    const verified: any = await FileSystem.getInfoAsync(target);
+    if (!verified.exists || (typeof verified.size === "number" && verified.size !== Number(sourceInfo.size || 0))) {
+      throw new Error("Could not verify downloaded patient PDF: " + archive.fileName + ". " + saved + " PDF(s) were saved.");
+    }
+    saved++;
+  }
+  return { saved, folderUri };
+}
+
 export async function shareBackupFile(password: string, filter: BackupFilter = { type: "all" }) {
   const fileUri = await createBackupFile(password, filter);
   const available = await Sharing.isAvailableAsync();
