@@ -12,7 +12,7 @@ import { queryClient } from "@/src/query-client";
 import { useAuth } from "@/src/auth/AuthContext";
 import { Segmented } from "@/src/components/Segmented";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
-import { backupToGoogleDrive, connectGoogleAccount, disconnectGoogleAccount, getConnectedGoogleAccount, restoreLatestFromGoogleDrive, listGoogleDriveBackups, restoreGoogleDriveBackupById } from "@/src/utils/storage/google-drive";
+import { backupIncrementalToGoogleDrive, connectGoogleAccount, disconnectGoogleAccount, getConnectedGoogleAccount, restoreLatestFromGoogleDrive, listGoogleDriveBackups, restoreGoogleDriveBackupById } from "@/src/utils/storage/google-drive";
 import { refreshAutomaticDriveBackup, triggerAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-backup";
 
  // Selective restore reads from the single complete Drive master snapshot.
@@ -175,18 +175,33 @@ export default function BackupRestoreScreen() {
     try {
       setDriveLoading(true);
       setDriveStatus("Preparing backup data…");
-      // Drive uses one complete master snapshot; range selection is for local/file backups only.
-      const result = await backupToGoogleDrive(undefined, { type: "all" }, { onProgress: setDriveStatus });
+      // Use the incremental sync path for manual backup too. Replacing a 700 MB
+      // monthly snapshot on every tap was unnecessary and made retries look like
+      // they restarted at 99.5%. A complete baseline is made only when required.
+      const result = await backupIncrementalToGoogleDrive([
+        "patients", "procedures", "inventoryCategories", "inventory", "patientImplants",
+        "patientCustomFields", "implantRecords", "expenses", "users", "patientHistory",
+        "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts", "trash",
+        "branding", "appSettings",
+      ], setDriveStatus);
       const cleanupFailures = Array.isArray((result as any).cleanupFailures) ? (result as any).cleanupFailures : [];
       const migrationPending = (result as any).migrationPending === true;
+      const baselineCreated = (result as any).baselineCreated === true;
+      const skipped = (result as any).skipped === true;
+      const backupName = String((result as any).name || "the current monthly backup");
+      const detail = baselineCreated
+        ? 'A complete monthly backup named "' + backupName + '" was saved to ' + googleAccount + "'s Google Drive."
+        : skipped
+          ? "No changed records needed uploading. The existing monthly backup remains in place."
+          : 'Changed records were synchronized to "' + backupName + '". The app did not intentionally re-upload the whole photo archive for this manual check.';
       Alert.alert(
-        migrationPending ? "Monthly backup saved — older files kept" : "Google Drive monthly backup complete",
-        "The complete monthly backup was saved to " + googleAccount + "'s Google Drive." +
+        migrationPending ? "Monthly backup saved — older files kept" : baselineCreated ? "Monthly backup created and confirmed" : skipped ? "Drive backup is up to date" : "Drive sync complete",
+        detail +
           (migrationPending
-            ? "\nSome older backup files could not be fully merged, so they were kept for safety. Retry after checking those files."
+            ? "\nSome older backups could not be fully merged, so they were retained for safety. Retry after checking those files."
             : cleanupFailures.length
-              ? "\nOld duplicate backup files could not all be permanently deleted: " + cleanupFailures.join("; ")
-              : "\nThe current month has one full snapshot; later edits use its monthly change journal.")
+              ? "\nSome legacy backup files could not be cleaned up: " + cleanupFailures.join("; ")
+              : "")
       );
     } catch (error) {
       Alert.alert("Drive backup failed", error instanceof Error ? error.message : "Unable to back up to Google Drive.");

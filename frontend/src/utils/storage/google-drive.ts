@@ -1,7 +1,7 @@
 import { GoogleSignin, statusCodes } from "@react-native-google-signin/google-signin";
 import { NativeModules, Platform } from "react-native";
 import * as FileSystem from "expo-file-system/legacy";
-import { exportUnencryptedBackup, exportUnencryptedBackupData, exportIncrementalBackup, exportIncrementalBackupData, prepareIncrementalSnapshotCacheFromBackupData, commitIncrementalSnapshotCache, type BackupFilter } from "@/src/utils/storage/backup";
+import { exportUnencryptedBackup, exportUnencryptedBackupData, exportIncrementalBackup, exportIncrementalBackupData, prepareIncrementalSnapshotCacheFromBackupData, commitIncrementalSnapshotCache, pruneBackupPhotoAssets, type BackupFilter } from "@/src/utils/storage/backup";
 import { markBackupTaken } from "@/src/utils/backup-reminder";
 import { storage } from "@/src/utils/storage";
 
@@ -23,6 +23,21 @@ const DRIVE_UPLOAD = "https://www.googleapis.com/upload/drive/v3/files";
 
 let configured = false;
 let accessTokenInFlight: Promise<string> | null = null;
+
+// Serialize manual backup, automatic sync and archive maintenance. A second
+// operation used to restart progress near 100% and repeat huge uploads.
+let driveOperationQueue: Promise<void> = Promise.resolve();
+let queuedDriveOperationCount = 0;
+function queueDriveOperation<T>(operation: () => Promise<T>, onProgress?: (stage: string) => void): Promise<T> {
+  const alreadyQueued = queuedDriveOperationCount > 0;
+  queuedDriveOperationCount += 1;
+  if (alreadyQueued) onProgress?.("Waiting for the current Google Drive transfer to finish…");
+  const result = driveOperationQueue.then(operation, operation);
+  driveOperationQueue = result.then(() => undefined, () => undefined);
+  return result.finally(() => {
+    queuedDriveOperationCount = Math.max(0, queuedDriveOperationCount - 1);
+  });
+}
 
 function configure() {
   if (configured) return;
@@ -725,6 +740,7 @@ async function writeBackupTextInChunks(uri: string, content: string, chunkChars 
 }
 
 async function writeBackupObjectToFile(uri: string, value: any, onProgress?: (stage: string) => void): Promise<void> {
+  pruneBackupPhotoAssets(value);
   const writer = NativeModules.DriveBackgroundUpload;
   if (!writer?.writeTextChunk) throw new Error("This Android build is missing the safe large-backup file writer. Install the latest APK and retry.");
   let buffer = "";
@@ -1037,6 +1053,9 @@ function mergeRowsByRecency(currentRows: any[], incomingRows: any[], table: stri
 }
 
 function applyIncrementalToMaster(local: any, incoming: any, preserveCurrent = false) {
+  if (incoming?.photoAssets && typeof incoming.photoAssets === "object") {
+    local.photoAssets = { ...(local.photoAssets || {}), ...(incoming.photoAssets || {}) };
+  }
   const tables = [
     "patients", "procedures", "inventoryCategories", "inventory", "patientImplants",
     "patientCustomFields", "implantRecords", "expenses", "users", "patientHistory",
@@ -1134,6 +1153,9 @@ async function mergeLegacyDriveHistory(localInput: string | any, onProgress?: (s
       continue;
     }
     if (old.incremental === true) continue;
+    if (old.photoAssets && typeof old.photoAssets === "object") {
+      local.photoAssets = { ...(old.photoAssets as Record<string, string>), ...(local.photoAssets || {}) };
+    }
     for (const table of tables) {
       if (!Array.isArray(old[table]) || !Array.isArray(local[table])) continue;
       local[table] = preferDrive
@@ -1200,6 +1222,7 @@ async function mergeLegacyDriveHistory(localInput: string | any, onProgress?: (s
     }
   }
 
+  pruneBackupPhotoAssets(local);
   const cleanupSafe = complete;
   local.version = Math.max(Number(local.version || 0), 7);
   local.filter = { type: "all" };
@@ -1255,10 +1278,12 @@ async function cleanupLegacyNonMonthlyBackups(keepFileId: string): Promise<strin
   }
   return failures;
 }
-export async function backupToGoogleDrive(
+type DriveBackupOptions = { skipIfUnchanged?: boolean; onProgress?: (stage: string) => void; preferDriveOnMigration?: boolean; backupTextOverride?: string; backupDataOverride?: any; localChanges?: any };
+
+async function backupToGoogleDriveUnlocked(
   _password?: string,
   filter: BackupFilter = { type: "all" },
-  options: { skipIfUnchanged?: boolean; onProgress?: (stage: string) => void; preferDriveOnMigration?: boolean; backupTextOverride?: string; backupDataOverride?: any; localChanges?: any } = {},
+  options: DriveBackupOptions = {},
 ) {
   options.onProgress?.("Preparing backup data…");
   const isMasterBackup = filter.type === "all";
@@ -1291,6 +1316,7 @@ export async function backupToGoogleDrive(
       const migration = await mergeLegacyDriveHistory(backupData, options.onProgress, options.preferDriveOnMigration === true, true);
       backupData = migration.backupData;
       if (options.localChanges) applyIncrementalToMaster(backupData, options.localChanges, options.localChanges._rowDelta !== true);
+      pruneBackupPhotoAssets(backupData);
       backupData.version = Math.max(Number(backupData.version || 0), 7);
       backupData.createdAt = new Date().toISOString();
       backupData.filter = { type: "all" };
@@ -1302,6 +1328,7 @@ export async function backupToGoogleDrive(
       migrationComplete = migration.complete;
       cleanupSafe = migration.cleanupSafe;
     }
+    pruneBackupPhotoAssets(backupData);
     if (!FileSystem.cacheDirectory) throw new Error("Device cache storage is unavailable for the Drive backup.");
     stagedFileUri = FileSystem.cacheDirectory + "ortho-drive-stream-" + Date.now() + ".json";
     try {
@@ -1334,6 +1361,7 @@ export async function backupToGoogleDrive(
       delete mergedMaster._rowDelta;
       delete mergedMaster.deletedIds;
       delete mergedMaster.fullTables;
+      pruneBackupPhotoAssets(mergedMaster);
       backupText = JSON.stringify(mergedMaster);
       migrationComplete = migration.complete;
       cleanupSafe = migration.cleanupSafe;
@@ -1391,6 +1419,13 @@ export async function backupToGoogleDrive(
   if (isMasterBackup && seededCacheForLocalSnapshot && result?.id) {
     await commitIncrementalSnapshotCache(String(result.id) + ":" + String(result.modifiedTime || ""));
   }
+  if (isMasterBackup) {
+    const archiveCursor = String((await storage.secureGet(MONTH_ARCHIVE_CURSOR_KEY, "")) || "");
+    if (!/^\d{4}-\d{2}$/.test(archiveCursor)) {
+      // Don't trigger a second huge archive upload right after the first baseline.
+      await storage.secureSet(MONTH_ARCHIVE_CURSOR_KEY, monthKeyFromDate(new Date()));
+    }
+  }
   // A verified full monthly snapshot supersedes that month's journal. Removing
   // the old journal prevents deletions/edits from being applied twice on restore.
   if (isMasterBackup && result?.id && (!migrationAttempted || (migrationComplete && cleanupSafe))) {
@@ -1406,6 +1441,22 @@ export async function backupToGoogleDrive(
     ...result, skipped: false, completedAt, name: fileName, accountEmail: getConnectedGoogleAccount(),
     cleanupFailures, migrationPending: isMasterBackup && (!migrationComplete || !cleanupSafe || cleanupFailures.length > 0),
   };
+}
+
+export function backupToGoogleDrive(
+  password?: string,
+  filter: BackupFilter = { type: "all" },
+  options: DriveBackupOptions = {},
+): Promise<any> {
+  return queueDriveOperation(() => backupToGoogleDriveUnlocked(password, filter, options), options.onProgress);
+}
+
+export function backupToGoogleDrive(
+  password?: string,
+  filter: BackupFilter = { type: "all" },
+  options: DriveBackupOptions = {},
+): Promise<any> {
+  return queueDriveOperation(() => backupToGoogleDriveUnlocked(password, filter, options), options.onProgress);
 }
 
 async function listIncrementalFiles() {
@@ -1657,6 +1708,7 @@ function mergeIncrementalPayloads(previous: any, incoming: any): any {
     ...(previous.deletedIds && typeof previous.deletedIds === "object" ? previous.deletedIds : {}),
   };
   const merged: any = { ...previous, ...incoming, changedTables, fullTables: [] };
+  merged.photoAssets = { ...(previous.photoAssets || {}), ...(incoming.photoAssets || {}) };
 
   for (const table of tableNames) {
     const wasChanged = Array.isArray(previous.changedTables) && previous.changedTables.includes(table);
@@ -1713,16 +1765,29 @@ function mergeIncrementalPayloads(previous: any, incoming: any): any {
   return merged;
 }
 
-export async function ensureGoogleDriveBaseline(onProgress?: (stage: string) => void) {
+async function ensureGoogleDriveBaselineUnlocked(onProgress?: (stage: string) => void) {
   const currentMonthName = driveBackupName({ type: "all" });
   const existing = await findBackupByName(currentMonthName);
-  if (existing?.id) return { skipped: true, name: currentMonthName };
+  if (existing?.id) {
+    const cursor = String((await storage.secureGet(MONTH_ARCHIVE_CURSOR_KEY, "")) || "");
+    if (!/^\d{4}-\d{2}$/.test(cursor)) await storage.secureSet(MONTH_ARCHIVE_CURSOR_KEY, monthKeyFromDate(new Date()));
+    return { skipped: true, name: currentMonthName };
+  }
+  // A new monthly baseline must preserve any existing legacy or archived Drive history.
+  const priorBackups = await findLatestBackupCandidates();
+  if (priorBackups.some((file: any) => file?.id)) await storage.secureSet(MASTER_MIGRATION_KEY, "");
   onProgress?.("Creating complete monthly backup " + monthKeyFromDate(new Date()) + "…");
-  const result = await backupToGoogleDrive(undefined, { type: "all" }, { onProgress, preferDriveOnMigration: true });
+  const result = await backupToGoogleDriveUnlocked(undefined, { type: "all" }, { onProgress, preferDriveOnMigration: true });
   const confirmed = await findBackupByName(currentMonthName);
   if (!confirmed?.id) throw new Error("The monthly Drive backup could not be confirmed. Local data remains on this phone.");
   await commitIncrementalSnapshotCache(String(confirmed.id) + ":" + String(confirmed.modifiedTime || ""));
+  const cursor = String((await storage.secureGet(MONTH_ARCHIVE_CURSOR_KEY, "")) || "");
+  if (!/^\d{4}-\d{2}$/.test(cursor)) await storage.secureSet(MONTH_ARCHIVE_CURSOR_KEY, monthKeyFromDate(new Date()));
   return { ...result, baselineCreated: true, snapshotFailures: [] };
+}
+
+export function ensureGoogleDriveBaseline(onProgress?: (stage: string) => void): Promise<any> {
+  return queueDriveOperation(() => ensureGoogleDriveBaselineUnlocked(onProgress), onProgress);
 }
 
 function monthKeyFromDate(date: Date): string {
@@ -1749,6 +1814,13 @@ async function archiveMonthSnapshot(month: string, onProgress?: (stage: string) 
     !!FileSystem.cacheDirectory;
   if (canStreamMonth) {
     const monthData = await exportUnencryptedBackupData({ type: "month", value: month }, onProgress);
+    const hasMonthActivity = ["patients", "patientImplants", "implantRecords", "expenses", "patientHistory", "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts", "trash"]
+      .some((table) => Array.isArray((monthData as any)[table]) && (monthData as any)[table].length > 0);
+    if (!hasMonthActivity) {
+      onProgress?.("No dated activity for " + month + "; keeping any existing monthly backup unchanged.");
+      return;
+    }
+    pruneBackupPhotoAssets(monthData);
     const stageUri = FileSystem.cacheDirectory + "ortho-drive-month-" + month + "-" + Date.now() + ".json";
     try {
       await writeBackupObjectToFile(stageUri, monthData, onProgress);
@@ -1762,7 +1834,15 @@ async function archiveMonthSnapshot(month: string, onProgress?: (stage: string) 
       try { await FileSystem.deleteAsync(stageUri, { idempotent: true }); } catch {}
     }
   } else {
-    const text = await exportUnencryptedBackup({ type: "month", value: month }, onProgress);
+    const monthData = await exportUnencryptedBackupData({ type: "month", value: month }, onProgress);
+    const hasMonthActivity = ["patients", "patientImplants", "implantRecords", "expenses", "patientHistory", "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts", "trash"]
+      .some((table) => Array.isArray((monthData as any)[table]) && (monthData as any)[table].length > 0);
+    if (!hasMonthActivity) {
+      onProgress?.("No dated activity for " + month + "; keeping any existing monthly backup unchanged.");
+      return;
+    }
+    pruneBackupPhotoAssets(monthData);
+    const text = JSON.stringify(monthData);
     onProgress?.("Uploading monthly backup " + month + "…");
     uploaded = await uploadContent(text, existing?.id, onProgress, name);
   }
@@ -1774,14 +1854,6 @@ async function archiveMonthSnapshot(month: string, onProgress?: (stage: string) 
   }
 }
 
-function previousMonthKey(month: string): string {
-  const match = /^(\d{4})-(\d{2})$/.exec(month);
-  if (!match) return monthKeyFromDate(new Date());
-  const date = new Date(Number(match[1]), Number(match[2]) - 1, 1);
-  date.setMonth(date.getMonth() - 1);
-  return monthKeyFromDate(date);
-}
-
 async function archiveCompletedMonths(onProgress?: (stage: string) => void) {
   const currentMonth = monthKeyFromDate(new Date());
   let cursor = String((await storage.secureGet(MONTH_ARCHIVE_CURSOR_KEY, "")) || "");
@@ -1789,8 +1861,10 @@ async function archiveCompletedMonths(onProgress?: (stage: string) => void) {
   // uploading the same enormous month snapshot on every small edit and avoids
   // keeping both an all-time file and a duplicate current-month copy in sync.
   if (!/^\d{4}-\d{2}$/.test(cursor)) {
-    cursor = previousMonthKey(currentMonth);
-    await storage.secureSet(MONTH_ARCHIVE_CURSOR_KEY, cursor);
+    // Start tracking this month after the full baseline is made. Avoid a second
+    // enormous archive upload immediately after reaching 100%.
+    await storage.secureSet(MONTH_ARCHIVE_CURSOR_KEY, currentMonth);
+    return;
   } else if (cursor > currentMonth) {
     // Older builds advanced the cursor past the open month after archiving it.
     // Reset to the open month so it is archived exactly once when it closes.
@@ -1805,14 +1879,17 @@ async function archiveCompletedMonths(onProgress?: (stage: string) => void) {
   }
 }
 
-export async function backupIncrementalToGoogleDrive(changedTables: string[], onProgress?: (stage: string) => void) {
+async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], onProgress?: (stage: string) => void) {
   onProgress?.("Checking whether saved records changed…");
   // Do not attach new changes to a prior month's baseline. Create a complete
   // snapshot the first time this phone syncs in each calendar month.
   const currentMonthName = driveBackupName({ type: "all" });
   const base = await findBackupByName(currentMonthName);
-  if (!base?.id) return ensureGoogleDriveBaseline(onProgress);
+  if (!base?.id) return ensureGoogleDriveBaselineUnlocked(onProgress);
 
+  // This maintenance call was missing, so closed months were never archived
+  // when there were no new patient/stock writes.
+  await archiveCompletedMonths(onProgress);
   const baselineKey = String(base.id) + ":" + String(base.modifiedTime || "");
   const canStreamIncremental = Platform.OS === "android" &&
     !!NativeModules.DriveBackgroundUpload?.writeTextChunk &&
@@ -1850,7 +1927,7 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
   // and every patient row after each small edit.
   if (migrationNeeded) {
     onProgress?.("Completing one-time safe merge of older Drive backups…");
-    const migrated = await backupToGoogleDrive(undefined, { type: "all" }, {
+    const migrated = await backupToGoogleDriveUnlocked(undefined, { type: "all" }, {
       onProgress,
       preferDriveOnMigration: true,
       localChanges: hasActualChanges ? delta : undefined,
@@ -1858,7 +1935,10 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
     const migratedBase = await findLatestBackup();
     if (!migratedBase?.id) throw new Error("The complete backup was uploaded but could not be confirmed. Local data remains safe.");
     if (canStreamIncremental) {
-      await verifyStreamedDriveFile(String(migratedBase.id), "Ortho Logbook Backup - All Time.orbackup",
+      // The complete baseline is named "Month YYYY-MM", not "All Time".
+      // This stale expected name made verification fail after the huge upload and
+      // retried the same full backup instead of finishing sync.
+      await verifyStreamedDriveFile(String(migratedBase.id), currentMonthName,
         migrated?.size != null ? Number(migrated.size) : undefined);
     } else {
       const verified = await downloadDriveJsonValidated(String(migratedBase.id));
@@ -1870,7 +1950,7 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
     // backupToGoogleDrive already created and verified the current month archive.
     // Do not reset its cursor here: doing so made the next automatic sync upload
     // the same large monthly file again immediately after reaching 100%.
-    return { ...migrated, skipped: false, completedAt: new Date().toISOString(), name: "Ortho Logbook Backup - All Time.orbackup", accountEmail: getConnectedGoogleAccount(), snapshotFailures: [] };
+    return { ...migrated, skipped: false, baselineCreated: true, completedAt: new Date().toISOString(), name: currentMonthName, accountEmail: getConnectedGoogleAccount(), snapshotFailures: [] };
   }
 
   // Month archive reconciliation ran above, before the no-change early return.
@@ -1905,6 +1985,7 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
   combined.incremental = true;
   combined._baselineKey = baselineKey;
   combined._updateCount = Math.max(0, Number(journal?._updateCount || 0)) + (hasActualChanges ? 1 : 0);
+  pruneBackupPhotoAssets(combined);
   let journalText: string | null = null;
   let journalStageUri: string | null = null;
   let journalBytes = 0;
@@ -1961,6 +2042,7 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
       throw new Error("The current full backup could not be verified. The change journal is retained and local data is safe.");
     }
     applyIncrementalToMaster(master, combined, combined._rowDelta !== true);
+    pruneBackupPhotoAssets(master);
     master.version = Math.max(Number(master.version || 0), 8);
     master.createdAt = new Date().toISOString();
     master.filter = { type: "all" };
@@ -1971,7 +2053,7 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
     delete master.fullTables;
     delete master._baselineKey;
     delete master._updateCount;
-    const masterResult = await backupToGoogleDrive(undefined, { type: "all" }, {
+    const masterResult = await backupToGoogleDriveUnlocked(undefined, { type: "all" }, {
       onProgress,
       backupDataOverride: master,
     });
@@ -2017,6 +2099,10 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
     deltaJournal: hasActualChanges,
     compacted: false,
   };
+}
+
+export function backupIncrementalToGoogleDrive(changedTables: string[], onProgress?: (stage: string) => void): Promise<any> {
+  return queueDriveOperation(() => backupIncrementalToGoogleDriveUnlocked(changedTables, onProgress), onProgress);
 }
 
 export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) => void) {

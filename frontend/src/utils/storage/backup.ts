@@ -16,8 +16,10 @@ type BackupData = {
   version:number; app:string; createdAt:string;
   patients:any[]; procedures:any[]; inventoryCategories:any[]; inventory:any[]; patientImplants:any[]; patientCustomFields:any[]; implantRecords:any[]; expenses:any[]; users:any[];
   patientHistory:any[]; inventoryMovements:any[]; inventoryPurchaseReceipts:any[]; stockReceipts:any[]; trash?:any[];
+  // Each unique compressed image is stored once and referenced by its rows.
+  photoAssets?: Record<string, string>;
   branding?: BrandingConfig | null;
-  appSettings?: { googleOAuthClientId: string | null; googleCloudProjectId: string | null; googleAccountEmail: string | null; labOcrEnabled?: string | null; labWarningsEnabled?: string | null; labTestDefinitions?: string | null; labTestBranches?: string | null; labResultsHiddenByPatient?: string | null };
+  appSettings?: { googleOAuthClientId: string | null; googleCloudProjectId: string | null; googleAccountEmail: string | null; labOcrEnabled?: string | null; labWarningsEnabled?: string | null; labTestDefinitions?: string | null; labTestBranches?: string | null; labResultsHiddenByPatient?: string | null; labWarningThresholdPercent?: string | null; labOldResultDays?: string | null };
   filter?: BackupFilter;
   incremental?: boolean;
   changedTables?: string[];
@@ -35,6 +37,8 @@ async function restoreLabSettings(settings: BackupData["appSettings"] | undefine
     ["labTestDefinitions", "ortho_lab_test_definitions_v1"],
     ["labTestBranches", "ortho_lab_test_branches_v1"],
     ["labResultsHiddenByPatient", "ortho_lab_results_hidden_by_patient_v1"],
+    ["labWarningThresholdPercent", "ortho_lab_warning_threshold_percent_v1"],
+    ["labOldResultDays", "ortho_lab_old_result_days_v1"],
   ];
   for (const [field, key] of mappings) {
     if (!(field in settings)) continue;
@@ -81,18 +85,35 @@ function photoMime(uri:string){
 // This is the important difference from the old backup: file:// or content://
 // paths are not portable between phones, so the actual photo bytes are stored
 // inside the encrypted backup.
+type BackupPhotoCache = Map<string, string> & { assets?: Map<string, string> };
+const BACKUP_PHOTO_REF_PREFIX = "__ORTHO_PHOTO_REF__:";
+
 async function embedPhoto(uri:string, cache?: Map<string,string>, profile: "patient" | "document" = "patient"):Promise<string>{
   if (!uri) return "";
-  // Map keys reuse the original string value; do not concatenate or hash the
-  // entire multi-megabyte data URI, which can stall exports on low-memory phones.
+  if (uri.startsWith(BACKUP_PHOTO_REF_PREFIX)) return uri;
+
   const cacheKey = uri;
+  const photoCache = cache as BackupPhotoCache | undefined;
+  const assets = photoCache?.assets;
+  // Signature uses the original URI/bytes and is stable between patient rows,
+  // history snapshots and trash. Repeated images become a short reference.
+  const assetRef = assets ? BACKUP_PHOTO_REF_PREFIX + photoSourceSignature({ photo_uri: uri }) : "";
   const cached = cache?.get(cacheKey);
   if (cached) return cached;
   const remember = (value: string) => {
+    if (assets) {
+      if (!assets.has(assetRef)) assets.set(assetRef, value);
+      if (cache) {
+        while (!cache.has(cacheKey) && cache.size >= 3) {
+          const oldest = cache.keys().next().value;
+          if (oldest === undefined) break;
+          cache.delete(oldest);
+        }
+        cache.set(cacheKey, assetRef);
+      }
+      return assetRef;
+    }
     if (cache) {
-      // Keep only a few recent sources. Parsed data-URI strings can themselves
-      // be many megabytes, so an unbounded cache can retain every original
-      // image until the whole backup finishes and exhaust Android's heap.
       while (!cache.has(cacheKey) && cache.size >= 3) {
         const oldest = cache.keys().next().value;
         if (oldest === undefined) break;
@@ -102,14 +123,16 @@ async function embedPhoto(uri:string, cache?: Map<string,string>, profile: "pati
     }
     return value;
   };
+  if (assets?.has(assetRef)) return remember(assetRef);
 
   try {
     // Keep already-small embedded images byte-for-byte. Larger images are
     // encoded as high-quality JPEG at their ORIGINAL dimensions: no resize,
     // crop, filters, sharpening, or repeated generations of compression.
     const isDataImage = /^data:image\//i.test(uri);
-    const estimatedBytes = isDataImage
-      ? Math.floor(((uri.split(",")[1] || "").length * 3) / 4)
+    const comma = isDataImage ? uri.indexOf(",") : -1;
+    const estimatedBytes = isDataImage && comma >= 0
+      ? Math.floor(((uri.length - comma - 1) * 3) / 4)
       : 0;
     const targetBytes = 1.5 * 1024 * 1024;
     if (isDataImage && estimatedBytes > 0 && estimatedBytes <= targetBytes) {
@@ -332,6 +355,8 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
    googleAccountEmail: (await storage.secureGet("ortho_drive_account_email", "")) || null,
    labOcrEnabled: await AsyncStorage.getItem("ortho_lab_ocr_enabled"),
    labWarningsEnabled: await AsyncStorage.getItem("ortho_lab_warnings_enabled"),
+   labWarningThresholdPercent: await AsyncStorage.getItem("ortho_lab_warning_threshold_percent_v1"),
+   labOldResultDays: await AsyncStorage.getItem("ortho_lab_old_result_days_v1"),
    labTestDefinitions: await AsyncStorage.getItem("ortho_lab_test_definitions_v1"),
    labTestBranches: await AsyncStorage.getItem("ortho_lab_test_branches_v1"),
    labResultsHiddenByPatient: await AsyncStorage.getItem("ortho_lab_results_hidden_by_patient_v1"),
@@ -352,7 +377,8 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
    }
  }
  const selectedPatientIds = new Set(patients.map((p:any)=>String(p.id)));
- const compressedPhotoCache = new Map<string,string>();
+ const compressedPhotoCache = new Map<string,string>() as BackupPhotoCache;
+ compressedPhotoCache.assets = new Map<string,string>();
  const embeddedPatients:any[]=[];
  const previousPatientsById = new Map<string, any>((previousPatientRows || []).filter((p:any)=>p?.id!=null).map((p:any)=>[String(p.id),p]));
  for(let i=0;i<patients.length;i++){
@@ -564,6 +590,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
   trash:trashRows,
   branding,
   appSettings,
+  photoAssets: Object.fromEntries(compressedPhotoCache.assets?.entries() || []),
  };
 }
 
@@ -722,6 +749,41 @@ function stripBackupCacheRow(value: any): any {
   output[key] = stripBackupCacheRow(child);
  }
  return output;
+}
+
+// Prune orphaned photo assets without parsing history/trash JSON columns that
+// may be many megabytes. The asset token uses only safe ASCII characters.
+export function pruneBackupPhotoAssets(backup: any): void {
+ const assets = backup?.photoAssets;
+ if (!assets || typeof assets !== "object" || Array.isArray(assets)) return;
+ const used = new Set<string>();
+ const referencePattern = /__ORTHO_PHOTO_REF__:[A-Za-z0-9:_-]+/g;
+ const visit = (value: any): void => {
+  if (typeof value === "string") {
+   referencePattern.lastIndex = 0;
+   let match: RegExpExecArray | null;
+   while ((match = referencePattern.exec(value)) !== null) used.add(match[0]);
+   return;
+  }
+  if (Array.isArray(value)) {
+   for (const item of value) visit(item);
+   return;
+  }
+  if (!value || typeof value !== "object") return;
+  for (const [key, child] of Object.entries(value)) {
+   if (key === "photoAssets") continue;
+   visit(child);
+  }
+ };
+ visit(backup);
+ const retained: Record<string, string> = {};
+ for (const id of used) {
+  if (typeof assets[id] !== "string") {
+   throw new Error("Backup data is missing a referenced medical image (" + id.slice(0, 64) + "). This backup was not uploaded.");
+  }
+  retained[id] = assets[id];
+ }
+ backup.photoAssets = retained;
 }
 
 // Hash only media fields for comparison-cache entries. Image bytes stay in the
@@ -943,6 +1005,8 @@ export async function exportIncrementalBackupData(changedTables: string[], onPro
    if (!id.startsWith("images:") && !currentIds.has(id)) delete nextPhotoSources[id];
   }
  }
+ // Changed rows can omit unchanged photos. Keep only assets referenced by this delta.
+ pruneBackupPhotoAssets(backup);
  // Do not persist the new baseline until the upload succeeds.
  pendingDeltaCacheText = JSON.stringify({ baselineKey, tables: nextTables, photoSources: nextPhotoSources });
  return backup;
@@ -1051,6 +1115,39 @@ function restorePatientPhotos(p:any){
   return {photoUri,photosJson:photos.length?JSON.stringify(photos):null};
 }
 
+function materializeBackupPhotoReferences(backup: BackupData): BackupData {
+ const assets = backup?.photoAssets;
+ if (!assets || typeof assets !== "object") return backup;
+ const expand = (value: any, key = ""): any => {
+  if (typeof value === "string") {
+   if (value.startsWith(BACKUP_PHOTO_REF_PREFIX)) {
+    const image = assets[value];
+    if (typeof image !== "string" || !image.startsWith("data:image/")) {
+     throw new Error("This backup is missing a referenced medical image. Keep the original file and create a new backup before restoring.");
+    }
+    return image;
+   }
+   if (key.toLowerCase().endsWith("_json") && /^[\s]*[\[{]/.test(value)) {
+    let parsed: any;
+    try { parsed = JSON.parse(value); } catch { return value; }
+    return JSON.stringify(expand(parsed));
+   }
+   return value;
+  }
+  if (Array.isArray(value)) return value.map((item) => expand(item));
+  if (value && typeof value === "object") {
+   for (const [childKey, child] of Object.entries(value)) {
+    if (childKey === "photoAssets") continue;
+    (value as any)[childKey] = expand(child, childKey);
+   }
+  }
+  return value;
+ };
+ const expanded = expand(backup) as BackupData;
+ delete expanded.photoAssets;
+ return expanded;
+}
+
 function restoreRowId(value:any, prefix:string, used:Set<string>){
   const raw=String(value||"").trim();
   if(raw && !used.has(raw)){ used.add(raw); return raw; }
@@ -1068,6 +1165,7 @@ function restoreJsonArray(value:any){try{const parsed=JSON.parse(String(value ??
 export async function restoreBackup(backup:BackupData){
  initializeDatabase({ skipInventoryReset: true });
  if(!backup||![2,3,4,5,6,7,8,9,10].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
+ backup = materializeBackupPhotoReferences(backup);
  const patients=restoreArray((backup as any).patients);
  const procedures=restoreArray((backup as any).procedures);
  const inventoryCategories=restoreArray((backup as any).inventoryCategories);
@@ -1282,6 +1380,7 @@ export async function restoreBackup(backup:BackupData){
 export async function mergeBackup(backup: BackupData) {
  initializeDatabase({ skipInventoryReset: true });
  if(!backup||![2,3,4,5,6,7,8,9,10].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
+ backup = materializeBackupPhotoReferences(backup);
  const stats = { patients: 0, procedures: 0, inventory: 0, inventoryCategories: 0, patientImplants: 0, expenses: 0, users: 0, patientHistory: 0, inventoryMovements: 0, stockReceipts: 0 };
  db.withTransactionSync(() => {
   const has = (table: string, id: string) => !!db.getFirstSync<any>(`SELECT id FROM ${table} WHERE id=?`, [id]);

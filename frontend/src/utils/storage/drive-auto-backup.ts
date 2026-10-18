@@ -1,6 +1,7 @@
 import * as SQLite from "expo-sqlite";
 import {
   backupIncrementalToGoogleDrive,
+  getLastDriveBackupStatus,
   getConnectedGoogleAccount,
   restoreGoogleAccountSilently,
 } from "@/src/utils/storage/google-drive";
@@ -220,11 +221,20 @@ export function startAutomaticDriveBackup() {
   setDriveSyncRefreshHandler(refreshAutomaticDriveBackup);
   const unregisterRefresh = () => setDriveSyncRefreshHandler(null);
   void loadPendingTables().then(async () => {
-    // Reconcile every syncable table once at app startup. The incremental
-    // exporter compares metadata and image signatures with the last confirmed
-    // snapshot, so this detects writes missed while Android suspended the app
-    // without re-uploading unchanged photos or creating a new backup file.
-    ALL_SYNC_TABLES.forEach((name) => pendingTables.add(name));
+    // Only do a complete initial scan if Drive has never confirmed a backup.
+    // Re-queuing all tables at every app launch re-read all report/history images
+    // and could compete with a user-started upload at 99.5%.
+    const lastSuccessfulBackup = await getLastDriveBackupStatus();
+    if (!pendingTables.size) {
+      if (!lastSuccessfulBackup) {
+        ALL_SYNC_TABLES.forEach((name) => pendingTables.add(name));
+      } else {
+        // A lightweight maintenance check also creates any missing current-month
+        // baseline and advances a completed-month archive without scanning every
+        // image table on every launch.
+        pendingTables.add("appSettings");
+      }
+    }
     await persistPendingTables();
     scheduleBackup();
   });
