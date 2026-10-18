@@ -581,7 +581,7 @@ export default function BackupRestoreScreen() {
                 if (!match) return null;
                 const percent = Math.max(0, Math.min(100, Number(match[1])));
                 return <View accessibilityLabel={"Backup download " + percent + " percent"} style={{ height: 7, borderRadius: 4, overflow: "hidden", backgroundColor: colors.border }}>
-                  <View style={{ height: 7, width: percent + "%", backgroundColor: colors.brandPrimary }} />
+                  <View style={{ height: 7, width: (percent + "%") as any, backgroundColor: colors.brandPrimary }} />
                 </View>;
               })()}
             </View>
