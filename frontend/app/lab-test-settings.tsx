@@ -161,7 +161,7 @@ export default function LabTestSettingsScreen() {
   if (user?.role !== "admin") return <View style={styles.container}><Text style={styles.title}>Administrator only</Text></View>;
   return <View style={styles.container}>
     <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
-      <Pressable onPress={() => router.back()} style={styles.back}><Ionicons name="arrow-back" size={22} color={colors.onSurface}/></Pressable>
+      <Pressable onPress={() => router.replace("/settings" as any)} style={styles.back}><Ionicons name="arrow-back" size={22} color={colors.onSurface}/></Pressable>
       <Text style={styles.title}>Lab Test Reference Ranges</Text><View style={styles.back}/>
     </View>
     <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xxl }}>
