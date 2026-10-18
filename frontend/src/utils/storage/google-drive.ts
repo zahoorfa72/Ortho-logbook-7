@@ -1765,6 +1765,23 @@ async function downloadDriveJson(fileId: string, onProgress?: (message: string) 
         onProgress?.("Backup file downloaded. Validating contents…");
         const info = await FileSystem.getInfoAsync(targetUri);
         if (!info.exists || Number(info.size || 0) <= 0) throw new Error("Background download completed without a readable backup file.");
+        // Read through a native buffered reader in bounded chunks. This avoids
+        // Expo allocating a second full-size Java String for large backups.
+        // JSON parsing still occurs after the downloaded text has been collected.
+        if (typeof background.openTextReader === "function" && typeof background.readTextChunk === "function") {
+          const readerId = await background.openTextReader(targetUri);
+          const chunks: string[] = [];
+          try {
+            while (true) {
+              const chunk = await background.readTextChunk(readerId, 196608);
+              if (chunk?.text) chunks.push(String(chunk.text));
+              if (chunk?.done) break;
+            }
+            return chunks.join("");
+          } finally {
+            try { await background.closeTextReader?.(readerId); } catch {}
+          }
+        }
         return await FileSystem.readAsStringAsync(targetUri);
       }
       if (status?.status === "error") throw new Error(String(status?.error || "Background Google Drive download failed."));

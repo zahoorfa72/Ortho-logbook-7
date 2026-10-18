@@ -15,6 +15,57 @@ class DriveBackgroundUploadModule(private val context: ReactApplicationContext) 
   ReactContextBaseJavaModule(context) {
   override fun getName() = "DriveBackgroundUpload"
 
+  // Stream large restore files with a persistent reader instead of allocating
+  // a second full-size Java String in the Expo file-system bridge.
+  private val textReaders = java.util.concurrent.ConcurrentHashMap<String, java.io.BufferedReader>()
+
+  @ReactMethod
+  fun openTextReader(fileUri: String, promise: Promise) {
+    try {
+      val uri = Uri.parse(fileUri)
+      val path = uri.path ?: throw IllegalArgumentException("Backup file path is invalid.")
+      val file = File(path)
+      if (!file.isFile) throw IllegalStateException("Downloaded backup file is missing.")
+      val id = java.util.UUID.randomUUID().toString()
+      textReaders[id] = file.inputStream().bufferedReader(Charsets.UTF_8)
+      promise.resolve(id)
+    } catch (error: Exception) {
+      promise.reject("DRIVE_BACKUP_READ_FAILED", error.message, error)
+    }
+  }
+
+  @ReactMethod
+  fun readTextChunk(readerId: String, maxChars: Int, promise: Promise) {
+    try {
+      val reader = textReaders[readerId] ?: throw IllegalStateException("Backup reader is no longer available.")
+      val buffer = CharArray(maxChars.coerceIn(16384, 262144))
+      val count = reader.read(buffer)
+      val map = Arguments.createMap()
+      if (count < 0) {
+        textReaders.remove(readerId)?.close()
+        map.putString("text", "")
+        map.putBoolean("done", true)
+      } else {
+        map.putString("text", String(buffer, 0, count))
+        map.putBoolean("done", false)
+      }
+      promise.resolve(map)
+    } catch (error: Exception) {
+      textReaders.remove(readerId)?.runCatching { close() }
+      promise.reject("DRIVE_BACKUP_READ_FAILED", error.message, error)
+    }
+  }
+
+  @ReactMethod
+  fun closeTextReader(readerId: String, promise: Promise) {
+    try {
+      textReaders.remove(readerId)?.close()
+      promise.resolve(true)
+    } catch (error: Exception) {
+      promise.reject("DRIVE_BACKUP_READ_FAILED", error.message, error)
+    }
+  }
+
   @ReactMethod
   fun writeTextChunk(fileUri: String, text: String, append: Boolean, promise: Promise) {
     try {
