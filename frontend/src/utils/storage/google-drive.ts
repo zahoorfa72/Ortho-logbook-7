@@ -1728,18 +1728,32 @@ async function downloadDriveJson(fileId: string, onProgress?: (message: string) 
     try { await FileSystem.deleteAsync(targetUri, { idempotent: true }); } catch {}
     const taskId = await background.startDownload(url, token, targetUri);
     let lastPercent = -1;
+    let lastLoaded = -1;
+    let lastTotal = -1;
+    let lastStatus = "";
+    let lastProgressAt = Date.now();
     while (true) {
       const status = await background.getStatus(taskId);
-      const percent = Math.max(0, Math.min(100, Number(status?.progress || 0)));
-      if (percent !== lastPercent) {
+      const loaded = Math.max(0, Number(status?.downloadedBytes ?? status?.bytesDownloaded ?? status?.bytesWritten ?? status?.receivedBytes ?? status?.bytesReceived ?? status?.uploadedBytes ?? 0));
+      const total = Math.max(0, Number(status?.totalBytes ?? status?.contentLength ?? status?.total ?? 0));
+      const rawPercent = Number(status?.progress);
+      const percent = Math.max(0, Math.min(100, Number.isFinite(rawPercent) && rawPercent > 0
+        ? rawPercent : total > 0 ? Math.floor((loaded / total) * 100) : 0));
+      const currentStatus = String(status?.status || "");
+      // Native download progress often advances bytes while integer percent
+      // remains 0 (or is not supplied). Update the app whenever bytes/status
+      // change, not only when the percent changes.
+      if (percent !== lastPercent || loaded !== lastLoaded || total !== lastTotal || currentStatus !== lastStatus) {
         lastPercent = percent;
-        // Download status reports downloadedBytes/bytesDownloaded; uploadedBytes
-        // is an upload-only counter and kept restore progress stuck at 0.0 MB.
-        const loaded = Number(status?.downloadedBytes ?? status?.bytesDownloaded ?? status?.bytesWritten ?? status?.uploadedBytes ?? 0);
-        const total = Number(status?.totalBytes ?? status?.contentLength ?? 0);
+        lastLoaded = loaded;
+        lastTotal = total;
+        lastStatus = currentStatus;
+        lastProgressAt = Date.now();
         onProgress?.(total > 0
-          ? "Downloading backup file: " + percent + "% (" + (loaded / 1048576).toFixed(1) + " / " + (total / 1048576).toFixed(1) + " MB)"
-          : "Downloading backup file: " + (loaded / 1048576).toFixed(1) + " MB received");
+          ? "Downloading master backup: " + percent + "% (" + (loaded / 1048576).toFixed(1) + " / " + (total / 1048576).toFixed(1) + " MB)"
+          : "Downloading master backup: " + (loaded / 1048576).toFixed(1) + " MB received" + (currentStatus ? " · " + currentStatus : ""));
+      } else if (Date.now() - lastProgressAt > 10 * 60 * 1000) {
+        throw new Error("Google Drive download has shown no progress for 10 minutes. The restore was stopped safely; retry on a stable connection.");
       }
       if (status?.status === "completed") {
         onProgress?.("Backup file downloaded. Validating contents…");
