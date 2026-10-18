@@ -19,7 +19,7 @@ type BackupData = {
   // Each unique compressed image is stored once and referenced by its rows.
   photoAssets?: Record<string, string>;
   branding?: BrandingConfig | null;
-  appSettings?: { googleOAuthClientId: string | null; googleCloudProjectId: string | null; googleAccountEmail: string | null; labOcrEnabled?: string | null; labWarningsEnabled?: string | null; labTestDefinitions?: string | null; labTestBranches?: string | null; labResultsHiddenByPatient?: string | null; labWarningThresholdPercent?: string | null; labOldResultDays?: string | null; labOcrApiKey?: string | null };
+  appSettings?: { googleOAuthClientId: string | null; googleCloudProjectId: string | null; googleAccountEmail: string | null; labOcrEnabled?: string | null; labWarningsEnabled?: string | null; labTestDefinitions?: string | null; labTestBranches?: string | null; labResultsHiddenByPatient?: string | null; labWarningThresholdPercent?: string | null; labOldResultDays?: string | null; labOcrApiKey?: string | null; asyncStorageSettings?: Record<string, string | null> };
   filter?: BackupFilter;
   incremental?: boolean;
   changedTables?: string[];
@@ -46,6 +46,35 @@ async function restoreLabSettings(settings: BackupData["appSettings"] | undefine
     const value = settings[field];
     if (typeof value === "string") await AsyncStorage.setItem(key, value);
     else await AsyncStorage.removeItem(key);
+  }
+}
+
+// Snapshot durable application settings stored in AsyncStorage, not just the
+// handful of keys known to this backup version. This keeps newly added admin
+// settings (including lab ranges/branches and feature toggles) recoverable
+// without requiring a backup-code change for every key.
+function isBackupableSettingKey(key: string): boolean {
+  const normalized = String(key || "").toLowerCase();
+  if (!normalized) return false;
+  // Never restore stale login/session material or sync cursors from a backup.
+  if (/(^|[_-])(access[_-]?token|refresh[_-]?token|auth[_-]?token|password|session|current[_-]?user|credential)([_-]|$)/i.test(normalized)) return false;
+  if (/(^|[_-])(query[_-]?cache|persisted[_-]?query|last[_-]?successful[_-]?backup|last[_-]?uploaded[_-]?content[_-]?hash|incremental[_-]?snapshot|delta[_-]?cache|backup[_-]?reminder)([_-]|$)/i.test(normalized)) return false;
+  return true;
+}
+async function captureAsyncStorageSettings(): Promise<Record<string, string | null>> {
+  const keys = (await AsyncStorage.getAllKeys()).filter(isBackupableSettingKey);
+  const pairs = await AsyncStorage.multiGet(keys);
+  const result: Record<string, string | null> = {};
+  for (const [key, value] of pairs) result[key] = value;
+  return result;
+}
+async function restoreAsyncStorageSettings(settings: BackupData["appSettings"] | undefined): Promise<void> {
+  const saved = settings?.asyncStorageSettings;
+  if (!saved || typeof saved !== "object" || Array.isArray(saved)) return;
+  for (const [key, value] of Object.entries(saved)) {
+    if (!isBackupableSettingKey(key) || (value !== null && typeof value !== "string")) continue;
+    if (value === null) await AsyncStorage.removeItem(key);
+    else await AsyncStorage.setItem(key, value);
   }
 }
 
@@ -365,6 +394,8 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
    labTestDefinitions: await AsyncStorage.getItem("ortho_lab_test_definitions_v1"),
    labTestBranches: await AsyncStorage.getItem("ortho_lab_test_branches_v1"),
    labResultsHiddenByPatient: await AsyncStorage.getItem("ortho_lab_results_hidden_by_patient_v1"),
+   // Include durable settings added by future admin screens as well.
+   asyncStorageSettings: await captureAsyncStorageSettings(),
  } : undefined;
  const pf=whereForFilter(filter, "date");
  let patients: any[] = [];
@@ -1373,6 +1404,7 @@ export async function restoreBackup(backup:BackupData){
    }
  }
  await restoreLabSettings(backup.appSettings);
+ await restoreAsyncStorageSettings(backup.appSettings);
   markInventoryResetDone();
  return {patients:patients.length,procedures:procedures.length,inventory:inventory.length,inventoryCategories:inventoryCategories.length,patientImplants:patientImplants.length,expenses:expenses.length,users:users.length,patientHistory:patientHistory.length,inventoryMovements:inventoryMovements.length};
 }
