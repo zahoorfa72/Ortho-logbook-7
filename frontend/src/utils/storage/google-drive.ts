@@ -1383,9 +1383,9 @@ export async function backupToGoogleDrive(
     }
     await storage.secureSet(MASTER_MIGRATION_KEY, "1");
   }
-  if (isMasterBackup && result?.id && (!migrationAttempted || (migrationComplete && cleanupSafe))) {
-    // A verified full monthly snapshot is now the baseline. Keep monthly history,
-    // but remove legacy all-time/year/date files and the old rolling journal.
+  if (isMasterBackup && migrationAttempted && migrationComplete && cleanupSafe && result?.id) {
+    // Only delete legacy files when this upload explicitly merged and verified
+    // their records. If migration was not confirmed, retain every old backup.
     cleanupFailures.push(...await cleanupLegacyNonMonthlyBackups(String(result.id)));
   }
   if (isMasterBackup && seededCacheForLocalSnapshot && result?.id) {
