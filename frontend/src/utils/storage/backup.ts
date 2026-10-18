@@ -87,6 +87,20 @@ async function embedPhoto(uri:string, cache?: Map<string,string>, profile: "pati
   const cacheKey = uri;
   const cached = cache?.get(cacheKey);
   if (cached) return cached;
+  const remember = (value: string) => {
+    if (cache) {
+      // Keep only a few recent sources. Parsed data-URI strings can themselves
+      // be many megabytes, so an unbounded cache can retain every original
+      // image until the whole backup finishes and exhaust Android's heap.
+      while (!cache.has(cacheKey) && cache.size >= 3) {
+        const oldest = cache.keys().next().value;
+        if (oldest === undefined) break;
+        cache.delete(oldest);
+      }
+      cache.set(cacheKey, value);
+    }
+    return value;
+  };
 
   try {
     // Keep already-small embedded images byte-for-byte. Larger images are
@@ -98,8 +112,7 @@ async function embedPhoto(uri:string, cache?: Map<string,string>, profile: "pati
       : 0;
     const targetBytes = 2.2 * 1024 * 1024;
     if (isDataImage && estimatedBytes > 0 && estimatedBytes <= targetBytes) {
-      cache?.set(cacheKey, uri);
-      return uri;
+      return remember(uri);
     }
     if (!isDataImage && /^(file:\/\/|content:\/\/)/i.test(uri)) {
       try {
@@ -118,8 +131,7 @@ async function embedPhoto(uri:string, cache?: Map<string,string>, profile: "pati
               : path.endsWith(".gif") ? "image/gif"
               : "image/jpeg";
             const portable = "data:" + mime + ";base64," + base64;
-            cache?.set(cacheKey, portable);
-            return portable;
+            return remember(portable);
           }
         }
       } catch {
@@ -200,14 +212,12 @@ async function embedPhoto(uri:string, cache?: Map<string,string>, profile: "pati
       });
       if (!base64) throw new Error("Compressed image data is empty.");
       const portable = "data:image/jpeg;base64," + base64;
-      cache?.set(cacheKey, portable);
-      return portable;
+      return remember(portable);
     } catch (compressionError) {
       // Preserve the source if the device decoder cannot safely finish. A
       // large original may exceed the preferred size, but it must not be lost.
       if (isDataImage) {
-        cache?.set(cacheKey, uri);
-        return uri;
+        return remember(uri);
       }
       const base64 = await LegacyFileSystem.readAsStringAsync(uri, {
         encoding: LegacyFileSystem.EncodingType.Base64,
@@ -220,8 +230,7 @@ async function embedPhoto(uri:string, cache?: Map<string,string>, profile: "pati
         : path.endsWith(".gif") ? "image/gif"
         : "image/jpeg";
       const portable = "data:" + mime + ";base64," + base64;
-      cache?.set(cacheKey, portable);
-      return portable;
+      return remember(portable);
     } finally {
       for (const tempUri of tempUris) {
         try { await LegacyFileSystem.deleteAsync(tempUri, { idempotent: true }); } catch {}
