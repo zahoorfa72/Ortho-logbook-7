@@ -9,6 +9,7 @@ import { archiveEligiblePatientImages, getLocalPatientImageArchives, installPati
 const LAST_DRIVE_BACKUP_KEY = "ortho_drive_last_successful_backup";
 const LAST_DRIVE_CONTENT_HASH_KEY = "ortho_drive_last_uploaded_content_hash";
 const MASTER_MIGRATION_KEY = "ortho_drive_master_migration_v2";
+const MASTER_LOCAL_SNAPSHOT_VERSION_KEY = "ortho_drive_master_local_snapshot_v1";
 const MONTH_ARCHIVE_CURSOR_KEY = "ortho_drive_month_archive_cursor_v1";
 const DRIVE_SCOPE_VERSION_KEY = "ortho_drive_scope_version";
 const DRIVE_SCOPE_VERSION = "full-drive-gmail-v1";
@@ -1572,16 +1573,12 @@ async function backupToGoogleDriveUnlocked(
       seededCacheForLocalSnapshot = true;
     }
     if (migrationMarker !== "1") {
-      // Bounded one-time merge: only the current master (or one newest legacy
-      // snapshot) and the single rolling change journal are considered.
+      // First upload after the new backup system starts is a fresh snapshot of
+      // this phone's complete app data. Never merge old Drive backups/journals.
       migrationAttempted = true;
-      options.onProgress?.("Checking the current master and latest changes…");
-      const migration = await mergeLegacyDriveHistory(backupData, options.onProgress, options.preferDriveOnMigration === true, true);
-      backupData = migration.backupData;
       migrationComplete = true;
-      cleanupSafe = false;
-      if (options.localChanges) applyIncrementalToMaster(backupData, options.localChanges, options.localChanges._rowDelta !== true);
-      pruneBackupPhotoAssets(backupData);
+      cleanupSafe = true;
+      onProgress?.("Creating a fresh full backup from this phone; old backups will not be merged…");
       backupData.version = Math.max(Number(backupData.version || 0), 7);
       backupData.createdAt = new Date().toISOString();
       backupData.filter = { type: "all" };
@@ -1590,6 +1587,7 @@ async function backupToGoogleDriveUnlocked(
       delete backupData._rowDelta;
       delete backupData.deletedIds;
       delete backupData.fullTables;
+      pruneBackupPhotoAssets(backupData);
     }
     pruneBackupPhotoAssets(backupData);
     if (!FileSystem.cacheDirectory) throw new Error("Device cache storage is unavailable for the Drive backup.");
@@ -1611,19 +1609,16 @@ async function backupToGoogleDriveUnlocked(
       ? JSON.stringify(options.backupDataOverride)
       : await exportUnencryptedBackup(filter, options.onProgress));
     if (isMasterBackup && migrationMarker !== "1") {
-      // Bounded one-time merge: current master (or one newest legacy snapshot)
-      // plus the rolling journal only, not the entire historical backup directory.
+      // The first upload is always the complete local app snapshot. Do not read,
+      // merge, or apply any legacy Drive backup or its old change journal.
       migrationAttempted = true;
-      options.onProgress?.("Checking the current master and latest changes…");
-      const migration = await mergeLegacyDriveHistory(backupText, options.onProgress, options.preferDriveOnMigration === true);
       migrationComplete = true;
-      cleanupSafe = false;
-      const initialMaster = parseDownloadedBackup(migration.backupText);
+      cleanupSafe = true;
+      const initialMaster = parseDownloadedBackup(backupText);
       if (!initialMaster || initialMaster.app !== "Ortho Logbook" ||
           !Array.isArray(initialMaster.patients) || !Array.isArray(initialMaster.inventory)) {
-        throw new Error("The first full backup is incomplete; existing Drive backups were not changed.");
+        throw new Error("The first full local backup is incomplete; existing Drive files were not changed.");
       }
-      if (options.localChanges) applyIncrementalToMaster(initialMaster, options.localChanges, options.localChanges._rowDelta !== true);
       initialMaster.version = Math.max(Number(initialMaster.version || 0), 7);
       initialMaster.createdAt = new Date().toISOString();
       initialMaster.filter = { type: "all" };
@@ -1679,6 +1674,7 @@ async function backupToGoogleDriveUnlocked(
       }
     }
     await storage.secureSet(MASTER_MIGRATION_KEY, "1");
+    await storage.secureSet(MASTER_LOCAL_SNAPSHOT_VERSION_KEY, "1");
   }
   // Legacy backup files are retained as recovery copies; no history-wide cleanup.
   if (isMasterBackup && seededCacheForLocalSnapshot && result?.id) {
@@ -2033,19 +2029,20 @@ function mergeIncrementalPayloads(previous: any, incoming: any): any {
 async function ensureGoogleDriveBaselineUnlocked(onProgress?: (stage: string) => void) {
   const currentMonthName = driveBackupName({ type: "all" });
   const existing = await findBackupByName(currentMonthName);
-  if (existing?.id) {
+  const localSnapshotVersion = String((await storage.secureGet(MASTER_LOCAL_SNAPSHOT_VERSION_KEY, "")) || "");
+  if (existing?.id && localSnapshotVersion === "1") {
     const cursor = String((await storage.secureGet(MONTH_ARCHIVE_CURSOR_KEY, "")) || "");
     if (!/^\d{4}-\d{2}$/.test(cursor)) await storage.secureSet(MONTH_ARCHIVE_CURSOR_KEY, monthKeyFromDate(new Date()));
     return { skipped: true, name: currentMonthName };
   }
-  // Keep existing legacy files as recovery copies, but create one rolling master.
-  const priorBackups = await findLatestBackupCandidates();
-  if (priorBackups.some((file: any) => file?.id)) await storage.secureSet(MASTER_MIGRATION_KEY, "");
-  onProgress?.("Creating the rolling all-time Drive backup…");
-  const result = await backupToGoogleDriveUnlocked(undefined, { type: "all" }, { onProgress, preferDriveOnMigration: true });
+  // Replace any old active master with a complete snapshot of this phone. Legacy
+  // backups are not merged; old files are left untouched as inactive recovery copies.
+  onProgress?.(existing?.id ? "Replacing the old merged master with a fresh full phone backup…" : "Creating the first complete phone backup…");
+  const result = await backupToGoogleDriveUnlocked(undefined, { type: "all" }, { onProgress });
   const confirmed = await findBackupByName(currentMonthName);
   if (!confirmed?.id) throw new Error("The rolling Drive master could not be confirmed. Local data remains on this phone.");
   await commitIncrementalSnapshotCache(String(confirmed.id) + ":" + String(confirmed.modifiedTime || ""));
+  await storage.secureSet(MASTER_LOCAL_SNAPSHOT_VERSION_KEY, "1");
   const cursor = String((await storage.secureGet(MONTH_ARCHIVE_CURSOR_KEY, "")) || "");
   if (!/^\d{4}-\d{2}$/.test(cursor)) await storage.secureSet(MONTH_ARCHIVE_CURSOR_KEY, monthKeyFromDate(new Date()));
   return { ...result, baselineCreated: true, snapshotFailures: [] };
