@@ -18,6 +18,18 @@ import { queryClient } from "@/src/query-client";
 import { storage } from "@/src/utils/storage";
 import { setAutomaticDriveBackupPaused } from "@/src/utils/storage/drive-auto-backup";
 
+function googleDriveRestoreErrorMessage(error: unknown): string {
+  const err = error as any;
+  const parts = [err?.message, err?.cause?.message, err?.nativeError?.message, err?.toString?.()]
+    .filter((value) => typeof value === "string" && value.trim())
+    .map((value) => String(value).trim());
+  const detail = Array.from(new Set(parts)).join("\\n\\n").slice(0, 1800);
+  if (/out.?of.?memory|cannot allocate|failed to allocate|memory allocation|heap limit/i.test(detail)) {
+    return "Google Drive restore ran out of Android app memory while processing this backup. Your existing local records should remain untouched if restore did not complete. The current single-file backup format must be changed to staged/chunked restore for very large datasets; retrying the same file may fail again.\\n\\nTechnical detail: " + (detail || "Android memory allocation failed.");
+  }
+  return detail || "No detailed error was provided by Android. Check the connection and try again; do not delete your existing backup files.";
+}
+
 export default function Login() {
   const styles = useStyles();
   const { colors, branding } = useTheme();
@@ -70,7 +82,7 @@ export default function Login() {
                     "\n\nNow log in with an account from the backup.",
                 );
               } catch (error: any) {
-                Alert.alert("Restore failed", error?.message || "Unable to restore the Google Drive backup.");
+                Alert.alert("Google Drive restore failed", googleDriveRestoreErrorMessage(error));
               } finally {
                 setDriveRestoreLoading(false);
                 setDriveRestoreMessage("");
@@ -83,7 +95,7 @@ export default function Login() {
       );
       waitingForRestoreChoice = true;
     } catch (error: any) {
-      Alert.alert("Google Drive restore failed", error?.message || "Unable to find or download the latest Drive backup.");
+      Alert.alert("Google Drive restore failed", googleDriveRestoreErrorMessage(error));
     } finally {
       if (!waitingForRestoreChoice) setAutomaticDriveBackupPaused(false);
       setDriveRestoreLoading(false);
