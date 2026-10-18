@@ -1003,13 +1003,10 @@ export async function ensurePatientImagePdfOnDrive(patientId: string, onProgress
     const local = await FileSystem.getInfoAsync(archive.localUri);
     if (!local.exists || Number(local.size || 0) < 8) throw new Error("The patient's local PDF is missing or empty.");
     let remote: any = null;
-    if (archive.driveFileId && archive.driveSourceStamp === archive.sourceStamp) {
+    if (archive.driveFileId) {
       try {
         const verified = await verifyPatientPdf(archive.driveFileId);
-        if (verified.name === archive.fileName &&
-            Number(verified.size || 0) === Number(local.size || 0) &&
-            String(verified.appProperties?.orthoPatientId || "") === archive.patientId &&
-            String(verified.appProperties?.orthoSourceStamp || "") === archive.sourceStamp &&
+        if (String(verified.appProperties?.orthoPatientId || "") === archive.patientId &&
             (Array.isArray(verified.parents) ? verified.parents : []).includes(folderId)) remote = verified;
       } catch { remote = null; }
     }
@@ -1107,6 +1104,13 @@ export async function uploadPatientImageArchivesToDrive(onProgress?: (stage: str
     // A confirmed source stamp means this exact PDF was already uploaded.
     if (archive.driveFileId && archive.driveSourceStamp === archive.sourceStamp) continue;
     let remote: any = null;
+    if (archive.driveFileId) {
+      try {
+        const verified = await verifyPatientPdf(archive.driveFileId);
+        if (String(verified.appProperties?.orthoPatientId || "") === archive.patientId &&
+            (Array.isArray(verified.parents) ? verified.parents : []).includes(folderId)) remote = verified;
+      } catch { remote = null; }
+    }
     if (!remote) remote = await findPatientPdfInFolder(archive.fileName, folderId);
     if (remote && remote.mimeType === "application/pdf" &&
         Number(remote.size || 0) === Number(local.size || 0) &&

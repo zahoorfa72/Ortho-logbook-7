@@ -113,11 +113,25 @@ export default function PatientForm() {
 
   const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
   const [patientArchiveAvailable, setPatientArchiveAvailable] = useState(false);
+  const [patientArchiveOnDrive, setPatientArchiveOnDrive] = useState(false);
   useFocusEffect(useCallback(() => {
     let active = true;
-    if (!id) { setPatientArchiveAvailable(false); return () => { active = false; }; }
-    getPatientImageArchive(String(id)).then(value => { if (active) setPatientArchiveAvailable(!!value); })
-      .catch(() => { if (active) setPatientArchiveAvailable(false); });
+    if (!id) {
+      setPatientArchiveAvailable(false);
+      setPatientArchiveOnDrive(false);
+      return () => { active = false; };
+    }
+    getPatientImageArchive(String(id)).then(value => {
+      if (active) {
+        setPatientArchiveAvailable(!!value);
+        setPatientArchiveOnDrive(!!value?.driveFileId);
+      }
+    }).catch(() => {
+      if (active) {
+        setPatientArchiveAvailable(false);
+        setPatientArchiveOnDrive(false);
+      }
+    });
     return () => { active = false; };
   }, [id]));
   const [labOcrEnabled, setLabOcrEnabled] = useState(false);
@@ -1242,7 +1256,22 @@ export default function PatientForm() {
   };
 
   const removePhoto = (idx: number) => {
-    setP((x) => ({ ...x, photos: x.photos.filter((_, i) => i !== idx) }));
+    const remove = () => setP((x) => {
+      const photos = x.photos.filter((_, i) => i !== idx);
+      return { ...x, photos, photoUri: photos[0] || "" };
+    });
+    if (patientArchiveOnDrive) {
+      Alert.alert(
+        "Remove image from patient and Drive PDF?",
+        "This image is included in this patient's saved Google Drive PDF. If you continue and save this record, the next successful backup will update the same PDF and remove the deleted image. Other patient images will be kept.",
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Remove image", style: "destructive", onPress: remove },
+        ],
+      );
+      return;
+    }
+    remove();
   };
   const loadEditingPhotoDimensions = (uri: string) => {
     Image.getSize(uri, (width, height) => setEditingPhotoDimensions({ width, height }), () => setEditingPhotoDimensions(null));

@@ -49,6 +49,29 @@ function getPhotoSources(row: any): string[] {
   } catch {}
   return Array.from(new Set(result)).filter(x => !x.startsWith("__ORTHO_PHOTO_REF__:"));
 }
+async function imageContentKey(source: string): Promise<string> {
+  try {
+    let bytes = source;
+    if (/^data:image\//i.test(source)) {
+      const comma = source.indexOf(",");
+      bytes = comma >= 0 ? source.slice(comma + 1) : source;
+    } else if (/^(file|content):\/\//i.test(source)) {
+      bytes = await FileSystem.readAsStringAsync(source, { encoding: FileSystem.EncodingType.Base64 });
+    }
+    return await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, bytes);
+  } catch {
+    return await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, source);
+  }
+}
+async function deduplicatePhotoSources(sources: string[]): Promise<string[]> {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const source of sources) {
+    const key = await imageContentKey(source);
+    if (!seen.has(key)) { seen.add(key); result.push(source); }
+  }
+  return result;
+}
 async function toEmbeddableImage(source: string): Promise<string> {
   if (/^data:image\//i.test(source)) return source;
   if (/^https?:\/\//i.test(source)) return source;
@@ -61,9 +84,7 @@ async function toEmbeddableImage(source: string): Promise<string> {
 }
 async function stampFor(id: string, name: string, mrNo: string, createdAt: string, sources: string[]): Promise<string> {
   const signatures: string[] = [];
-  for (const source of sources) {
-    signatures.push(source.length + ":" + source.slice(0, 96) + ":" + source.slice(-96));
-  }
+  for (const source of sources) signatures.push(await imageContentKey(source));
   return Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256,
     JSON.stringify([id, name, mrNo, createdAt, signatures]));
 }
@@ -133,7 +154,7 @@ export async function archivePatientImagesForPatient(patientId: string, onProgre
   const patient = db.getFirstSync<any>("SELECT id,name,mr_no,date,created_at,updated_at FROM patients WHERE id=?", [id]);
   if (!patient) throw new Error("This patient is not available in the phone database. Refresh the patient list and try again.");
   const row = db.getFirstSync<any>("SELECT photo_uri,photos_json FROM patients WHERE id=?", [id]) || {};
-  const sources = getPhotoSources(row);
+  const sources = await deduplicatePhotoSources(getPhotoSources(row));
   const name = String(patient.name || "Patient");
   const mrNo = String(patient.mr_no || "");
   const stamp = await stampFor(id, name, mrNo, String(patient.created_at || patient.date || ""), sources);
@@ -159,8 +180,9 @@ export async function archivePatientImagesForPatient(patientId: string, onProgre
       patientId: id, patientName: name, mrNo, fileName, sourceStamp: stamp,
       archivedAt: new Date().toISOString(), imageCount: embedded.length,
       patientUpdatedAt: String(patient.updated_at || ""),
-      driveFileId: existing?.sourceStamp === stamp ? existing.driveFileId : undefined,
-      driveSourceStamp: existing?.sourceStamp === stamp ? existing.driveSourceStamp : undefined,
+      // Preserve this patient's remote file ID so the uploader updates the same Drive file.
+      driveFileId: existing?.driveFileId,
+      driveSourceStamp: existing?.driveSourceStamp,
     }, generated.uri);
   } finally {
     try { await FileSystem.deleteAsync(generated.uri, { idempotent: true }); } catch {}
@@ -191,7 +213,7 @@ export async function archiveEligiblePatientImages(onProgress?: (stage: string) 
       if (cached.exists && Number(cached.size || 0) > 8) continue;
     }
     const row = db.getFirstSync<any>("SELECT photo_uri,photos_json FROM patients WHERE id=?", [id]) || {};
-    const sources = getPhotoSources(row);
+    const sources = await deduplicatePhotoSources(getPhotoSources(row));
     const stamp = await stampFor(id, name, mrNo, String(patient.created_at || patient.date || ""), sources);
     if (existing?.sourceStamp === stamp) {
       const info = await FileSystem.getInfoAsync(existing.localUri);
@@ -219,8 +241,9 @@ export async function archiveEligiblePatientImages(onProgress?: (stage: string) 
       patientId: id, patientName: name, mrNo, fileName, localUri: target,
       sourceStamp: stamp, archivedAt: new Date().toISOString(), imageCount: embedded.length,
       patientUpdatedAt: String(patient.updated_at || ""),
-      driveFileId: existing?.sourceStamp === stamp ? existing?.driveFileId : undefined,
-      driveSourceStamp: existing?.sourceStamp === stamp ? existing?.driveSourceStamp : undefined,
+      // Preserve this patient's remote file ID so the uploader updates the same Drive file.
+      driveFileId: existing?.driveFileId,
+      driveSourceStamp: existing?.driveSourceStamp,
     };
     await writeArchives(archives);
     changed = true;

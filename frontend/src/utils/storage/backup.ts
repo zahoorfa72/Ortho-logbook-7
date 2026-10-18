@@ -491,6 +491,14 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
    }
    const snapshotRow = db.getFirstSync<any>("SELECT snapshot_json FROM patient_history WHERE id=?", [h.id]);
    const rawSnapshot = String(snapshotRow?.snapshot_json || "");
+   const historySourceSignature = rowImageSignature({ snapshot_json: rawSnapshot });
+   const historySignatureKey = "images:patientHistory:" + String(h.id);
+   if (changedTables?.includes("patientHistory") &&
+       previousPhotoSources?.[historySignatureKey] === historySourceSignature) {
+     embeddedHistory.push({ ...h, snapshot_json: rawSnapshot });
+     h.snapshot_json = "";
+     continue;
+   }
    try {
      const snap = JSON.parse(rawSnapshot);
      // Historical patient snapshots can contain another copy of every photo.
@@ -971,6 +979,13 @@ export async function exportIncrementalBackupData(changedTables: string[], onPro
     const id = rowKey(row);
     if (id !== null) currentImageSignatures.set(id, rowImageSignature(row));
    }
+   if (table === "patientHistory") {
+    currentImageSignatures.clear();
+    const sourceRows = db.getAllSync<any>("SELECT id,snapshot_json FROM patient_history");
+    for (const source of sourceRows) {
+     if (source?.id != null) currentImageSignatures.set(String(source.id), rowImageSignature({ snapshot_json: String(source.snapshot_json || "") }));
+    }
+   }
   }
   const previousRows = canDiff && Array.isArray(nextTables[table]) ? nextTables[table] : null;
   if (!previousRows) {
@@ -1049,11 +1064,21 @@ export async function exportIncrementalBackupData(changedTables: string[], onPro
   if (!IMAGE_SIGNATURE_TABLES.has(table)) continue;
   const prefix = "images:" + table + ":";
   for (const key of Object.keys(nextPhotoSources)) if (key.startsWith(prefix)) delete nextPhotoSources[key];
-  for (const row of currentRowsForCache[table] || []) {
-   const id = rowKey(row);
-   if (id === null) continue;
-   const signature = rowImageSignature(row);
-   if (signature) nextPhotoSources[prefix + id] = signature;
+  if (table === "patientHistory") {
+   const sourceRows = db.getAllSync<any>("SELECT id,snapshot_json FROM patient_history");
+   for (const row of sourceRows) {
+    const id = rowKey(row);
+    if (id === null) continue;
+    const signature = rowImageSignature({ snapshot_json: String(row.snapshot_json || "") });
+    if (signature) nextPhotoSources[prefix + id] = signature;
+   }
+  } else {
+   for (const row of currentRowsForCache[table] || []) {
+    const id = rowKey(row);
+    if (id === null) continue;
+    const signature = rowImageSignature(row);
+    if (signature) nextPhotoSources[prefix + id] = signature;
+   }
   }
  }
  if (tables.includes("patients")) {
@@ -1101,11 +1126,21 @@ export async function prepareIncrementalSnapshotCacheFromBackupData(baselineKey:
     photoSources[id] = photoSourceSignature(row);
    }
   } else if (IMAGE_SIGNATURE_TABLES.has(table)) {
-   for (const row of rows) {
-    const id = rowKey(row);
-    if (id === null) continue;
-    const signature = rowImageSignature(row);
-    if (signature) photoSources["images:" + table + ":" + id] = signature;
+   if (table === "patientHistory") {
+    const sourceRows = db.getAllSync<any>("SELECT id,snapshot_json FROM patient_history");
+    for (const row of sourceRows) {
+     const id = rowKey(row);
+     if (id === null) continue;
+     const signature = rowImageSignature({ snapshot_json: String(row.snapshot_json || "") });
+     if (signature) photoSources["images:" + table + ":" + id] = signature;
+    }
+   } else {
+    for (const row of rows) {
+     const id = rowKey(row);
+     if (id === null) continue;
+     const signature = rowImageSignature(row);
+     if (signature) photoSources["images:" + table + ":" + id] = signature;
+    }
    }
   }
  }
