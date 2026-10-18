@@ -283,6 +283,11 @@ export async function restoreGoogleDriveBackupById(fileId: string) {
   if (monthlyMatch) {
     const warnings: string[] = [];
     let applied = 0;
+    // The monthly snapshot's Drive modifiedTime does not change when its
+    // separate monthly journal is updated. Report the journal time when it is
+    // successfully applied so the restore picker does not label current data
+    // with the old snapshot date.
+    let effectiveModifiedTime = String(metadata.modifiedTime || "");
     const journalFile = await findBackupByName("Ortho Logbook Backup - Month " + monthlyMatch[1] + " Changes.orbackup");
     if (journalFile?.id) {
       try {
@@ -292,6 +297,7 @@ export async function restoreGoogleDriveBackupById(fileId: string) {
             Array.isArray(journal.changedTables)) {
           applyIncrementalToMaster(parsed, journal, journal._rowDelta !== true);
           parsed.createdAt = journal.createdAt || parsed.createdAt;
+          if (journalFile.modifiedTime) effectiveModifiedTime = String(journalFile.modifiedTime);
           applied = 1;
         }
       } catch (error: any) {
@@ -302,7 +308,7 @@ export async function restoreGoogleDriveBackupById(fileId: string) {
     parsed.incremental = false;
     delete parsed.changedTables; delete parsed._rowDelta; delete parsed.deletedIds;
     delete parsed.fullTables; delete parsed._baselineKey; delete parsed._updateCount;
-    return { name: String(metadata.name), modifiedTime: String(metadata.modifiedTime || ""),
+    return { name: String(metadata.name), modifiedTime: effectiveModifiedTime,
       backupText: JSON.stringify(parsed), appliedIncrementals: applied, recoveryWarnings: warnings };
   }
 
@@ -2137,6 +2143,7 @@ export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) 
   if (!candidates.length) throw new Error("No Ortho Logbook backup file was found in this Google Drive account. Backup folders are searched recursively; only actual backup files can be restored.");
   let file: any = null;
   let composed: any = null;
+  let effectiveModifiedTime = "";
   const rejectedFiles: string[] = [];
   // Prefer the newest valid full backup, but fall back to older full backups
   // if the newest matching file is damaged or is an unrelated similarly named file.
@@ -2159,6 +2166,7 @@ export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) 
     }
     file = candidate;
     composed = parsed;
+    effectiveModifiedTime = String(candidate.modifiedTime || "");
     break;
   }
   if (!file || !composed) {
@@ -2276,11 +2284,15 @@ export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) 
     if (appliedAnyTable) {
       appliedIncrementals += 1;
       composed.createdAt = delta.createdAt || composed.createdAt;
+      const deltaModifiedTime = String(deltaFile.modifiedTime || "");
+      if (deltaModifiedTime && (!effectiveModifiedTime || Date.parse(deltaModifiedTime) > Date.parse(effectiveModifiedTime))) {
+        effectiveModifiedTime = deltaModifiedTime;
+      }
     }
   }
   composed.incremental = false;
   delete composed.changedTables;
   composed.filter = { type: "all" };
-  return { backupText: JSON.stringify(composed), name: file.name, modifiedTime: file.modifiedTime, appliedIncrementals, recoveryWarnings };
+  return { backupText: JSON.stringify(composed), name: file.name, modifiedTime: effectiveModifiedTime || String(file.modifiedTime || ""), appliedIncrementals, recoveryWarnings };
 }
 
