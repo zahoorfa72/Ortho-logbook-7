@@ -339,11 +339,11 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
      // Include patient records for anyone with history created in this period,
      // even if their original admit date was earlier.
      patients = db.getAllSync<any>(
-       "SELECT * FROM patients WHERE date LIKE ? OR id IN (SELECT DISTINCT patient_id FROM patient_history WHERE created_at LIKE ?) ORDER BY date DESC, created_at DESC",
+       "SELECT id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,implant_id,implant_ii_id,address,file_name,date,created_at,created_by,updated_at,updated_by FROM patients WHERE date LIKE ? OR id IN (SELECT DISTINCT patient_id FROM patient_history WHERE created_at LIKE ?) ORDER BY date DESC, created_at DESC",
        [pattern, pattern],
      );
    } else {
-     patients = db.getAllSync<any>(`SELECT * FROM patients${pf.sql} ORDER BY date DESC, created_at DESC`, pf.args);
+     patients = db.getAllSync<any>(`SELECT id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,implant_id,implant_ii_id,address,file_name,date,created_at,created_by,updated_at,updated_by FROM patients${pf.sql} ORDER BY date DESC, created_at DESC`, pf.args);
    }
  }
  const selectedPatientIds = new Set(patients.map((p:any)=>String(p.id)));
@@ -353,7 +353,11 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
  for(let i=0;i<patients.length;i++){
    const patient = patients[i];
    const patientId = String(patient.id ?? "");
-   const sourceSignature = photoSourceSignature(patient);
+   // Fetch only one patient's large photo payload at a time. SELECT * across all
+   // patients used to load hundreds of MB of base64 into memory before export.
+   const photoRow = db.getFirstSync<any>("SELECT photo_uri,photos_json FROM patients WHERE id=?", [patientId]) || {};
+   const patientWithPhotos = { ...patient, ...photoRow };
+   const sourceSignature = photoSourceSignature(patientWithPhotos);
    const previous = previousPatientsById.get(patientId);
    if (changedTables?.includes("patients") && patientId && previous &&
        previousPhotoSources?.[patientId] === sourceSignature) {
@@ -368,7 +372,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
      embeddedPatients.push({...patient, photo_uri: previous.photo_uri || "", photos_json: previous.photos_json});
    } else {
      onProgress?.("Reading original patient photos… " + (i + 1) + "/" + patients.length);
-     embeddedPatients.push(await embedPatientPhotos(patient, compressedPhotoCache));
+     embeddedPatients.push(await embedPatientPhotos(patientWithPhotos, compressedPhotoCache));
      onProgress?.("Patient photos prepared " + (i + 1) + "/" + patients.length);
      // Yield after each patient so progress updates and Back remain responsive
      // on phones with large reports.
@@ -379,10 +383,14 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
    // 57+ patient reports alive is enough to exhaust Android's JS heap.
    patient.photo_uri = "";
    patient.photos_json = "";
+   patientWithPhotos.photo_uri = "";
+   patientWithPhotos.photos_json = "";
+   photoRow.photo_uri = "";
+   photoRow.photos_json = "";
  }
 
  onProgress?.("Patient photos prepared; reading historical reports…");
- const historyAll=include("patientHistory") ? db.getAllSync<any>("SELECT * FROM patient_history ORDER BY created_at ASC") : [];
+ const historyAll=include("patientHistory") ? db.getAllSync<any>("SELECT id,patient_id,user_id,action,created_at FROM patient_history ORDER BY created_at ASC") : [];
  const history=filter.type==="all" ? historyAll : filter.type === "month" || filter.type === "year"
    ? historyAll.filter((h:any)=>String(h.created_at || "").startsWith(String(filter.value || "") + "-"))
    : historyAll.filter((h:any)=>selectedPatientIds.has(String(h.patient_id)) && String(h.created_at || "").startsWith(String(filter.value || "")));
@@ -395,8 +403,10 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
      // Yield to React Native so the progress message and cancel/back UI remain responsive.
      await new Promise<void>((resolve) => setTimeout(resolve, 0));
    }
+   const snapshotRow = db.getFirstSync<any>("SELECT snapshot_json FROM patient_history WHERE id=?", [h.id]);
+   const rawSnapshot = String(snapshotRow?.snapshot_json || "");
    try {
-     const snap = JSON.parse(String(h.snapshot_json || ""));
+     const snap = JSON.parse(rawSnapshot);
      // Historical patient snapshots can contain another copy of every photo.
      // Keep history intact but compress/embed those copies too, and reuse
      // already-compressed identical photos instead of allocating them again.
@@ -432,12 +442,12 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
      // image-heavy snapshot after a portable replacement has been made.
      h.snapshot_json = "";
    } catch {
-     embeddedHistory.push(h);
+     embeddedHistory.push({ ...h, snapshot_json: rawSnapshot });
    }
  }
 
  const trashSourceRows = include("trash") ? (() => {
-   const all = db.getAllSync<any>("SELECT * FROM deleted_records ORDER BY deleted_at DESC");
+   const all = db.getAllSync<any>("SELECT id,kind,title,deleted_at,expires_at,deleted_by FROM deleted_records ORDER BY deleted_at DESC");
    if (filter.type === "all") return all;
    const prefix = String(filter.value || "");
    return all.filter((row:any) => String(row.deleted_at || "").startsWith(prefix));
@@ -448,8 +458,9 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
      onProgress?.("Processing deleted records and trash… " + (trashIndex + 1) + "/" + trashSourceRows.length);
      await new Promise<void>((resolve) => setTimeout(resolve, 0));
    }
+   const payloadRow = db.getFirstSync<any>("SELECT payload_json FROM deleted_records WHERE id=?", [entry.id]);
    let payload:any = {};
-   try { payload = JSON.parse(String(entry.payload_json || "{}")); } catch { payload = {}; }
+   try { payload = JSON.parse(String(payloadRow?.payload_json || "{}")); } catch { payload = {}; }
    for (const patient of Array.isArray(payload.patients) ? payload.patients : []) {
      const embedded = await embedPatientPhotos(patient, compressedPhotoCache);
      Object.assign(patient, embedded);
@@ -506,20 +517,22 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
   inventoryCategories:include("inventoryCategories") ? db.getAllSync<any>("SELECT * FROM inventory_categories ORDER BY name COLLATE NOCASE") : [],
   // Period archives are for dated activity, not a duplicate snapshot of the
   // entire current stock and all its bill photos. The all-time master retains it.
-  inventory:include("inventory") && filter.type==="all" ? await mapWithConcurrency(db.getAllSync<any>("SELECT id,name,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,low_stock_triggered_at,low_stock_since FROM inventory ORDER BY COALESCE(category,''),name COLLATE NOCASE,COALESCE(size,'')"), 2, async (row:any) => {
-    const billImage = typeof row.bill_image === "string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(row.bill_image)
-      ? await embedOptionalPhoto(row.bill_image, compressedPhotoCache)
-      : row.bill_image;
-    const portableRow = { ...row, bill_image: billImage };
-    row.bill_image = "";
-    return portableRow;
+  inventory:include("inventory") && filter.type==="all" ? await mapWithConcurrency(db.getAllSync<any>("SELECT id,name,category_id,category,size,quantity,unit,minimum_stock,added_date,low_stock_triggered_at,low_stock_since FROM inventory ORDER BY COALESCE(category,''),name COLLATE NOCASE,COALESCE(size,'')"), 2, async (row:any) => {
+    const billRow = db.getFirstSync<any>("SELECT bill_image FROM inventory WHERE id=?", [row.id]);
+    const sourceBillImage = billRow?.bill_image;
+    const billImage = typeof sourceBillImage === "string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(sourceBillImage)
+      ? await embedOptionalPhoto(sourceBillImage, compressedPhotoCache)
+      : sourceBillImage;
+    billRow && (billRow.bill_image = "");
+    return { ...row, bill_image: billImage };
   }) : [],
   patientImplants:include("patientImplants") ? db.getAllSync<any>("SELECT * FROM patient_implants ORDER BY created_at ASC").filter((row:any)=>filter.type==="all" || selectedPatientIds.has(String(row.patient_id))) : [],
   patientCustomFields:include("patientCustomFields") ? db.getAllSync<any>("SELECT * FROM patient_custom_fields ORDER BY sort_order ASC,label COLLATE NOCASE") : [],
-  implantRecords:include("implantRecords") ? await mapWithConcurrency(db.getAllSync<any>(`SELECT * FROM implant_records${whereForFilter(filter,"created_at").sql} ORDER BY created_at ASC`, whereForFilter(filter,"created_at").args), 2, async (row:any) => {
-    let billFiles = row.bill_files_json;
+  implantRecords:include("implantRecords") ? await mapWithConcurrency(db.getAllSync<any>(`SELECT id,name,category,size,manufacturer,model,lot_number,serial_number,expiry_date,supplier,quantity,unit,purchase_price,notes,created_at,updated_at,created_by,updated_by FROM implant_records${whereForFilter(filter,"created_at").sql} ORDER BY created_at ASC`, whereForFilter(filter,"created_at").args), 2, async (row:any) => {
+    const billRow = db.getFirstSync<any>("SELECT bill_files_json FROM implant_records WHERE id=?", [row.id]);
+    let billFiles = billRow?.bill_files_json;
     try {
-      const parsed = JSON.parse(String(row.bill_files_json || "[]"));
+      const parsed = JSON.parse(String(billFiles || "[]"));
       if (Array.isArray(parsed)) {
         const compressed = [];
         for (const file of parsed) {
@@ -532,6 +545,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
     } catch {}
     const portableRow = { ...row, bill_files_json: billFiles };
     row.bill_files_json = "";
+    if (billRow) billRow.bill_files_json = "";
     return portableRow;
   }) : [],
   expenses:include("expenses") ? (()=>{const f=whereForFilter(filter,"date");return db.getAllSync<any>(`SELECT * FROM expenses${f.sql} ORDER BY date DESC, created_at DESC`,f.args);})() : [],
