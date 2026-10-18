@@ -76,15 +76,16 @@ function isOutOfMemoryError(error: unknown): boolean {
 }
 
 async function readPickedFile(uri: string, knownSize?: number | null): Promise<string> {
-  // A whole-file JSON/encrypted backup is currently decoded in memory. Avoid
-  // triggering Android's hard heap limit and never retry the same huge read
-  // through multiple APIs after an allocation failure.
-  const MAX_SAFE_IN_MEMORY_BACKUP_BYTES = 48 * 1024 * 1024;
+  // Legacy .orbackup files are monolithic and must be decoded in memory.
+  // Allow selecting large existing files (including ~712 MB files) so the
+  // reader can make a best-effort attempt on high-memory devices. OOM remains
+  // caught below; this does not make monolithic decryption streaming-safe.
+  const MAX_SAFE_IN_MEMORY_BACKUP_BYTES = 768 * 1024 * 1024;
   if (typeof knownSize === "number" && knownSize > MAX_SAFE_IN_MEMORY_BACKUP_BYTES) {
     throw new Error(
       "This backup is too large for the current phone restore reader (" +
         Math.round(knownSize / (1024 * 1024)) +
-        " MB). Keep this file unchanged. Restore it from a smaller backup for now; large all-time backups need the new split-backup restore format.",
+        " MB). Keep this file unchanged. Restore it from a smaller backup for now; this device may not have enough memory for a monolithic backup.",
     );
   }
 
