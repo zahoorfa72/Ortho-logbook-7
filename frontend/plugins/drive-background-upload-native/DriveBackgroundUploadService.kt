@@ -146,7 +146,9 @@ class DriveBackgroundUploadService : Service() {
   private fun downloadToFile() {
     var failures = 0
     var lastError: Exception? = null
-    while (failures < 12) {
+    // Large medical backups may be downloading over unstable mobile data.
+    // Keep retrying for longer and retain all bytes already written.
+    while (failures < 30) {
       val existingBytes = if (file.isFile) file.length().coerceAtLeast(0L) else 0L
       val connection = URL(uploadUrl).openConnection() as HttpURLConnection
       try {
@@ -159,6 +161,20 @@ class DriveBackgroundUploadService : Service() {
         if (code == 401 || code == 403) {
           val detail = try { connection.errorStream?.bufferedReader()?.use { it.readText() } ?: "" } catch (_: Exception) { "" }
           throw IllegalStateException("Google Drive authorization failed (HTTP " + code + "). Reconnect Google Drive, then retry. " + detail.take(160))
+        }
+        if (code == 416 && existingBytes > 0L) {
+          // Some servers answer Range Not Satisfiable when the previous attempt
+          // actually received the last byte but died before marking completion.
+          // Verify against the advertised total, if available, before accepting.
+          val contentRange = connection.getHeaderField("Content-Range") ?: ""
+          val unsatisfied = Regex("bytes\\s+\\*/(\\d+)", RegexOption.IGNORE_CASE).find(contentRange)
+          val expected = unsatisfied?.groupValues?.get(1)?.toLongOrNull() ?: 0L
+          if (expected > 0L && file.length() == expected) {
+            prefs.edit().putLong("$taskId.uploadedBytes", file.length()).putLong("$taskId.totalBytes", expected).apply()
+            return
+          }
+          file.delete()
+          throw IllegalStateException("Google Drive could not resume this partial file; restarting safely from byte zero.")
         }
         if (code !in 200..299) {
           val detail = try { connection.errorStream?.bufferedReader()?.use { it.readText() } ?: "" } catch (_: Exception) { "" }
@@ -174,6 +190,10 @@ class DriveBackgroundUploadService : Service() {
         // If the server ignores Range and returns 200, restart from byte zero
         // instead of appending a duplicate copy to the partial backup.
         val writeAppend = append && (rangeMatch == null || rangeMatch.groupValues[1].toLong() == existingBytes)
+        if (existingBytes > 0L && code == 206 && !writeAppend) {
+          file.delete()
+          throw IllegalStateException("Google Drive returned an invalid resume offset; restarting safely from byte zero.")
+        }
         val rangeTotal = if (rangeMatch != null && rangeMatch.groupValues[3] != "*") rangeMatch.groupValues[3].toLongOrNull() ?: 0L else 0L
         val contentLength = connection.contentLengthLong.coerceAtLeast(0L)
         val totalBytes = if (rangeTotal > 0L) rangeTotal else if (writeAppend) existingBytes + contentLength else contentLength
@@ -206,15 +226,15 @@ class DriveBackgroundUploadService : Service() {
         val message = error.message ?: ""
         if (message.contains("authorization failed") || message.contains("HTTP 401") || message.contains("HTTP 403")) throw error
         failures += 1
-        if (failures >= 12) break
-        val delay = minOf(2000L * (1L shl (failures - 1).coerceIn(0, 4)), 30000L)
-        updateNotification(prefs.getInt("$taskId.progress", 0), "Connection interrupted; resuming backup download (" + failures + "/12)…")
+        if (failures >= 30) break
+        val delay = minOf(2000L * (1L shl (failures - 1).coerceIn(0, 4)), 60000L)
+        updateNotification(prefs.getInt("$taskId.progress", 0), "Connection interrupted; resuming backup download (" + failures + "/30)…")
         try { Thread.sleep(delay) } catch (_: InterruptedException) { Thread.currentThread().interrupt(); throw IllegalStateException("Background backup download was interrupted.") }
       } finally {
         connection.disconnect()
       }
     }
-    throw IllegalStateException("Background backup download stopped after 12 retries: " + (lastError?.message ?: "network unavailable") + ". Reopen Ortho Logbook and retry; downloaded bytes were retained for resume.")
+    throw IllegalStateException("Background backup download paused after 30 retries: " + (lastError?.message ?: "network unavailable") + ". Your partial file is kept; retrying will continue from the saved bytes.")
   }
 
   private fun uploadResumable(): JSONObject {

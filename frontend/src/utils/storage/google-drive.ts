@@ -1725,7 +1725,9 @@ async function downloadDriveJson(fileId: string, onProgress?: (message: string) 
   const background = NativeModules.DriveBackgroundUpload;
   if (Platform.OS === "android" && typeof background?.startDownload === "function" && typeof background?.getStatus === "function" && FileSystem.cacheDirectory) {
     const targetUri = FileSystem.cacheDirectory + "ortho-drive-restore-" + fileId.replace(/[^a-zA-Z0-9_-]/g, "_") + ".json";
-    try { await FileSystem.deleteAsync(targetUri, { idempotent: true }); } catch {}
+    // Keep any partial file from a previous interrupted attempt. The native
+    // service validates the server's Content-Range before appending, and starts
+    // from byte zero if Drive does not support range resume.
     const taskId = await background.startDownload(url, token, targetUri);
     let lastPercent = -1;
     let lastLoaded = -1;
