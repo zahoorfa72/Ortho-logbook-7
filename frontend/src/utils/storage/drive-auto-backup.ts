@@ -119,9 +119,42 @@ async function runBackup() {
   });
 
   try {
-    const result = await backupIncrementalToGoogleDrive(batch, (message) => {
-      setDriveSyncState({ phase: "uploading", updates: batch.length, message });
-    });
+    // A very large first-sync batch can exceed the JavaScript engine's maximum
+    // string length before the native file uploader gets control. If that exact
+    // failure occurs, retry the same work in smaller table groups. Each group
+    // uses the normal verified journal/cache path, so changes remain recoverable
+    // and a retry after partial success is safe (already-synced groups diff to no-op).
+    const syncBatch = async (tables: string[]): Promise<any> => {
+      try {
+        return await backupIncrementalToGoogleDrive(tables, (message) => {
+          setDriveSyncState({ phase: "uploading", updates: batch.length, message });
+        });
+      } catch (error) {
+        const details = error instanceof Error ? error.message : String(error || "");
+        if (!/String length exceeds limit/i.test(details) || tables.length <= 1) {
+          if (/String length exceeds limit/i.test(details) && tables.length === 1) {
+            throw new Error(
+              "One backup data group is larger than this Android build can serialize. Local data remains on this phone. Install the latest APK with large-backup streaming, then retry. Original patient images have not been reduced."
+            );
+          }
+          throw error;
+        }
+        const midpoint = Math.ceil(tables.length / 2);
+        setDriveSyncState({
+          phase: "uploading",
+          updates: batch.length,
+          message: "Large backup detected · safely splitting the sync into smaller groups…",
+        });
+        const first = await syncBatch(tables.slice(0, midpoint));
+        const second = await syncBatch(tables.slice(midpoint));
+        return {
+          ...second,
+          baselineCreated: !!first?.baselineCreated || !!second?.baselineCreated,
+          skipped: !!first?.skipped && !!second?.skipped,
+        };
+      }
+    };
+    const result = await syncBatch(batch);
     retryAttempt = 0;
     const completedAt = result.completedAt
       ? new Date(result.completedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
