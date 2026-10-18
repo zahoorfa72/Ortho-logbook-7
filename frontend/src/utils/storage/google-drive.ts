@@ -591,6 +591,7 @@ async function uploadNativeBackground(
   totalBytes: number,
   onProgress?: (stage: string) => void,
   authRetry = 0,
+  taskLabel = "backup",
 ): Promise<any> {
   const nativeUploader = NativeModules.DriveBackgroundUpload;
   if (!nativeUploader?.startUpload || !nativeUploader?.getStatus) {
@@ -616,7 +617,7 @@ async function uploadNativeBackground(
       if (authRetry < 1 && /HTTP 401|authorization expired|unauthorized/i.test(detail)) {
         onProgress?.("Refreshing Google authorization and resuming the existing upload…");
         const refreshedToken = await accessToken();
-        return uploadNativeBackground(sessionUrl, refreshedToken, fileUri, totalBytes, onProgress, authRetry + 1);
+        return uploadNativeBackground(sessionUrl, refreshedToken, fileUri, totalBytes, onProgress, authRetry + 1, taskLabel);
       }
       throw new Error(detail + " Your local data is unchanged; retry when connected.");
     }
@@ -630,7 +631,7 @@ async function uploadNativeBackground(
       lastProgressAt = Date.now();
       const exactPercent = Math.min(100, (uploadedBytes / Math.max(1, totalBytes)) * 100);
       onProgress?.(
-        "Uploading backup to Google Drive in background… " + exactPercent.toFixed(1) +
+        "Uploading " + taskLabel + " to Google Drive in background… " + exactPercent.toFixed(1) +
         "% (" + formatBytes(uploadedBytes) + " / " + formatBytes(totalBytes) + ")"
       );
     } else if (Date.now() - lastProgressAt >= noProgressLimitMs) {
@@ -793,7 +794,7 @@ async function uploadStagedJsonFile(uri: string, totalBytes: number, existingId?
   }
   const sessionUrl = response.headers.get("Location");
   if (!sessionUrl) throw new Error("Google Drive did not provide an upload session. Reconnect your Google account and retry.");
-  const uploaded = await uploadNativeBackground(sessionUrl, token, uri, totalBytes, onProgress);
+  const uploaded = await uploadNativeBackground(sessionUrl, token, uri, totalBytes, onProgress, 0, fileName);
   return await verifyUploadedFile(uploaded, fileName, totalBytes, existingId);
 }
 
@@ -894,7 +895,7 @@ async function uploadContent(backupText: string, existingId?: string, onProgress
       // The Android foreground service owns the file transfer. It continues
       // sending 512 KiB Drive chunks while the app is backgrounded or the
       // screen is locked, and reconciles progress with Drive after interruptions.
-      const nativeResult = await uploadNativeBackground(sessionUrl, token, stagedFileUri, totalBytes, onProgress);
+      const nativeResult = await uploadNativeBackground(sessionUrl, token, stagedFileUri, totalBytes, onProgress, 0, fileName);
       return await verifyUploadedFile(nativeResult, fileName, totalBytes, existingId);
     }
 
