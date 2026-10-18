@@ -98,7 +98,7 @@ export default function BrandingScreen() {
     return (
       <View style={styles.container}>
         <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
-          <Pressable onPress={() => router.back()} style={styles.headerBtn}>
+          <Pressable onPress={() => router.canGoBack() ? router.back() : router.replace("/settings" as any)} style={styles.headerBtn}>
             <Ionicons name="arrow-back" size={24} color={colors.onSurface} />
           </Pressable>
           <Text style={styles.headerTitle}>Branding</Text>
@@ -202,7 +202,7 @@ export default function BrandingScreen() {
       await setBranding(nextDraft);
       triggerAutomaticDriveBackup("branding");
       toast("Branding updated.", "success");
-      router.back();
+      router.canGoBack() ? router.back() : router.replace("/settings" as any);
     } finally {
       setSaving(false);
     }
@@ -218,7 +218,7 @@ export default function BrandingScreen() {
   return (
     <View style={styles.container}>
       <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
-        <Pressable onPress={() => router.back()} style={styles.headerBtn} testID="branding-back">
+        <Pressable onPress={() => router.canGoBack() ? router.back() : router.replace("/settings" as any)} style={styles.headerBtn} testID="branding-back">
           <Ionicons name="arrow-back" size={24} color={colors.onSurface} />
         </Pressable>
         <Text style={styles.headerTitle}>Branding</Text>
