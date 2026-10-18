@@ -1578,7 +1578,7 @@ async function backupToGoogleDriveUnlocked(
       migrationAttempted = true;
       migrationComplete = true;
       cleanupSafe = true;
-      onProgress?.("Creating a fresh full backup from this phone; old backups will not be merged…");
+      options.onProgress?.("Creating a fresh full backup from this phone; old backups will not be merged…");
       backupData.version = Math.max(Number(backupData.version || 0), 7);
       backupData.createdAt = new Date().toISOString();
       backupData.filter = { type: "all" };
