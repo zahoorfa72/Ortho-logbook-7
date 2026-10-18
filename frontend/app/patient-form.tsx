@@ -31,6 +31,7 @@ import { Segmented } from "@/src/components/Segmented";
 import { useToast } from "@/src/components/toast";
 import { formatInventoryLabel } from "@/src/utils/inventory-label";
 import { createPatientImagePdfFile, getPatientImageArchive, openPatientImageArchivePdf } from "@/src/utils/storage/patient-image-archive";
+import { downloadPatientImageArchiveForPatient } from "@/src/utils/storage/google-drive";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 const LAB_OCR_PIPELINE_VERSION = "row-aware-2026-10-17-v4-admin-aliases";
 
@@ -1098,6 +1099,25 @@ export default function PatientForm() {
     }
   };
 
+  const openOrDownloadPatientArchivePdf = async () => {
+    if (photoBusy) return;
+    const patientId = String(id || p.id || "");
+    if (!patientId || patientId === "unsaved-patient") {
+      toast("Save this patient record before downloading archived images.", "error");
+      return;
+    }
+    setPhotoBusy(true);
+    try {
+      await downloadPatientImageArchiveForPatient({ id: patientId, name: p.name, mrNo: p.mrNo });
+      await openPatientImageArchivePdf(patientId);
+      toast("Verified PDF for this patient downloaded and opened.", "success");
+    } catch (e: any) {
+      toast(e?.message || "Could not download this patient's archived PDF.", "error");
+    } finally {
+      setPhotoBusy(false);
+    }
+  };
+
   const createPatientPdf = async () => {
     if (photoBusy) return;
     if (!p.photos.length) { toast("Add at least one patient image first.", "error"); return; }
@@ -1671,14 +1691,16 @@ export default function PatientForm() {
             ))}
           </ScrollView>
         )}
-        {isEdit && patientArchiveAvailable ? (
+        {isEdit ? (
           <Pressable
-            style={[styles.secondary, { marginTop: spacing.sm, justifyContent: "center", borderColor: colors.brandPrimary }]}
-            onPress={() => openPatientImageArchivePdf(String(id)).catch((error:any) => Alert.alert("Patient image PDF", String(error?.message || error)))}
+            style={[styles.secondary, { marginTop: spacing.sm, justifyContent: "center", borderColor: colors.brandPrimary }, photoBusy && { opacity: 0.5 }]}
+            onPress={() => { void openOrDownloadPatientArchivePdf(); }}
+            disabled={photoBusy}
             accessibilityRole="button"
+            testID="download-patient-archive-from-drive-button"
           >
-            <Ionicons name="document-text-outline" size={18} color={colors.brandPrimary} />
-            <Text style={[styles.secondaryText, { color: colors.brandPrimary }]}>Open archived images PDF</Text>
+            <Ionicons name="cloud-download-outline" size={18} color={colors.brandPrimary} />
+            <Text style={[styles.secondaryText, { color: colors.brandPrimary }]}>{photoBusy ? "Downloading…" : "Download / Open archived images PDF"}</Text>
           </Pressable>
         ) : null}
 

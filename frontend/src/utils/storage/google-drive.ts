@@ -1028,6 +1028,60 @@ async function downloadPatientImageArchivesFromDrive(backup: any, onProgress?: (
   }
 }
 
+
+export async function downloadPatientImageArchiveForPatient(
+  patient: { id: string; name?: string; mrNo?: string },
+  onProgress?: (stage: string) => void,
+): Promise<void> {
+  const patientId = String(patient?.id || "").trim();
+  if (!patientId) throw new Error("Save the patient record before downloading its archived images.");
+  const folder = await findPatientImagePdfFolder();
+  if (!folder?.id) throw new Error("The Patient Image PDFs folder was not found in the connected Google Drive.");
+  const archives = await getLocalPatientImageArchives();
+  const local = archives.find(item => item.patientId === patientId);
+  const fileName = local?.fileName;
+  const token = await accessToken();
+  const q = encodeURIComponent("'" + escapeDriveQuery(String(folder.id)) + "' in parents and appProperties has { key='orthoPatientId' and value='" + escapeDriveQuery(patientId.slice(0,100)) + "' } and trashed = false");
+  onProgress?.("Finding this patient's archived PDF…");
+  const response = await driveRequest(DRIVE_API + "?q=" + q + "&spaces=drive&pageSize=100&orderBy=modifiedTime%20desc&includeItemsFromAllDrives=true&supportsAllDrives=true&fields=files(id,name,mimeType,size,modifiedTime,parents,appProperties)");
+  const data = await response.json();
+  const files = Array.isArray(data.files) ? data.files : [];
+  let remote = files.find((item:any) => item?.id && item.mimeType === "application/pdf" &&
+    String(item.appProperties?.orthoPatientId || "") === patientId.slice(0,100) &&
+    (!fileName || String(item.name || "") === fileName));
+  if (!remote && fileName) {
+    const byName = await findPatientPdfInFolder(fileName, String(folder.id));
+    if (byName?.id && byName.mimeType === "application/pdf" &&
+        String(byName.appProperties?.orthoPatientId || "") === patientId.slice(0,100)) remote = byName;
+  }
+  if (!remote?.id || remote.mimeType !== "application/pdf" || Number(remote.size || 0) < 8 ||
+      String(remote.appProperties?.orthoPatientId || "") !== patientId.slice(0,100) ||
+      !(Array.isArray(remote.parents) ? remote.parents : []).includes(String(folder.id))) {
+    throw new Error("No verified image PDF for this exact patient ID was found. No other patient's images were downloaded.");
+  }
+  if (!FileSystem.cacheDirectory) throw new Error("Temporary phone storage is unavailable.");
+  onProgress?.("Downloading archived images for " + String(patient.name || "this patient") + "…");
+  const target = FileSystem.cacheDirectory + "ortho-patient-pdf-" + Date.now() + ".pdf";
+  try {
+    const result = await FileSystem.downloadAsync(DRIVE_API + "/" + encodeURIComponent(String(remote.id)) + "?alt=media",
+      target, { headers: { Authorization: "Bearer " + token } });
+    const info = await FileSystem.getInfoAsync(result.uri);
+    if (Number(result.status || 0) < 200 || Number(result.status || 0) >= 300 ||
+        !info.exists || Number(info.size || 0) < 8 || Number(info.size || 0) !== Number(remote.size || 0)) {
+      throw new Error("The patient's PDF download was incomplete. Try again when the connection is stable.");
+    }
+    await installPatientImageArchivePdf({
+      patientId, patientName: String(patient.name || local?.patientName || "Patient"),
+      mrNo: String(patient.mrNo || local?.mrNo || ""), fileName: String(remote.name),
+      sourceStamp: String(remote.appProperties?.orthoSourceStamp || local?.sourceStamp || ""),
+      archivedAt: String(remote.modifiedTime || local?.archivedAt || new Date().toISOString()),
+      imageCount: Number(local?.imageCount || 0), driveFileId: String(remote.id),
+    }, result.uri);
+  } finally {
+    await FileSystem.deleteAsync(target, { idempotent: true }).catch(() => {});
+  }
+}
+
 async function uploadContent(backupText: string, existingId?: string, onProgress?: (stage: string) => void, fileName: string = BACKUP_NAME) {
   const token = await accessToken();
   // The native uploader receives a file URI, not the backup string. Use it for
