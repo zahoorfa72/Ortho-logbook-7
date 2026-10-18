@@ -7,6 +7,7 @@ import * as ImageManipulator from "expo-image-manipulator";
 import * as Sharing from "expo-sharing";
 import { Asset, requestPermissionsAsync } from "expo-media-library";
 import * as FileSystem from "expo-file-system/legacy";
+import { convert as convertPdfPagesToImages } from "@uzimandias/react-native-pdf-to-image";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { extractLabReportDate, hasKnownLabTestName, isLabMetadataLine, isLikelyLabReportText, parseLabReportRows, recognizeLabText } from "@/src/utils/lab-ocr";
 import { detectScreeningStatuses } from "@/src/utils/screening-status";
@@ -31,7 +32,7 @@ import { Segmented } from "@/src/components/Segmented";
 import { useToast } from "@/src/components/toast";
 import { formatInventoryLabel } from "@/src/utils/inventory-label";
 import { createPatientImagePdfFile, getPatientImageArchive, openPatientImageArchivePdf } from "@/src/utils/storage/patient-image-archive";
-import { deletePatientImagePdfFromDrive, ensurePatientImagePdfOnDrive } from "@/src/utils/storage/google-drive";
+import { deletePatientImagePdfFromDrive, downloadPatientImageArchiveForPatient } from "@/src/utils/storage/google-drive";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 const LAB_OCR_PIPELINE_VERSION = "row-aware-2026-10-17-v4-admin-aliases";
 
@@ -68,7 +69,7 @@ export default function PatientForm() {
   const toast = useToast();
   const qc = useQueryClient();
   const { user } = useAuth();
-  const { id } = useLocalSearchParams<{ id?: string }>();
+  const { id, downloadDriveImages } = useLocalSearchParams<{ id?: string; downloadDriveImages?: string }>();
   const isEdit = !!id;
   const [implantSearch, setImplantSearch] = useState("");
 
@@ -1141,15 +1142,53 @@ export default function PatientForm() {
     }
     setPhotoBusy(true);
     try {
-      const result = await ensurePatientImagePdfOnDrive(patientId);
-      await Linking.openURL(result.url);
-      toast("Verified patient PDF opened from Google Drive.", "success");
+      const archive = await downloadPatientImageArchiveForPatient({ id: patientId, name: p.name, mrNo: p.mrNo });
+      if (archive.imageCount < 1) throw new Error("This patient's Drive PDF contains no images to import.");
+      const oldStamp = String(p.customData?.drivePatientImagePdfSourceStamp || "");
+      const oldUrisRaw = p.customData?.drivePatientImportedImageUris || "[]";
+      let oldImportedUris: string[] = [];
+      try { const parsed = JSON.parse(oldUrisRaw); if (Array.isArray(parsed)) oldImportedUris = parsed.filter((x:any)=>typeof x === "string"); } catch {}
+      if (oldStamp === archive.sourceStamp && oldImportedUris.length) {
+        toast("These exact Drive images are already saved in this patient's file.", "info");
+        return;
+      }
+      const outputDir = String(FileSystem.cacheDirectory || FileSystem.documentDirectory || "") + "ortho-drive-patient-images/";
+      await FileSystem.makeDirectoryAsync(outputDir, { intermediates: true });
+      const pages = await convertPdfPagesToImages(archive.localUri, {
+        format: "jpeg", scale: 2, quality: 0.96, maxWidth: 2400, outputDir,
+        filePrefix: "patient-" + patientId.slice(-16) + "-page",
+      });
+      if (!Array.isArray(pages) || !pages.length) throw new Error("No readable image pages were found in this patient's Drive PDF.");
+      const importedUris: string[] = [];
+      for (const page of pages) importedUris.push(await persistPhoto(page.uri));
+      const preserved = p.photos.filter(uri => !oldImportedUris.includes(uri));
+      const mergedPhotos = [...preserved, ...importedUris];
+      const customData = {
+        ...(p.customData || {}),
+        drivePatientImagePdfSourceStamp: archive.sourceStamp,
+        drivePatientImportedImageUris: JSON.stringify(importedUris),
+      };
+      const payload = { ...p, photos: mergedPhotos, photoUri: mergedPhotos[0] || "", customData };
+      await api.put("/patients/" + encodeURIComponent(patientId), payload);
+      setP(previous => ({ ...previous, photos: mergedPhotos, photoUri: mergedPhotos[0] || "", customData }));
+      qc.invalidateQueries({ queryKey: ["patients"] });
+      qc.invalidateQueries({ queryKey: ["patient-detail", patientId] });
+      toast("Downloaded " + importedUris.length + " image page(s) from this patient's Drive PDF and saved them into this patient record.", "success");
     } catch (e: any) {
-      toast(e?.message || "Could not download this patient's archived PDF.", "error");
+      toast(e?.message || "Could not download this patient's images from Google Drive.", "error");
     } finally {
       setPhotoBusy(false);
     }
   };
+
+  const driveImportAutoRun = useRef("");
+  useEffect(() => {
+    const patientId = String(id || "");
+    if (downloadDriveImages !== "1" || !isEdit || !ready || !patientId) return;
+    if (driveImportAutoRun.current === patientId) return;
+    driveImportAutoRun.current = patientId;
+    void openOrDownloadPatientArchivePdf();
+  }, [downloadDriveImages, isEdit, ready, id]);
 
   const createPatientPdf = async () => {
     if (photoBusy) return;
@@ -1755,7 +1794,7 @@ export default function PatientForm() {
             testID="download-patient-archive-from-drive-button"
           >
             <Ionicons name="cloud-download-outline" size={18} color={colors.brandPrimary} />
-            <Text style={[styles.secondaryText, { color: colors.brandPrimary }]}>{photoBusy ? "Preparing / uploading PDF…" : "Open patient image PDF in Google Drive"}</Text>
+            <Text style={[styles.secondaryText, { color: colors.brandPrimary }]}>{photoBusy ? "Downloading images…" : "Download patient images from Drive"}</Text>
           </Pressable>
         ) : null}
 

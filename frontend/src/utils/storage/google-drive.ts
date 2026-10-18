@@ -4,7 +4,7 @@ import * as FileSystem from "expo-file-system/legacy";
 import { exportUnencryptedBackup, exportUnencryptedBackupData, exportIncrementalBackup, exportIncrementalBackupData, prepareIncrementalSnapshotCacheFromBackupData, commitIncrementalSnapshotCache, pruneBackupPhotoAssets, type BackupFilter } from "@/src/utils/storage/backup";
 import { markBackupTaken } from "@/src/utils/backup-reminder";
 import { storage } from "@/src/utils/storage";
-import { archiveEligiblePatientImages, archivePatientImagesForPatient, getLocalPatientImageArchives, installPatientImageArchivePdf, removePatientImageArchive, setPatientImageArchiveDriveState, type PatientImageArchive } from "@/src/utils/storage/patient-image-archive";
+import { archiveEligiblePatientImages, archivePatientImagesForPatient, getLocalPatientImageArchives, getPatientImageArchive, installPatientImageArchivePdf, removePatientImageArchive, setPatientImageArchiveDriveState, type PatientImageArchive } from "@/src/utils/storage/patient-image-archive";
 
 const LAST_DRIVE_BACKUP_KEY = "ortho_drive_last_successful_backup";
 const LAST_DRIVE_CONTENT_HASH_KEY = "ortho_drive_last_uploaded_content_hash";
@@ -121,21 +121,28 @@ export async function getGoogleGmailAccessToken(): Promise<string> {
 
 async function resolveAccessToken(): Promise<string> {
   configure();
-  const current = GoogleSignin.getCurrentUser();
-  const scopeVersion = String((await storage.secureGet(DRIVE_SCOPE_VERSION_KEY, "")) || "");
-  if (!current || scopeVersion !== DRIVE_SCOPE_VERSION) {
-    await connectGoogleAccount();
+  // Never launch the account chooser from a PDF/backup button tap.
+  // Recover a previously authorized account silently. Account selection or
+  // first-time consent remains an explicit action in Drive Settings.
+  let current = GoogleSignin.getCurrentUser();
+  if (!current && GoogleSignin.hasPreviousSignIn()) {
+    try {
+      await GoogleSignin.signInSilently();
+      current = GoogleSignin.getCurrentUser();
+    } catch {
+      // Explain how to reconnect instead of showing a chooser on each button tap.
+    }
+  }
+  if (!current) {
+    throw new Error("Google Drive is not connected in this app. Open Settings → Google Drive and connect your account once, then retry.");
   }
   try {
     const tokens = await GoogleSignin.getTokens();
-    if (!tokens.accessToken) throw new Error("Google did not return a Drive access token.");
+    if (!tokens.accessToken) throw new Error("Google did not return a Drive access token. Reconnect Google Drive from Settings.");
     return tokens.accessToken;
   } catch (error: any) {
     if (error?.code === statusCodes.SIGN_IN_REQUIRED || error?.code === "NO_SAVED_CREDENTIAL_FOUND") {
-      await connectGoogleAccount();
-      const tokens = await GoogleSignin.getTokens();
-      if (!tokens.accessToken) throw new Error("Google did not return a Drive access token.");
-      return tokens.accessToken;
+      throw new Error("Google Drive authorization expired. Reconnect it once from Settings → Google Drive, then retry.");
     }
     throw error;
   }
@@ -321,7 +328,11 @@ export async function restoreGoogleDriveBackupById(fileId: string, onProgress?: 
     parsed.incremental = false;
     delete parsed.changedTables; delete parsed._rowDelta; delete parsed.deletedIds;
     delete parsed.fullTables; delete parsed._baselineKey; delete parsed._updateCount;
-    await downloadPatientImageArchivesFromDrive(parsed);
+    try {
+      await downloadPatientImageArchivesFromDrive(parsed, onProgress);
+    } catch (error: any) {
+      warnings.push("The master backup data was downloaded, but some separate patient image PDFs could not be downloaded: " + String(error?.message || error));
+    }
     return { name: String(metadata.name), modifiedTime: effectiveModifiedTime,
       backupText: JSON.stringify(parsed), appliedIncrementals: applied, recoveryWarnings: warnings };
   }
@@ -470,6 +481,11 @@ export async function restoreGoogleDriveBackupById(fileId: string, onProgress?: 
   delete composed._baselineKey;
   delete composed._updateCount;
   composed.filter = { type: "all" };
+  try {
+    await downloadPatientImageArchivesFromDrive(composed, onProgress);
+  } catch (error: any) {
+    recoveryWarnings.push("The master backup data was downloaded, but some separate patient image PDFs could not be downloaded: " + String(error?.message || error));
+  }
   return {
     name: String(metadata.name || "Ortho Logbook Backup"),
     modifiedTime: String(metadata.modifiedTime || ""),
@@ -1087,15 +1103,10 @@ export async function uploadPatientImageArchivesToDrive(onProgress?: (stage: str
     onProgress?.("Checking patient image PDF " + (i + 1) + "/" + archives.length + ": " + archive.patientName);
     const local = await FileSystem.getInfoAsync(archive.localUri);
     if (!local.exists || Number(local.size || 0) < 8) throw new Error("The local patient PDF is missing: " + archive.fileName);
+    // Avoid a Drive network check for every patient after each one-record edit.
+    // A confirmed source stamp means this exact PDF was already uploaded.
+    if (archive.driveFileId && archive.driveSourceStamp === archive.sourceStamp) continue;
     let remote: any = null;
-    if (archive.driveFileId && archive.driveSourceStamp === archive.sourceStamp) {
-      try {
-        const check = await verifyPatientPdf(archive.driveFileId);
-        if (check.name === archive.fileName && Number(check.size || 0) === Number(local.size || 0) &&
-            String(check.appProperties?.orthoSourceStamp || "") === archive.sourceStamp &&
-            String(check.appProperties?.orthoPatientId || "") === archive.patientId) remote = check;
-      } catch { remote = null; }
-    }
     if (!remote) remote = await findPatientPdfInFolder(archive.fileName, folderId);
     if (remote && remote.mimeType === "application/pdf" &&
         Number(remote.size || 0) === Number(local.size || 0) &&
@@ -1169,7 +1180,7 @@ async function downloadPatientImageArchivesFromDrive(backup: any, onProgress?: (
 export async function downloadPatientImageArchiveForPatient(
   patient: { id: string; name?: string; mrNo?: string },
   onProgress?: (stage: string) => void,
-): Promise<void> {
+): Promise<{ localUri: string; sourceStamp: string; driveFileId: string; imageCount: number }> {
   const patientId = String(patient?.id || "").trim();
   if (!patientId) throw new Error("Save the patient record before downloading its archived images.");
   const folder = await findPatientImagePdfFolder();
@@ -1214,6 +1225,14 @@ export async function downloadPatientImageArchiveForPatient(
       archivedAt: String(remote.modifiedTime || local?.archivedAt || new Date().toISOString()),
       imageCount: Number(local?.imageCount || 0), driveFileId: String(remote.id),
     }, result.uri);
+    const installed = await getPatientImageArchive(patientId);
+    if (!installed?.localUri) throw new Error("The patient PDF was downloaded, but the verified phone copy could not be found.");
+    return {
+      localUri: installed.localUri,
+      sourceStamp: String(remote.appProperties?.orthoSourceStamp || installed.sourceStamp || ""),
+      driveFileId: String(remote.id),
+      imageCount: Number(installed.imageCount || 0),
+    };
   } finally {
     await FileSystem.deleteAsync(target, { idempotent: true }).catch(() => {});
   }

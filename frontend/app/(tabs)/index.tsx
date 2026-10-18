@@ -45,7 +45,7 @@ import {
   type ReminderState,
 } from "@/src/utils/backup-reminder";
 import { buildPatientListHtml, generateAndSharePdf } from "@/src/utils/pdf";
-import { deletePatientImagePdfFromDrive, ensurePatientImagePdfOnDrive } from "@/src/utils/storage/google-drive";
+import { deletePatientImagePdfFromDrive } from "@/src/utils/storage/google-drive";
 
 type LabScanStatus = {
   status: "not-scanned" | "queued" | "scanning" | "success" | "failed" | "stopped";
@@ -1369,8 +1369,7 @@ export default function Logbook() {
                   onPress={async (event: any) => {
                     event?.stopPropagation?.();
                     try {
-                      const result = await ensurePatientImagePdfOnDrive(String(item.id));
-                      await Linking.openURL(result.url);
+                      router.push({ pathname: "/patient-form", params: { id: String(item.id), downloadDriveImages: "1" } });
                     } catch (error: any) {
                       Alert.alert("Could not open patient PDF", String(error?.message || "Please check the Google Drive connection and try again."));
                     }
@@ -1378,7 +1377,7 @@ export default function Logbook() {
                   style={{ alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: spacing.xs, marginTop: spacing.sm, paddingVertical: spacing.xs, paddingHorizontal: spacing.sm, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.border }}
                 >
                   <Ionicons name="document-attach-outline" size={16} color={colors.brandPrimary} />
-                  <Text style={{ fontFamily: fontFamily.semibold, fontSize: fontSize.xs, color: colors.brandPrimary }}>Open patient image PDF in Drive</Text>
+                  <Text style={{ fontFamily: fontFamily.semibold, fontSize: fontSize.xs, color: colors.brandPrimary }}>Download patient images from Drive</Text>
                 </Pressable>
               )}
               {infectionResults(item).length ? (

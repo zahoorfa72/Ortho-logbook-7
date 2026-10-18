@@ -19,6 +19,7 @@ export type PatientImageArchive = {
   imageCount: number;
   driveFileId?: string;
   driveSourceStamp?: string;
+  patientUpdatedAt?: string;
 };
 
 async function readArchives(): Promise<Record<string, PatientImageArchive>> {
@@ -129,7 +130,7 @@ export async function archivePatientImagesForPatient(patientId: string, onProgre
   const id = String(patientId || "").trim();
   if (!id) throw new Error("Save this patient before creating an image PDF.");
   if (!FileSystem.documentDirectory) throw new Error("Private phone storage is unavailable for patient image archives.");
-  const patient = db.getFirstSync<any>("SELECT id,name,mr_no,date,created_at FROM patients WHERE id=?", [id]);
+  const patient = db.getFirstSync<any>("SELECT id,name,mr_no,date,created_at,updated_at FROM patients WHERE id=?", [id]);
   if (!patient) throw new Error("This patient is not available in the phone database. Refresh the patient list and try again.");
   const row = db.getFirstSync<any>("SELECT photo_uri,photos_json FROM patients WHERE id=?", [id]) || {};
   const sources = getPhotoSources(row);
@@ -157,6 +158,7 @@ export async function archivePatientImagesForPatient(patientId: string, onProgre
     await installPatientImageArchivePdf({
       patientId: id, patientName: name, mrNo, fileName, sourceStamp: stamp,
       archivedAt: new Date().toISOString(), imageCount: embedded.length,
+      patientUpdatedAt: String(patient.updated_at || ""),
       driveFileId: existing?.sourceStamp === stamp ? existing.driveFileId : undefined,
       driveSourceStamp: existing?.sourceStamp === stamp ? existing.driveSourceStamp : undefined,
     }, generated.uri);
@@ -172,24 +174,34 @@ export async function archiveEligiblePatientImages(onProgress?: (stage: string) 
   initializeDatabase();
   if (!FileSystem.documentDirectory) throw new Error("Private phone storage is unavailable for patient image archives.");
   await FileSystem.makeDirectoryAsync(ARCHIVE_DIR, { intermediates: true });
-  const patients = db.getAllSync<any>("SELECT id,name,mr_no,date,created_at FROM patients ORDER BY created_at ASC");
+  const patients = db.getAllSync<any>("SELECT id,name,mr_no,date,created_at,updated_at FROM patients ORDER BY created_at ASC");
   const archives = await readArchives();
   let changed = false;
   for (let i = 0; i < patients.length; i++) {
     const patient = patients[i];
     const id = String(patient.id || "");
     if (!id) continue;
-    const row = db.getFirstSync<any>("SELECT photo_uri,photos_json FROM patients WHERE id=?", [id]) || {};
-    const sources = getPhotoSources(row);
-    // Create a PDF for every patient regardless of record age. Patients without images
-    // receive a clearly labelled one-page PDF until photos are attached.
     const name = String(patient.name || "Patient");
     const mrNo = String(patient.mr_no || "");
-    const stamp = await stampFor(id, name, mrNo, String(patient.created_at || patient.date || ""), sources);
     const existing = archives[id];
+    // updated_at changes only for the patient the user saved. Don't read photo
+    // JSON or regenerate the PDF for every other patient on each backup.
+    if (existing && existing.patientUpdatedAt === String(patient.updated_at || "")) {
+      const cached = await FileSystem.getInfoAsync(existing.localUri);
+      if (cached.exists && Number(cached.size || 0) > 8) continue;
+    }
+    const row = db.getFirstSync<any>("SELECT photo_uri,photos_json FROM patients WHERE id=?", [id]) || {};
+    const sources = getPhotoSources(row);
+    const stamp = await stampFor(id, name, mrNo, String(patient.created_at || patient.date || ""), sources);
     if (existing?.sourceStamp === stamp) {
       const info = await FileSystem.getInfoAsync(existing.localUri);
-      if (info.exists && Number(info.size || 0) > 8) continue;
+      if (info.exists && Number(info.size || 0) > 8) {
+        if (existing.patientUpdatedAt !== String(patient.updated_at || "")) {
+          archives[id] = { ...existing, patientName: name, mrNo, patientUpdatedAt: String(patient.updated_at || "") };
+          await writeArchives(archives);
+        }
+        continue;
+      }
     }
     onProgress?.("Preparing patient image PDF " + (i + 1) + "/" + patients.length + ": " + name);
     const embedded: string[] = [];
@@ -206,7 +218,9 @@ export async function archiveEligiblePatientImages(onProgress?: (stage: string) 
     archives[id] = {
       patientId: id, patientName: name, mrNo, fileName, localUri: target,
       sourceStamp: stamp, archivedAt: new Date().toISOString(), imageCount: embedded.length,
-      driveFileId: existing?.driveFileId, driveSourceStamp: existing?.driveSourceStamp,
+      patientUpdatedAt: String(patient.updated_at || ""),
+      driveFileId: existing?.sourceStamp === stamp ? existing?.driveFileId : undefined,
+      driveSourceStamp: existing?.sourceStamp === stamp ? existing?.driveSourceStamp : undefined,
     };
     await writeArchives(archives);
     changed = true;
