@@ -175,6 +175,60 @@ export async function archiveEligiblePatientImages(onProgress?: (stage: string) 
   }
   return changed;
 }
+
+/** Create a patient-named PDF on demand without deleting or modifying source images. */
+export async function createPatientImagePdfFromSources(
+  patientId: string,
+  patientName: string,
+  mrNo: string,
+  sourceUris: string[],
+): Promise<PatientImageArchive> {
+  const id = String(patientId || "").trim();
+  const name = String(patientName || "Patient").trim() || "Patient";
+  const medicalRecordNo = String(mrNo || "").trim();
+  const sources = Array.from(new Set((sourceUris || []).filter((x): x is string => typeof x === "string" && !!x.trim()).map(x => x.trim())))
+    .filter(x => !x.startsWith("__ORTHO_PHOTO_REF__:"));
+  if (!id) throw new Error("Save the patient record before creating its image PDF.");
+  if (!sources.length) throw new Error("This patient has no images to export.");
+  if (!FileSystem.documentDirectory) throw new Error("Private phone storage is unavailable for patient image PDFs.");
+  await FileSystem.makeDirectoryAsync(ARCHIVE_DIR, { intermediates: true });
+  const embedded: string[] = [];
+  for (const source of sources) embedded.push(await toEmbeddableImage(source));
+  const html = makeHtml(name, medicalRecordNo, embedded);
+  const generated = await Print.printToFileAsync({ html, base64: false });
+  const fileName = fileNameFor(name, medicalRecordNo, id);
+  const target = ARCHIVE_DIR + fileName;
+  const staging = ARCHIVE_DIR + ".pending-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8) + ".pdf";
+  try {
+    await FileSystem.copyAsync({ from: generated.uri, to: staging });
+    const stagedInfo = await FileSystem.getInfoAsync(staging);
+    if (!stagedInfo.exists || Number(stagedInfo.size || 0) < 8) throw new Error("The generated patient PDF could not be verified.");
+    // Do not replace the previous PDF until the new one has been generated and verified.
+    const old = await FileSystem.getInfoAsync(target);
+    if (old.exists) await FileSystem.deleteAsync(target, { idempotent: true });
+    await FileSystem.moveAsync({ from: staging, to: target });
+    const finalInfo = await FileSystem.getInfoAsync(target);
+    if (!finalInfo.exists || Number(finalInfo.size || 0) !== Number(stagedInfo.size || 0)) {
+      throw new Error("The patient PDF could not be verified after saving.");
+    }
+    const patientRow = db.getFirstSync<any>("SELECT created_at,date FROM patients WHERE id=?", [id]) || {};
+    const sourceStamp = await stampFor(id, name, medicalRecordNo, String(patientRow.created_at || patientRow.date || ""), sources);
+    const all = await readArchives();
+    const previous = all[id];
+    const archive: PatientImageArchive = {
+      patientId: id, patientName: name, mrNo: medicalRecordNo, fileName, localUri: target,
+      sourceStamp, archivedAt: new Date().toISOString(), imageCount: sources.length,
+      driveFileId: previous?.driveFileId, driveSourceStamp: previous?.driveSourceStamp,
+    };
+    all[id] = archive;
+    await writeArchives(all);
+    return archive;
+  } finally {
+    try { await FileSystem.deleteAsync(generated.uri, { idempotent: true }); } catch {}
+    try { await FileSystem.deleteAsync(staging, { idempotent: true }); } catch {}
+  }
+}
+
 export async function openPatientImageArchivePdf(patientId: string): Promise<void> {
   const archive = await getPatientImageArchive(patientId);
   if (!archive) throw new Error("No archived image PDF is available for this patient yet. Connect backup and let the automatic archive finish.");

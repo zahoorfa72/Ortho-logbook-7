@@ -29,7 +29,7 @@ import { PrimaryButton } from "@/src/components/PrimaryButton";
 import { Segmented } from "@/src/components/Segmented";
 import { useToast } from "@/src/components/toast";
 import { formatInventoryLabel } from "@/src/utils/inventory-label";
-import { getPatientImageArchive, openPatientImageArchivePdf } from "@/src/utils/storage/patient-image-archive";
+import { createPatientImagePdfFromSources, getPatientImageArchive, openPatientImageArchivePdf } from "@/src/utils/storage/patient-image-archive";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 const LAB_OCR_PIPELINE_VERSION = "row-aware-2026-10-17-v4-admin-aliases";
 
@@ -776,9 +776,16 @@ export default function PatientForm() {
   const persistPhoto = async (sourceUri: string) => {
     if (!sourceUri) return sourceUri;
     if (sourceUri.startsWith("data:")) {
-      // New picker/scanner results are file URIs. Keep legacy embedded photos
-      // unchanged here; backup/restore still understands data URIs.
-      return sourceUri;
+      // Legacy/base64 images must go through the same size/quality guard as
+      // gallery, camera and scanner images instead of bypassing compression.
+      const match = sourceUri.match(/^data:image\/(png|jpe?g|webp);base64,([\s\S]+)$/i);
+      if (!match?.[2]) throw new Error("This embedded photo format cannot be compressed safely. The original image has not been changed.");
+      const cache = String(FileSystem.cacheDirectory || FileSystem.documentDirectory || "");
+      if (!cache) throw new Error("Temporary storage is unavailable to compress this photo.");
+      const input = cache + "patient-photo-input-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8) + "." + (match[1].toLowerCase() === "png" ? "png" : match[1].toLowerCase() === "webp" ? "webp" : "jpg");
+      await FileSystem.writeAsStringAsync(input, match[2], { encoding: FileSystem.EncodingType.Base64 });
+      try { return await persistPhoto(input); }
+      finally { await FileSystem.deleteAsync(input, { idempotent: true }).catch(() => {}); }
     }
     const directory = String(FileSystem.documentDirectory || "") + "patient-photos/";
     await FileSystem.makeDirectoryAsync(directory, { intermediates: true }).catch(() => {});
@@ -844,6 +851,29 @@ export default function PatientForm() {
       throw new Error(String(error?.message || lastError || "Could not save the compressed photo."));
     } finally {
       await FileSystem.deleteAsync(normalizedUri, { idempotent: true }).catch(() => {});
+    }
+  };
+
+  const createImagesPdf = async () => {
+    if (!isEdit || !id) {
+      Alert.alert("Save patient first", "Save this patient record before creating its named images PDF.");
+      return;
+    }
+    if (!p.photos.length) {
+      Alert.alert("No patient images", "Add or scan at least one image before creating a PDF.");
+      return;
+    }
+    if (photoBusy) return;
+    setPhotoBusy(true);
+    try {
+      await createPatientImagePdfFromSources(String(id), p.name, p.mrNo, p.photos);
+      setPatientArchiveAvailable(true);
+      await openPatientImageArchivePdf(String(id));
+      toast("Patient images PDF created. Original images remain in the patient file.", "success");
+    } catch (error: any) {
+      Alert.alert("Patient images PDF", String(error?.message || "Could not create the PDF."));
+    } finally {
+      setPhotoBusy(false);
     }
   };
 
@@ -1590,18 +1620,41 @@ export default function PatientForm() {
                 <Pressable style={styles.photoRemove} onPress={() => removePhoto(idx)} hitSlop={8} testID={`remove-photo-${idx}`}>
                   <Ionicons name="close" size={16} color="#FFFFFF" />
                 </Pressable>
+                <Pressable
+                  style={styles.photoDownload}
+                  onPress={() => savePhotoToDevice(uri)}
+                  disabled={photoBusy}
+                  hitSlop={8}
+                  testID={`download-photo-${idx}`}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Download patient image ${idx + 1}`}
+                >
+                  <Ionicons name="download-outline" size={16} color="#FFFFFF" />
+                </Pressable>
               </View>
             ))}
           </ScrollView>
         )}
+        {isEdit && p.photos.length > 0 ? (
+          <Pressable
+            style={[styles.secondary, { marginTop: spacing.sm, justifyContent: "center", borderColor: colors.brandPrimary }, photoBusy && { opacity: 0.5 }]}
+            onPress={createImagesPdf}
+            disabled={photoBusy}
+            accessibilityRole="button"
+            testID="create-patient-images-pdf-button"
+          >
+            <Ionicons name="document-text-outline" size={18} color={colors.brandPrimary} />
+            <Text style={[styles.secondaryText, { color: colors.brandPrimary }]}>{photoBusy ? "Preparing patient PDF…" : "Create / Download Patient Images PDF"}</Text>
+          </Pressable>
+        ) : null}
         {isEdit && patientArchiveAvailable ? (
           <Pressable
             style={[styles.secondary, { marginTop: spacing.sm, justifyContent: "center", borderColor: colors.brandPrimary }]}
             onPress={() => openPatientImageArchivePdf(String(id)).catch((error:any) => Alert.alert("Patient image PDF", String(error?.message || error)))}
             accessibilityRole="button"
           >
-            <Ionicons name="document-text-outline" size={18} color={colors.brandPrimary} />
-            <Text style={[styles.secondaryText, { color: colors.brandPrimary }]}>Open archived images PDF</Text>
+            <Ionicons name="folder-open-outline" size={18} color={colors.brandPrimary} />
+            <Text style={[styles.secondaryText, { color: colors.brandPrimary }]}>Open saved patient images PDF</Text>
           </Pressable>
         ) : null}
 
@@ -2247,6 +2300,7 @@ const useStyles = makeStyles((colors) => ({
   photoBox: { width: 140, height: 180, borderRadius: radius.md, overflow: "hidden", backgroundColor: colors.surfaceTertiary },
   photoThumb: { width: "100%", height: "100%" },
   photoRemove: { position: "absolute", top: 6, right: 6, backgroundColor: "rgba(0,0,0,0.65)", width: 26, height: 26, borderRadius: 13, alignItems: "center", justifyContent: "center" },
+  photoDownload: { position: "absolute", bottom: 6, right: 6, backgroundColor: "rgba(0,0,0,0.72)", width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center" },
   quickScroller: { marginTop: -spacing.sm, marginBottom: spacing.lg },
   inventoryPicker: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, backgroundColor: colors.surfaceSecondary, marginTop: -spacing.md, marginBottom: spacing.md, overflow: "hidden" },
   inventoryOption: { paddingHorizontal: spacing.md, paddingVertical: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.divider },
