@@ -456,10 +456,11 @@ async function findLatestBackup() {
   const legacy = await findBackupByName("Ortho Logbook Backup - All Time.orbackup") || await findBackupByName(BACKUP_NAME);
   if (legacy) return legacy;
   const candidates = await findLatestBackupCandidates();
-  return candidates.filter((file: any) => /^Ortho Logbook Backup - Month \d{4}-\d{2}\.orbackup$/.test(String(file.name || "")))
-    .sort((a: any, b: any) => Date.parse(String(b.modifiedTime || "")) - Date.parse(String(a.modifiedTime || ""))[0] || null;
+  return candidates
+    .filter((file: any) => /^Ortho Logbook Backup - Month \d{4}-\d{2}\.orbackup$/.test(String(file.name || "")))
+    .sort((a: any, b: any) => Date.parse(String(b.modifiedTime || "")) - Date.parse(String(a.modifiedTime || "")))[0] || null;
 }
-}
+
 
 // Use 512 KiB chunks (a multiple of Drive's 256 KiB requirement). Smaller
 // chunks are more reliable on mobile networks and prevent one slow 4 MiB
@@ -1399,7 +1400,6 @@ async function listIncrementalFiles() {
   );
 }
 
-}
 
 async function downloadDriveJson(fileId: string): Promise<string> {
   const url = `${DRIVE_API}/${encodeURIComponent(fileId)}?alt=media`;
