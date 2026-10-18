@@ -227,7 +227,7 @@ export async function listGoogleDriveBackups(): Promise<Array<{id:string;name:st
   // Show each monthly file's effective time by checking its own change journal.
   const journalTimeByMaster = new Map<string, string>();
   for (const master of masters) {
-    const match = /^Ortho Logbook Backup - Month (\\d{4}-\\d{2})\\.orbackup$/.exec(String(master.name || ""));
+    const match = /^Ortho Logbook Backup - Month (\d{4}-\d{2})\.orbackup$/.exec(String(master.name || ""));
     if (!match) continue;
     try {
       const journalFile = await findBackupByName("Ortho Logbook Backup - Month " + match[1] + " Changes.orbackup");
