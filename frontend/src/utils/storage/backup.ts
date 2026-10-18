@@ -120,6 +120,32 @@ async function embedPhoto(uri:string, cache?: Map<string,string>, profile: "pati
       cache?.set(cacheKey, uri);
       return uri;
     }
+    if (!isDataImage && /^(file:\/\/|content:\/\/)/i.test(uri)) {
+      try {
+        const sourceInfo = await LegacyFileSystem.getInfoAsync(uri);
+        if (sourceInfo.exists && typeof sourceInfo.size === "number" && sourceInfo.size > 0 && sourceInfo.size <= targetBytes) {
+          // Keep small local report images byte-for-byte; only large images need
+          // lossy JPEG compression. This avoids needless changes to fine text.
+          const base64 = await LegacyFileSystem.readAsStringAsync(uri, {
+            encoding: LegacyFileSystem.EncodingType.Base64,
+          });
+          if (base64) {
+            const path = uri.split("?")[0].toLowerCase();
+            const mime = path.endsWith(".png") ? "image/png"
+              : path.endsWith(".webp") ? "image/webp"
+              : path.endsWith(".heic") || path.endsWith(".heif") ? "image/heic"
+              : path.endsWith(".gif") ? "image/gif"
+              : "image/jpeg";
+            const portable = "data:" + mime + ";base64," + base64;
+            cache?.set(cacheKey, portable);
+            return portable;
+          }
+        }
+      } catch {
+        // Some content:// providers do not expose file size; continue through
+        // the normal high-quality compression path in that case.
+      }
+    }
 
     // Convert embedded data URIs to a temporary file first. Native image
     // manipulation is unreliable with data: URIs on Android and could leave
