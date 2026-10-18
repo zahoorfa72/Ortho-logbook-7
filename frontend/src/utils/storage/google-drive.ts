@@ -1767,7 +1767,7 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
   // rows; otherwise a month file can remain missing forever after one failure.
   // The cursor advances only after the month file is verified, so this is a
   // no-op for already completed months.
-  await archiveCompletedMonths(onProgress);
+  if (!migrationNeeded) await archiveCompletedMonths(onProgress);
   if (!hasActualChanges && !migrationNeeded) {
     await commitIncrementalSnapshotCache(baselineKey);
     return { skipped: true, completedAt: new Date().toISOString(), name: "No changes", accountEmail: getConnectedGoogleAccount() };
