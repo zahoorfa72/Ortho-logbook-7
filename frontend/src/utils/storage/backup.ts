@@ -432,7 +432,11 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
    const sourceSignature = photoSourceSignature(patientWithPhotos);
    const previous = previousPatientsById.get(patientId);
    const archivedImage = archiveByPatientId.get(patientId);
-   if (archivedImage) {
+   // Only replace live patient photos with a PDF reference when that PDF was
+   // explicitly synchronized to this exact saved patient revision. If the
+   // patient has since changed, keep the current photos in the master backup
+   // until an admin approves updating the separate Drive PDF.
+   if (archivedImage && String(archivedImage.patientUpdatedAt || "") === String(patient.updated_at || "")) {
      embeddedPatients.push({
        ...patient, photo_uri: "", photos_json: "",
        photo_archive_file_name: archivedImage.fileName,
