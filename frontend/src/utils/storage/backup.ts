@@ -111,7 +111,7 @@ async function embedPhoto(uri:string, cache?: Map<string,string>, profile: "pati
     const estimatedBytes = isDataImage
       ? Math.floor(((uri.split(",")[1] || "").length * 3) / 4)
       : 0;
-    const targetBytes = 2.2 * 1024 * 1024;
+    const targetBytes = 1.5 * 1024 * 1024;
     if (isDataImage && estimatedBytes > 0 && estimatedBytes <= targetBytes) {
       return remember(uri);
     }
@@ -169,7 +169,7 @@ async function embedPhoto(uri:string, cache?: Map<string,string>, profile: "pati
       // result reached rather than generating a visibly degraded thumbnail.
       // Patient attachments are often lab reports too; keep a strict 0.88
       // minimum quality rather than forcing a tiny file at the expense of text.
-      const qualities = profile === "document" ? [0.97, 0.95, 0.94, 0.92] : [0.96, 0.95, 0.94, 0.92];
+      const qualities = profile === "document" ? [0.97, 0.95, 0.93, 0.90] : [0.96, 0.94, 0.92, 0.90];
       let selectedSize = 0;
       for (const quality of qualities) {
         const result = await new Promise<any>((resolve, reject) => {
