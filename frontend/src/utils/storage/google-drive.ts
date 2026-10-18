@@ -169,10 +169,29 @@ async function driveRequest(url: string, init: RequestInit = {}) {
     ? Object.entries(init.headers as Record<string, unknown>)
         .filter((entry): entry is [string, string] => typeof entry[1] === "string")
     : [];
-  const response = await fetchWithTimeout(url, {
+  const requestInit: RequestInit = {
     ...init,
     headers: { Authorization: `Bearer ${token}`, ...Object.fromEntries(extraHeaders) },
-  }, 30000);
+  };
+  // Retry transient network failures for read requests only. Retrying POST/PATCH/DELETE
+  // blindly can duplicate folders or mutate Drive records twice if the first request succeeded.
+  const canRetry = String(init.method || "GET").toUpperCase() === "GET";
+  let response: Response | null = null;
+  let lastNetworkError: any = null;
+  for (let attempt = 0; attempt < (canRetry ? 3 : 1); attempt++) {
+    try {
+      response = await fetchWithTimeout(url, requestInit, 30000);
+      lastNetworkError = null;
+      break;
+    } catch (error: any) {
+      lastNetworkError = error;
+      if (!canRetry || attempt >= 2) break;
+      await new Promise(resolve => setTimeout(resolve, 600 * (attempt + 1)));
+    }
+  }
+  if (!response) {
+    throw new Error("Google Drive connection failed after retrying. Check internet access and Google account permission, then retry. " + String(lastNetworkError?.message || ""));
+  }
   if (!response.ok) {
     let message = `Google Drive request failed (HTTP ${response.status}).`;
     try {
@@ -926,9 +945,15 @@ async function uploadPatientPdf(archive: PatientImageArchive, folderId: string, 
   return verified;
 }
 export async function uploadPatientImageArchivesToDrive(onProgress?: (stage: string) => void): Promise<void> {
-  const archives = await getLocalPatientImageArchives();
-  if (!archives.length) return;
+  // Always provision the folder as part of Drive backup setup, even if no patient
+  // images have crossed the 30-day archive threshold yet.
+  onProgress?.("Checking the Patient Image PDFs folder in Google Drive…");
   const folder = await getOrCreatePatientImagePdfFolder();
+  const archives = await getLocalPatientImageArchives();
+  if (!archives.length) {
+    onProgress?.("Patient Image PDFs folder is ready; no patient PDFs are due for upload yet.");
+    return;
+  }
   const folderId = String(folder.id);
   for (let i = 0; i < archives.length; i++) {
     const archive = archives[i];
@@ -2013,13 +2038,13 @@ async function ensureGoogleDriveBaselineUnlocked(onProgress?: (stage: string) =>
     if (!/^\d{4}-\d{2}$/.test(cursor)) await storage.secureSet(MONTH_ARCHIVE_CURSOR_KEY, monthKeyFromDate(new Date()));
     return { skipped: true, name: currentMonthName };
   }
-  // A new monthly baseline must preserve any existing legacy or archived Drive history.
+  // Keep existing legacy files as recovery copies, but create one rolling master.
   const priorBackups = await findLatestBackupCandidates();
   if (priorBackups.some((file: any) => file?.id)) await storage.secureSet(MASTER_MIGRATION_KEY, "");
-  onProgress?.("Creating complete monthly backup " + monthKeyFromDate(new Date()) + "…");
+  onProgress?.("Creating the rolling all-time Drive backup…");
   const result = await backupToGoogleDriveUnlocked(undefined, { type: "all" }, { onProgress, preferDriveOnMigration: true });
   const confirmed = await findBackupByName(currentMonthName);
-  if (!confirmed?.id) throw new Error("The monthly Drive backup could not be confirmed. Local data remains on this phone.");
+  if (!confirmed?.id) throw new Error("The rolling Drive master could not be confirmed. Local data remains on this phone.");
   await commitIncrementalSnapshotCache(String(confirmed.id) + ":" + String(confirmed.modifiedTime || ""));
   const cursor = String((await storage.secureGet(MONTH_ARCHIVE_CURSOR_KEY, "")) || "");
   if (!/^\d{4}-\d{2}$/.test(cursor)) await storage.secureSet(MONTH_ARCHIVE_CURSOR_KEY, monthKeyFromDate(new Date()));
