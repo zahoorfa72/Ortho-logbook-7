@@ -574,9 +574,17 @@ export default function BackupRestoreScreen() {
             </Pressable>
           )}
           {driveLoading && (
-            <Text style={[styles.hint, { marginTop: spacing.md, marginBottom: 0 }]} accessibilityLiveRegion="polite">
-              {driveStatus || "Working with Google Drive…"}
-            </Text>
+            <View style={{ marginTop: spacing.md, gap: spacing.xs }}>
+              <Text style={styles.hint} accessibilityLiveRegion="polite">{driveStatus || "Working with Google Drive…"}</Text>
+              {(() => {
+                const match = /Downloading backup file: (\d+)%/.exec(driveStatus);
+                if (!match) return null;
+                const percent = Math.max(0, Math.min(100, Number(match[1])));
+                return <View accessibilityLabel={"Backup download " + percent + " percent"} style={{ height: 7, borderRadius: 4, overflow: "hidden", backgroundColor: colors.border }}>
+                  <View style={{ height: 7, width: percent + "%", backgroundColor: colors.brandPrimary }} />
+                </View>;
+              })()}
+            </View>
           )}
           <Text style={[styles.hint, { marginTop: spacing.md, marginBottom: 0 }]}>
             The Android OAuth client is tied to this app's package/signing certificate; the Google account selected here determines whose Drive is used.
