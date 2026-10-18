@@ -66,37 +66,73 @@ export async function shareBackupFile(password: string, filter: BackupFilter = {
 // may return content:// URIs. Read those through Expo's legacy SAF-compatible
 // API before trying the newer File API or fetch. Never require users to move
 // a selected backup into app storage manually.
-async function readPickedFile(uri: string): Promise<string> {
-  const errors: unknown[] = [];
+function errorText(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error ?? "");
+}
+
+function isOutOfMemoryError(error: unknown): boolean {
+  return /OutOfMemoryError|Failed to allocate|out of memory|memory allocation/i.test(errorText(error));
+}
+
+async function readPickedFile(uri: string, knownSize?: number | null): Promise<string> {
+  // A whole-file JSON/encrypted backup is currently decoded in memory. Avoid
+  // triggering Android's hard heap limit and never retry the same huge read
+  // through multiple APIs after an allocation failure.
+  const MAX_SAFE_IN_MEMORY_BACKUP_BYTES = 48 * 1024 * 1024;
+  if (typeof knownSize === "number" && knownSize > MAX_SAFE_IN_MEMORY_BACKUP_BYTES) {
+    throw new Error(
+      "This backup is too large for the current phone restore reader (" +
+        Math.round(knownSize / (1024 * 1024)) +
+        " MB). Keep this file unchanged. Restore it from a smaller backup for now; large all-time backups need the new split-backup restore format.",
+    );
+  }
 
   try {
     return await FileSystem.readAsStringAsync(uri, {
       encoding: FileSystem.EncodingType.UTF8,
     });
   } catch (error) {
-    errors.push(error);
-  }
+    if (isOutOfMemoryError(error)) {
+      throw new Error(
+        "Android ran out of memory while opening this backup. Your local records have not been restored or intentionally deleted. Keep the backup unchanged; this large file needs a split-backup restore format.",
+      );
+    }
 
-  try {
-    return await new File(uri).text();
-  } catch (error) {
-    errors.push(error);
-  }
+    // Only try another provider reader for ordinary URI/provider errors.
+    // Repeating a huge read after an OOM can exhaust the app's remaining heap.
+    const errors: unknown[] = [error];
+    try {
+      return await new File(uri).text();
+    } catch (nextError) {
+      if (isOutOfMemoryError(nextError)) {
+        throw new Error(
+          "Android ran out of memory while opening this backup. Your local records have not been restored or intentionally deleted. Keep the backup unchanged; this large file needs a split-backup restore format.",
+        );
+      }
+      errors.push(nextError);
+    }
 
-  try {
-    const response = await fetch(uri);
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return await response.text();
-  } catch (error) {
-    errors.push(error);
-  }
+    try {
+      const response = await fetch(uri);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return await response.text();
+    } catch (nextError) {
+      if (isOutOfMemoryError(nextError)) {
+        throw new Error(
+          "Android ran out of memory while opening this backup. Your local records have not been restored or intentionally deleted. Keep the backup unchanged; this large file needs a split-backup restore format.",
+        );
+      }
+      errors.push(nextError);
+    }
 
-  const detail = errors.find((error) => error instanceof Error) as Error | undefined;
-  throw new Error(
-    detail?.message
-      ? `Android could not read this selected file (${detail.message}). Try selecting the original .orbackup file again.`
-      : "Android could not read the selected file. Try selecting the original .orbackup file again.",
-  );
+    const detail = errors.find((item) => item instanceof Error) as Error | undefined;
+    throw new Error(
+      detail?.message
+        ? `Android could not read this selected file (${detail.message}). Try selecting the original .orbackup file again.`
+        : "Android could not read the selected file. Try selecting the original .orbackup file again.",
+    );
+  }
 }
 
 export async function pickBackupFile() {
@@ -117,7 +153,7 @@ export async function pickBackupFile() {
 
   let backupText: string;
   try {
-    backupText = await readPickedFile(file.uri);
+    backupText = await readPickedFile(file.uri, file.size);
   } catch (error) {
     // Keep the Android provider's actual failure reason. Hiding it behind a
     // generic message made Drive/Downloads import errors impossible to diagnose.
