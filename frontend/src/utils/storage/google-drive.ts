@@ -1244,6 +1244,23 @@ async function deleteDuplicateDriveBackups(masterFileId: string): Promise<string
   return failures;
 }
 
+async function cleanupLegacyNonMonthlyBackups(keepFileId: string): Promise<string[]> {
+  const failures: string[] = [];
+  const monthlyName = /^Ortho Logbook Backup - Month \d{4}-\d{2}(?: Changes)?\.orbackup$/i;
+  const candidates = await findLatestBackupCandidates();
+  for (const file of candidates) {
+    const name = String(file.name || "");
+    if (!file?.id || String(file.id) === keepFileId || monthlyName.test(name)) continue;
+    try { await driveRequest(DRIVE_API + "/" + encodeURIComponent(String(file.id)) + "?supportsAllDrives=true", { method: "DELETE" }); }
+    catch (error: any) { failures.push(name + ": " + String(error?.message || "could not remove legacy backup")); }
+  }
+  for (const file of await listIncrementalFiles()) {
+    if (!file?.id || !/Ortho Logbook Incremental/i.test(String(file.name || ""))) continue;
+    try { await driveRequest(DRIVE_API + "/" + encodeURIComponent(String(file.id)) + "?supportsAllDrives=true", { method: "DELETE" }); }
+    catch (error: any) { failures.push(String(file.name || file.id) + ": " + String(error?.message || "could not remove legacy journal")); }
+  }
+  return failures;
+}
 export async function backupToGoogleDrive(
   _password?: string,
   filter: BackupFilter = { type: "all" },
@@ -1371,6 +1388,8 @@ export async function backupToGoogleDrive(
       }
     }
     await storage.secureSet(MASTER_MIGRATION_KEY, "1");
+    // Keep monthly archives, but remove obsolete all-time/year/date backups and the legacy journal.
+    cleanupFailures.push(...await cleanupLegacyNonMonthlyBackups(String(result.id)));
   }
   if (isMasterBackup && seededCacheForLocalSnapshot && result?.id) {
     await commitIncrementalSnapshotCache(String(result.id) + ":" + String(result.modifiedTime || ""));
