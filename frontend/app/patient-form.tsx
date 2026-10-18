@@ -869,9 +869,9 @@ export default function PatientForm() {
       try {
         await FileSystem.copyAsync({ from: normalizedUri, to: destination });
         const savedInfo = await FileSystem.getInfoAsync(destination);
-        if (!savedInfo.exists || typeof savedInfo.size !== "number" || savedInfo.size > targetBytes) {
+        if (!savedInfo.exists || typeof savedInfo.size !== "number" || savedInfo.size > qualityFallbackBytes) {
           await FileSystem.deleteAsync(destination, { idempotent: true }).catch(() => {});
-          throw new Error("Saved photo did not meet the 1.5 MB size limit.");
+          throw new Error("Saved photo could not be verified within the quality-preserving size limit.");
         }
         return destination;
       } catch (error: any) {
