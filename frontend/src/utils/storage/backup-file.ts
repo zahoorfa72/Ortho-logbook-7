@@ -129,7 +129,7 @@ export async function pickBackupFile() {
 
   // Some Android document providers prepend a UTF-8 BOM. JSON.parse rejects
   // that invisible character, even when the backup itself is otherwise valid.
-  backupText = backupText.replace(/^\\uFEFF/, "").trimStart();
+  backupText = backupText.replace(/^\uFEFF/, "").trimStart();
 
   // Quick pre-check so we can give a much clearer error than "invalid JSON".
   const trimmed = backupText.trim();
