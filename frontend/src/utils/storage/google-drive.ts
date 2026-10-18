@@ -942,7 +942,7 @@ async function uploadPatientPdf(archive: PatientImageArchive, folderId: string, 
     : DRIVE_UPLOAD + "?uploadType=resumable&fields=" + fields;
   const metadata: any = {
     name: archive.fileName, mimeType: "application/pdf",
-    appProperties: { orthoPatientId: archive.patientId.slice(0, 100), orthoSourceStamp: archive.sourceStamp.slice(0, 100) },
+    appProperties: { orthoPatientId: archive.patientId.slice(0, 100), orthoSourceStamp: archive.sourceStamp.slice(0, 100), orthoImageCount: String(archive.imageCount) },
   };
   if (!existing?.id) metadata.parents = [folderId];
   let response: Response | null = null;
@@ -1223,7 +1223,7 @@ export async function downloadPatientImageArchiveForPatient(
       mrNo: String(patient.mrNo || local?.mrNo || ""), fileName: String(remote.name),
       sourceStamp: String(remote.appProperties?.orthoSourceStamp || local?.sourceStamp || ""),
       archivedAt: String(remote.modifiedTime || local?.archivedAt || new Date().toISOString()),
-      imageCount: Number(local?.imageCount || 0), driveFileId: String(remote.id),
+      imageCount: Number(remote.appProperties?.orthoImageCount ?? (local ? local.imageCount : -1)), driveFileId: String(remote.id),
     }, result.uri);
     const installed = await getPatientImageArchive(patientId);
     if (!installed?.localUri) throw new Error("The patient PDF was downloaded, but the verified phone copy could not be found.");

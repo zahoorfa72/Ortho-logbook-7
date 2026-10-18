@@ -1143,7 +1143,7 @@ export default function PatientForm() {
     setPhotoBusy(true);
     try {
       const archive = await downloadPatientImageArchiveForPatient({ id: patientId, name: p.name, mrNo: p.mrNo });
-      if (archive.imageCount < 1) throw new Error("This patient's Drive PDF contains no images to import.");
+      if (archive.imageCount === 0) throw new Error("This patient's Drive PDF contains no images to import.");
       const oldStamp = String(p.customData?.drivePatientImagePdfSourceStamp || "");
       const oldUrisRaw = p.customData?.drivePatientImportedImageUris || "[]";
       let oldImportedUris: string[] = [];
