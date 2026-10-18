@@ -709,21 +709,29 @@ async function writeBackupTextInChunks(uri: string, content: string, chunkChars 
   if (first) await writer.writeTextChunk(uri, "", false);
 }
 
-async function writeBackupObjectToFile(uri: string, value: any): Promise<void> {
+async function writeBackupObjectToFile(uri: string, value: any, onProgress?: (stage: string) => void): Promise<void> {
   const writer = NativeModules.DriveBackgroundUpload;
   if (!writer?.writeTextChunk) throw new Error("This Android build is missing the safe large-backup file writer. Install the latest APK and retry.");
   let buffer = "";
   let first = true;
+  let charactersWritten = 0;
+  let lastReportedCharacters = 0;
   const flush = async () => {
     if (!buffer) return;
     await writer.writeTextChunk(uri, buffer, !first);
     first = false;
     buffer = "";
+    if (charactersWritten - lastReportedCharacters >= 4 * 1024 * 1024) {
+      lastReportedCharacters = charactersWritten;
+      onProgress?.("Preparing backup file… " + (charactersWritten / (1024 * 1024)).toFixed(1) + " MB written");
+    }
   };
   const append = async (part: string) => {
+    charactersWritten += part.length;
     for (let offset = 0; offset < part.length; offset += 16 * 1024) {
       buffer += part.slice(offset, offset + 16 * 1024);
-      if (buffer.length >= 64 * 1024) await flush();
+      // Larger but bounded bridge writes reduce overhead for 700+ MB backups.
+      if (buffer.length >= 256 * 1024) await flush();
     }
   };
   const writeValue = async (item: any): Promise<void> => {
@@ -770,6 +778,7 @@ async function writeBackupObjectToFile(uri: string, value: any): Promise<void> {
   await writeValue(value);
   await flush();
   if (first) await writer.writeTextChunk(uri, "", false);
+  onProgress?.("Backup file preparation complete · " + (charactersWritten / (1024 * 1024)).toFixed(1) + " MB");
 }
 
 async function uploadStagedJsonFile(uri: string, totalBytes: number, existingId?: string, onProgress?: (stage: string) => void, fileName: string = BACKUP_NAME) {
@@ -1264,7 +1273,7 @@ export async function backupToGoogleDrive(
     if (!FileSystem.cacheDirectory) throw new Error("Device cache storage is unavailable for the Drive backup.");
     stagedFileUri = FileSystem.cacheDirectory + "ortho-drive-stream-" + Date.now() + ".json";
     try {
-      await writeBackupObjectToFile(stagedFileUri, backupData);
+      await writeBackupObjectToFile(stagedFileUri, backupData, options.onProgress);
       const info = await FileSystem.getInfoAsync(stagedFileUri);
       if (!info.exists || typeof info.size !== "number" || info.size <= 0) {
         throw new Error("The streamed backup file is missing or empty. Local data remains unchanged.");
@@ -1710,7 +1719,7 @@ async function archiveCompletedMonths(onProgress?: (stage: string) => void) {
       const monthData = await exportUnencryptedBackupData({ type: "month", value: month }, onProgress);
       const stageUri = FileSystem.cacheDirectory + "ortho-drive-month-" + month + "-" + Date.now() + ".json";
       try {
-        await writeBackupObjectToFile(stageUri, monthData);
+        await writeBackupObjectToFile(stageUri, monthData, onProgress);
         const info = await FileSystem.getInfoAsync(stageUri);
         if (!info.exists || typeof info.size !== "number" || info.size <= 0) {
           throw new Error("The monthly backup file is missing or empty.");
