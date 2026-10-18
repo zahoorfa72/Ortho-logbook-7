@@ -4,6 +4,7 @@ import * as ImagePicker from "expo-image-picker";
 import * as CameraPermissions from "expo-camera";
 import { CameraView } from "expo-camera";
 import * as ImageManipulator from "expo-image-manipulator";
+import * as Sharing from "expo-sharing";
 import { Asset, requestPermissionsAsync } from "expo-media-library";
 import * as FileSystem from "expo-file-system/legacy";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -29,7 +30,7 @@ import { PrimaryButton } from "@/src/components/PrimaryButton";
 import { Segmented } from "@/src/components/Segmented";
 import { useToast } from "@/src/components/toast";
 import { formatInventoryLabel } from "@/src/utils/inventory-label";
-import { getPatientImageArchive, openPatientImageArchivePdf } from "@/src/utils/storage/patient-image-archive";
+import { createPatientImagePdfFile, getPatientImageArchive, openPatientImageArchivePdf } from "@/src/utils/storage/patient-image-archive";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 const LAB_OCR_PIPELINE_VERSION = "row-aware-2026-10-17-v4-admin-aliases";
 
