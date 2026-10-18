@@ -374,6 +374,11 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
      // on phones with large reports.
      await new Promise<void>((resolve) => setTimeout(resolve, 0));
    }
+   // Drop the raw base64/photo JSON from the source row immediately after the
+   // compressed portable copy has been produced. Keeping both copies of all
+   // 57+ patient reports alive is enough to exhaust Android's JS heap.
+   patient.photo_uri = "";
+   patient.photos_json = "";
  }
 
  onProgress?.("Patient photos prepared; reading historical reports…");
@@ -423,6 +428,9 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
        if (snap.photo_uri) snap.photo_uri = "";
      }
      embeddedHistory.push({...h, snapshot_json:JSON.stringify(snap)});
+     // The history array is still needed for iteration, but not its original
+     // image-heavy snapshot after a portable replacement has been made.
+     h.snapshot_json = "";
    } catch {
      embeddedHistory.push(h);
    }
@@ -484,7 +492,11 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
        history.snapshot_json = JSON.stringify(snap);
      } catch {}
    }
-   return { ...entry, payload_json: JSON.stringify(payload) };
+   const portableEntry = { ...entry, payload_json: JSON.stringify(payload) };
+   // Avoid holding the original and portable trash payload (which may contain
+   // many photos) simultaneously until the entire backup has finished.
+   entry.payload_json = "";
+   return portableEntry;
  }) : [];
 
  return {
