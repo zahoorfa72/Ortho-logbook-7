@@ -126,9 +126,9 @@ async function runBackup() {
       ? new Date(result.completedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
       : "";
     const successMessage = ((result as any).migrationPending
-      ? "Master backup uploaded · older backup merge needs retry"
+      ? "Monthly backup uploaded · older backup merge needs retry"
       : result.baselineCreated
-        ? "Master backup uploaded and confirmed"
+        ? "Monthly full backup uploaded and confirmed"
         : result.skipped
           ? "Drive checked · no changed records"
           : "Changed data uploaded to Google Drive") +
@@ -138,7 +138,7 @@ async function runBackup() {
         : "") +
       (Array.isArray((result as any).snapshotFailures) && (result as any).snapshotFailures.length
         ? " · Range snapshot pending: " + (result as any).snapshotFailures.join("; ")
-        : " · single master backup checked");
+        : " · monthly backup checked");
     if (pendingTables.size) {
       setDriveSyncState({ phase: "waiting", updates: pendingTables.size, message: "New changes detected · syncing again…" });
     } else {
