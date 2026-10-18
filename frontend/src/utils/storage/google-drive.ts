@@ -205,7 +205,8 @@ function driveBackupName(filter: BackupFilter): string {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error("Enter the date as YYYY-MM-DD before backing up.");
     return `Ortho Logbook Backup - Date ${date}.orbackup`;
   }
-  return "Ortho Logbook Backup - All Time.orbackup";
+  // Full snapshot named for the calendar month; changes are kept in a small monthly journal.
+  return "Ortho Logbook Backup - Month " + monthKeyFromDate(new Date()) + ".orbackup";
 }
 
 async function findBackupByName(name: string) {
@@ -267,16 +268,33 @@ export async function restoreGoogleDriveBackupById(fileId: string) {
   if (!parsed || parsed.app !== "Ortho Logbook" || !Array.isArray(parsed.patients) || !Array.isArray(parsed.inventory)) {
     throw new Error("The selected file is not a complete Ortho Logbook backup.");
   }
-  // Monthly archives are period-scoped snapshots, not master baselines. Do not
-  // apply the rolling all-time journal to them or unrelated months could leak in.
-  if (/^Ortho Logbook Backup - Month \d{4}-\d{2}\.orbackup$/.test(String(metadata.name || ""))) {
-    return {
-      name: String(metadata.name),
-      modifiedTime: String(metadata.modifiedTime || ""),
-      backupText: JSON.stringify(parsed),
-      appliedIncrementals: 0,
-      recoveryWarnings: [],
-    };
+  // Monthly files contain full snapshots. Apply only the journal for the same
+  // month and exact baseline file; never mix other months into this restore.
+  const monthlyMatch = /^Ortho Logbook Backup - Month (\d{4}-\d{2})\.orbackup$/.exec(String(metadata.name || ""));
+  if (monthlyMatch) {
+    const warnings: string[] = [];
+    let applied = 0;
+    const journalFile = await findBackupByName("Ortho Logbook Backup - Month " + monthlyMatch[1] + " Changes.orbackup");
+    if (journalFile?.id) {
+      try {
+        const journal = await downloadDriveJsonValidated(String(journalFile.id));
+        if (journal?.incremental === true &&
+            String(journal._baselineKey || "").startsWith(String(fileId) + ":") &&
+            Array.isArray(journal.changedTables)) {
+          applyIncrementalToMaster(parsed, journal, journal._rowDelta !== true);
+          parsed.createdAt = journal.createdAt || parsed.createdAt;
+          applied = 1;
+        }
+      } catch (error: any) {
+        warnings.push("The monthly changes journal could not be applied: " + String(error?.message || error));
+      }
+    }
+    parsed.filter = { type: "all" };
+    parsed.incremental = false;
+    delete parsed.changedTables; delete parsed._rowDelta; delete parsed.deletedIds;
+    delete parsed.fullTables; delete parsed._baselineKey; delete parsed._updateCount;
+    return { name: String(metadata.name), modifiedTime: String(metadata.modifiedTime || ""),
+      backupText: JSON.stringify(parsed), appliedIncrementals: applied, recoveryWarnings: warnings };
   }
 
   // The master is intentionally stable between compactions. Automatic edits,
@@ -433,12 +451,14 @@ export async function restoreGoogleDriveBackupById(fileId: string) {
 }
 
 async function findLatestBackup() {
-  // Auto-sync only needs the newest full baseline. Do not page through the entire
-  // Drive history on every tiny edit; restore still uses the exhaustive search.
-  const current = await findBackupByName("Ortho Logbook Backup - All Time.orbackup");
+  const current = await findBackupByName(driveBackupName({ type: "all" }));
   if (current) return current;
-  // Compatibility with the original filename used by earlier releases.
-  return await findBackupByName(BACKUP_NAME);
+  const legacy = await findBackupByName("Ortho Logbook Backup - All Time.orbackup") || await findBackupByName(BACKUP_NAME);
+  if (legacy) return legacy;
+  const candidates = await findLatestBackupCandidates();
+  return candidates.filter((file: any) => /^Ortho Logbook Backup - Month \d{4}-\d{2}\.orbackup$/.test(String(file.name || "")))
+    .sort((a: any, b: any) => Date.parse(String(b.modifiedTime || "")) - Date.parse(String(a.modifiedTime || ""))[0] || null;
+}
 }
 
 // Use 512 KiB chunks (a multiple of Drive's 256 KiB requirement). Smaller
@@ -1354,11 +1374,8 @@ export async function backupToGoogleDrive(
   if (isMasterBackup && seededCacheForLocalSnapshot && result?.id) {
     await commitIncrementalSnapshotCache(String(result.id) + ":" + String(result.modifiedTime || ""));
   }
-  // A manual full backup must also refresh the visible monthly archive; this
-  // used to happen only in the automatic incremental-sync path.
-  if (isMasterBackup && result?.id) {
-    await archiveCompletedMonths(options.onProgress);
-  }
+  // Do not launch a second large upload after a full snapshot; it previously
+  // restarted the progress bar near 100% while archiving another huge file.
   return {
     ...result, skipped: false, completedAt, name: fileName, accountEmail: getConnectedGoogleAccount(),
     cleanupFailures, migrationPending: isMasterBackup && (!migrationComplete || !cleanupSafe || cleanupFailures.length > 0),
@@ -1366,11 +1383,9 @@ export async function backupToGoogleDrive(
 }
 
 async function listIncrementalFiles() {
-  const q = encodeURIComponent("name contains 'Ortho Logbook Incremental' and trashed = false");
+  const q = encodeURIComponent("name contains 'Ortho Logbook' and trashed = false");
   const files: any[] = [];
   let pageToken = "";
-  // Page through the entire delta history so older phones can restore even
-  // after more than 100 incremental uploads.
   do {
     const tokenParam = pageToken ? "&pageToken=" + encodeURIComponent(pageToken) : "";
     const response = await driveRequest(`${DRIVE_API}?q=${q}&spaces=drive&pageSize=100&orderBy=modifiedTime%20asc&includeItemsFromAllDrives=true&supportsAllDrives=true&fields=files(id,name,modifiedTime,size,mimeType),nextPageToken${tokenParam}`);
@@ -1378,7 +1393,12 @@ async function listIncrementalFiles() {
     if (Array.isArray(data.files)) files.push(...data.files);
     pageToken = typeof data.nextPageToken === "string" ? data.nextPageToken : "";
   } while (pageToken);
-  return files;
+  return files.filter((file: any) =>
+    /Ortho Logbook Incremental/i.test(String(file.name || "")) ||
+    /^Ortho Logbook Backup - Month \d{4}-\d{2} Changes\.orbackup$/i.test(String(file.name || ""))
+  );
+}
+
 }
 
 async function downloadDriveJson(fileId: string): Promise<string> {
@@ -1669,14 +1689,14 @@ function mergeIncrementalPayloads(previous: any, incoming: any): any {
 }
 
 export async function ensureGoogleDriveBaseline(onProgress?: (stage: string) => void) {
-  const existing = await findLatestBackup();
-  if (existing?.id) return { skipped: true, name: String(existing.name || "Ortho Logbook Backup - All Time.orbackup") };
-  onProgress?.("Creating the first complete all-time backup…");
-  const result = await backupToGoogleDrive(undefined, { type: "all" }, { onProgress });
-  const confirmed = await findLatestBackup();
-  if (!confirmed?.id) throw new Error("The first Drive backup upload could not be found after upload. Local data remains on this phone.");
+  const currentMonthName = driveBackupName({ type: "all" });
+  const existing = await findBackupByName(currentMonthName);
+  if (existing?.id) return { skipped: true, name: currentMonthName };
+  onProgress?.("Creating complete monthly backup " + monthKeyFromDate(new Date()) + "…");
+  const result = await backupToGoogleDrive(undefined, { type: "all" }, { onProgress, preferDriveOnMigration: true });
+  const confirmed = await findBackupByName(currentMonthName);
+  if (!confirmed?.id) throw new Error("The monthly Drive backup could not be confirmed. Local data remains on this phone.");
   await commitIncrementalSnapshotCache(String(confirmed.id) + ":" + String(confirmed.modifiedTime || ""));
-  // A single complete master file avoids tripling storage with month/year copies.
   return { ...result, baselineCreated: true, snapshotFailures: [] };
 }
 
@@ -1762,7 +1782,10 @@ async function archiveCompletedMonths(onProgress?: (stage: string) => void) {
 
 export async function backupIncrementalToGoogleDrive(changedTables: string[], onProgress?: (stage: string) => void) {
   onProgress?.("Checking whether saved records changed…");
-  const base = await findLatestBackup();
+  // Do not attach new changes to a prior month's baseline. Create a complete
+  // snapshot the first time this phone syncs in each calendar month.
+  const currentMonthName = driveBackupName({ type: "all" });
+  const base = await findBackupByName(currentMonthName);
   if (!base?.id) return ensureGoogleDriveBaseline(onProgress);
 
   const baselineKey = String(base.id) + ":" + String(base.modifiedTime || "");
@@ -1791,7 +1814,6 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
   // rows; otherwise a month file can remain missing forever after one failure.
   // The cursor advances only after the month file is verified, so this is a
   // no-op for already completed months.
-  if (!migrationNeeded) await archiveCompletedMonths(onProgress);
   if (!hasActualChanges && !migrationNeeded) {
     await commitIncrementalSnapshotCache(baselineKey);
     return { skipped: true, completedAt: new Date().toISOString(), name: "No changes", accountEmail: getConnectedGoogleAccount() };
@@ -1827,7 +1849,7 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
   }
 
   // Month archive reconciliation ran above, before the no-change early return.
-  const JOURNAL_NAME = "Ortho Logbook Incremental Journal.orbackup";
+  const JOURNAL_NAME = "Ortho Logbook Backup - Month " + monthKeyFromDate(new Date()) + " Changes.orbackup";
   onProgress?.("Preparing the small change journal…");
   let journalFile = await findBackupByName(JOURNAL_NAME);
   let journal: any = null;
@@ -1931,7 +1953,7 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
     const refreshedBase = await findLatestBackup();
     if (!refreshedBase?.id) throw new Error("The refreshed full backup could not be found. The delta journal is retained.");
     if (canStreamIncremental) {
-      await verifyStreamedDriveFile(String(refreshedBase.id), "Ortho Logbook Backup - All Time.orbackup",
+      await verifyStreamedDriveFile(String(refreshedBase.id), currentMonthName,
         masterResult?.size != null ? Number(masterResult.size) : undefined);
     } else {
       const verifiedMaster = await downloadDriveJsonValidated(String(refreshedBase.id));
@@ -1952,7 +1974,7 @@ export async function backupIncrementalToGoogleDrive(changedTables: string[], on
     await markBackupTaken();
     const completedAt = new Date().toISOString();
     await storage.secureSet(LAST_DRIVE_BACKUP_KEY, completedAt);
-    return { ...masterResult, skipped: false, completedAt, name: "Ortho Logbook Backup - All Time.orbackup", accountEmail: getConnectedGoogleAccount(), snapshotFailures: [] };
+    return { ...masterResult, skipped: false, completedAt, name: currentMonthName, accountEmail: getConnectedGoogleAccount(), snapshotFailures: [] };
   }
 
   // If the Drive delta was confirmed, promote the local diff cache. If there
@@ -1998,15 +2020,14 @@ export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) 
     };
   }
 
-  onProgress?.("Searching Google Drive for the all-time master…");
-  const candidates = (await findLatestBackupCandidates()).filter((item:any) =>
+  onProgress?.("Searching Google Drive for the latest monthly backup…");
+  const candidates = (await findLatestBackupCandidates()).filter((item: any) =>
+    /^Ortho Logbook Backup - Month \d{4}-\d{2}\.orbackup$/.test(String(item.name || "")) ||
     String(item.name || "") === "Ortho Logbook Backup - All Time.orbackup" ||
     String(item.name || "") === BACKUP_NAME
   );
-  // Only complete master snapshots can be restored as an all-time restore.
-  // Month/year/date exports from older builds are never treated as full backups.
-  candidates.sort((a:any,b:any) => {
-    const rank = (name:string) => /all time/i.test(name) ? 0 : name === BACKUP_NAME ? 1 : /month|year|date/i.test(name) ? 3 : 2;
+  candidates.sort((a: any, b: any) => {
+    const rank = (name: string) => /^Ortho Logbook Backup - Month \d{4}-\d{2}\.orbackup$/.test(name) ? 0 : /all time/i.test(name) ? 1 : name === BACKUP_NAME ? 2 : 3;
     return rank(String(a.name || "")) - rank(String(b.name || "")) ||
       Date.parse(String(b.modifiedTime || "")) - Date.parse(String(a.modifiedTime || ""));
   });
