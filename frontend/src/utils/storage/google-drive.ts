@@ -21,6 +21,7 @@ export async function getLastDriveBackupStatus(): Promise<string | null> {
 export const GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive";
 const BACKUP_NAME = "Ortho Logbook Backup.orbackup";
 const PATIENT_IMAGE_PDF_FOLDER = "Patient Image PDFs";
+const PENDING_PATIENT_PDF_DELETE_KEY = "ortho_pending_patient_pdf_drive_deletes_v1";
 const DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder";
 const DRIVE_API = "https://www.googleapis.com/drive/v3/files";
 const DRIVE_UPLOAD = "https://www.googleapis.com/upload/drive/v3/files";
@@ -1013,33 +1014,71 @@ export async function ensurePatientImagePdfOnDrive(patientId: string, onProgress
 }
 
 
+
+async function readPendingPatientPdfDeletes(): Promise<string[]> {
+  try {
+    const raw = await storage.secureGet(PENDING_PATIENT_PDF_DELETE_KEY, "[]");
+    const value = JSON.parse(String(raw || "[]"));
+    return Array.isArray(value) ? Array.from(new Set(value.map(String).filter(Boolean))) : [];
+  } catch { return []; }
+}
+async function writePendingPatientPdfDeletes(ids: string[]): Promise<void> {
+  await storage.secureSet(PENDING_PATIENT_PDF_DELETE_KEY, JSON.stringify(Array.from(new Set(ids.filter(Boolean)))));
+}
+async function deletePatientPdfFilesFromDrive(patientId: string): Promise<void> {
+  const id = String(patientId || "").trim().slice(0, 100);
+  if (!id) return;
+  const folder = await findPatientImagePdfFolder();
+  if (!folder?.id) return;
+  const q = encodeURIComponent("'" + escapeDriveQuery(String(folder.id)) + "' in parents and appProperties has { key='orthoPatientId' and value='" + escapeDriveQuery(id) + "' } and trashed = false");
+  const response = await driveRequest(DRIVE_API + "?q=" + q + "&spaces=drive&pageSize=100&includeItemsFromAllDrives=true&supportsAllDrives=true&fields=files(id,name,mimeType,appProperties)");
+  const data = await response.json();
+  const files = Array.isArray(data.files) ? data.files : [];
+  for (const file of files) {
+    if (!file?.id || file.mimeType !== "application/pdf" ||
+        String(file.appProperties?.orthoPatientId || "") !== id) continue;
+    await driveRequest(DRIVE_API + "/" + encodeURIComponent(String(file.id)) + "?supportsAllDrives=true", { method: "DELETE" });
+  }
+}
+async function processPendingPatientPdfDeletes(onProgress?: (stage: string) => void): Promise<void> {
+  const pending = await readPendingPatientPdfDeletes();
+  if (!pending.length) return;
+  const remaining: string[] = [];
+  for (let i = 0; i < pending.length; i++) {
+    try {
+      onProgress?.("Removing deleted patient's PDF from Google Drive (" + (i + 1) + "/" + pending.length + ")…");
+      await deletePatientPdfFilesFromDrive(pending[i]);
+    } catch { remaining.push(pending[i]); }
+  }
+  await writePendingPatientPdfDeletes(remaining);
+}
+
 export async function deletePatientImagePdfFromDrive(patientId: string): Promise<void> {
   const id = String(patientId || "").trim();
   if (!id) return;
-  await queueDriveOperation(async () => {
-    const folder = await findPatientImagePdfFolder();
-    if (folder?.id) {
-      const q = encodeURIComponent("'" + escapeDriveQuery(String(folder.id)) + "' in parents and appProperties has { key='orthoPatientId' and value='" + escapeDriveQuery(id.slice(0, 100)) + "' } and trashed = false");
-      const response = await driveRequest(DRIVE_API + "?q=" + q + "&spaces=drive&pageSize=100&includeItemsFromAllDrives=true&supportsAllDrives=true&fields=files(id,name,mimeType,appProperties)");
-      const data = await response.json();
-      const files = Array.isArray(data.files) ? data.files : [];
-      for (const file of files) {
-        if (!file?.id || file.mimeType !== "application/pdf" ||
-            String(file.appProperties?.orthoPatientId || "") !== id.slice(0, 100)) continue;
-        await driveRequest(DRIVE_API + "/" + encodeURIComponent(String(file.id)) + "?supportsAllDrives=true", { method: "DELETE" });
-      }
-    }
-    await removePatientImageArchive(id);
-  });
+  const pending = await readPendingPatientPdfDeletes();
+  if (!pending.includes(id)) pending.push(id);
+  await writePendingPatientPdfDeletes(pending);
+  // Remove local metadata/file immediately so later backups cannot re-upload a deleted patient's PDF.
+  await removePatientImageArchive(id);
+  try {
+    await queueDriveOperation(async () => {
+      await deletePatientPdfFilesFromDrive(id);
+      await writePendingPatientPdfDeletes((await readPendingPatientPdfDeletes()).filter(value => value !== id));
+    });
+  } catch {
+    // Leave the ID queued for the next successful Drive backup.
+  }
 }
 
 export async function uploadPatientImageArchivesToDrive(onProgress?: (stage: string) => void): Promise<void> {
-  // Provision the folder and upload PDFs for every patient with saved images, including newly added records.
+  await processPendingPatientPdfDeletes(onProgress);
+  // Provision the folder and upload a PDF for every current patient, including newly added records.
   onProgress?.("Checking the Patient Image PDFs folder in Google Drive…");
   const folder = await getOrCreatePatientImagePdfFolder();
   const archives = await getLocalPatientImageArchives();
   if (!archives.length) {
-    onProgress?.("Patient Image PDFs folder is ready; no patient PDFs are due for upload yet.");
+    onProgress?.("Patient Image PDFs folder is ready; no patient PDFs are registered yet.");
     return;
   }
   const folderId = String(folder.id);

@@ -77,7 +77,10 @@ function makeHtml(name: string, mrNo: string, images: string[]): string {
       "<section class='photo'><div style='width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center'>" +
       "<div style='align-self:flex-start;width:100%'><div class='head'>" + esc(name || "Patient") + "</div><div class='meta'>MR No: " + esc(mrNo || "—") +
       " · Image " + (index + 1) + " of " + images.length + "</div></div><img src='" + src.replace(/'/g, "%27") + "' /></div></section>"
-    ).join("") + "</body></html>";
+    ).join("") + (images.length ? "" :
+      "<section class='photo'><div style='width:100%'><div class='head'>" + esc(name || "Patient") +
+      "</div><div class='meta'>MR No: " + esc(mrNo || "—") +
+      "</div><p>No images are currently attached to this patient.</p></div></section>") + "</body></html>";
 }
 
 export async function getLocalPatientImageArchives(): Promise<PatientImageArchive[]> {
@@ -130,7 +133,6 @@ export async function archivePatientImagesForPatient(patientId: string, onProgre
   if (!patient) throw new Error("This patient is not available in the phone database. Refresh the patient list and try again.");
   const row = db.getFirstSync<any>("SELECT photo_uri,photos_json FROM patients WHERE id=?", [id]) || {};
   const sources = getPhotoSources(row);
-  if (!sources.length) throw new Error("No readable patient images are saved for this patient on this phone.");
   const name = String(patient.name || "Patient");
   const mrNo = String(patient.mr_no || "");
   const stamp = await stampFor(id, name, mrNo, String(patient.created_at || patient.date || ""), sources);
@@ -179,7 +181,8 @@ export async function archiveEligiblePatientImages(onProgress?: (stage: string) 
     if (!id) continue;
     const row = db.getFirstSync<any>("SELECT photo_uri,photos_json FROM patients WHERE id=?", [id]) || {};
     const sources = getPhotoSources(row);
-    if (!sources.length) continue;
+    // Create a PDF for every patient regardless of record age. Patients without images
+    // receive a clearly labelled one-page PDF until photos are attached.
     const name = String(patient.name || "Patient");
     const mrNo = String(patient.mr_no || "");
     const stamp = await stampFor(id, name, mrNo, String(patient.created_at || patient.date || ""), sources);

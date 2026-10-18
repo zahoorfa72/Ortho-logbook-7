@@ -979,6 +979,7 @@ export default function Logbook() {
               if (pdfCleanupFailures) {
                 Alert.alert("Patient records deleted", "The selected records were moved to Trash, but " + pdfCleanupFailures + " Drive patient PDF(s) could not be deleted. Reconnect Google Drive and retry the PDF cleanup.");
               }
+              await Promise.allSettled(idsToDelete.map(patientId => deletePatientImagePdfFromDrive(String(patientId))));
               // Refresh directly from SQLite after the transaction has committed.
               setSelectedIds([]);
               setSelectMode(false);
@@ -1361,10 +1362,10 @@ export default function Logbook() {
                 {chip(item.procedure, "px")}
                 {chip(item.procedureII || "", "px2")}
               </View>
-              {Array.isArray(item.photos) && item.photos.length > 0 ? (
+              {(
                 <Pressable
                   accessibilityRole="button"
-                  testID={`patient-image-pdf-${item.id}`}
+                  testID={`patient-image-pdf-${item.id}`
                   onPress={async (event: any) => {
                     event?.stopPropagation?.();
                     try {
@@ -1379,7 +1380,7 @@ export default function Logbook() {
                   <Ionicons name="document-attach-outline" size={16} color={colors.brandPrimary} />
                   <Text style={{ fontFamily: fontFamily.semibold, fontSize: fontSize.xs, color: colors.brandPrimary }}>Open patient image PDF in Drive</Text>
                 </Pressable>
-              ) : null}
+              )}
               {infectionResults(item).length ? (
                 <View style={styles.infectionRow}>
                   {infectionResults(item).map(label => <Text key={label} style={styles.infectionText}>{label}</Text>)}
