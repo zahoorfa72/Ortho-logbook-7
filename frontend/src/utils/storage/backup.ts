@@ -85,7 +85,15 @@ function photoCacheKey(uri: string, profile: "patient" | "document"): string {
   // another huge string and the cache would retain it for the whole export.
   let first = 0x811c9dc5;
   let second = 0x9e3779b9;
-  for (let i = 0; i < uri.length; i++) {
+  // Sample the entire URI instead of hashing every character. Medical photos
+  // can be many megabytes; the cache key must not add seconds of CPU per image.
+  const step = Math.max(1, Math.floor(uri.length / 8192));
+  for (let i = 0; i < uri.length; i += step) {
+    const code = uri.charCodeAt(i);
+    first = Math.imul(first ^ code, 0x01000193) >>> 0;
+    second = Math.imul(second ^ (code + (i & 255)), 0x85ebca6b) >>> 0;
+  }
+  for (let i = Math.max(0, uri.length - 256); i < uri.length; i++) {
     const code = uri.charCodeAt(i);
     first = Math.imul(first ^ code, 0x01000193) >>> 0;
     second = Math.imul(second ^ (code + (i & 255)), 0x85ebca6b) >>> 0;
@@ -306,8 +314,21 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
    labResultsHiddenByPatient: await AsyncStorage.getItem("ortho_lab_results_hidden_by_patient_v1"),
  } : undefined;
  const pf=whereForFilter(filter, "date");
- const patients=include("patients") ? db.getAllSync<any>(`SELECT * FROM patients${pf.sql} ORDER BY date DESC, created_at DESC`, pf.args) : [];
- const selectedPatientIds = new Set(patients.map((p:any)=>p.id));
+ let patients: any[] = [];
+ if (include("patients")) {
+   if (filter.type === "month" || filter.type === "year") {
+     const pattern = `${filter.value || ""}-%`;
+     // Include patient records for anyone with history created in this period,
+     // even if their original admit date was earlier.
+     patients = db.getAllSync<any>(
+       "SELECT * FROM patients WHERE date LIKE ? OR id IN (SELECT DISTINCT patient_id FROM patient_history WHERE created_at LIKE ?) ORDER BY date DESC, created_at DESC",
+       [pattern, pattern],
+     );
+   } else {
+     patients = db.getAllSync<any>(`SELECT * FROM patients${pf.sql} ORDER BY date DESC, created_at DESC`, pf.args);
+   }
+ }
+ const selectedPatientIds = new Set(patients.map((p:any)=>String(p.id)));
  const compressedPhotoCache = new Map<string,string>();
  const embeddedPatients:any[]=[];
  const previousPatientsById = new Map<string, any>((previousPatientRows || []).filter((p:any)=>p?.id!=null).map((p:any)=>[String(p.id),p]));
@@ -339,7 +360,9 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
 
  onProgress?.("Patient photos prepared; reading historical reports…");
  const historyAll=include("patientHistory") ? db.getAllSync<any>("SELECT * FROM patient_history ORDER BY created_at ASC") : [];
- const history=filter.type==="all" ? historyAll : historyAll.filter((h:any)=>selectedPatientIds.has(h.patient_id));
+ const history=filter.type==="all" ? historyAll : filter.type === "month" || filter.type === "year"
+   ? historyAll.filter((h:any)=>String(h.created_at || "").startsWith(String(filter.value || "") + "-"))
+   : historyAll.filter((h:any)=>selectedPatientIds.has(String(h.patient_id)) && String(h.created_at || "").startsWith(String(filter.value || "")));
  const embeddedHistory:any[]=[];
  onProgress?.("Processing patient history images… 0/" + history.length);
  for (let historyIndex = 0; historyIndex < history.length; historyIndex++) {
@@ -387,7 +410,12 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
    }
  }
 
- const trashSourceRows = include("trash") ? db.getAllSync<any>("SELECT * FROM deleted_records ORDER BY deleted_at DESC") : [];
+ const trashSourceRows = include("trash") ? (() => {
+   const all = db.getAllSync<any>("SELECT * FROM deleted_records ORDER BY deleted_at DESC");
+   if (filter.type === "all") return all;
+   const prefix = String(filter.value || "");
+   return all.filter((row:any) => String(row.deleted_at || "").startsWith(prefix));
+ })() : [];
  onProgress?.("Processing deleted records and trash… 0/" + trashSourceRows.length);
  const trashRows = include("trash") ? await mapWithConcurrency(trashSourceRows, 2, async (entry:any, trashIndex:number) => {
    if (trashIndex % 2 === 0) {
@@ -446,15 +474,17 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
   patients:embeddedPatients,
   procedures:include("procedures") ? db.getAllSync<any>("SELECT * FROM procedures ORDER BY name COLLATE NOCASE") : [],
   inventoryCategories:include("inventoryCategories") ? db.getAllSync<any>("SELECT * FROM inventory_categories ORDER BY name COLLATE NOCASE") : [],
-  inventory:include("inventory") ? await mapWithConcurrency(db.getAllSync<any>("SELECT id,name,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,low_stock_triggered_at,low_stock_since FROM inventory ORDER BY COALESCE(category,''),name COLLATE NOCASE,COALESCE(size,'')"), 2, async (row:any) => ({
+  // Period archives are for dated activity, not a duplicate snapshot of the
+  // entire current stock and all its bill photos. The all-time master retains it.
+  inventory:include("inventory") && filter.type==="all" ? await mapWithConcurrency(db.getAllSync<any>("SELECT id,name,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,low_stock_triggered_at,low_stock_since FROM inventory ORDER BY COALESCE(category,''),name COLLATE NOCASE,COALESCE(size,'')"), 2, async (row:any) => ({
     ...row,
     bill_image: typeof row.bill_image === "string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(row.bill_image)
       ? await embedOptionalPhoto(row.bill_image, compressedPhotoCache)
       : row.bill_image,
   })) : [],
-  patientImplants:include("patientImplants") ? db.getAllSync<any>("SELECT * FROM patient_implants ORDER BY created_at ASC") : [],
+  patientImplants:include("patientImplants") ? db.getAllSync<any>("SELECT * FROM patient_implants ORDER BY created_at ASC").filter((row:any)=>filter.type==="all" || selectedPatientIds.has(String(row.patient_id))) : [],
   patientCustomFields:include("patientCustomFields") ? db.getAllSync<any>("SELECT * FROM patient_custom_fields ORDER BY sort_order ASC,label COLLATE NOCASE") : [],
-  implantRecords:include("implantRecords") ? await mapWithConcurrency(db.getAllSync<any>("SELECT * FROM implant_records ORDER BY created_at ASC"), 2, async (row:any) => {
+  implantRecords:include("implantRecords") ? await mapWithConcurrency(db.getAllSync<any>(`SELECT * FROM implant_records${whereForFilter(filter,"created_at").sql} ORDER BY created_at ASC`, whereForFilter(filter,"created_at").args), 2, async (row:any) => {
     let billFiles = row.bill_files_json;
     try {
       const parsed = JSON.parse(String(row.bill_files_json || "[]"));
