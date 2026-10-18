@@ -22,6 +22,11 @@ import * as SecureStore from "expo-secure-store";
 
 import { AssertNoExtras, StorageBase, StorageItemValue } from "./storage-base";
 
+function shouldBackupSettingChange(key: string): boolean {
+  if (!String(key || "").startsWith("ortho_")) return false;
+  return !/(pending_tables|last_successful_backup|last_uploaded_content_hash|incremental_snapshot|delta_cache|backup_reminder|backup_cursor|last_backup)/i.test(key);
+}
+
 export class Storage extends StorageBase {
   // General KV — backed by AsyncStorage.
   // `fallback` is required and returned on any miss/parse error — a missing key looks identical to a stored `null`.
@@ -45,9 +50,9 @@ export class Storage extends StorageBase {
     try {
       await AsyncStorage.setItem(key, JSON.stringify(value));
       if (key === "ortho_branding") {
-        // Branding/PDF headers are KV settings rather than SQLite rows, so
-        // enqueue them explicitly after a real successful write.
         void import("./drive-auto-backup").then((m) => m.triggerAutomaticDriveBackup("branding")).catch(() => undefined);
+      } else if (shouldBackupSettingChange(key)) {
+        void import("./drive-auto-backup").then((m) => m.triggerAutomaticDriveBackup("appSettings")).catch(() => undefined);
       }
       return true;
     } catch (e) {
@@ -61,6 +66,8 @@ export class Storage extends StorageBase {
       await AsyncStorage.removeItem(key);
       if (key === "ortho_branding") {
         void import("./drive-auto-backup").then((m) => m.triggerAutomaticDriveBackup("branding")).catch(() => undefined);
+      } else if (shouldBackupSettingChange(key)) {
+        void import("./drive-auto-backup").then((m) => m.triggerAutomaticDriveBackup("appSettings")).catch(() => undefined);
       }
       return true;
     } catch (e) {
@@ -90,7 +97,7 @@ export class Storage extends StorageBase {
   ): Promise<boolean> {
     try {
       await SecureStore.setItemAsync(key, JSON.stringify(value));
-      if (key === "ortho_google_drive_client_id" || key === "ortho_google_drive_cloud_project_id" || key === "ortho_drive_account_email") {
+      if (shouldBackupSettingChange(key)) {
         void import("./drive-auto-backup").then((m) => m.triggerAutomaticDriveBackup("appSettings")).catch(() => undefined);
       }
       return true;
@@ -103,7 +110,7 @@ export class Storage extends StorageBase {
   async secureRemove(key: string): Promise<boolean> {
     try {
       await SecureStore.deleteItemAsync(key);
-      if (key === "ortho_google_drive_client_id" || key === "ortho_google_drive_cloud_project_id" || key === "ortho_drive_account_email") {
+      if (shouldBackupSettingChange(key)) {
         void import("./drive-auto-backup").then((m) => m.triggerAutomaticDriveBackup("appSettings")).catch(() => undefined);
       }
       return true;

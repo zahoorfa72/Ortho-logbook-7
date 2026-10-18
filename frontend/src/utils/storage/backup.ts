@@ -358,10 +358,10 @@ async function mapWithConcurrency<T, R>(items: T[], concurrency: number, mapper:
   return output;
 }
 
-async function createBackupData(filter: BackupFilter = { type: "all" }, onProgress?: (stage: string) => void, changedTables?: string[], previousPatientRows?: any[], previousPhotoSources?: Record<string, string>):Promise<BackupData>{
+async function createBackupData(filter: BackupFilter = { type: "all" }, onProgress?: (stage: string) => void, changedTables?: string[], previousPatientRows?: any[], previousPhotoSources?: Record<string, string>, includePatientImages = true):Promise<BackupData>{
  initializeDatabase();
- if (filter.type === "all" && (!changedTables || changedTables.includes("patients"))) await archiveEligiblePatientImages(onProgress);
- const localPatientArchives = await getLocalPatientImageArchives();
+ if (includePatientImages && filter.type === "all" && (!changedTables || changedTables.includes("patients"))) await archiveEligiblePatientImages(onProgress);
+ const localPatientArchives = includePatientImages ? await getLocalPatientImageArchives() : [];
  const archiveByPatientId = new Map(localPatientArchives.map((archive:any) => [String(archive.patientId), archive]));
  const include = (name: string) => !changedTables || changedTables.includes(name);
  let branding: BrandingConfig | null | undefined;
@@ -429,6 +429,13 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
    // patients used to load hundreds of MB of base64 into memory before export.
    const photoRow = db.getFirstSync<any>("SELECT photo_uri,photos_json FROM patients WHERE id=?", [patientId]) || {};
    const patientWithPhotos = { ...patient, ...photoRow };
+   if (!includePatientImages) {
+     embeddedPatients.push({ ...patient, photo_uri: "", photos_json: "" });
+     patient.photo_uri = ""; patient.photos_json = "";
+     patientWithPhotos.photo_uri = ""; patientWithPhotos.photos_json = "";
+     photoRow.photo_uri = ""; photoRow.photos_json = "";
+     continue;
+   }
    const sourceSignature = photoSourceSignature(patientWithPhotos);
    const previous = previousPatientsById.get(patientId);
    const archivedImage = archiveByPatientId.get(patientId);
@@ -495,6 +502,15 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
    }
    const snapshotRow = db.getFirstSync<any>("SELECT snapshot_json FROM patient_history WHERE id=?", [h.id]);
    const rawSnapshot = String(snapshotRow?.snapshot_json || "");
+   if (!includePatientImages) {
+     try {
+       const snapshot = JSON.parse(rawSnapshot || "{}");
+       delete snapshot.photos; delete snapshot.photos_json; delete snapshot.photoUri; delete snapshot.photo_uri;
+       embeddedHistory.push({ ...h, snapshot_json: JSON.stringify(snapshot) });
+     } catch { embeddedHistory.push({ ...h, snapshot_json: rawSnapshot }); }
+     h.snapshot_json = "";
+     continue;
+   }
    const historySourceSignature = rowImageSignature({ snapshot_json: rawSnapshot });
    const historySignatureKey = "images:patientHistory:" + String(h.id);
    if (changedTables?.includes("patientHistory") &&
@@ -560,6 +576,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
    const rawPayload = String(payloadRow?.payload_json || "{}");
    let payload:any = {};
    try { payload = JSON.parse(rawPayload); } catch { payload = {}; }
+   if (!includePatientImages) payload = stripBackupImages(payload);
    if (payloadRow) payloadRow.payload_json = "";
    for (const patient of Array.isArray(payload.patients) ? payload.patients : []) {
      const embedded = await embedPatientPhotos(patient, compressedPhotoCache, onProgress, "trash patient " + (trashIndex + 1) + "/" + trashSourceRows.length);
@@ -620,7 +637,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
   inventory:include("inventory") && filter.type==="all" ? await mapWithConcurrency(db.getAllSync<any>("SELECT id,name,category_id,category,size,quantity,unit,minimum_stock,added_date,low_stock_triggered_at,low_stock_since FROM inventory ORDER BY COALESCE(category,''),name COLLATE NOCASE,COALESCE(size,'')"), 2, async (row:any) => {
     const billRow = db.getFirstSync<any>("SELECT bill_image FROM inventory WHERE id=?", [row.id]);
     const sourceBillImage = billRow?.bill_image;
-    const billImage = typeof sourceBillImage === "string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(sourceBillImage)
+    const billImage = !includePatientImages ? "" : typeof sourceBillImage === "string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(sourceBillImage)
       ? await embedOptionalPhoto(sourceBillImage, compressedPhotoCache)
       : sourceBillImage;
     billRow && (billRow.bill_image = "");
@@ -630,6 +647,12 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
   patientCustomFields:include("patientCustomFields") ? db.getAllSync<any>("SELECT * FROM patient_custom_fields ORDER BY sort_order ASC,label COLLATE NOCASE") : [],
   implantRecords:include("implantRecords") ? await mapWithConcurrency(db.getAllSync<any>(`SELECT id,name,category,size,manufacturer,model,lot_number,serial_number,expiry_date,supplier,quantity,unit,purchase_price,notes,created_at,updated_at,created_by,updated_by FROM implant_records${whereForFilter(filter,"created_at").sql} ORDER BY created_at ASC`, whereForFilter(filter,"created_at").args), 2, async (row:any) => {
     const billRow = db.getFirstSync<any>("SELECT bill_files_json FROM implant_records WHERE id=?", [row.id]);
+    if (!includePatientImages) {
+      const portableRow = { ...row, bill_files_json: "[]" };
+      row.bill_files_json = "";
+      if (billRow) billRow.bill_files_json = "";
+      return portableRow;
+    }
     let billFiles = billRow?.bill_files_json;
     try {
       const parsed = JSON.parse(String(billFiles || "[]"));
@@ -656,22 +679,23 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
   users:include("users") ? db.getAllSync<any>("SELECT * FROM users ORDER BY created_at ASC") : [],
   patientHistory:embeddedHistory,
   inventoryMovements:include("inventoryMovements") ? (()=>{if(filter.type==="all") return db.getAllSync<any>("SELECT * FROM inventory_movements ORDER BY created_at ASC"); const f=filter.type==="date" ? {sql:" WHERE date(created_at)=?",args:[filter.value||""]} : filter.type==="month" ? {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]} : {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]}; return db.getAllSync<any>(`SELECT * FROM inventory_movements${f.sql} ORDER BY created_at ASC`,f.args);})() : [],
-  inventoryPurchaseReceipts:include("inventoryPurchaseReceipts") ? await (async()=>{const f=whereForFilter(filter,"created_at");const rows=db.getAllSync<any>(`SELECT id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,description,created_at,created_by FROM inventory_purchase_receipts${f.sql} ORDER BY created_at ASC`,f.args);return await mapWithConcurrency(rows, 2, async (row:any)=>{const billRow=db.getFirstSync<any>("SELECT bill_image FROM inventory_purchase_receipts WHERE id=?",[row.id]);const source=billRow?.bill_image;const billImage=typeof source==="string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(source) ? await embedOptionalPhoto(source,compressedPhotoCache) : source; if(billRow)billRow.bill_image=""; return {...row,bill_image:billImage};});})() : [],
-  stockReceipts:include("stockReceipts") ? await (async()=>{const f=whereForFilter(filter,"created_at");const rows=db.getAllSync<any>(`SELECT id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,description,created_at,created_by FROM stock_receipts${f.sql} ORDER BY created_at ASC`,f.args);return await mapWithConcurrency(rows, 2, async (row:any)=>{const billRow=db.getFirstSync<any>("SELECT bill_image FROM stock_receipts WHERE id=?",[row.id]);const source=billRow?.bill_image;const billImage=typeof source==="string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(source) ? await embedOptionalPhoto(source,compressedPhotoCache) : source; if(billRow)billRow.bill_image=""; return {...row,bill_image:billImage};});})() : [],
+  inventoryPurchaseReceipts:include("inventoryPurchaseReceipts") ? await (async()=>{const f=whereForFilter(filter,"created_at");const rows=db.getAllSync<any>(`SELECT id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,description,created_at,created_by FROM inventory_purchase_receipts${f.sql} ORDER BY created_at ASC`,f.args);return await mapWithConcurrency(rows, 2, async (row:any)=>{const billRow=db.getFirstSync<any>("SELECT bill_image FROM inventory_purchase_receipts WHERE id=?",[row.id]);const source=billRow?.bill_image;const billImage=!includePatientImages ? "" : typeof source==="string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(source) ? await embedOptionalPhoto(source,compressedPhotoCache) : source; if(billRow)billRow.bill_image=""; return {...row,bill_image:billImage};});})() : [],
+  stockReceipts:include("stockReceipts") ? await (async()=>{const f=whereForFilter(filter,"created_at");const rows=db.getAllSync<any>(`SELECT id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,description,created_at,created_by FROM stock_receipts${f.sql} ORDER BY created_at ASC`,f.args);return await mapWithConcurrency(rows, 2, async (row:any)=>{const billRow=db.getFirstSync<any>("SELECT bill_image FROM stock_receipts WHERE id=?",[row.id]);const source=billRow?.bill_image;const billImage=!includePatientImages ? "" : typeof source==="string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(source) ? await embedOptionalPhoto(source,compressedPhotoCache) : source; if(billRow)billRow.bill_image=""; return {...row,bill_image:billImage};});})() : [],
   trash:trashRows,
   branding,
   appSettings,
-  patientImageArchives: localPatientArchives.filter((archive:any) => selectedPatientIds.has(String(archive.patientId))).map((archive:any) => ({
+  patientImageArchives: includePatientImages ? localPatientArchives.filter((archive:any) => selectedPatientIds.has(String(archive.patientId))).map((archive:any) => ({
     patientId: archive.patientId, patientName: archive.patientName, mrNo: archive.mrNo,
     fileName: archive.fileName, sourceStamp: archive.sourceStamp, archivedAt: archive.archivedAt,
     imageCount: archive.imageCount, driveFileId: archive.driveFileId,
-  })),
-  photoAssets: Object.fromEntries(compressedPhotoCache.assets?.entries() || []),
+  })) : [],
+  photoAssets: includePatientImages ? Object.fromEntries(compressedPhotoCache.assets?.entries() || []) : {},
  };
 }
 
-export async function exportBackup(password:string, filter: BackupFilter = { type: "all" }):Promise<string>{
- const backup=await createBackupData(filter);
+export async function exportBackup(password:string, filter: BackupFilter = { type: "all" }, options: { includePatientImages?: boolean } = {}):Promise<string>{
+ // Phone/file backups omit patient report photos and bill images by default. Branding logos remain included.
+ const backup=await createBackupData(filter, undefined, undefined, undefined, undefined, options.includePatientImages === true);
  backup.filter = filter;
  const salt=await Crypto.getRandomBytesAsync(16);
  const nonce=await Crypto.getRandomBytesAsync(nacl.secretbox.nonceLength);

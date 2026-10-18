@@ -82,7 +82,7 @@ export default function SettingsScreen() {
             onValueChange={async value => {
               setLabOcrEnabled(value);
               try {
-                await AsyncStorage.setItem("ortho_lab_ocr_enabled", value ? "true" : "false");
+                await AsyncStorage.setItem("ortho_lab_ocr_enabled", value ? "true" : "false"); triggerAutomaticDriveBackup("appSettings");
                 DeviceEventEmitter.emit("ortho_lab_ocr_enabled_changed", value);
                 triggerAutomaticDriveBackup("appSettings");
               } catch { setLabOcrEnabled(!value); toast("Could not save the lab reader setting.", "error"); }

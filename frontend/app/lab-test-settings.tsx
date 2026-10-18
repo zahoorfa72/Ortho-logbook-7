@@ -101,7 +101,7 @@ export default function LabTestSettingsScreen() {
       const category = String(nextItem.category || "").trim();
       const nextBranches = category && !branches.some(branch => branch.toLocaleLowerCase() === category.toLocaleLowerCase())
         ? [...branches, category].sort((a, b) => a.localeCompare(b)) : branches;
-      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)); triggerAutomaticDriveBackup("appSettings");
       await AsyncStorage.setItem(BRANCHES_KEY, JSON.stringify(nextBranches));
       triggerAutomaticDriveBackup("appSettings");
       setBranches(nextBranches);
@@ -141,7 +141,7 @@ export default function LabTestSettingsScreen() {
     setOnlineKeyBusy(true);
     try {
       const key = onlineOcrKey.trim();
-      if (key) await AsyncStorage.setItem(ONLINE_OCR_KEY, key);
+      if (key) await AsyncStorage.setItem(ONLINE_OCR_KEY, key); triggerAutomaticDriveBackup("appSettings");
       else await AsyncStorage.removeItem(ONLINE_OCR_KEY);
       triggerAutomaticDriveBackup("appSettings");
       toast(key ? "Online OCR key saved on this device." : "Online OCR disabled; offline OCR remains available.", "success");

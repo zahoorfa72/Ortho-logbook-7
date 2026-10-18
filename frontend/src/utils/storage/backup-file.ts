@@ -42,27 +42,9 @@ export async function saveBackupToPhone(password: string, filter: BackupFilter =
   const permissions = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
   if (!permissions.granted) throw new Error("Save cancelled. Please choose a folder in the phone's File Manager.");
 
-  // Keep the master JSON compact. Patient images older than 30 days are saved as
-  // patient-named PDFs in a sibling folder instead of being duplicated in JSON.
-  const archives = filter.type === "all" ? await getLocalPatientImageArchives() : [];
-  if (archives.length) {
-    const pdfFolder = await getOrCreateSafFolder(permissions.directoryUri, "Patient Image PDFs");
-    for (let i = 0; i < archives.length; i++) {
-      const archive = archives[i];
-      const sourceInfo = await FileSystem.getInfoAsync(archive.localUri);
-      if (!sourceInfo.exists || Number(sourceInfo.size || 0) < 8) throw new Error("Patient PDF is missing: " + archive.fileName + ". The phone backup was not marked successful.");
-      const existing = await findSafChild(pdfFolder, archive.fileName);
-      const target = existing || await FileSystem.StorageAccessFramework.createFileAsync(pdfFolder, archive.fileName, "application/pdf");
-      const base64 = await FileSystem.readAsStringAsync(archive.localUri, { encoding: FileSystem.EncodingType.Base64 });
-      await FileSystem.writeAsStringAsync(target, base64, { encoding: FileSystem.EncodingType.Base64 });
-      const verified: any = await FileSystem.getInfoAsync(target);
-      if (!verified.exists || (typeof verified.size === "number" && verified.size !== Number(sourceInfo.size || 0))) {
-        throw new Error("Patient PDF could not be verified in the phone backup folder: " + archive.fileName);
-      }
-    }
-  }
-  // Write the master last, so a failed sidecar PDF copy cannot leave a seemingly
-  // successful backup whose patient-image links point to missing files.
+  // Phone backup is data-only: patient/report and inventory bill images are not
+  // embedded or copied as sidecar PDFs. Branding logos remain in branding settings.
+  // Patient PDFs can still be exported separately with the dedicated PDF action.
   const existingBackup = await findSafChild(permissions.directoryUri, BACKUP_FILE_NAME);
   const fileUri = existingBackup || await FileSystem.StorageAccessFramework.createFileAsync(
     permissions.directoryUri, BACKUP_FILE_NAME, "application/json");
