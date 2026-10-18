@@ -80,30 +80,11 @@ function photoMime(uri:string){
 // This is the important difference from the old backup: file:// or content://
 // paths are not portable between phones, so the actual photo bytes are stored
 // inside the encrypted backup.
-function photoCacheKey(uri: string, profile: "patient" | "document"): string {
-  // Never use the complete data URI as a Map key: a 9 MB image would create
-  // another huge string and the cache would retain it for the whole export.
-  let first = 0x811c9dc5;
-  let second = 0x9e3779b9;
-  // Sample the entire URI instead of hashing every character. Medical photos
-  // can be many megabytes; the cache key must not add seconds of CPU per image.
-  const step = Math.max(1, Math.floor(uri.length / 8192));
-  for (let i = 0; i < uri.length; i += step) {
-    const code = uri.charCodeAt(i);
-    first = Math.imul(first ^ code, 0x01000193) >>> 0;
-    second = Math.imul(second ^ (code + (i & 255)), 0x85ebca6b) >>> 0;
-  }
-  for (let i = Math.max(0, uri.length - 256); i < uri.length; i++) {
-    const code = uri.charCodeAt(i);
-    first = Math.imul(first ^ code, 0x01000193) >>> 0;
-    second = Math.imul(second ^ (code + (i & 255)), 0x85ebca6b) >>> 0;
-  }
-  return profile + ":" + uri.length + ":" + first.toString(16) + ":" + second.toString(16);
-}
-
 async function embedPhoto(uri:string, cache?: Map<string,string>, profile: "patient" | "document" = "patient"):Promise<string>{
   if (!uri) return "";
-  const cacheKey = photoCacheKey(uri, profile);
+  // Map keys reuse the original string value; do not concatenate or hash the
+  // entire multi-megabyte data URI, which can stall exports on low-memory phones.
+  const cacheKey = uri;
   const cached = cache?.get(cacheKey);
   if (cached) return cached;
 
