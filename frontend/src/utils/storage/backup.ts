@@ -8,6 +8,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { db, initializeDatabase, markInventoryResetDone, repairDatabaseData } from "@/src/db/database";
 import { storage } from "@/src/utils/storage";
 import type { BrandingConfig } from "@/src/theme";
+import { archiveEligiblePatientImages, getLocalPatientImageArchives } from "@/src/utils/storage/patient-image-archive";
 
 const BACKUP_VERSION = 11;
 const BACKUP_APP = "Ortho Logbook";
@@ -18,6 +19,7 @@ type BackupData = {
   patientHistory:any[]; inventoryMovements:any[]; inventoryPurchaseReceipts:any[]; stockReceipts:any[]; trash?:any[];
   // Each unique compressed image is stored once and referenced by its rows.
   photoAssets?: Record<string, string>;
+  patientImageArchives?: Array<{patientId:string;patientName:string;mrNo:string;fileName:string;sourceStamp:string;archivedAt:string;imageCount:number;driveFileId?:string}>;
   branding?: BrandingConfig | null;
   appSettings?: { googleOAuthClientId: string | null; googleCloudProjectId: string | null; googleAccountEmail: string | null; labOcrEnabled?: string | null; labWarningsEnabled?: string | null; labTestDefinitions?: string | null; labTestBranches?: string | null; labResultsHiddenByPatient?: string | null; labWarningThresholdPercent?: string | null; labOldResultDays?: string | null; labOcrApiKey?: string | null; asyncStorageSettings?: Record<string, string | null> };
   filter?: BackupFilter;
@@ -358,6 +360,9 @@ async function mapWithConcurrency<T, R>(items: T[], concurrency: number, mapper:
 
 async function createBackupData(filter: BackupFilter = { type: "all" }, onProgress?: (stage: string) => void, changedTables?: string[], previousPatientRows?: any[], previousPhotoSources?: Record<string, string>):Promise<BackupData>{
  initializeDatabase();
+ if (filter.type === "all" && (!changedTables || changedTables.includes("patients"))) await archiveEligiblePatientImages(onProgress);
+ const localPatientArchives = await getLocalPatientImageArchives();
+ const archiveByPatientId = new Map(localPatientArchives.map((archive:any) => [String(archive.patientId), archive]));
  const include = (name: string) => !changedTables || changedTables.includes(name);
  let branding: BrandingConfig | null | undefined;
  if (include("branding")) {
@@ -426,6 +431,20 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
    const patientWithPhotos = { ...patient, ...photoRow };
    const sourceSignature = photoSourceSignature(patientWithPhotos);
    const previous = previousPatientsById.get(patientId);
+   const archivedImage = archiveByPatientId.get(patientId);
+   if (archivedImage) {
+     embeddedPatients.push({
+       ...patient, photo_uri: "", photos_json: "",
+       photo_archive_file_name: archivedImage.fileName,
+       photo_archive_source_stamp: archivedImage.sourceStamp,
+       photo_archived_at: archivedImage.archivedAt,
+       photo_archive_image_count: archivedImage.imageCount,
+     });
+     patient.photo_uri = ""; patient.photos_json = "";
+     patientWithPhotos.photo_uri = ""; patientWithPhotos.photos_json = "";
+     photoRow.photo_uri = ""; photoRow.photos_json = "";
+     continue;
+   }
    if (changedTables?.includes("patients") && patientId && previous &&
        previousPhotoSources?.[patientId] === sourceSignature) {
      // For incremental sync, unchanged original photo bytes are already in the
@@ -626,6 +645,11 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
   trash:trashRows,
   branding,
   appSettings,
+  patientImageArchives: localPatientArchives.filter((archive:any) => selectedPatientIds.has(String(archive.patientId))).map((archive:any) => ({
+    patientId: archive.patientId, patientName: archive.patientName, mrNo: archive.mrNo,
+    fileName: archive.fileName, sourceStamp: archive.sourceStamp, archivedAt: archive.archivedAt,
+    imageCount: archive.imageCount, driveFileId: archive.driveFileId,
+  })),
   photoAssets: Object.fromEntries(compressedPhotoCache.assets?.entries() || []),
  };
 }

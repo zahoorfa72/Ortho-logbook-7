@@ -9,6 +9,7 @@ import {
   type BackupFilter,
 } from "@/src/utils/storage/backup";
 import { markBackupTaken } from "@/src/utils/backup-reminder";
+import { getLocalPatientImageArchives, getPatientImageArchive, installPatientImageArchivePdf } from "@/src/utils/storage/patient-image-archive";
 
 const BACKUP_FILE_NAME = "ortho-logbook-backup.orbackup.json";
 
@@ -21,21 +22,50 @@ export async function createBackupFile(password: string, filter: BackupFilter = 
   return file.uri;
 }
 
+async function findSafChild(parentUri: string, name: string): Promise<string | null> {
+  try {
+    const children = await FileSystem.StorageAccessFramework.readDirectoryAsync(parentUri);
+    for (const uri of children) {
+      const info: any = await FileSystem.getInfoAsync(uri);
+      if (String(info?.name || "") === name || uri.endsWith(encodeURIComponent(name))) return uri;
+    }
+  } catch {}
+  return null;
+}
+async function getOrCreateSafFolder(parentUri: string, name: string): Promise<string> {
+  const existing = await findSafChild(parentUri, name);
+  if (existing) return existing;
+  return await FileSystem.StorageAccessFramework.makeDirectoryAsync(parentUri, name);
+}
 export async function saveBackupToPhone(password: string, filter: BackupFilter = { type: "all" }) {
   const encryptedBackup = await exportBackup(password, filter);
-
-  // Android's Storage Access Framework lets the user choose a real folder
-  // such as Downloads, Documents, or another folder in the phone's File Manager.
   const permissions = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
-  if (!permissions.granted) {
-    throw new Error("Save cancelled. Please choose a folder in the phone's File Manager.");
-  }
+  if (!permissions.granted) throw new Error("Save cancelled. Please choose a folder in the phone's File Manager.");
 
-  const fileUri = await FileSystem.StorageAccessFramework.createFileAsync(
-    permissions.directoryUri,
-    BACKUP_FILE_NAME,
-    "application/json",
-  );
+  // Keep the master JSON compact. Patient images older than 30 days are saved as
+  // patient-named PDFs in a sibling folder instead of being duplicated in JSON.
+  const archives = filter.type === "all" ? await getLocalPatientImageArchives() : [];
+  if (archives.length) {
+    const pdfFolder = await getOrCreateSafFolder(permissions.directoryUri, "Patient Image PDFs");
+    for (let i = 0; i < archives.length; i++) {
+      const archive = archives[i];
+      const sourceInfo = await FileSystem.getInfoAsync(archive.localUri);
+      if (!sourceInfo.exists || Number(sourceInfo.size || 0) < 8) throw new Error("Patient PDF is missing: " + archive.fileName + ". The phone backup was not marked successful.");
+      const existing = await findSafChild(pdfFolder, archive.fileName);
+      const target = existing || await FileSystem.StorageAccessFramework.createFileAsync(pdfFolder, archive.fileName, "application/pdf");
+      const base64 = await FileSystem.readAsStringAsync(archive.localUri, { encoding: FileSystem.EncodingType.Base64 });
+      await FileSystem.writeAsStringAsync(target, base64, { encoding: FileSystem.EncodingType.Base64 });
+      const verified: any = await FileSystem.getInfoAsync(target);
+      if (!verified.exists || (typeof verified.size === "number" && verified.size !== Number(sourceInfo.size || 0))) {
+        throw new Error("Patient PDF could not be verified in the phone backup folder: " + archive.fileName);
+      }
+    }
+  }
+  // Write the master last, so a failed sidecar PDF copy cannot leave a seemingly
+  // successful backup whose patient-image links point to missing files.
+  const existingBackup = await findSafChild(permissions.directoryUri, BACKUP_FILE_NAME);
+  const fileUri = existingBackup || await FileSystem.StorageAccessFramework.createFileAsync(
+    permissions.directoryUri, BACKUP_FILE_NAME, "application/json");
   await FileSystem.writeAsStringAsync(fileUri, encryptedBackup);
   await markBackupTaken();
   return fileUri;
@@ -133,6 +163,48 @@ async function readPickedFile(uri: string, knownSize?: number | null): Promise<s
         ? `Android could not read this selected file (${detail.message}). Try selecting the original .orbackup or .orbackup.json file again.`
         : "Android could not read the selected file. Try selecting the original .orbackup or .orbackup.json file again.",
     );
+  }
+}
+
+export async function pickPatientImageArchivesForRestore(backup: any): Promise<void> {
+  const refs = new Map<string, any>();
+  for (const item of Array.isArray(backup?.patientImageArchives) ? backup.patientImageArchives : []) {
+    if (item?.patientId && item?.fileName) refs.set(String(item.fileName), item);
+  }
+  for (const patient of Array.isArray(backup?.patients) ? backup.patients : []) {
+    if (patient?.id && patient?.photo_archive_file_name) {
+      const fileName = String(patient.photo_archive_file_name);
+      if (!refs.has(fileName)) refs.set(fileName, {
+        patientId: String(patient.id), patientName: String(patient.name || "Patient"), mrNo: String(patient.mr_no || ""),
+        fileName, sourceStamp: String(patient.photo_archive_source_stamp || ""),
+        archivedAt: String(patient.photo_archived_at || ""), imageCount: Number(patient.photo_archive_image_count || 0),
+      });
+    }
+  }
+  const missing: any[] = [];
+  for (const ref of refs.values()) {
+    const local = await getPatientImageArchive(String(ref.patientId));
+    if (local && local.sourceStamp === String(ref.sourceStamp || "")) continue;
+    missing.push(ref);
+  }
+  if (!missing.length) return;
+  const selected = await DocumentPicker.getDocumentAsync({
+    type: ["application/pdf", "application/octet-stream"], copyToCacheDirectory: true, multiple: true,
+  });
+  if (selected.canceled) throw new Error("This backup needs separate patient PDFs. Select all matching PDFs from the 'Patient Image PDFs' folder before restoring.");
+  const assets = selected.assets || [];
+  const byName = new Map<string, any>(assets.filter((item:any) => item?.name && item?.uri).map((item:any) => [String(item.name), item]));
+  const matched = missing.map(ref => ({ ref, asset: byName.get(String(ref.fileName)) }));
+  const absent = matched.filter(item => !item.asset);
+  if (absent.length) throw new Error("Missing patient PDF(s): " + absent.slice(0, 4).map(item => item.ref.fileName).join(", ") +
+    ". Select all PDFs from the separate 'Patient Image PDFs' folder. No patient records were changed.");
+  for (const item of matched) {
+    await installPatientImageArchivePdf({
+      patientId: String(item.ref.patientId), patientName: String(item.ref.patientName || "Patient"),
+      mrNo: String(item.ref.mrNo || ""), fileName: String(item.ref.fileName),
+      sourceStamp: String(item.ref.sourceStamp || ""), archivedAt: String(item.ref.archivedAt || ""),
+      imageCount: Number(item.ref.imageCount || 0),
+    }, String(item.asset.uri));
   }
 }
 

@@ -5,7 +5,7 @@ import Ionicons from "@react-native-vector-icons/ionicons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { decryptBackup, getBackupInfo, mergeBackup, restoreBackup, type BackupFilter } from "../src/utils/storage/backup";
-import { pickBackupFile, saveBackupToPhone, shareBackupFile } from "../src/utils/storage/backup-file";
+import { pickBackupFile, pickPatientImageArchivesForRestore, saveBackupToPhone, shareBackupFile } from "../src/utils/storage/backup-file";
 import { storage } from "@/src/utils/storage";
 import * as SecureStore from "expo-secure-store";
 import { queryClient } from "@/src/query-client";
@@ -30,6 +30,7 @@ import { refreshAutomaticDriveBackup, triggerAutomaticDriveBackup } from "@/src/
    return {
      ...backup,
      patients,
+     patientImageArchives: (backup.patientImageArchives || []).filter((row: any) => patientIds.has(String(row.patientId))),
      patientImplants: (backup.patientImplants || []).filter((row: any) => patientIds.has(String(row.patient_id))),
      patientHistory: periodHistory.filter((row: any) => patientIds.has(String(row.patient_id))),
      expenses: (backup.expenses || []).filter((row: any) => inPeriod(row, "date", "created_at")),
@@ -343,6 +344,7 @@ export default function BackupRestoreScreen() {
             const backup = isPeriodRestore
               ? filterBackupForPeriod(completeBackup, restorePeriod as "month" | "year", restorePeriodValue)
               : completeBackup;
+            await pickPatientImageArchivesForRestore(backup);
             if (isPeriodRestore && !backup.patients.length && !backup.expenses.length && !backup.patientHistory.length &&
                 !backup.inventoryMovements.length && !backup.inventoryPurchaseReceipts.length && !backup.stockReceipts.length &&
                 !backup.implantRecords.length) {

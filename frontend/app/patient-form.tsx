@@ -29,6 +29,7 @@ import { PrimaryButton } from "@/src/components/PrimaryButton";
 import { Segmented } from "@/src/components/Segmented";
 import { useToast } from "@/src/components/toast";
 import { formatInventoryLabel } from "@/src/utils/inventory-label";
+import { getPatientImageArchive, openPatientImageArchivePdf } from "@/src/utils/storage/patient-image-archive";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 const LAB_OCR_PIPELINE_VERSION = "row-aware-2026-10-17-v4-admin-aliases";
 
@@ -108,6 +109,14 @@ export default function PatientForm() {
   }, [procedures, patients]);
 
   const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
+  const [patientArchiveAvailable, setPatientArchiveAvailable] = useState(false);
+  useFocusEffect(useCallback(() => {
+    let active = true;
+    if (!id) { setPatientArchiveAvailable(false); return () => { active = false; }; }
+    getPatientImageArchive(String(id)).then(value => { if (active) setPatientArchiveAvailable(!!value); })
+      .catch(() => { if (active) setPatientArchiveAvailable(false); });
+    return () => { active = false; };
+  }, [id]));
   const [labOcrEnabled, setLabOcrEnabled] = useState(false);
   const [labOcrBusy, setLabOcrBusy] = useState(false);
   const [labOcrText, setLabOcrText] = useState("");
@@ -1585,6 +1594,16 @@ export default function PatientForm() {
             ))}
           </ScrollView>
         )}
+        {isEdit && patientArchiveAvailable ? (
+          <Pressable
+            style={[styles.secondary, { marginTop: spacing.sm, justifyContent: "center", borderColor: colors.brandPrimary }]}
+            onPress={() => openPatientImageArchivePdf(String(id)).catch((error:any) => Alert.alert("Patient image PDF", String(error?.message || error)))}
+            accessibilityRole="button"
+          >
+            <Ionicons name="document-text-outline" size={18} color={colors.brandPrimary} />
+            <Text style={[styles.secondaryText, { color: colors.brandPrimary }]}>Open archived images PDF</Text>
+          </Pressable>
+        ) : null}
 
         <Modal visible={existingScanPickerVisible} transparent animationType="fade" onRequestClose={() => setExistingScanPickerVisible(false)}>
           <View style={styles.photoEditOverlay}>

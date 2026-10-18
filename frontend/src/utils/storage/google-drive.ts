@@ -4,6 +4,7 @@ import * as FileSystem from "expo-file-system/legacy";
 import { exportUnencryptedBackup, exportUnencryptedBackupData, exportIncrementalBackup, exportIncrementalBackupData, prepareIncrementalSnapshotCacheFromBackupData, commitIncrementalSnapshotCache, pruneBackupPhotoAssets, type BackupFilter } from "@/src/utils/storage/backup";
 import { markBackupTaken } from "@/src/utils/backup-reminder";
 import { storage } from "@/src/utils/storage";
+import { archiveEligiblePatientImages, getLocalPatientImageArchives, installPatientImageArchivePdf, setPatientImageArchiveDriveState, type PatientImageArchive } from "@/src/utils/storage/patient-image-archive";
 
 const LAST_DRIVE_BACKUP_KEY = "ortho_drive_last_successful_backup";
 const LAST_DRIVE_CONTENT_HASH_KEY = "ortho_drive_last_uploaded_content_hash";
@@ -18,6 +19,8 @@ export async function getLastDriveBackupStatus(): Promise<string | null> {
 // Full Drive access is needed to discover backups created by earlier app builds or under a different file authorization.
 export const GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive";
 const BACKUP_NAME = "Ortho Logbook Backup.orbackup";
+const PATIENT_IMAGE_PDF_FOLDER = "Patient Image PDFs";
+const DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder";
 const DRIVE_API = "https://www.googleapis.com/drive/v3/files";
 const DRIVE_UPLOAD = "https://www.googleapis.com/upload/drive/v3/files";
 
@@ -220,8 +223,8 @@ function driveBackupName(filter: BackupFilter): string {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error("Enter the date as YYYY-MM-DD before backing up.");
     return `Ortho Logbook Backup - Date ${date}.orbackup`;
   }
-  // Full snapshot named for the calendar month; changes are kept in a small monthly journal.
-  return "Ortho Logbook Backup - Month " + monthKeyFromDate(new Date()) + ".orbackup";
+  // A single rolling master is updated in place; period selection is a restore filter.
+  return BACKUP_NAME;
 }
 
 async function findBackupByName(name: string) {
@@ -235,17 +238,22 @@ export async function listGoogleDriveBackups(): Promise<Array<{id:string;name:st
   const files = await findLatestBackupCandidates();
   // The backup picker now shows monthly full snapshots only. Legacy all-time
   // files remain untouched until a monthly snapshot is safely confirmed.
-  const masters = files.filter((file:any) => file.id &&
-    /^Ortho Logbook Backup - Month \d{4}-\d{2}\.orbackup$/.test(String(file.name || ""))
-  );
+  const masters = files.filter((file:any) => file.id && (
+    String(file.name || "") === BACKUP_NAME ||
+    String(file.name || "") === "Ortho Logbook Backup - All Time.orbackup" ||
+    /^Ortho Logbook Backup - Month \d{4}-\d{2}\.orbackup$/.test(String(file.name || "")) ||
+    /^Ortho Logbook Backup - (Year|Date) /.test(String(file.name || ""))
+  ));
 
-  // Show each monthly file's effective time by checking its own change journal.
+  // Display the latest journal time for the rolling master, while keeping legacy month journals readable.
   const journalTimeByMaster = new Map<string, string>();
   for (const master of masters) {
-    const match = /^Ortho Logbook Backup - Month (\d{4}-\d{2})\.orbackup$/.exec(String(master.name || ""));
-    if (!match) continue;
+    const masterName = String(master.name || "");
+    const match = /^Ortho Logbook Backup - Month (\d{4}-\d{2})\.orbackup$/.exec(masterName);
+    if (!match && masterName !== BACKUP_NAME) continue;
     try {
-      const journalFile = await findBackupByName("Ortho Logbook Backup - Month " + match[1] + " Changes.orbackup");
+      const journalName = masterName === BACKUP_NAME ? "Ortho Logbook Backup Changes.orbackup" : "Ortho Logbook Backup - Month " + match![1] + " Changes.orbackup";
+      const journalFile = await findBackupByName(journalName);
       if (!journalFile?.id) continue;
       const journal = await downloadDriveJsonValidated(String(journalFile.id));
       const baseline = String(journal?._baselineKey || "");
@@ -263,7 +271,10 @@ export async function listGoogleDriveBackups(): Promise<Array<{id:string;name:st
       const effectiveTime = journalTimeByMaster.get(String(file.id)) || masterTime;
       return {id:String(file.id),name:String(file.name || "Ortho Logbook Backup"),modifiedTime:effectiveTime,size:file.size == null ? undefined : String(file.size)};
     })
-    .sort((a,b) => Date.parse(b.modifiedTime || "") - Date.parse(a.modifiedTime || ""));
+    .sort((a,b) => {
+      const rank = (name: string) => name === BACKUP_NAME ? 0 : /all time/i.test(name) ? 1 : /^Ortho Logbook Backup - Month /.test(name) ? 2 : 3;
+      return rank(a.name) - rank(b.name) || Date.parse(b.modifiedTime || "") - Date.parse(a.modifiedTime || "");
+    });
 }
 
 export async function restoreGoogleDriveBackupById(fileId: string) {
@@ -280,7 +291,8 @@ export async function restoreGoogleDriveBackupById(fileId: string) {
   // Monthly files contain full snapshots. Apply only the journal for the same
   // month and exact baseline file; never mix other months into this restore.
   const monthlyMatch = /^Ortho Logbook Backup - Month (\d{4}-\d{2})\.orbackup$/.exec(String(metadata.name || ""));
-  if (monthlyMatch) {
+  const isRollingMaster = String(metadata.name || "") === BACKUP_NAME;
+  if (monthlyMatch || isRollingMaster) {
     const warnings: string[] = [];
     let applied = 0;
     // The monthly snapshot's Drive modifiedTime does not change when its
@@ -288,7 +300,7 @@ export async function restoreGoogleDriveBackupById(fileId: string) {
     // successfully applied so the restore picker does not label current data
     // with the old snapshot date.
     let effectiveModifiedTime = String(metadata.modifiedTime || "");
-    const journalFile = await findBackupByName("Ortho Logbook Backup - Month " + monthlyMatch[1] + " Changes.orbackup");
+    const journalFile = await findBackupByName(isRollingMaster ? "Ortho Logbook Backup Changes.orbackup" : "Ortho Logbook Backup - Month " + monthlyMatch![1] + " Changes.orbackup");
     if (journalFile?.id) {
       try {
         const journal = await downloadDriveJsonValidated(String(journalFile.id));
@@ -308,6 +320,7 @@ export async function restoreGoogleDriveBackupById(fileId: string) {
     parsed.incremental = false;
     delete parsed.changedTables; delete parsed._rowDelta; delete parsed.deletedIds;
     delete parsed.fullTables; delete parsed._baselineKey; delete parsed._updateCount;
+    await downloadPatientImageArchivesFromDrive(parsed);
     return { name: String(metadata.name), modifiedTime: effectiveModifiedTime,
       backupText: JSON.stringify(parsed), appliedIncrementals: applied, recoveryWarnings: warnings };
   }
@@ -844,6 +857,176 @@ async function uploadStagedJsonFile(uri: string, totalBytes: number, existingId?
   return await verifyUploadedFile(uploaded, fileName, totalBytes, existingId);
 }
 
+
+function escapeDriveQuery(value: string): string {
+  return String(value || "").replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+}
+async function findPatientImagePdfFolder(): Promise<any | null> {
+  const q = encodeURIComponent("name = '" + escapeDriveQuery(PATIENT_IMAGE_PDF_FOLDER) + "' and mimeType = '" + DRIVE_FOLDER_MIME + "' and trashed = false");
+  const response = await driveRequest(DRIVE_API + "?q=" + q + "&spaces=drive&pageSize=50&includeItemsFromAllDrives=true&supportsAllDrives=true&fields=files(id,name,mimeType)");
+  const data = await response.json();
+  return Array.isArray(data.files) ? data.files.find((x: any) => x?.id && x.mimeType === DRIVE_FOLDER_MIME) || null : null;
+}
+async function getOrCreatePatientImagePdfFolder(): Promise<any> {
+  const existing = await findPatientImagePdfFolder();
+  if (existing?.id) return existing;
+  const response = await driveRequest(DRIVE_API + "?fields=id,name,mimeType", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: PATIENT_IMAGE_PDF_FOLDER, mimeType: DRIVE_FOLDER_MIME }),
+  });
+  const created = await response.json();
+  if (!created?.id || created.mimeType !== DRIVE_FOLDER_MIME) throw new Error("Google Drive did not confirm the separate Patient Image PDFs folder.");
+  return created;
+}
+async function findPatientPdfInFolder(fileName: string, folderId: string): Promise<any | null> {
+  const q = encodeURIComponent("'" + escapeDriveQuery(folderId) + "' in parents and name = '" + escapeDriveQuery(fileName) + "' and trashed = false");
+  const response = await driveRequest(DRIVE_API + "?q=" + q + "&spaces=drive&pageSize=50&orderBy=modifiedTime%20desc&includeItemsFromAllDrives=true&supportsAllDrives=true&fields=files(id,name,mimeType,size,modifiedTime,parents,appProperties)");
+  const data = await response.json();
+  return Array.isArray(data.files) ? data.files.find((x: any) => x?.id && x.mimeType !== DRIVE_FOLDER_MIME) || null : null;
+}
+async function verifyPatientPdf(fileId: string): Promise<any> {
+  const response = await driveRequest(DRIVE_API + "/" + encodeURIComponent(fileId) + "?supportsAllDrives=true&fields=id,name,mimeType,size,modifiedTime,parents,appProperties,trashed");
+  const item = await response.json();
+  if (!item?.id || item.trashed || item.mimeType !== "application/pdf" || Number(item.size || 0) < 8) {
+    throw new Error("Google Drive did not verify the patient image PDF.");
+  }
+  return item;
+}
+async function uploadPatientPdf(archive: PatientImageArchive, folderId: string, existing?: any): Promise<any> {
+  const info = await FileSystem.getInfoAsync(archive.localUri);
+  const size = Number(info.size || 0);
+  if (!info.exists || size < 8) throw new Error("Patient PDF is missing or empty: " + archive.fileName);
+  const token = await accessToken();
+  const fields = "id,name,mimeType,size,modifiedTime,parents,appProperties";
+  const target = existing?.id
+    ? DRIVE_UPLOAD + "/" + encodeURIComponent(String(existing.id)) + "?uploadType=resumable&fields=" + fields
+    : DRIVE_UPLOAD + "?uploadType=resumable&fields=" + fields;
+  const metadata: any = {
+    name: archive.fileName, mimeType: "application/pdf",
+    appProperties: { orthoPatientId: archive.patientId.slice(0, 100), orthoSourceStamp: archive.sourceStamp.slice(0, 100) },
+  };
+  if (!existing?.id) metadata.parents = [folderId];
+  const response = await fetchWithTimeout(target, {
+    method: existing?.id ? "PATCH" : "POST",
+    headers: { Authorization: "Bearer " + token, "Content-Type": "application/json; charset=UTF-8",
+      "X-Upload-Content-Type": "application/pdf", "X-Upload-Content-Length": String(size) },
+    body: JSON.stringify(metadata),
+  }, 30000);
+  if (!response.ok) {
+    let message = "Google Drive could not start patient PDF upload (HTTP " + response.status + ").";
+    try { const body = await response.json(); message = body?.error?.message || message; } catch {}
+    throw new Error(message);
+  }
+  const sessionUrl = response.headers.get("Location");
+  if (!sessionUrl) throw new Error("Google Drive did not provide a patient PDF upload session.");
+  const transfer = await FileSystem.uploadAsync(sessionUrl, archive.localUri, {
+    httpMethod: "PUT", uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+    headers: { Authorization: "Bearer " + token, "Content-Type": "application/pdf",
+      "Content-Length": String(size), "Content-Range": "bytes 0-" + String(size - 1) + "/" + String(size) },
+  });
+  if (Number(transfer.status) < 200 || Number(transfer.status) >= 300) {
+    throw new Error("Google Drive rejected patient PDF " + archive.fileName + " (HTTP " + transfer.status + ").");
+  }
+  const uploaded = transfer.body ? (() => { try { return JSON.parse(transfer.body); } catch { return {}; } })() : {};
+  const id = String(uploaded.id || existing?.id || "");
+  if (!id) throw new Error("Google Drive did not return an ID for patient PDF " + archive.fileName + ".");
+  const verified = await verifyPatientPdf(id);
+  const parents = Array.isArray(verified.parents) ? verified.parents : [];
+  if (verified.name !== archive.fileName || Number(verified.size || 0) !== size ||
+      (!parents.includes(folderId) && !existing?.id) ||
+      String(verified.appProperties?.orthoSourceStamp || "") !== archive.sourceStamp) {
+    throw new Error("Google Drive patient PDF verification failed for " + archive.fileName + ".");
+  }
+  return verified;
+}
+export async function uploadPatientImageArchivesToDrive(onProgress?: (stage: string) => void): Promise<void> {
+  const archives = await getLocalPatientImageArchives();
+  if (!archives.length) return;
+  const folder = await getOrCreatePatientImagePdfFolder();
+  const folderId = String(folder.id);
+  for (let i = 0; i < archives.length; i++) {
+    const archive = archives[i];
+    onProgress?.("Checking patient image PDF " + (i + 1) + "/" + archives.length + ": " + archive.patientName);
+    const local = await FileSystem.getInfoAsync(archive.localUri);
+    if (!local.exists || Number(local.size || 0) < 8) throw new Error("The local patient PDF is missing: " + archive.fileName);
+    let remote: any = null;
+    if (archive.driveFileId && archive.driveSourceStamp === archive.sourceStamp) {
+      try {
+        const check = await verifyPatientPdf(archive.driveFileId);
+        if (check.name === archive.fileName && Number(check.size || 0) === Number(local.size || 0) &&
+            String(check.appProperties?.orthoSourceStamp || "") === archive.sourceStamp &&
+            String(check.appProperties?.orthoPatientId || "") === archive.patientId) remote = check;
+      } catch { remote = null; }
+    }
+    if (!remote) remote = await findPatientPdfInFolder(archive.fileName, folderId);
+    if (remote && remote.mimeType === "application/pdf" &&
+        Number(remote.size || 0) === Number(local.size || 0) &&
+        String(remote.appProperties?.orthoSourceStamp || "") === archive.sourceStamp &&
+        String(remote.appProperties?.orthoPatientId || "") === archive.patientId &&
+        (Array.isArray(remote.parents) ? remote.parents : []).includes(folderId)) {
+      await setPatientImageArchiveDriveState(archive.fileName, archive.sourceStamp, String(remote.id));
+      continue;
+    }
+    onProgress?.("Uploading patient PDF " + (i + 1) + "/" + archives.length + ": " + archive.fileName);
+    const verified = await uploadPatientPdf(archive, folderId, remote);
+    await setPatientImageArchiveDriveState(archive.fileName, archive.sourceStamp, String(verified.id));
+  }
+}
+async function downloadPatientImageArchivesFromDrive(backup: any, onProgress?: (stage: string) => void): Promise<void> {
+  const refs = new Map<string, any>();
+  for (const item of Array.isArray(backup?.patientImageArchives) ? backup.patientImageArchives : []) {
+    if (item?.patientId && item?.fileName) refs.set(String(item.fileName), item);
+  }
+  for (const patient of Array.isArray(backup?.patients) ? backup.patients : []) {
+    if (patient?.id && patient?.photo_archive_file_name) {
+      const fileName = String(patient.photo_archive_file_name);
+      if (!refs.has(fileName)) refs.set(fileName, {
+        patientId: String(patient.id), patientName: String(patient.name || "Patient"), mrNo: String(patient.mr_no || ""),
+        fileName, sourceStamp: String(patient.photo_archive_source_stamp || ""),
+        archivedAt: String(patient.photo_archived_at || ""), imageCount: Number(patient.photo_archive_image_count || 0),
+      });
+    }
+  }
+  if (!refs.size) return;
+  const folder = await findPatientImagePdfFolder();
+  if (!folder?.id) throw new Error("The separate Patient Image PDFs folder is missing in Google Drive. No patient records were restored.");
+  if (!FileSystem.cacheDirectory) throw new Error("Temporary phone storage is unavailable for patient PDF restore.");
+  const token = await accessToken();
+  const downloaded: Array<{ ref: any; uri: string; id: string }> = [];
+  try {
+    let i = 0;
+    for (const [fileName, ref] of refs) {
+      i++;
+      if (!/^[^/\\]{1,180}\.pdf$/i.test(fileName)) throw new Error("Invalid patient PDF filename in backup; restore stopped safely.");
+      onProgress?.("Finding patient PDF " + i + "/" + refs.size + ": " + fileName);
+      const remote = await findPatientPdfInFolder(fileName, String(folder.id));
+      if (!remote?.id || remote.mimeType !== "application/pdf" || Number(remote.size || 0) < 8) {
+        throw new Error("Patient image PDF '" + fileName + "' is missing or invalid. Existing patient data was not changed.");
+      }
+      const target = FileSystem.cacheDirectory + "ortho-patient-pdf-restore-" + Date.now() + "-" + i + ".pdf";
+      onProgress?.("Downloading patient PDF " + i + "/" + refs.size + ": " + fileName);
+      const result = await FileSystem.downloadAsync(DRIVE_API + "/" + encodeURIComponent(String(remote.id)) + "?alt=media",
+        target, { headers: { Authorization: "Bearer " + token } });
+      const info = await FileSystem.getInfoAsync(result.uri);
+      if (Number(result.status || 0) < 200 || Number(result.status || 0) >= 300 ||
+          !info.exists || Number(info.size || 0) < 8 || Number(info.size || 0) !== Number(remote.size || 0)) {
+        throw new Error("Patient PDF download was incomplete: " + fileName + ". Existing patient data was not changed.");
+      }
+      downloaded.push({ ref: { ...ref, driveFileId: String(remote.id) }, uri: result.uri, id: String(remote.id) });
+    }
+    for (const item of downloaded) {
+      await installPatientImageArchivePdf({
+        patientId: String(item.ref.patientId), patientName: String(item.ref.patientName || "Patient"),
+        mrNo: String(item.ref.mrNo || ""), fileName: String(item.ref.fileName),
+        sourceStamp: String(item.ref.sourceStamp || ""), archivedAt: String(item.ref.archivedAt || ""),
+        imageCount: Number(item.ref.imageCount || 0), driveFileId: item.id,
+      }, item.uri);
+    }
+  } finally {
+    for (const item of downloaded) { try { await FileSystem.deleteAsync(item.uri, { idempotent: true }); } catch {} }
+  }
+}
+
 async function uploadContent(backupText: string, existingId?: string, onProgress?: (stage: string) => void, fileName: string = BACKUP_NAME) {
   const token = await accessToken();
   // The native uploader receives a file URI, not the backup string. Use it for
@@ -1062,6 +1245,14 @@ function applyIncrementalToMaster(local: any, incoming: any, preserveCurrent = f
   if (incoming?.photoAssets && typeof incoming.photoAssets === "object") {
     local.photoAssets = { ...(local.photoAssets || {}), ...(incoming.photoAssets || {}) };
   }
+  if (Array.isArray(incoming?.patientImageArchives)) {
+    const archives = new Map<string, any>((Array.isArray(local.patientImageArchives) ? local.patientImageArchives : [])
+      .filter((x:any) => x?.patientId).map((x:any) => [String(x.patientId), x]));
+    for (const item of incoming.patientImageArchives) if (item?.patientId) {
+      archives.set(String(item.patientId), { ...archives.get(String(item.patientId)), ...item });
+    }
+    local.patientImageArchives = Array.from(archives.values());
+  }
   const tables = [
     "patients", "procedures", "inventoryCategories", "inventory", "patientImplants",
     "patientCustomFields", "implantRecords", "expenses", "users", "patientHistory",
@@ -1267,22 +1458,10 @@ async function deleteDuplicateDriveBackups(masterFileId: string): Promise<string
   return failures;
 }
 
-async function cleanupLegacyNonMonthlyBackups(keepFileId: string): Promise<string[]> {
-  const failures: string[] = [];
-  const monthlyName = /^Ortho Logbook Backup - Month \d{4}-\d{2}(?: Changes)?\.orbackup$/i;
-  const candidates = await findLatestBackupCandidates();
-  for (const file of candidates) {
-    const name = String(file.name || "");
-    if (!file?.id || String(file.id) === keepFileId || monthlyName.test(name)) continue;
-    try { await driveRequest(DRIVE_API + "/" + encodeURIComponent(String(file.id)) + "?supportsAllDrives=true", { method: "DELETE" }); }
-    catch (error: any) { failures.push(name + ": " + String(error?.message || "could not remove legacy backup")); }
-  }
-  for (const file of await listIncrementalFiles()) {
-    if (!file?.id || !/Ortho Logbook Incremental/i.test(String(file.name || ""))) continue;
-    try { await driveRequest(DRIVE_API + "/" + encodeURIComponent(String(file.id)) + "?supportsAllDrives=true", { method: "DELETE" }); }
-    catch (error: any) { failures.push(String(file.name || file.id) + ": " + String(error?.message || "could not remove legacy journal")); }
-  }
-  return failures;
+async function cleanupLegacyNonMonthlyBackups(_keepFileId: string): Promise<string[]> {
+  // Keep legacy backups and journals as recovery sources. The rolling master replaces
+  // ongoing monthly duplication, but migration never deletes older patient records.
+  return [];
 }
 type DriveBackupOptions = { skipIfUnchanged?: boolean; onProgress?: (stage: string) => void; preferDriveOnMigration?: boolean; backupTextOverride?: string; backupDataOverride?: any; localChanges?: any };
 
@@ -1293,6 +1472,10 @@ async function backupToGoogleDriveUnlocked(
 ) {
   options.onProgress?.("Preparing backup data…");
   const isMasterBackup = filter.type === "all";
+  if (isMasterBackup) {
+    await archiveEligiblePatientImages(options.onProgress);
+    await uploadPatientImageArchivesToDrive(options.onProgress);
+  }
   const migrationMarker = String((await storage.secureGet(MASTER_MIGRATION_KEY, "")) || "");
   const canStream = isMasterBackup && Platform.OS === "android" &&
     !!NativeModules.DriveBackgroundUpload?.writeTextChunk &&
@@ -1435,7 +1618,7 @@ async function backupToGoogleDriveUnlocked(
   // A verified full monthly snapshot supersedes that month's journal. Removing
   // the old journal prevents deletions/edits from being applied twice on restore.
   if (isMasterBackup && result?.id && (!migrationAttempted || (migrationComplete && cleanupSafe))) {
-    const monthJournal = await findBackupByName("Ortho Logbook Backup - Month " + monthKeyFromDate(new Date()) + " Changes.orbackup");
+    const monthJournal = await findBackupByName("Ortho Logbook Backup Changes.orbackup");
     if (monthJournal?.id) {
       try { await driveRequest(DRIVE_API + "/" + encodeURIComponent(String(monthJournal.id)) + "?supportsAllDrives=true", { method: "DELETE" }); }
       catch (error) { console.warn("[drive-backup] monthly journal cleanup deferred", error); }
@@ -1454,7 +1637,8 @@ export function backupToGoogleDrive(
   filter: BackupFilter = { type: "all" },
   options: DriveBackupOptions = {},
 ): Promise<any> {
-  return queueDriveOperation(() => backupToGoogleDriveUnlocked(password, filter, options), options.onProgress);
+  // Drive stores one rolling all-time master; period filters are for restore/export, not separate Drive snapshots.
+  return queueDriveOperation(() => backupToGoogleDriveUnlocked(password, { type: "all" }, options), options.onProgress);
 }
 
 async function listIncrementalFiles() {
@@ -1470,6 +1654,7 @@ async function listIncrementalFiles() {
   } while (pageToken);
   return files.filter((file: any) =>
     /Ortho Logbook Incremental/i.test(String(file.name || "")) ||
+    /^Ortho Logbook Backup Changes\.orbackup$/i.test(String(file.name || "")) ||
     /^Ortho Logbook Backup - Month \d{4}-\d{2} Changes\.orbackup$/i.test(String(file.name || ""))
   );
 }
@@ -1707,6 +1892,12 @@ function mergeIncrementalPayloads(previous: any, incoming: any): any {
   };
   const merged: any = { ...previous, ...incoming, changedTables, fullTables: [] };
   merged.photoAssets = { ...(previous.photoAssets || {}), ...(incoming.photoAssets || {}) };
+  const archiveMap = new Map<string, any>((Array.isArray(previous.patientImageArchives) ? previous.patientImageArchives : [])
+    .filter((x:any) => x?.patientId).map((x:any) => [String(x.patientId), x]));
+  for (const item of Array.isArray(incoming.patientImageArchives) ? incoming.patientImageArchives : []) {
+    if (item?.patientId) archiveMap.set(String(item.patientId), { ...archiveMap.get(String(item.patientId)), ...item });
+  }
+  merged.patientImageArchives = Array.from(archiveMap.values());
 
   for (const table of tableNames) {
     const wasChanged = Array.isArray(previous.changedTables) && previous.changedTables.includes(table);
@@ -1881,13 +2072,12 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
   onProgress?.("Checking whether saved records changed…");
   // Do not attach new changes to a prior month's baseline. Create a complete
   // snapshot the first time this phone syncs in each calendar month.
+  const archiveChanged = await archiveEligiblePatientImages(onProgress);
+  await uploadPatientImageArchivesToDrive(onProgress);
+  const effectiveChangedTables = archiveChanged ? Array.from(new Set([...changedTables, "patients"])) : changedTables;
   const currentMonthName = driveBackupName({ type: "all" });
   const base = await findBackupByName(currentMonthName);
   if (!base?.id) return ensureGoogleDriveBaselineUnlocked(onProgress);
-
-  // This maintenance call was missing, so closed months were never archived
-  // when there were no new patient/stock writes.
-  await archiveCompletedMonths(onProgress);
   const baselineKey = String(base.id) + ":" + String(base.modifiedTime || "");
   const canStreamIncremental = Platform.OS === "android" &&
     !!NativeModules.DriveBackgroundUpload?.writeTextChunk &&
@@ -1896,9 +2086,9 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
   let delta: any;
   if (canStreamIncremental) {
     // Avoid JSON.stringify on the entire changed-table payload before upload.
-    delta = await exportIncrementalBackupData(changedTables, onProgress, baselineKey);
+    delta = await exportIncrementalBackupData(effectiveChangedTables, onProgress, baselineKey);
   } else {
-    const backupText = await exportIncrementalBackup(changedTables, onProgress, baselineKey);
+    const backupText = await exportIncrementalBackup(effectiveChangedTables, onProgress, baselineKey);
     delta = JSON.parse(backupText);
   }
   const hasActualChanges = (Array.isArray(delta.changedTables) ? delta.changedTables : []).some((table: string) => {
@@ -1952,7 +2142,7 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
   }
 
   // Month archive reconciliation ran above, before the no-change early return.
-  const JOURNAL_NAME = "Ortho Logbook Backup - Month " + monthKeyFromDate(new Date()) + " Changes.orbackup";
+  const JOURNAL_NAME = "Ortho Logbook Backup Changes.orbackup";
   onProgress?.("Preparing the small change journal…");
   let journalFile = await findBackupByName(JOURNAL_NAME);
   let journal: any = null;
@@ -2123,8 +2313,9 @@ export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) 
     if (!merged || merged.app !== "Ortho Logbook" || !Array.isArray(merged.patients) || !Array.isArray(merged.inventory)) {
       throw new Error("Drive backup history could not be merged into a valid all-time backup. Your phone has not been changed.");
     }
+    await downloadPatientImageArchivesFromDrive(merged, onProgress);
     return {
-      backupText: migration.backupText,
+      backupText: JSON.stringify(merged),
       name: "Merged Ortho Logbook Master Backup",
       modifiedTime: new Date().toISOString(),
       appliedIncrementals: 0,
@@ -2134,12 +2325,13 @@ export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) 
 
   onProgress?.("Searching Google Drive for the latest monthly backup…");
   const candidates = (await findLatestBackupCandidates()).filter((item: any) =>
+    String(item.name || "") === BACKUP_NAME ||
     /^Ortho Logbook Backup - Month \d{4}-\d{2}\.orbackup$/.test(String(item.name || "")) ||
     String(item.name || "") === "Ortho Logbook Backup - All Time.orbackup" ||
-    String(item.name || "") === BACKUP_NAME
+    /^Ortho Logbook Backup - (Year|Date) /.test(String(item.name || ""))
   );
   candidates.sort((a: any, b: any) => {
-    const rank = (name: string) => /^Ortho Logbook Backup - Month \d{4}-\d{2}\.orbackup$/.test(name) ? 0 : /all time/i.test(name) ? 1 : name === BACKUP_NAME ? 2 : 3;
+    const rank = (name: string) => name === BACKUP_NAME ? 0 : /^Ortho Logbook Backup - Month \d{4}-\d{2}\.orbackup$/.test(name) ? 1 : /all time/i.test(name) ? 2 : 3;
     return rank(String(a.name || "")) - rank(String(b.name || "")) ||
       Date.parse(String(b.modifiedTime || "")) - Date.parse(String(a.modifiedTime || ""));
   });
@@ -2296,6 +2488,7 @@ export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) 
   composed.incremental = false;
   delete composed.changedTables;
   composed.filter = { type: "all" };
+  await downloadPatientImageArchivesFromDrive(composed, onProgress);
   return { backupText: JSON.stringify(composed), name: file.name, modifiedTime: effectiveModifiedTime || String(file.modifiedTime || ""), appliedIncrementals, recoveryWarnings };
 }
 
