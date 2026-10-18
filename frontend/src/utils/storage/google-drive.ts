@@ -1640,6 +1640,33 @@ async function listIncrementalFiles() {
 async function downloadDriveJson(fileId: string, onProgress?: (message: string) => void): Promise<string> {
   const url = DRIVE_API + "/" + encodeURIComponent(fileId) + "?alt=media";
   const token = await accessToken();
+  const background = NativeModules.DriveBackgroundUpload;
+  if (Platform.OS === "android" && typeof background?.startDownload === "function" && typeof background?.getStatus === "function" && FileSystem.cacheDirectory) {
+    const targetUri = FileSystem.cacheDirectory + "ortho-drive-restore-" + fileId.replace(/[^a-zA-Z0-9_-]/g, "_") + ".json";
+    try { await FileSystem.deleteAsync(targetUri, { idempotent: true }); } catch {}
+    const taskId = await background.startDownload(url, token, targetUri);
+    let lastPercent = -1;
+    while (true) {
+      const status = await background.getStatus(taskId);
+      const percent = Math.max(0, Math.min(100, Number(status?.progress || 0)));
+      if (percent !== lastPercent) {
+        lastPercent = percent;
+        const loaded = Number(status?.uploadedBytes || 0);
+        const total = Number(status?.totalBytes || 0);
+        onProgress?.(total > 0
+          ? "Downloading backup file: " + percent + "% (" + (loaded / 1048576).toFixed(1) + " / " + (total / 1048576).toFixed(1) + " MB)"
+          : "Downloading backup file: " + (loaded / 1048576).toFixed(1) + " MB received");
+      }
+      if (status?.status === "completed") {
+        onProgress?.("Backup file downloaded. Validating contents…");
+        const info = await FileSystem.getInfoAsync(targetUri);
+        if (!info.exists || Number(info.size || 0) <= 0) throw new Error("Background download completed without a readable backup file.");
+        return await FileSystem.readAsStringAsync(targetUri);
+      }
+      if (status?.status === "error") throw new Error(String(status?.error || "Background Google Drive download failed."));
+      await new Promise<void>(resolve => setTimeout(resolve, 700));
+    }
+  }
   return await new Promise<string>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("GET", url);

@@ -53,6 +53,25 @@ class DriveBackgroundUploadModule(private val context: ReactApplicationContext) 
   }
 
   @ReactMethod
+  fun startDownload(url: String, token: String, fileUri: String, promise: Promise) {
+    try {
+      val taskId = java.util.UUID.randomUUID().toString()
+      val intent = Intent(context, DriveBackgroundUploadService::class.java).apply {
+        action = DriveBackgroundUploadService.ACTION_DOWNLOAD
+        putExtra(DriveBackgroundUploadService.EXTRA_TASK_ID, taskId)
+        putExtra(DriveBackgroundUploadService.EXTRA_URL, url)
+        putExtra(DriveBackgroundUploadService.EXTRA_TOKEN, token)
+        putExtra(DriveBackgroundUploadService.EXTRA_FILE_URI, fileUri)
+      }
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent)
+      else context.startService(intent)
+      promise.resolve(taskId)
+    } catch (error: Exception) {
+      promise.reject("DRIVE_DOWNLOAD_START_FAILED", error.message, error)
+    }
+  }
+
+  @ReactMethod
   fun getStatus(taskId: String, promise: Promise) {
     try {
       val prefs = context.getSharedPreferences(DriveBackgroundUploadService.PREFS, 0)
@@ -60,6 +79,7 @@ class DriveBackgroundUploadModule(private val context: ReactApplicationContext) 
       map.putString("status", prefs.getString("$taskId.status", "running"))
       map.putInt("progress", prefs.getInt("$taskId.progress", 0))
       map.putDouble("uploadedBytes", prefs.getLong("$taskId.uploadedBytes", 0L).toDouble())
+      map.putDouble("totalBytes", prefs.getLong("$taskId.totalBytes", 0L).toDouble())
       map.putString("result", prefs.getString("$taskId.result", ""))
       map.putString("error", prefs.getString("$taskId.error", ""))
       promise.resolve(map)

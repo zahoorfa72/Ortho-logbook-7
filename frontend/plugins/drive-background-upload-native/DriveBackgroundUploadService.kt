@@ -18,6 +18,7 @@ import org.json.JSONObject
 class DriveBackgroundUploadService : Service() {
   companion object {
     const val ACTION_START = "ortho.drive.upload.START"
+    const val ACTION_DOWNLOAD = "ortho.drive.download.START"
     const val EXTRA_TASK_ID = "taskId"
     const val EXTRA_URL = "url"
     const val EXTRA_TOKEN = "token"
@@ -39,11 +40,15 @@ class DriveBackgroundUploadService : Service() {
   override fun onBind(intent: Intent?): IBinder? = null
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-    if (intent?.action != ACTION_START) {
+    if (intent?.action != ACTION_START && intent?.action != ACTION_DOWNLOAD) {
       stopSelf(startId)
       return START_NOT_STICKY
     }
     taskId = intent.getStringExtra(EXTRA_TASK_ID) ?: run { stopSelf(startId); return START_NOT_STICKY }
+    if (intent.action == ACTION_DOWNLOAD) {
+      startBackgroundDownload(intent, startId)
+      return START_NOT_STICKY
+    }
     uploadUrl = intent.getStringExtra(EXTRA_URL) ?: run { fail("Missing Drive upload session URL"); stopSelf(startId); return START_NOT_STICKY }
     token = intent.getStringExtra(EXTRA_TOKEN) ?: run { fail("Missing Google access token"); stopSelf(startId); return START_NOT_STICKY }
     val uri = Uri.parse(intent.getStringExtra(EXTRA_FILE_URI) ?: "")
@@ -79,6 +84,78 @@ class DriveBackgroundUploadService : Service() {
       }
     }.start()
     return START_NOT_STICKY
+  }
+
+
+  private fun startBackgroundDownload(intent: Intent, startId: Int) {
+    uploadUrl = intent.getStringExtra(EXTRA_URL) ?: run { fail("Missing Google Drive download URL"); stopSelf(startId); return }
+    token = intent.getStringExtra(EXTRA_TOKEN) ?: run { fail("Missing Google access token"); stopSelf(startId); return }
+    val uri = Uri.parse(intent.getStringExtra(EXTRA_FILE_URI) ?: "")
+    file = File(uri.path ?: "")
+    file.parentFile?.mkdirs()
+    ensureChannel()
+    val notification = notification(0, "Downloading Ortho Logbook backup…")
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+    } else {
+      startForeground(NOTIFICATION_ID, notification)
+    }
+    prefs.edit().putString("$taskId.status", "running").putInt("$taskId.progress", 0)
+      .putLong("$taskId.uploadedBytes", 0L).putLong("$taskId.totalBytes", 0L).apply()
+    Thread {
+      try {
+        downloadToFile()
+        prefs.edit().putString("$taskId.status", "completed").putInt("$taskId.progress", 100).apply()
+        updateNotification(100, "Ortho Logbook backup downloaded")
+      } catch (error: Exception) {
+        fail(error.message ?: "Google Drive background download failed.")
+        updateNotification(prefs.getInt("$taskId.progress", 0), "Download failed — open Ortho Logbook to retry")
+      } finally {
+        stopForeground(STOP_FOREGROUND_DETACH)
+        stopSelf()
+      }
+    }.start()
+  }
+
+  private fun downloadToFile() {
+    val connection = URL(uploadUrl).openConnection() as HttpURLConnection
+    try {
+      connection.requestMethod = "GET"
+      connection.connectTimeout = 30000
+      connection.readTimeout = 120000
+      connection.setRequestProperty("Authorization", "Bearer " + token)
+      val code = connection.responseCode
+      if (code !in 200..299) {
+        val detail = try { connection.errorStream?.bufferedReader()?.use { it.readText() } ?: "" } catch (_: Exception) { "" }
+        throw IllegalStateException("Google Drive download failed (HTTP " + code + "): " + detail.take(240))
+      }
+      val totalBytes = connection.contentLengthLong.coerceAtLeast(0L)
+      prefs.edit().putLong("$taskId.totalBytes", totalBytes).apply()
+      var received = 0L
+      connection.inputStream.buffered().use { input ->
+        file.outputStream().buffered().use { output ->
+          val buffer = ByteArray(128 * 1024)
+          while (true) {
+            val count = input.read(buffer)
+            if (count < 0) break
+            output.write(buffer, 0, count)
+            received += count
+            val percent = if (totalBytes > 0) ((received * 100L) / totalBytes).toInt().coerceIn(0, 99) else 0
+            prefs.edit().putInt("$taskId.progress", percent).putLong("$taskId.uploadedBytes", received).apply()
+            val message = if (totalBytes > 0) "Downloading backup… " + String.format(java.util.Locale.US, "%.1f", received.toDouble() * 100.0 / totalBytes.toDouble()) + "%"
+              else "Downloading backup… " + String.format(java.util.Locale.US, "%.1f", received.toDouble() / 1048576.0) + " MB"
+            updateNotification(percent, message)
+          }
+          output.flush()
+        }
+      }
+      if (!file.isFile || file.length() == 0L || (totalBytes > 0 && file.length() != totalBytes)) {
+        throw IllegalStateException("Downloaded backup file size did not match Google Drive metadata.")
+      }
+      prefs.edit().putLong("$taskId.uploadedBytes", received).putLong("$taskId.totalBytes", totalBytes).apply()
+    } finally {
+      connection.disconnect()
+    }
   }
 
   private fun uploadResumable(): JSONObject {
