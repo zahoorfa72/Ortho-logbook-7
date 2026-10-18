@@ -1441,6 +1441,21 @@ export async function mergeBackup(backup: BackupData) {
    }
    categoryIds.set(String(c.name||"").toLowerCase(), cid);
   }
+  // Preserve admin-defined patient fields during merge, using their stable key
+  // to avoid creating duplicates when the same backup is imported repeatedly.
+  const customFields = Array.isArray(backup.patientCustomFields) ? backup.patientCustomFields : [];
+  const usedCustomFieldIds = new Set<string>();
+  for (const field of customFields) {
+   const key = restoreText(field.key);
+   if (!key) continue;
+   if (db.getFirstSync<any>("SELECT id FROM patient_custom_fields WHERE LOWER(key)=LOWER(?) LIMIT 1", [key])) continue;
+   const fieldType = ["text","number","date","multiline"].includes(String(field.type)) ? String(field.type) : "text";
+   const createdAt = restoreText(field.created_at, new Date().toISOString());
+   db.runSync(
+    "INSERT OR IGNORE INTO patient_custom_fields (id,key,label,type,sort_order,enabled,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)",
+    [restoreRowId(field.id, "custom-field", usedCustomFieldIds), key, restoreText(field.label, "Custom field"), fieldType, Math.trunc(restoreReal(field.sort_order, 0)), restoreReal(field.enabled, 1, 0) > 0 ? 1 : 0, createdAt, restoreText(field.updated_at, createdAt)]
+   );
+  }
   for (const i of backup.inventory) {
    const sourceId = String(i.id || "");
    // Critical: importing the same backup again must never add its quantity again.
@@ -1524,6 +1539,20 @@ export async function mergeBackup(backup: BackupData) {
    db.runSync("INSERT INTO inventory_movements (id,inventory_id,user_id,type,amount,quantity_after,note,created_at) VALUES (?,?,?,?,?,?,?,?)", [m.id,m.inventory_id,m.user_id||null,m.type,Number(m.amount||0),Number(m.quantity_after||0),m.note||null,m.created_at]);
    stats.inventoryMovements++;
   }
+  // Keep unexpired deleted-record payloads and tombstones when merging a backup.
+  // Existing IDs are skipped so repeated imports stay idempotent.
+  const usedTrashIds = new Set<string>();
+  for (const item of Array.isArray(backup.trash) ? backup.trash : []) {
+   const deletedAt = restoreText(item.deleted_at, new Date().toISOString());
+   const expiresAt = restoreText(item.expires_at, new Date(Date.parse(deletedAt) + 30 * 24 * 60 * 60 * 1000).toISOString());
+   if (Date.parse(expiresAt) <= Date.now()) continue;
+   const sourceId = restoreText(item.id);
+   if (sourceId && has("deleted_records", sourceId)) continue;
+   db.runSync(
+    "INSERT OR IGNORE INTO deleted_records (id,kind,title,payload_json,deleted_at,expires_at,deleted_by) VALUES (?,?,?,?,?,?,?)",
+    [restoreRowId(sourceId, "trash", usedTrashIds), restoreText(item.kind, "deleted-record"), restoreText(item.title, "Deleted item"), restoreText(item.payload_json, "{}"), deletedAt, expiresAt, restoreText(item.deleted_by) || null]
+   );
+  }
  });
  // Verify persisted settings before restore is reported as complete.
  if (backup.version >= 6 && backup.branding === null) {
@@ -1554,6 +1583,7 @@ export async function mergeBackup(backup: BackupData) {
    }
  }
  await restoreLabSettings(backup.appSettings);
+ await restoreAsyncStorageSettings(backup.appSettings);
   markInventoryResetDone();
  return stats;
 }
