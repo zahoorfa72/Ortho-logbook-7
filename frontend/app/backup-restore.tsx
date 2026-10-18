@@ -180,13 +180,13 @@ export default function BackupRestoreScreen() {
       const cleanupFailures = Array.isArray((result as any).cleanupFailures) ? (result as any).cleanupFailures : [];
       const migrationPending = (result as any).migrationPending === true;
       Alert.alert(
-        migrationPending ? "Master backup saved — older files kept" : "Google Drive backup complete",
+        migrationPending ? "Monthly backup saved — older files kept" : "Google Drive monthly backup complete",
         "The complete monthly backup was saved to " + googleAccount + "'s Google Drive." +
           (migrationPending
             ? "\nSome older backup files could not be fully merged, so they were kept for safety. Retry after checking those files."
             : cleanupFailures.length
               ? "\nOld duplicate backup files could not all be permanently deleted: " + cleanupFailures.join("; ")
-              : "\nRedundant full/month/year and incremental backup files were permanently deleted after the merged master was verified.")
+              : "\nThe current month has one full snapshot; later edits use its monthly change journal.")
       );
     } catch (error) {
       Alert.alert("Drive backup failed", error instanceof Error ? error.message : "Unable to back up to Google Drive.");
