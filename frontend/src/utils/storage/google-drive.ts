@@ -1451,14 +1451,6 @@ export function backupToGoogleDrive(
   return queueDriveOperation(() => backupToGoogleDriveUnlocked(password, filter, options), options.onProgress);
 }
 
-export function backupToGoogleDrive(
-  password?: string,
-  filter: BackupFilter = { type: "all" },
-  options: DriveBackupOptions = {},
-): Promise<any> {
-  return queueDriveOperation(() => backupToGoogleDriveUnlocked(password, filter, options), options.onProgress);
-}
-
 async function listIncrementalFiles() {
   const q = encodeURIComponent("name contains 'Ortho Logbook' and trashed = false");
   const files: any[] = [];
