@@ -206,14 +206,18 @@ export async function archiveEligiblePatientImages(onProgress?: (stage: string) 
     const name = String(patient.name || "Patient");
     const mrNo = String(patient.mr_no || "");
     const existing = archives[id];
-    // updated_at changes only for the patient the user saved. Don't read photo
-    // JSON or regenerate the PDF for every other patient on each backup.
-    if (existing && existing.patientUpdatedAt === String(patient.updated_at || "")) {
+    // Never rewrite an already registered patient PDF automatically. A patient
+    // image can be removed/changed in the record, but the Drive PDF is changed
+    // only after an administrator explicitly approves it inside that patient.
+    // This also prevents unrelated patient edits from triggering PDF rebuilds.
+    if (existing) {
       const cached = await FileSystem.getInfoAsync(existing.localUri);
       if (cached.exists && Number(cached.size || 0) > 8) continue;
     }
     const row = db.getFirstSync<any>("SELECT photo_uri,photos_json FROM patients WHERE id=?", [id]) || {};
     const sources = await deduplicatePhotoSources(getPhotoSources(row));
+    // Do not create empty archive PDFs for patients who have never had images.
+    if (!sources.length && !existing) continue;
     const stamp = await stampFor(id, name, mrNo, String(patient.created_at || patient.date || ""), sources);
     if (existing?.sourceStamp === stamp) {
       const info = await FileSystem.getInfoAsync(existing.localUri);
