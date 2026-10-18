@@ -1729,25 +1729,35 @@ async function archiveMonthSnapshot(month: string, onProgress?: (stage: string) 
   }
 }
 
+function previousMonthKey(month: string): string {
+  const match = /^(\d{4})-(\d{2})$/.exec(month);
+  if (!match) return monthKeyFromDate(new Date());
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, 1);
+  date.setMonth(date.getMonth() - 1);
+  return monthKeyFromDate(date);
+}
+
 async function archiveCompletedMonths(onProgress?: (stage: string) => void) {
   const currentMonth = monthKeyFromDate(new Date());
   let cursor = String((await storage.secureGet(MONTH_ARCHIVE_CURSOR_KEY, "")) || "");
-  // Older builds advanced this cursor past the current month immediately after
-  // its first upload. Recover that state so the current month's file is refreshed
-  // on every real sync instead of staying stale for the rest of the month.
-  if (!/^\d{4}-\d{2}$/.test(cursor) || cursor > currentMonth) {
+  // A monthly archive is finalized only after that month has ended. This avoids
+  // uploading the same enormous month snapshot on every small edit and avoids
+  // keeping both an all-time file and a duplicate current-month copy in sync.
+  if (!/^\d{4}-\d{2}$/.test(cursor)) {
+    cursor = previousMonthKey(currentMonth);
+    await storage.secureSet(MONTH_ARCHIVE_CURSOR_KEY, cursor);
+  } else if (cursor > currentMonth) {
+    // Older builds advanced the cursor past the open month after archiving it.
+    // Reset to the open month so it is archived exactly once when it closes.
     cursor = currentMonth;
     await storage.secureSet(MONTH_ARCHIVE_CURSOR_KEY, cursor);
   }
   let guard = 0;
-  // Archive closed months once, then refresh the current month's same named file
-  // in place on every sync. The cursor always points at the current/open month.
   while (cursor < currentMonth && guard++ < 120) {
     await archiveMonthSnapshot(cursor, onProgress);
     cursor = nextMonthKey(cursor);
     await storage.secureSet(MONTH_ARCHIVE_CURSOR_KEY, cursor);
   }
-  await archiveMonthSnapshot(currentMonth, onProgress);
 }
 
 export async function backupIncrementalToGoogleDrive(changedTables: string[], onProgress?: (stage: string) => void) {
