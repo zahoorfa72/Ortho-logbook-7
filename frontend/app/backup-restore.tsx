@@ -181,7 +181,7 @@ export default function BackupRestoreScreen() {
       const migrationPending = (result as any).migrationPending === true;
       Alert.alert(
         migrationPending ? "Master backup saved — older files kept" : "Google Drive backup complete",
-        "The single master backup was saved to " + googleAccount + "'s Google Drive." +
+        "The complete monthly backup was saved to " + googleAccount + "'s Google Drive." +
           (migrationPending
             ? "\nSome older backup files could not be fully merged, so they were kept for safety. Retry after checking those files."
             : cleanupFailures.length
@@ -202,7 +202,7 @@ export default function BackupRestoreScreen() {
       setDriveStatus("Finding the master and monthly backups…");
       const files = await listGoogleDriveBackups();
       setDriveBackups(files);
-      if (!files.length) Alert.alert("No Drive backups yet", "Tap Backup to Google Drive once. The first backup creates one full master with your old data; completed months are archived separately after each month ends.");
+      if (!files.length) Alert.alert("No Drive backups yet", "Tap Backup to Google Drive once. The first upload saves the complete app data in a file named for the current month. Each new month gets its own full snapshot.");
     } catch (error) {
       Alert.alert("Could not list backups", error instanceof Error ? error.message : "Unable to list Google Drive backups.");
     } finally {
