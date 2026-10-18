@@ -76,7 +76,7 @@ function isOutOfMemoryError(error: unknown): boolean {
 }
 
 async function readPickedFile(uri: string, knownSize?: number | null): Promise<string> {
-  // Legacy .orbackup.json files are monolithic and must be decoded in memory.
+  // Both .orbackup and .orbackup.json are accepted. The extension is only a filename suffix; both use the same JSON backup envelope. Legacy files are monolithic and must be decoded in memory.
   // Allow selecting large existing files (including ~712 MB files) so the
   // reader can make a best-effort attempt on high-memory devices. OOM remains
   // caught below; this does not make monolithic decryption streaming-safe.
@@ -130,8 +130,8 @@ async function readPickedFile(uri: string, knownSize?: number | null): Promise<s
     const detail = errors.find((item) => item instanceof Error) as Error | undefined;
     throw new Error(
       detail?.message
-        ? `Android could not read this selected file (${detail.message}). Try selecting the original .orbackup.json file again.`
-        : "Android could not read the selected file. Try selecting the original .orbackup.json file again.",
+        ? `Android could not read this selected file (${detail.message}). Try selecting the original .orbackup or .orbackup.json file again.`
+        : "Android could not read the selected file. Try selecting the original .orbackup or .orbackup.json file again.",
     );
   }
 }
@@ -160,7 +160,7 @@ export async function pickBackupFile() {
     // generic message made Drive/Downloads import errors impossible to diagnose.
     const detail = error instanceof Error ? error.message : String(error || "unknown file-read error");
     throw new Error(
-      "Could not read the selected backup (" + detail + "). Re-select the original .orbackup.json file from Downloads or Files and try again.",
+      "Could not read the selected backup (" + detail + "). Re-select the original .orbackup or .orbackup.json file from Downloads or Files and try again.",
     );
   }
 
@@ -172,7 +172,7 @@ export async function pickBackupFile() {
   const trimmed = backupText.trim();
   if (!trimmed.startsWith("{")) {
     throw new Error(
-      "That file is not an Ortho Logbook backup. Please pick a .orbackup.json file created from this app.",
+      "That file is not an Ortho Logbook backup. Please pick a valid .orbackup or .orbackup.json file created from this app.",
     );
   }
 

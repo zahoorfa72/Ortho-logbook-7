@@ -659,7 +659,7 @@ export default function BackupRestoreScreen() {
 
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Import Backup</Text>
-          <Text style={styles.cardSub}>Choose how to combine incoming data with your local database.</Text>
+          <Text style={styles.cardSub}>Choose how to combine incoming data with your local database. Phone restore accepts both .orbackup and .orbackup.json files; the contents must be a valid Ortho Logbook backup.</Text>
           <Segmented
             options={["Merge (safe)", "Replace"] as any}
             value={mode}
