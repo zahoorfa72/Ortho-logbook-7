@@ -80,9 +80,22 @@ function photoMime(uri:string){
 // This is the important difference from the old backup: file:// or content://
 // paths are not portable between phones, so the actual photo bytes are stored
 // inside the encrypted backup.
+function photoCacheKey(uri: string, profile: "patient" | "document"): string {
+  // Never use the complete data URI as a Map key: a 9 MB image would create
+  // another huge string and the cache would retain it for the whole export.
+  let first = 0x811c9dc5;
+  let second = 0x9e3779b9;
+  for (let i = 0; i < uri.length; i++) {
+    const code = uri.charCodeAt(i);
+    first = Math.imul(first ^ code, 0x01000193) >>> 0;
+    second = Math.imul(second ^ (code + (i & 255)), 0x85ebca6b) >>> 0;
+  }
+  return profile + ":" + uri.length + ":" + first.toString(16) + ":" + second.toString(16);
+}
+
 async function embedPhoto(uri:string, cache?: Map<string,string>, profile: "patient" | "document" = "patient"):Promise<string>{
   if (!uri) return "";
-  const cacheKey = profile + ":" + uri;
+  const cacheKey = photoCacheKey(uri, profile);
   const cached = cache?.get(cacheKey);
   if (cached) return cached;
 
@@ -106,35 +119,66 @@ async function embedPhoto(uri:string, cache?: Map<string,string>, profile: "pati
     // without resizing, and cap the wait so a broken decoder cannot hang sync.
     const tempUris: string[] = [];
     let inputUri = uri;
+    let bestResultUri = "";
+    let bestResultSize = Number.POSITIVE_INFINITY;
     try {
       if (isDataImage) {
         if (!LegacyFileSystem.cacheDirectory) throw new Error("Image cache directory unavailable.");
         const comma = uri.indexOf(",");
         if (comma < 0) throw new Error("Malformed image data URI.");
-        inputUri = LegacyFileSystem.cacheDirectory + "ortho-backup-photo-" + Date.now() + "-" + Math.floor(Math.random() * 100000) + ".bin";
-        await LegacyFileSystem.writeAsStringAsync(inputUri, uri.slice(comma + 1), {
+        const mime = (uri.slice(5, uri.indexOf(";") > 0 ? uri.indexOf(";") : comma) || "image/jpeg").toLowerCase();
+        const extension = mime.includes("png") ? ".png" : mime.includes("webp") ? ".webp" : mime.includes("heic") ? ".heic" : ".jpg";
+        inputUri = LegacyFileSystem.cacheDirectory + "ortho-backup-photo-" + Date.now() + "-" + Math.floor(Math.random() * 100000) + extension;
+        const base64Start = comma + 1;
+        await LegacyFileSystem.writeAsStringAsync(inputUri, uri.slice(base64Start), {
           encoding: LegacyFileSystem.EncodingType.Base64,
         });
         tempUris.push(inputUri);
       }
-      const quality = profile === "document" ? 0.94 : 0.92;
-      const result = await new Promise<any>((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error("Image processing timed out after 45 seconds.")), 45000);
-        ImageManipulator.manipulateAsync(inputUri, [], {
-          compress: quality,
-          format: ImageManipulator.SaveFormat.JPEG,
-        }).then((value) => {
-          clearTimeout(timeout);
-          resolve(value);
-        }, (error) => {
-          clearTimeout(timeout);
-          reject(error);
+      // Retry from the original source at progressively lower-but-still-high
+      // JPEG quality. Keep original pixel dimensions; never resize medical text.
+      // Stop as soon as the file is near 2 MB, otherwise keep the best quality
+      // result reached rather than generating a visibly degraded thumbnail.
+      const qualities = profile === "document" ? [0.95, 0.92, 0.89, 0.86] : [0.94, 0.91, 0.88, 0.85];
+      let selectedSize = 0;
+      for (const quality of qualities) {
+        const result = await new Promise<any>((resolve, reject) => {
+          let settled = false;
+          const timeout = setTimeout(() => {
+            if (!settled) { settled = true; reject(new Error("Image processing timed out after 45 seconds.")); }
+          }, 45000);
+          ImageManipulator.manipulateAsync(inputUri, [], {
+            compress: quality,
+            format: ImageManipulator.SaveFormat.JPEG,
+          }).then((value) => {
+            if (!settled) { settled = true; clearTimeout(timeout); resolve(value); }
+            else if (value?.uri) void LegacyFileSystem.deleteAsync(value.uri, { idempotent: true }).catch(() => {});
+          }, (error) => {
+            if (!settled) { settled = true; clearTimeout(timeout); reject(error); }
+          });
         });
-      });
-      tempUris.push(result.uri);
-      const info = await LegacyFileSystem.getInfoAsync(result.uri);
-      if (!info.exists || typeof info.size !== "number" || info.size <= 0) throw new Error("Compressed image is empty.");
-      const base64 = await LegacyFileSystem.readAsStringAsync(result.uri, {
+        const info = await LegacyFileSystem.getInfoAsync(result.uri);
+        if (!info.exists || typeof info.size !== "number" || info.size <= 0) {
+          try { await LegacyFileSystem.deleteAsync(result.uri, { idempotent: true }); } catch {}
+          throw new Error("Compressed image is empty.");
+        }
+        if (info.size < bestResultSize) {
+          if (bestResultUri) {
+            try { await LegacyFileSystem.deleteAsync(bestResultUri, { idempotent: true }); } catch {}
+            const oldIndex = tempUris.indexOf(bestResultUri);
+            if (oldIndex >= 0) tempUris.splice(oldIndex, 1);
+          }
+          bestResultUri = result.uri;
+          bestResultSize = info.size;
+          selectedSize = info.size;
+          tempUris.push(bestResultUri);
+        } else {
+          try { await LegacyFileSystem.deleteAsync(result.uri, { idempotent: true }); } catch {}
+        }
+        if (selectedSize > 0 && selectedSize <= targetBytes) break;
+      }
+      if (!bestResultUri) throw new Error("Image compression did not produce a usable file.");
+      const base64 = await LegacyFileSystem.readAsStringAsync(bestResultUri, {
         encoding: LegacyFileSystem.EncodingType.Base64,
       });
       if (!base64) throw new Error("Compressed image data is empty.");
@@ -293,10 +337,11 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
    }
  }
 
+ onProgress?.("Patient photos prepared; reading historical reports…");
  const historyAll=include("patientHistory") ? db.getAllSync<any>("SELECT * FROM patient_history ORDER BY created_at ASC") : [];
  const history=filter.type==="all" ? historyAll : historyAll.filter((h:any)=>selectedPatientIds.has(h.patient_id));
  const embeddedHistory:any[]=[];
- onProgress?.("Processing patient history… 0/" + history.length);
+ onProgress?.("Processing patient history images… 0/" + history.length);
  for (let historyIndex = 0; historyIndex < history.length; historyIndex++) {
    const h = history[historyIndex];
    if (historyIndex % 3 === 0) {
@@ -325,7 +370,11 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
      if (!historyPhotos.length && singlePhoto) historyPhotos = [singlePhoto];
      if (historyPhotos.length) {
        const embeddedHistoryPhotos: string[] = [];
-       for (const photo of historyPhotos) embeddedHistoryPhotos.push(await embedPhoto(photo, compressedPhotoCache));
+       for (let photoIndex = 0; photoIndex < historyPhotos.length; photoIndex++) {
+         onProgress?.("Compressing historical report image " + (photoIndex + 1) + "/" + historyPhotos.length + " · history " + (historyIndex + 1) + "/" + history.length);
+         embeddedHistoryPhotos.push(await embedPhoto(historyPhotos[photoIndex], compressedPhotoCache));
+         await new Promise<void>((resolve) => setTimeout(resolve, 0));
+       }
        if (Array.isArray(snap.photos)) snap.photos = embeddedHistoryPhotos;
        else if (typeof snap.photos_json === "string") snap.photos_json = JSON.stringify(embeddedHistoryPhotos);
        else snap.photos = embeddedHistoryPhotos;
