@@ -10,7 +10,7 @@ import {
 } from "@/src/utils/storage/backup";
 import { markBackupTaken } from "@/src/utils/backup-reminder";
 
-const BACKUP_FILE_NAME = "ortho-logbook-backup.orbackup";
+const BACKUP_FILE_NAME = "ortho-logbook-backup.orbackup.json";
 
 export async function createBackupFile(password: string, filter: BackupFilter = { type: "all" }) {
   const encryptedBackup = await exportBackup(password, filter);
@@ -34,7 +34,7 @@ export async function saveBackupToPhone(password: string, filter: BackupFilter =
   const fileUri = await FileSystem.StorageAccessFramework.createFileAsync(
     permissions.directoryUri,
     BACKUP_FILE_NAME,
-    "application/octet-stream",
+    "application/json",
   );
   await FileSystem.writeAsStringAsync(fileUri, encryptedBackup);
   await markBackupTaken();
@@ -50,7 +50,7 @@ export async function shareBackupFile(password: string, filter: BackupFilter = {
   }
 
   await Sharing.shareAsync(fileUri, {
-    mimeType: "application/octet-stream",
+    mimeType: "application/json",
     dialogTitle: "Save Ortho Logbook Backup",
     UTI: "public.data",
   });
@@ -76,7 +76,7 @@ function isOutOfMemoryError(error: unknown): boolean {
 }
 
 async function readPickedFile(uri: string, knownSize?: number | null): Promise<string> {
-  // Legacy .orbackup files are monolithic and must be decoded in memory.
+  // Legacy .orbackup.json files are monolithic and must be decoded in memory.
   // Allow selecting large existing files (including ~712 MB files) so the
   // reader can make a best-effort attempt on high-memory devices. OOM remains
   // caught below; this does not make monolithic decryption streaming-safe.
@@ -130,8 +130,8 @@ async function readPickedFile(uri: string, knownSize?: number | null): Promise<s
     const detail = errors.find((item) => item instanceof Error) as Error | undefined;
     throw new Error(
       detail?.message
-        ? `Android could not read this selected file (${detail.message}). Try selecting the original .orbackup file again.`
-        : "Android could not read the selected file. Try selecting the original .orbackup file again.",
+        ? `Android could not read this selected file (${detail.message}). Try selecting the original .orbackup.json file again.`
+        : "Android could not read the selected file. Try selecting the original .orbackup.json file again.",
     );
   }
 }
@@ -160,7 +160,7 @@ export async function pickBackupFile() {
     // generic message made Drive/Downloads import errors impossible to diagnose.
     const detail = error instanceof Error ? error.message : String(error || "unknown file-read error");
     throw new Error(
-      "Could not read the selected backup (" + detail + "). Re-select the original .orbackup file from Downloads or Files and try again.",
+      "Could not read the selected backup (" + detail + "). Re-select the original .orbackup.json file from Downloads or Files and try again.",
     );
   }
 
@@ -172,7 +172,7 @@ export async function pickBackupFile() {
   const trimmed = backupText.trim();
   if (!trimmed.startsWith("{")) {
     throw new Error(
-      "That file is not an Ortho Logbook backup. Please pick a .orbackup file created from this app.",
+      "That file is not an Ortho Logbook backup. Please pick a .orbackup.json file created from this app.",
     );
   }
 
