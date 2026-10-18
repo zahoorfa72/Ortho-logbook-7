@@ -1374,7 +1374,7 @@ export default function PatientForm() {
         if (Math.max(image.width, image.height) > 2800) actions = [image.width >= image.height ? { resize: { width: 2800 } } : { resize: { height: 2800 } }];
       }
       const result = await ImageManipulator.manipulateAsync(editingPhotoUri, actions, {
-        compress: action === "optimize" ? 0.94 : 0.92, format: ImageManipulator.SaveFormat.JPEG,
+        compress: 0.92, format: ImageManipulator.SaveFormat.JPEG,
       });
       setEditingPhotoUri(result.uri);
       loadEditingPhotoDimensions(result.uri);
@@ -1382,7 +1382,7 @@ export default function PatientForm() {
       cropDragStartRef.current = null;
       cropResizeStartRef.current = null;
       if (action === "crop") toast("Freeform crop applied. You can adjust again before saving.", "success");
-      else if (action === "optimize") toast("Photo compressed to a manageable file size.", "success");
+      else if (action === "rotate") toast("Photo rotated.", "success");
     } catch (e: any) {
       toast(e?.message || "Could not edit photo.", "error");
     } finally {
