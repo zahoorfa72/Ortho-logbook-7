@@ -796,6 +796,10 @@ export default function PatientForm() {
     }
     await FileSystem.makeDirectoryAsync(directory, { intermediates: true }).catch(() => {});
     const targetBytes = 1.5 * 1024 * 1024;
+    // Preserve diagnostic detail: 1.5 MiB is the preferred target, not a reason
+    // to destroy fine text. If that target cannot be met at good quality, allow
+    // a modestly larger file rather than downscaling to unreadable dimensions.
+    const qualityFallbackBytes = 2.25 * 1024 * 1024;
     let dimensions: { width: number; height: number };
     try {
       dimensions = await new Promise<{ width: number; height: number }>((resolve, reject) => {
@@ -813,12 +817,16 @@ export default function PatientForm() {
     // in small steps. Every attempt starts from the original source, never from
     // a previously compressed copy, to avoid cumulative quality loss.
     const attempts: Array<{ edge: number; quality: number }> = [
-      ...[0.96, 0.92, 0.88, 0.84, 0.80].map(quality => ({ edge: longest, quality })),
-      ...[4000, 3600, 3200, 3000, 2800, 2600, 2400, 2200, 2000, 1800, 1600, 1400, 1200, 1000, 900]
+      ...[0.96, 0.94, 0.92, 0.90, 0.88, 0.86, 0.84].map(quality => ({ edge: longest, quality })),
+      ...[4400, 4000, 3600, 3400, 3200, 3000, 2800, 2600, 2400, 2200, 2000, 1800, 1600]
         .filter(edge => edge < longest)
-        .flatMap(edge => [0.92, 0.86, 0.80, 0.76].map(quality => ({ edge, quality }))),
+        .flatMap(edge => [0.94, 0.92, 0.90, 0.88, 0.86, 0.84].map(quality => ({ edge, quality }))),
     ];
     let normalizedUri = "";
+    let fallbackUri = "";
+    let fallbackSize = Number.POSITIVE_INFINITY;
+    let fallbackEdge = 0;
+    let fallbackQuality = 0;
     let lastError: unknown = null;
     try {
       for (const attempt of attempts) {
@@ -831,11 +839,31 @@ export default function PatientForm() {
             await FileSystem.deleteAsync(normalized.uri, { idempotent: true }).catch(() => {});
             continue;
           }
-          if (info.size <= targetBytes) { normalizedUri = normalized.uri; break; }
-          await FileSystem.deleteAsync(normalized.uri, { idempotent: true }).catch(() => {});
+          if (info.size <= targetBytes) {
+            normalizedUri = normalized.uri;
+            if (fallbackUri) await FileSystem.deleteAsync(fallbackUri, { idempotent: true }).catch(() => {});
+            fallbackUri = "";
+            break;
+          }
+          // Remember the best full-detail candidate up to 2.25 MiB. Rank by
+          // retained pixel dimensions first, then JPEG quality, then file size.
+          // Never fall back to tiny 900px images or very low JPEG quality.
+          if (info.size <= qualityFallbackBytes &&
+              (attempt.edge > fallbackEdge ||
+               (attempt.edge === fallbackEdge && attempt.quality > fallbackQuality) ||
+               (attempt.edge === fallbackEdge && attempt.quality === fallbackQuality && info.size < fallbackSize))) {
+            if (fallbackUri) await FileSystem.deleteAsync(fallbackUri, { idempotent: true }).catch(() => {});
+            fallbackUri = normalized.uri;
+            fallbackSize = info.size;
+            fallbackEdge = attempt.edge;
+            fallbackQuality = attempt.quality;
+          } else {
+            await FileSystem.deleteAsync(normalized.uri, { idempotent: true }).catch(() => {});
+          }
         } catch (error) { lastError = error; }
       }
-      if (!normalizedUri) throw new Error("This image could not be reduced below 1.5 MB without risking excessive detail loss. The original has not been changed. Try cropping empty margins or choose a less noisy scan.");
+      if (!normalizedUri && fallbackUri) normalizedUri = fallbackUri;
+      if (!normalizedUri) throw new Error("This image could not be compressed while preserving diagnostic detail. The original has not been changed. Try cropping empty margins or choose a less noisy scan.");
       const filename = "patient-photo-" + Date.now() + "-" + Math.random().toString(36).slice(2, 10) + ".jpg";
       const destination = directory + filename;
       try {

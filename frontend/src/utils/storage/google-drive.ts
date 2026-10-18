@@ -837,29 +837,50 @@ async function writeBackupObjectToFile(uri: string, value: any, onProgress?: (st
 }
 
 async function uploadStagedJsonFile(uri: string, totalBytes: number, existingId?: string, onProgress?: (stage: string) => void, fileName: string = BACKUP_NAME) {
-  const token = await accessToken();
-  const target = existingId
-    ? DRIVE_UPLOAD + "/" + encodeURIComponent(existingId) + "?uploadType=resumable&fields=id,name,modifiedTime,size"
-    : DRIVE_UPLOAD + "?uploadType=resumable&fields=id,name,modifiedTime,size";
-  const response = await fetchWithTimeout(target, {
-    method: existingId ? "PATCH" : "POST",
-    headers: {
-      Authorization: "Bearer " + token,
-      "Content-Type": "application/json; charset=UTF-8",
-      "X-Upload-Content-Type": "application/json",
-      "X-Upload-Content-Length": String(totalBytes),
-    },
-    body: JSON.stringify({ name: fileName, mimeType: "application/json" }),
-  }, 30000);
-  if (!response.ok) {
-    let message = "Google Drive could not start upload (HTTP " + response.status + ").";
-    try { const data = await response.json(); message = data?.error?.message || message; } catch {}
-    throw new Error(message);
+  let lastError: any = null;
+  // A failed native transfer must not leave sync permanently failed after a
+  // transient mobile-network interruption. Start a fresh resumable session once;
+  // first check whether Drive actually committed the previous attempt.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const token = await accessToken();
+    try {
+      const target = existingId
+        ? DRIVE_UPLOAD + "/" + encodeURIComponent(existingId) + "?uploadType=resumable&fields=id,name,modifiedTime,size"
+        : DRIVE_UPLOAD + "?uploadType=resumable&fields=id,name,modifiedTime,size";
+      const response = await fetchWithTimeout(target, {
+        method: existingId ? "PATCH" : "POST",
+        headers: {
+          Authorization: "Bearer " + token,
+          "Content-Type": "application/json; charset=UTF-8",
+          "X-Upload-Content-Type": "application/json",
+          "X-Upload-Content-Length": String(totalBytes),
+        },
+        body: JSON.stringify({ name: fileName, mimeType: "application/json" }),
+      }, 30000);
+      if (!response.ok) {
+        let message = "Google Drive could not start upload (HTTP " + response.status + ").";
+        try { const data = await response.json(); message = data?.error?.message || message; } catch {}
+        throw new Error(message);
+      }
+      const sessionUrl = response.headers.get("Location");
+      if (!sessionUrl) throw new Error("Google Drive did not provide an upload session. Reconnect your Google account and retry.");
+      const uploaded = await uploadNativeBackground(sessionUrl, token, uri, totalBytes, onProgress, 0, fileName);
+      return await verifyUploadedFile(uploaded, fileName, totalBytes, existingId);
+    } catch (error: any) {
+      lastError = error;
+      const message = String(error?.message || error || "");
+      if (attempt > 0 || /HTTP 40[013]|permission|invalid_grant|missing the safe large-backup file writer/i.test(message)) throw error;
+      // A timed-out response can arrive after Drive commits the file. Reuse it
+      // only after exact filename and byte-size verification.
+      try {
+        const confirmed = await verifyUploadedFile({}, fileName, totalBytes, existingId);
+        if (confirmed?.id) return confirmed;
+      } catch {}
+      onProgress?.("Drive upload was interrupted; safely retrying the same backup…");
+      await new Promise<void>(resolve => setTimeout(resolve, 1200));
+    }
   }
-  const sessionUrl = response.headers.get("Location");
-  if (!sessionUrl) throw new Error("Google Drive did not provide an upload session. Reconnect your Google account and retry.");
-  const uploaded = await uploadNativeBackground(sessionUrl, token, uri, totalBytes, onProgress, 0, fileName);
-  return await verifyUploadedFile(uploaded, fileName, totalBytes, existingId);
+  throw new Error("Google Drive upload failed after a safe retry: " + String(lastError?.message || lastError || "network error") + ". Your phone data remains unchanged.");
 }
 
 
