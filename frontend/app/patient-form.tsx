@@ -15,7 +15,7 @@ import { buildPerspectiveWarpHtml } from "@/src/utils/perspective-warp";
 import { recordDiagnosticError } from "@/src/utils/problem-report";
 import { Dimensions } from "react-native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, AppState, Image, InteractionManager, Modal, Pressable, ScrollView, Text, View } from "react-native";
+import { Alert, AppState, Image, InteractionManager, Linking, Modal, Pressable, ScrollView, Text, View } from "react-native";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { WebView } from "react-native-webview";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
@@ -31,7 +31,7 @@ import { Segmented } from "@/src/components/Segmented";
 import { useToast } from "@/src/components/toast";
 import { formatInventoryLabel } from "@/src/utils/inventory-label";
 import { createPatientImagePdfFile, getPatientImageArchive, openPatientImageArchivePdf } from "@/src/utils/storage/patient-image-archive";
-import { downloadPatientImageArchiveForPatient } from "@/src/utils/storage/google-drive";
+import { ensurePatientImagePdfOnDrive } from "@/src/utils/storage/google-drive";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 const LAB_OCR_PIPELINE_VERSION = "row-aware-2026-10-17-v4-admin-aliases";
 
@@ -1141,9 +1141,9 @@ export default function PatientForm() {
     }
     setPhotoBusy(true);
     try {
-      await downloadPatientImageArchiveForPatient({ id: patientId, name: p.name, mrNo: p.mrNo });
-      await openPatientImageArchivePdf(patientId);
-      toast("Verified PDF for this patient downloaded and opened.", "success");
+      const result = await ensurePatientImagePdfOnDrive(patientId);
+      await Linking.openURL(result.url);
+      toast("Verified patient PDF opened from Google Drive.", "success");
     } catch (e: any) {
       toast(e?.message || "Could not download this patient's archived PDF.", "error");
     } finally {
@@ -1750,7 +1750,7 @@ export default function PatientForm() {
             testID="download-patient-archive-from-drive-button"
           >
             <Ionicons name="cloud-download-outline" size={18} color={colors.brandPrimary} />
-            <Text style={[styles.secondaryText, { color: colors.brandPrimary }]}>{photoBusy ? "Downloading…" : "Download / Open archived images PDF"}</Text>
+            <Text style={[styles.secondaryText, { color: colors.brandPrimary }]}>{photoBusy ? "Preparing / uploading PDF…" : "Open patient image PDF in Google Drive"}</Text>
           </Pressable>
         ) : null}
 

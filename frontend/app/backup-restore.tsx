@@ -215,10 +215,10 @@ export default function BackupRestoreScreen() {
   const handleLoadDriveBackups = async () => {
     try {
       setDriveLoading(true);
-      setDriveStatus("Finding the master and monthly backups…");
+      setDriveStatus("Finding the single master backup…");
       const files = await listGoogleDriveBackups();
       setDriveBackups(files);
-      if (!files.length) Alert.alert("No Drive backups yet", "Tap Backup to Google Drive once. The first upload saves the complete app data in a file named for the current month. Each new month gets its own full snapshot.");
+      if (!files.length) Alert.alert("No Drive backups yet", "Tap Backup to Google Drive once. The app maintains one rolling master backup file. Existing older archives are left untouched.");
     } catch (error) {
       Alert.alert("Could not list backups", error instanceof Error ? error.message : "Unable to list Google Drive backups.");
     } finally {
@@ -231,7 +231,7 @@ export default function BackupRestoreScreen() {
     try {
       setDriveLoading(true);
       setDriveStatus("Downloading master backup…");
-      const result = await restoreGoogleDriveBackupById(file.id);
+      const result = await restoreGoogleDriveBackupById(file.id, setDriveStatus);
       const info = getBackupInfo(result.backupText);
       setSelectedBackup({ name: result.name, backupText: result.backupText, info });
       setRestorePassword("");
@@ -250,7 +250,7 @@ export default function BackupRestoreScreen() {
     try {
       setDriveLoading(true);
       setDriveStatus("Finding the latest master backup…");
-      const result = await restoreLatestFromGoogleDrive();
+      const result = await restoreLatestFromGoogleDrive(setDriveStatus);
       const info = getBackupInfo(result.backupText);
       setSelectedBackup({ name: result.name, backupText: result.backupText, info });
       setRestorePassword("");
@@ -499,7 +499,7 @@ export default function BackupRestoreScreen() {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Google Drive Backup</Text>
           <Text style={styles.cardSub}>
-            Connect a Google account on this phone. The first confirmed backup contains all existing data in one full master. After each month ends, Drive adds a month-named archive containing that period only—not another full master. Drive backups are unencrypted; phone/file backups remain encrypted.
+            Connect a Google account on this phone. The app maintains one rolling master backup file rather than creating a new backup for every month. Drive backups are unencrypted; phone/file backups remain encrypted.
           </Text>
           {googleAccount ? (
             <>
@@ -533,7 +533,7 @@ export default function BackupRestoreScreen() {
                 disabled={driveLoading}
               >
                 <Ionicons name="list-outline" size={18} color={colors.onSurface} />
-                <Text style={styles.secondaryText}>Select Master or Monthly Backup to Restore</Text>
+                <Text style={styles.secondaryText}>Select Backup to Restore</Text>
               </Pressable>
               {driveBackups.map((file) => (
                 <Pressable
@@ -593,7 +593,7 @@ export default function BackupRestoreScreen() {
 
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Backup Range</Text>
-          <Text style={styles.cardSub}>Choose the patient date range for manual Drive snapshots and encrypted phone backups. Google Drive keeps one rolling master backup. Patient photos are compressed in the backup; month/year restore filters this master without storing duplicate full copies.</Text>
+          <Text style={styles.cardSub}>Choose the patient date range for manual Drive snapshots and encrypted phone backups. Google Drive keeps one rolling master backup. Patient photos are compressed in the backup; month/year restore filters this master without creating separate monthly backup files.</Text>
           <Segmented
             options={["All", "Date", "Month", "Year"] as any}
             value={backupFilter.type === "all" ? "All" : backupFilter.type.charAt(0).toUpperCase() + backupFilter.type.slice(1)}

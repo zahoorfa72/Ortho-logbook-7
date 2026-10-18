@@ -261,11 +261,7 @@ export async function listGoogleDriveBackups(): Promise<Array<{id:string;name:st
   const backups = files.filter((file: any) => {
     if (!file?.id) return false;
     const name = String(file.name || "");
-    return name === BACKUP_NAME ||
-      /^Ortho Logbook Backup - Month \d{4}-\d{2}\.orbackup$/.test(name) ||
-      /^Ortho Logbook Backup - Year \d{4}\.orbackup$/.test(name) ||
-      /^Ortho Logbook Backup - Date \d{4}-\d{2}-\d{2}\.orbackup$/.test(name) ||
-      name === "Ortho Logbook Backup - All Time.orbackup";
+    return name === BACKUP_NAME || name === "Ortho Logbook Backup - All Time.orbackup";
   }).map((file: any) => ({
     id: String(file.id),
     name: String(file.name || "Ortho Logbook Backup"),
@@ -280,14 +276,15 @@ export async function listGoogleDriveBackups(): Promise<Array<{id:string;name:st
   });
 }
 
-export async function restoreGoogleDriveBackupById(fileId: string) {
+export async function restoreGoogleDriveBackupById(fileId: string, onProgress?: (message: string) => void) {
   if (!fileId) throw new Error("Select a Google Drive backup first.");
   const metadataResponse = await driveRequest(`${DRIVE_API}/${encodeURIComponent(fileId)}?fields=id,name,modifiedTime,size,mimeType,trashed`);
   const metadata = await metadataResponse.json();
   if (!metadata?.id || metadata.trashed || metadata.mimeType === "application/vnd.google-apps.folder") {
     throw new Error("The selected Google Drive item is not a backup file.");
   }
-  const parsed = await downloadDriveJsonValidated(fileId);
+  onProgress?.("Downloading selected backup from Google Drive…");
+  const parsed = await downloadDriveJsonValidated(fileId, onProgress);
   if (!parsed || parsed.app !== "Ortho Logbook" || !Array.isArray(parsed.patients) || !Array.isArray(parsed.inventory)) {
     throw new Error("The selected file is not a complete Ortho Logbook backup.");
   }
@@ -306,7 +303,7 @@ export async function restoreGoogleDriveBackupById(fileId: string) {
     const journalFile = await findBackupByName(isRollingMaster ? "Ortho Logbook Backup Changes.orbackup" : "Ortho Logbook Backup - Month " + monthlyMatch![1] + " Changes.orbackup");
     if (journalFile?.id) {
       try {
-        const journal = await downloadDriveJsonValidated(String(journalFile.id));
+        const journal = await downloadDriveJsonValidated(String(journalFile.id), onProgress);
         if (journal?.incremental === true &&
             String(journal._baselineKey || "").startsWith(String(fileId) + ":") &&
             Array.isArray(journal.changedTables)) {
@@ -1640,44 +1637,34 @@ async function listIncrementalFiles() {
 }
 
 
-async function downloadDriveJson(fileId: string): Promise<string> {
-  const url = `${DRIVE_API}/${encodeURIComponent(fileId)}?alt=media`;
-  let fetchError: any = null;
-  try {
-    const response = await driveRequest(url);
-    return await response.text();
-  } catch (error: any) {
-    fetchError = error;
-  }
-
-  // React Native fetch can fail with the generic "Network request failed"
-  // for large Drive media downloads even when Drive's metadata API works.
-  // Retry the same authenticated media request with XHR, which has a separate
-  // native networking path. Keep the local database untouched on either failure.
+async function downloadDriveJson(fileId: string, onProgress?: (message: string) => void): Promise<string> {
+  const url = DRIVE_API + "/" + encodeURIComponent(fileId) + "?alt=media";
   const token = await accessToken();
   return await new Promise<string>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("GET", url);
     xhr.setRequestHeader("Authorization", "Bearer " + token);
-    xhr.timeout = 120000;
+    xhr.timeout = 10 * 60 * 1000;
+    xhr.onprogress = (event) => {
+      const loaded = Number(event.loaded || 0);
+      const total = Number(event.total || 0);
+      if (total > 0) {
+        const percent = Math.min(99, Math.floor((loaded / total) * 100));
+        onProgress?.("Downloading backup file: " + percent + "% (" + (loaded / 1048576).toFixed(1) + " / " + (total / 1048576).toFixed(1) + " MB)");
+      } else onProgress?.("Downloading backup file: " + (loaded / 1048576).toFixed(1) + " MB received");
+    };
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) {
+        onProgress?.("Backup file downloaded. Validating contents…");
         resolve(xhr.responseText || "");
         return;
       }
       let message = "Google Drive backup download failed (HTTP " + xhr.status + ").";
-      try {
-        const data = JSON.parse(xhr.responseText || "{}");
-        message = data?.error?.message || message;
-      } catch {}
+      try { const data = JSON.parse(xhr.responseText || "{}"); message = data?.error?.message || message; } catch {}
       reject(new Error(message));
     };
-    xhr.onerror = () => reject(new Error(
-      "Google Drive media download failed over both fetch and XHR. Fetch: " +
-      String(fetchError?.message || "network error") +
-      "; XHR returned no HTTP response. Check Google Drive connectivity, VPN, or network restrictions."
-    ));
-    xhr.ontimeout = () => reject(new Error("Google Drive backup download timed out after 120 seconds. Check the connection and retry."));
+    xhr.onerror = () => reject(new Error("Google Drive backup download failed. Check your internet connection and Google Drive access."));
+    xhr.ontimeout = () => reject(new Error("Google Drive backup download timed out. You can retry without changing local records."));
     xhr.onabort = () => reject(new Error("Google Drive backup download was cancelled."));
     xhr.send();
   });
@@ -1721,11 +1708,11 @@ function decodeBackupBase64(value: string): string {
   } catch { throw new Error("Google Drive backup base64 content could not be decoded."); }
 }
 
-async function downloadDriveJsonValidated(fileId: string): Promise<any> {
+async function downloadDriveJsonValidated(fileId: string, onProgress?: (message: string) => void): Promise<any> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      return parseDownloadedBackup(await downloadDriveJson(fileId));
+      return parseDownloadedBackup(await downloadDriveJson(fileId, onProgress));
     } catch (error) {
       lastError = error;
       if (attempt < 3) await new Promise<void>(resolve => setTimeout(resolve, attempt * 900));
@@ -2062,7 +2049,7 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
   // Finalize the previous month as its own dated snapshot once that month has
   // ended. This call was missing from the active sync path, so the archive
   // helper existed but normal backups did not reliably create monthly files.
-  await archiveCompletedMonths(onProgress);
+  // Keep one rolling master backup. Do not create per-month Drive snapshot files.
   const baselineKey = String(base.id) + ":" + String(base.modifiedTime || "");
   const canStreamIncremental = Platform.OS === "android" &&
     !!NativeModules.DriveBackgroundUpload?.writeTextChunk &&
@@ -2308,7 +2295,8 @@ export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) 
     onProgress?.("Checking master backup " + (candidateIndex + 1) + " of " + candidates.length + "…");
     let parsed: any;
     try {
-      parsed = await downloadDriveJsonValidated(candidate.id);
+      onProgress?.("Downloading " + String(candidate.name || "backup") + " from Google Drive…");
+      parsed = await downloadDriveJsonValidated(candidate.id, onProgress);
     } catch (error: any) {
       // Keep the real reason visible so a malformed legacy file can be
       // diagnosed instead of every failure being reported as "not readable".
