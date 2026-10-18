@@ -1733,8 +1733,10 @@ async function downloadDriveJson(fileId: string, onProgress?: (message: string) 
       const percent = Math.max(0, Math.min(100, Number(status?.progress || 0)));
       if (percent !== lastPercent) {
         lastPercent = percent;
-        const loaded = Number(status?.uploadedBytes || 0);
-        const total = Number(status?.totalBytes || 0);
+        // Download status reports downloadedBytes/bytesDownloaded; uploadedBytes
+        // is an upload-only counter and kept restore progress stuck at 0.0 MB.
+        const loaded = Number(status?.downloadedBytes ?? status?.bytesDownloaded ?? status?.bytesWritten ?? status?.uploadedBytes ?? 0);
+        const total = Number(status?.totalBytes ?? status?.contentLength ?? 0);
         onProgress?.(total > 0
           ? "Downloading backup file: " + percent + "% (" + (loaded / 1048576).toFixed(1) + " / " + (total / 1048576).toFixed(1) + " MB)"
           : "Downloading backup file: " + (loaded / 1048576).toFixed(1) + " MB received");
