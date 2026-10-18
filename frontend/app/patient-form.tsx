@@ -29,7 +29,7 @@ import { PrimaryButton } from "@/src/components/PrimaryButton";
 import { Segmented } from "@/src/components/Segmented";
 import { useToast } from "@/src/components/toast";
 import { formatInventoryLabel } from "@/src/utils/inventory-label";
-import { createPatientImagePdfFromSources, getPatientImageArchive, openPatientImageArchivePdf } from "@/src/utils/storage/patient-image-archive";
+import { getPatientImageArchive, openPatientImageArchivePdf } from "@/src/utils/storage/patient-image-archive";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 const LAB_OCR_PIPELINE_VERSION = "row-aware-2026-10-17-v4-admin-aliases";
 
@@ -775,105 +775,77 @@ export default function PatientForm() {
   // record never depends on the gallery app or a temporary URI.
   const persistPhoto = async (sourceUri: string) => {
     if (!sourceUri) return sourceUri;
-    if (sourceUri.startsWith("data:")) {
-      // Legacy/base64 images must go through the same size/quality guard as
-      // gallery, camera and scanner images instead of bypassing compression.
-      const match = sourceUri.match(/^data:image\/(png|jpe?g|webp);base64,([\s\S]+)$/i);
-      if (!match?.[2]) throw new Error("This embedded photo format cannot be compressed safely. The original image has not been changed.");
-      const cache = String(FileSystem.cacheDirectory || FileSystem.documentDirectory || "");
-      if (!cache) throw new Error("Temporary storage is unavailable to compress this photo.");
-      const input = cache + "patient-photo-input-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8) + "." + (match[1].toLowerCase() === "png" ? "png" : match[1].toLowerCase() === "webp" ? "webp" : "jpg");
-      await FileSystem.writeAsStringAsync(input, match[2], { encoding: FileSystem.EncodingType.Base64 });
-      try { return await persistPhoto(input); }
-      finally { await FileSystem.deleteAsync(input, { idempotent: true }).catch(() => {}); }
+    let sourceTempUri = "";
+    if (/^data:image\//i.test(sourceUri)) {
+      const match = sourceUri.match(/^data:image\/([^;]+);base64,([\s\S]+)$/i);
+      if (!match?.[2]) throw new Error("The selected image data is invalid.");
+      const cacheRoot = String(FileSystem.cacheDirectory || FileSystem.documentDirectory || "");
+      if (!cacheRoot) throw new Error("Temporary phone storage is unavailable for image compression.");
+      const tempDir = cacheRoot + "ortho-photo-compression/";
+      await FileSystem.makeDirectoryAsync(tempDir, { intermediates: true }).catch(() => {});
+      sourceTempUri = tempDir + "source-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8) + "." + (match[1].toLowerCase().includes("png") ? "png" : "jpg");
+      await FileSystem.writeAsStringAsync(sourceTempUri, match[2], { encoding: FileSystem.EncodingType.Base64 });
+      sourceUri = sourceTempUri;
     }
     const directory = String(FileSystem.documentDirectory || "") + "patient-photos/";
+    if (!FileSystem.documentDirectory) {
+      if (sourceTempUri) await FileSystem.deleteAsync(sourceTempUri, { idempotent: true }).catch(() => {});
+      throw new Error("Private phone storage is unavailable for patient photos.");
+    }
     await FileSystem.makeDirectoryAsync(directory, { intermediates: true }).catch(() => {});
     const targetBytes = 1.5 * 1024 * 1024;
-    const dimensions = await new Promise<{ width: number; height: number }>((resolve, reject) => {
-      Image.getSize(sourceUri, (width, height) => resolve({ width, height }), reject);
-    });
+    let dimensions: { width: number; height: number };
+    try {
+      dimensions = await new Promise<{ width: number; height: number }>((resolve, reject) => {
+        Image.getSize(sourceUri, (width, height) => resolve({ width, height }), reject);
+      });
+    } catch (error) {
+      if (sourceTempUri) await FileSystem.deleteAsync(sourceTempUri, { idempotent: true }).catch(() => {});
+      throw error;
+    }
     const longest = Math.max(dimensions.width, dimensions.height);
-    // Try the original pixel dimensions first. Only reduce dimensions if a
-    // high-quality JPEG still exceeds 1.5 MB; every attempt starts from the
-    // original photo, never from an already-lossy intermediate.
+    // Start each attempt from the original image. Preserve original pixel dimensions
+    // whenever high-quality JPEG encoding can meet the size target.
     const attempts: Array<{ edge: number; quality: number }> = [
-      { edge: longest, quality: 0.96 },
-      { edge: longest, quality: 0.92 },
-      { edge: longest, quality: 0.88 },
+      { edge: longest, quality: 0.96 }, { edge: longest, quality: 0.92 }, { edge: longest, quality: 0.88 },
       ...[4000, 3600, 3200, 2800, 2400, 2200, 2000, 1800, 1600].filter(edge => edge < longest).map(edge => ({ edge, quality: 0.90 })),
       ...[1400, 1200].filter(edge => edge < longest).map(edge => ({ edge, quality: 0.86 })),
     ];
     let normalizedUri = "";
-    let normalizedSize = 0;
     let lastError: unknown = null;
-    for (const attempt of attempts) {
-      try {
-        const actions: any[] = [];
-        if (attempt.edge < longest) {
-          actions.push(dimensions.width >= dimensions.height
-            ? { resize: { width: attempt.edge } }
-            : { resize: { height: attempt.edge } });
-        }
-        const normalized = await ImageManipulator.manipulateAsync(sourceUri, actions, {
-          compress: attempt.quality,
-          format: ImageManipulator.SaveFormat.JPEG,
-        });
-        const info = await FileSystem.getInfoAsync(normalized.uri);
-        if (!info.exists || typeof info.size !== "number" || info.size <= 0) {
+    try {
+      for (const attempt of attempts) {
+        try {
+          const actions: any[] = [];
+          if (attempt.edge < longest) actions.push(dimensions.width >= dimensions.height ? { resize: { width: attempt.edge } } : { resize: { height: attempt.edge } });
+          const normalized = await ImageManipulator.manipulateAsync(sourceUri, actions, { compress: attempt.quality, format: ImageManipulator.SaveFormat.JPEG });
+          const info = await FileSystem.getInfoAsync(normalized.uri);
+          if (!info.exists || typeof info.size !== "number" || info.size <= 0) {
+            await FileSystem.deleteAsync(normalized.uri, { idempotent: true }).catch(() => {});
+            continue;
+          }
+          if (info.size <= targetBytes) { normalizedUri = normalized.uri; break; }
           await FileSystem.deleteAsync(normalized.uri, { idempotent: true }).catch(() => {});
-          continue;
-        }
-        if (info.size <= targetBytes) {
-          normalizedUri = normalized.uri;
-          normalizedSize = info.size;
-          break;
-        }
-        await FileSystem.deleteAsync(normalized.uri, { idempotent: true }).catch(() => {});
-      } catch (error) {
-        lastError = error;
+        } catch (error) { lastError = error; }
       }
-    }
-    if (!normalizedUri) {
-      throw new Error("Could not compress this photo below 1.5 MB. The original has not been changed; try a clearer crop or another image.");
-    }
-    const filename = "patient-photo-" + Date.now() + "-" + Math.random().toString(36).slice(2, 10) + ".jpg";
-    const destination = directory + filename;
-    try {
-      await FileSystem.copyAsync({ from: normalizedUri, to: destination });
-      const savedInfo = await FileSystem.getInfoAsync(destination);
-      if (!savedInfo.exists || typeof savedInfo.size !== "number" || savedInfo.size > targetBytes) {
-        await FileSystem.deleteAsync(destination, { idempotent: true }).catch(() => {});
-        throw new Error("Saved photo did not meet the 1.5 MB size limit.");
+      if (!normalizedUri) throw new Error("Could not compress this photo below 1.5 MB. The original has not been changed; try a clearer crop or another image.");
+      const filename = "patient-photo-" + Date.now() + "-" + Math.random().toString(36).slice(2, 10) + ".jpg";
+      const destination = directory + filename;
+      try {
+        await FileSystem.copyAsync({ from: normalizedUri, to: destination });
+        const savedInfo = await FileSystem.getInfoAsync(destination);
+        if (!savedInfo.exists || typeof savedInfo.size !== "number" || savedInfo.size > targetBytes) {
+          await FileSystem.deleteAsync(destination, { idempotent: true }).catch(() => {});
+          throw new Error("Saved photo did not meet the 1.5 MB size limit.");
+        }
+        return destination;
+      } catch (error: any) {
+        throw new Error(String(error?.message || lastError || "Could not save the compressed photo."));
+      } finally {
+        await FileSystem.deleteAsync(normalizedUri, { idempotent: true }).catch(() => {});
       }
-      return destination;
-    } catch (error: any) {
-      throw new Error(String(error?.message || lastError || "Could not save the compressed photo."));
     } finally {
-      await FileSystem.deleteAsync(normalizedUri, { idempotent: true }).catch(() => {});
-    }
-  };
-
-  const createImagesPdf = async () => {
-    if (!isEdit || !id) {
-      Alert.alert("Save patient first", "Save this patient record before creating its named images PDF.");
-      return;
-    }
-    if (!p.photos.length) {
-      Alert.alert("No patient images", "Add or scan at least one image before creating a PDF.");
-      return;
-    }
-    if (photoBusy) return;
-    setPhotoBusy(true);
-    try {
-      await createPatientImagePdfFromSources(String(id), p.name, p.mrNo, p.photos);
-      setPatientArchiveAvailable(true);
-      await openPatientImageArchivePdf(String(id));
-      toast("Patient images PDF created. Original images remain in the patient file.", "success");
-    } catch (error: any) {
-      Alert.alert("Patient images PDF", String(error?.message || "Could not create the PDF."));
-    } finally {
-      setPhotoBusy(false);
+      if (sourceTempUri) await FileSystem.deleteAsync(sourceTempUri, { idempotent: true }).catch(() => {});
     }
   };
 
@@ -1121,6 +1093,57 @@ export default function PatientForm() {
     } catch (e: any) {
       toast(e?.message || "Could not save the patient photo.", "error");
     } finally {
+      setPhotoBusy(false);
+    }
+  };
+
+  const createPatientPdf = async () => {
+    if (photoBusy) return;
+    if (!p.photos.length) { toast("Add at least one patient image first.", "error"); return; }
+    setPhotoBusy(true);
+    try {
+      const patientId = String(id || p.id || "unsaved-patient");
+      const uri = await createPatientImagePdfFile({ id: patientId, name: p.name, mrNo: p.mrNo }, p.photos);
+      if (!(await Sharing.isAvailableAsync())) throw new Error("PDF sharing is not available on this device.");
+      await Sharing.shareAsync(uri, { mimeType: "application/pdf", UTI: "com.adobe.pdf", dialogTitle: "Save " + String(p.name || "Patient") + " image PDF" });
+      toast("Patient image PDF created and verified.", "success");
+    } catch (e: any) {
+      toast(e?.message || "Could not create the patient image PDF.", "error");
+    } finally {
+      setPhotoBusy(false);
+    }
+  };
+
+  const downloadPatientPhotosToDevice = async () => {
+    if (photoBusy) return;
+    if (!p.photos.length) { toast("This patient has no images to download.", "error"); return; }
+    setPhotoBusy(true);
+    let saved = 0;
+    const temporaryUris: string[] = [];
+    try {
+      const permission = await requestPermissionsAsync(true, ["photo"]);
+      if (!permission.granted) throw new Error("Photo permission is required to save patient images to your device.");
+      for (let i = 0; i < p.photos.length; i++) {
+        let localUri = p.photos[i];
+        if (localUri.startsWith("data:image/")) {
+          const match = localUri.match(/^data:image\/[^;]+;base64,([\s\S]+)$/i);
+          if (!match?.[1]) throw new Error("Patient image " + (i + 1) + " has invalid embedded data.");
+          const root = String(FileSystem.cacheDirectory || FileSystem.documentDirectory || "");
+          if (!root) throw new Error("Temporary phone storage is unavailable.");
+          const dir = root + "ortho-photo-export/";
+          await FileSystem.makeDirectoryAsync(dir, { intermediates: true }).catch(() => {});
+          localUri = dir + "patient-image-" + Date.now() + "-" + i + ".jpg";
+          temporaryUris.push(localUri);
+          await FileSystem.writeAsStringAsync(localUri, match[1], { encoding: FileSystem.EncodingType.Base64 });
+        }
+        await Asset.create(localUri);
+        saved++;
+      }
+      toast(saved + " patient image" + (saved === 1 ? "" : "s") + " saved to your device gallery.", "success");
+    } catch (e: any) {
+      toast(saved ? saved + " image(s) saved; remaining images failed. " + String(e?.message || "") : (e?.message || "Could not download patient images."), "error");
+    } finally {
+      for (const uri of temporaryUris) await FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
       setPhotoBusy(false);
     }
   };
@@ -1605,6 +1628,18 @@ export default function PatientForm() {
             <Text style={styles.secondaryText}> Take & Auto-Scan</Text>
           </Pressable>
         </View>
+        {p.photos.length > 0 ? (
+          <View style={[styles.photoActions, { marginTop: spacing.sm }]}>
+            <Pressable style={[styles.secondary, { justifyContent: "center", flexGrow: 1 }, photoBusy && { opacity: 0.5 }]} onPress={() => { void createPatientPdf(); }} disabled={photoBusy} testID="create-patient-images-pdf-button">
+              <Ionicons name="document-text-outline" size={18} color={colors.brandPrimary} />
+              <Text style={[styles.secondaryText, { color: colors.brandPrimary }]}>{photoBusy ? "Preparing…" : "Create / Save PDF"}</Text>
+            </Pressable>
+            <Pressable style={[styles.secondary, { justifyContent: "center", flexGrow: 1 }, photoBusy && { opacity: 0.5 }]} onPress={() => { void downloadPatientPhotosToDevice(); }} disabled={photoBusy} testID="download-all-patient-images-button">
+              <Ionicons name="download-outline" size={18} color={colors.brandPrimary} />
+              <Text style={[styles.secondaryText, { color: colors.brandPrimary }]}>{photoBusy ? "Saving…" : "Download all images"}</Text>
+            </Pressable>
+          </View>
+        ) : null}
         {p.photos.length === 0 ? (
           <View style={styles.photoPlaceholder}>
             <Ionicons name="images-outline" size={38} color={colors.muted} />
@@ -1621,40 +1656,28 @@ export default function PatientForm() {
                   <Ionicons name="close" size={16} color="#FFFFFF" />
                 </Pressable>
                 <Pressable
-                  style={styles.photoDownload}
-                  onPress={() => savePhotoToDevice(uri)}
+                  onPress={() => { void savePhotoToDevice(uri); }}
                   disabled={photoBusy}
                   hitSlop={8}
                   testID={`download-photo-${idx}`}
                   accessibilityRole="button"
                   accessibilityLabel={`Download patient image ${idx + 1}`}
+                  style={{ position: "absolute", right: 6, bottom: 6, width: 32, height: 32, borderRadius: 16, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(0,0,0,0.72)", opacity: photoBusy ? 0.5 : 1 }}
                 >
-                  <Ionicons name="download-outline" size={16} color="#FFFFFF" />
+                  <Ionicons name="download-outline" size={17} color="#FFFFFF" />
                 </Pressable>
               </View>
             ))}
           </ScrollView>
         )}
-        {isEdit && p.photos.length > 0 ? (
-          <Pressable
-            style={[styles.secondary, { marginTop: spacing.sm, justifyContent: "center", borderColor: colors.brandPrimary }, photoBusy && { opacity: 0.5 }]}
-            onPress={createImagesPdf}
-            disabled={photoBusy}
-            accessibilityRole="button"
-            testID="create-patient-images-pdf-button"
-          >
-            <Ionicons name="document-text-outline" size={18} color={colors.brandPrimary} />
-            <Text style={[styles.secondaryText, { color: colors.brandPrimary }]}>{photoBusy ? "Preparing patient PDF…" : "Create / Download Patient Images PDF"}</Text>
-          </Pressable>
-        ) : null}
         {isEdit && patientArchiveAvailable ? (
           <Pressable
             style={[styles.secondary, { marginTop: spacing.sm, justifyContent: "center", borderColor: colors.brandPrimary }]}
             onPress={() => openPatientImageArchivePdf(String(id)).catch((error:any) => Alert.alert("Patient image PDF", String(error?.message || error)))}
             accessibilityRole="button"
           >
-            <Ionicons name="folder-open-outline" size={18} color={colors.brandPrimary} />
-            <Text style={[styles.secondaryText, { color: colors.brandPrimary }]}>Open saved patient images PDF</Text>
+            <Ionicons name="document-text-outline" size={18} color={colors.brandPrimary} />
+            <Text style={[styles.secondaryText, { color: colors.brandPrimary }]}>Open archived images PDF</Text>
           </Pressable>
         ) : null}
 
@@ -2300,7 +2323,6 @@ const useStyles = makeStyles((colors) => ({
   photoBox: { width: 140, height: 180, borderRadius: radius.md, overflow: "hidden", backgroundColor: colors.surfaceTertiary },
   photoThumb: { width: "100%", height: "100%" },
   photoRemove: { position: "absolute", top: 6, right: 6, backgroundColor: "rgba(0,0,0,0.65)", width: 26, height: 26, borderRadius: 13, alignItems: "center", justifyContent: "center" },
-  photoDownload: { position: "absolute", bottom: 6, right: 6, backgroundColor: "rgba(0,0,0,0.72)", width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center" },
   quickScroller: { marginTop: -spacing.sm, marginBottom: spacing.lg },
   inventoryPicker: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, backgroundColor: colors.surfaceSecondary, marginTop: -spacing.md, marginBottom: spacing.md, overflow: "hidden" },
   inventoryOption: { paddingHorizontal: spacing.md, paddingVertical: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.divider },
