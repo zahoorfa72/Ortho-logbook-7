@@ -218,11 +218,11 @@ async function findBackupByName(name: string) {
 
 export async function listGoogleDriveBackups(): Promise<Array<{id:string;name:string;modifiedTime:string;size?:string}>> {
   const files = await findLatestBackupCandidates();
-  const masters = files.filter((file:any) => file.id && (
-    String(file.name || "") === "Ortho Logbook Backup - All Time.orbackup" ||
-    String(file.name || "") === BACKUP_NAME ||
+  // The backup picker now shows monthly full snapshots only. Legacy all-time
+  // files remain untouched until a monthly snapshot is safely confirmed.
+  const masters = files.filter((file:any) => file.id &&
     /^Ortho Logbook Backup - Month \d{4}-\d{2}\.orbackup$/.test(String(file.name || ""))
-  ));
+  );
 
   // Small automatic edits are stored in the rolling incremental journal so we
   // do not re-upload every patient/photo for each change. The master file's
@@ -1374,6 +1374,15 @@ export async function backupToGoogleDrive(
   }
   if (isMasterBackup && seededCacheForLocalSnapshot && result?.id) {
     await commitIncrementalSnapshotCache(String(result.id) + ":" + String(result.modifiedTime || ""));
+  }
+  // A verified full monthly snapshot supersedes that month's journal. Removing
+  // the old journal prevents deletions/edits from being applied twice on restore.
+  if (isMasterBackup && result?.id && (!migrationAttempted || (migrationComplete && cleanupSafe))) {
+    const monthJournal = await findBackupByName("Ortho Logbook Backup - Month " + monthKeyFromDate(new Date()) + " Changes.orbackup");
+    if (monthJournal?.id) {
+      try { await driveRequest(DRIVE_API + "/" + encodeURIComponent(String(monthJournal.id)) + "?supportsAllDrives=true", { method: "DELETE" }); }
+      catch (error) { console.warn("[drive-backup] monthly journal cleanup deferred", error); }
+    }
   }
   // Do not launch a second large upload after a full snapshot; it previously
   // restarted the progress bar near 100% while archiving another huge file.
