@@ -459,8 +459,10 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
      await new Promise<void>((resolve) => setTimeout(resolve, 0));
    }
    const payloadRow = db.getFirstSync<any>("SELECT payload_json FROM deleted_records WHERE id=?", [entry.id]);
+   const rawPayload = String(payloadRow?.payload_json || "{}");
    let payload:any = {};
-   try { payload = JSON.parse(String(payloadRow?.payload_json || "{}")); } catch { payload = {}; }
+   try { payload = JSON.parse(rawPayload); } catch { payload = {}; }
+   if (payloadRow) payloadRow.payload_json = "";
    for (const patient of Array.isArray(payload.patients) ? payload.patients : []) {
      const embedded = await embedPatientPhotos(patient, compressedPhotoCache);
      Object.assign(patient, embedded);
@@ -552,8 +554,8 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
   users:include("users") ? db.getAllSync<any>("SELECT * FROM users ORDER BY created_at ASC") : [],
   patientHistory:embeddedHistory,
   inventoryMovements:include("inventoryMovements") ? (()=>{if(filter.type==="all") return db.getAllSync<any>("SELECT * FROM inventory_movements ORDER BY created_at ASC"); const f=filter.type==="date" ? {sql:" WHERE date(created_at)=?",args:[filter.value||""]} : filter.type==="month" ? {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]} : {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]}; return db.getAllSync<any>(`SELECT * FROM inventory_movements${f.sql} ORDER BY created_at ASC`,f.args);})() : [],
-  inventoryPurchaseReceipts:include("inventoryPurchaseReceipts") ? await (async()=>{const f=whereForFilter(filter,"created_at");const rows=db.getAllSync<any>(`SELECT * FROM inventory_purchase_receipts${f.sql} ORDER BY created_at ASC`,f.args);return await mapWithConcurrency(rows, 2, async (row:any)=>{const billImage=typeof row.bill_image==="string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(row.bill_image) ? await embedOptionalPhoto(row.bill_image,compressedPhotoCache) : row.bill_image; const portableRow={...row,bill_image:billImage}; row.bill_image=""; return portableRow;});})() : [],
-  stockReceipts:include("stockReceipts") ? await (async()=>{const f=whereForFilter(filter,"created_at");const rows=db.getAllSync<any>(`SELECT * FROM stock_receipts${f.sql} ORDER BY created_at ASC`,f.args);return await mapWithConcurrency(rows, 2, async (row:any)=>{const billImage=typeof row.bill_image==="string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(row.bill_image) ? await embedOptionalPhoto(row.bill_image,compressedPhotoCache) : row.bill_image; const portableRow={...row,bill_image:billImage}; row.bill_image=""; return portableRow;});})() : [],
+  inventoryPurchaseReceipts:include("inventoryPurchaseReceipts") ? await (async()=>{const f=whereForFilter(filter,"created_at");const rows=db.getAllSync<any>(`SELECT id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,description,created_at,created_by FROM inventory_purchase_receipts${f.sql} ORDER BY created_at ASC`,f.args);return await mapWithConcurrency(rows, 2, async (row:any)=>{const billRow=db.getFirstSync<any>("SELECT bill_image FROM inventory_purchase_receipts WHERE id=?",[row.id]);const source=billRow?.bill_image;const billImage=typeof source==="string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(source) ? await embedOptionalPhoto(source,compressedPhotoCache) : source; if(billRow)billRow.bill_image=""; return {...row,bill_image:billImage};});})() : [],
+  stockReceipts:include("stockReceipts") ? await (async()=>{const f=whereForFilter(filter,"created_at");const rows=db.getAllSync<any>(`SELECT id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,description,created_at,created_by FROM stock_receipts${f.sql} ORDER BY created_at ASC`,f.args);return await mapWithConcurrency(rows, 2, async (row:any)=>{const billRow=db.getFirstSync<any>("SELECT bill_image FROM stock_receipts WHERE id=?",[row.id]);const source=billRow?.bill_image;const billImage=typeof source==="string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(source) ? await embedOptionalPhoto(source,compressedPhotoCache) : source; if(billRow)billRow.bill_image=""; return {...row,bill_image:billImage};});})() : [],
   trash:trashRows,
   branding,
   appSettings,
