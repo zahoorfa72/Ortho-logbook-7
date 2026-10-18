@@ -19,7 +19,7 @@ type BackupData = {
   // Each unique compressed image is stored once and referenced by its rows.
   photoAssets?: Record<string, string>;
   branding?: BrandingConfig | null;
-  appSettings?: { googleOAuthClientId: string | null; googleCloudProjectId: string | null; googleAccountEmail: string | null; labOcrEnabled?: string | null; labWarningsEnabled?: string | null; labTestDefinitions?: string | null; labTestBranches?: string | null; labResultsHiddenByPatient?: string | null; labWarningThresholdPercent?: string | null; labOldResultDays?: string | null };
+  appSettings?: { googleOAuthClientId: string | null; googleCloudProjectId: string | null; googleAccountEmail: string | null; labOcrEnabled?: string | null; labWarningsEnabled?: string | null; labTestDefinitions?: string | null; labTestBranches?: string | null; labResultsHiddenByPatient?: string | null; labWarningThresholdPercent?: string | null; labOldResultDays?: string | null; labOcrApiKey?: string | null };
   filter?: BackupFilter;
   incremental?: boolean;
   changedTables?: string[];
@@ -39,6 +39,7 @@ async function restoreLabSettings(settings: BackupData["appSettings"] | undefine
     ["labResultsHiddenByPatient", "ortho_lab_results_hidden_by_patient_v1"],
     ["labWarningThresholdPercent", "ortho_lab_warning_threshold_percent_v1"],
     ["labOldResultDays", "ortho_lab_old_result_days_v1"],
+    ["labOcrApiKey", "ortho_lab_online_ocr_api_key_v1"],
   ];
   for (const [field, key] of mappings) {
     if (!(field in settings)) continue;
@@ -357,6 +358,10 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
    labWarningsEnabled: await AsyncStorage.getItem("ortho_lab_warnings_enabled"),
    labWarningThresholdPercent: await AsyncStorage.getItem("ortho_lab_warning_threshold_percent_v1"),
    labOldResultDays: await AsyncStorage.getItem("ortho_lab_old_result_days_v1"),
+   // Included because the user requested OCR settings to survive restore. Note:
+   // Google Drive snapshots are currently unencrypted, so this key is visible to
+   // anyone who can read the backup file. Keep Drive access restricted.
+   labOcrApiKey: await AsyncStorage.getItem("ortho_lab_online_ocr_api_key_v1"),
    labTestDefinitions: await AsyncStorage.getItem("ortho_lab_test_definitions_v1"),
    labTestBranches: await AsyncStorage.getItem("ortho_lab_test_branches_v1"),
    labResultsHiddenByPatient: await AsyncStorage.getItem("ortho_lab_results_hidden_by_patient_v1"),
