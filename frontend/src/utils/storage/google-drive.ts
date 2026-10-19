@@ -946,19 +946,18 @@ async function ensureDriveFileInFolder(fileId: string, folderId: string): Promis
   return moved;
 }
 async function findPatientImagePdfFolder(): Promise<any | null> {
-  const backupFolder = await getOrCreateBackupFolder();
-  const q = encodeURIComponent("name = '" + escapeDriveQuery(PATIENT_IMAGE_PDF_FOLDER) + "' and mimeType = '" + DRIVE_FOLDER_MIME + "' and '" + escapeDriveQuery(String(backupFolder.id)) + "' in parents and trashed = false");
+  // Keep patient PDFs in their own Drive-root folder, separate from backup files.
+  const q = encodeURIComponent("name = '" + escapeDriveQuery(PATIENT_IMAGE_PDF_FOLDER) + "' and mimeType = '" + DRIVE_FOLDER_MIME + "' and 'root' in parents and trashed = false");
   const response = await driveRequest(DRIVE_API + "?q=" + q + "&spaces=drive&pageSize=50&includeItemsFromAllDrives=true&supportsAllDrives=true&fields=files(id,name,mimeType,parents)");
   const data = await response.json();
   return Array.isArray(data.files) ? data.files.find((x: any) => x?.id && x.mimeType === DRIVE_FOLDER_MIME) || null : null;
 }
 async function getOrCreatePatientImagePdfFolder(): Promise<any> {
-  const backupFolder = await getOrCreateBackupFolder();
   const existing = await findPatientImagePdfFolder();
   if (existing?.id) return existing;
   const response = await driveRequest(DRIVE_API + "?fields=id,name,mimeType,parents", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name: PATIENT_IMAGE_PDF_FOLDER, mimeType: DRIVE_FOLDER_MIME, parents: [String(backupFolder.id)] }),
+    body: JSON.stringify({ name: PATIENT_IMAGE_PDF_FOLDER, mimeType: DRIVE_FOLDER_MIME }),
   });
   const created = await response.json();
   if (!created?.id || created.mimeType !== DRIVE_FOLDER_MIME) throw new Error("Google Drive did not confirm the separate Patient Image PDFs folder.");
