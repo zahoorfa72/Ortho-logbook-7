@@ -888,16 +888,18 @@ function validateStructuredLabResults(
     if (!prefix) return line; // Keep unmatched labels visible for review.
 
     const rawResult = rawMeasuredResultForTest(prefix.name, rawText, configuredTests);
-    if (rawResult !== null) {
-      const reconstructedResult = resultNumber(cells[1] || "");
-      if (reconstructedResult === null || !sameMeasuredResult(reconstructedResult, rawResult)) {
-        // Only override the geometric value when raw OCR clearly associates a
-        // different measured value with this same test label.
-        cells[1] = rawResult;
-      }
+    const reconstructedResult = resultNumber(cells[1] || "");
+    if (rawResult === null) {
+      // Geometry alone is not enough to prove that a value belongs to this
+      // test: adjacent CBC columns can shift (e.g. hemoglobin into platelets).
+      // Leave uncertain values empty so the admin must review the source image.
+      cells[1] = "";
+    } else if (reconstructedResult === null || !sameMeasuredResult(reconstructedResult, rawResult)) {
+      // The original OCR text must independently support the same test/value
+      // pairing. Prefer its value only when it is explicitly associated with
+      // this test label; never silently keep an unverified geometric value.
+      cells[1] = rawResult;
     }
-    // If raw OCR lost the table layout, retain the image-position result.
-    // A missing text cross-check is not proof that the geometric result is wrong.
     while (cells.length < 4) cells.push("");
     return cells.slice(0, 4).join(" | ");
   }).join("\n");
