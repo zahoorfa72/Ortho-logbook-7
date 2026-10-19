@@ -1101,6 +1101,17 @@ async function deletePatientPdfFilesFromDrive(patientId: string): Promise<void> 
     await driveRequest(DRIVE_API + "/" + encodeURIComponent(String(file.id)) + "?supportsAllDrives=true", { method: "DELETE" });
   }
 }
+async function queuePatientPdfDeletion(patientId: string): Promise<void> {
+  const id = String(patientId || "").trim();
+  if (!id) return;
+  const pending = await readPendingPatientPdfDeletes();
+  if (!pending.includes(id)) pending.push(id);
+  await writePendingPatientPdfDeletes(pending);
+  // Remove local metadata immediately. The queued remote delete is retried by
+  // the next successful Drive upload and never blocks patient-table restore.
+  await removePatientImageArchive(id);
+}
+
 async function processPendingPatientPdfDeletes(onProgress?: (stage: string) => void): Promise<void> {
   const pending = await readPendingPatientPdfDeletes();
   if (!pending.length) return;
@@ -1117,11 +1128,7 @@ async function processPendingPatientPdfDeletes(onProgress?: (stage: string) => v
 export async function deletePatientImagePdfFromDrive(patientId: string): Promise<void> {
   const id = String(patientId || "").trim();
   if (!id) return;
-  const pending = await readPendingPatientPdfDeletes();
-  if (!pending.includes(id)) pending.push(id);
-  await writePendingPatientPdfDeletes(pending);
-  // Remove local metadata/file immediately so later backups cannot re-upload a deleted patient's PDF.
-  await removePatientImageArchive(id);
+  await queuePatientPdfDeletion(id);
   try {
     await queueDriveOperation(async () => {
       await deletePatientPdfFilesFromDrive(id);
@@ -1132,12 +1139,16 @@ export async function deletePatientImagePdfFromDrive(patientId: string): Promise
   }
 }
 
-export async function uploadPatientImageArchivesToDrive(onProgress?: (stage: string) => void): Promise<void> {
+export async function uploadPatientImageArchivesToDrive(onProgress?: (stage: string) => void, patientIds?: string[]): Promise<void> {
   await processPendingPatientPdfDeletes(onProgress);
   // Provision the folder and upload a PDF for every current patient, including newly added records.
   onProgress?.("Checking the Patient Image PDFs folder in Google Drive…");
   const folder = await getOrCreatePatientImagePdfFolder();
-  const archives = await getLocalPatientImageArchives();
+  const allArchives = await getLocalPatientImageArchives();
+  const requestedPatientIds = patientIds === undefined ? null : new Set(patientIds.map(String));
+  const archives = requestedPatientIds
+    ? allArchives.filter((archive) => requestedPatientIds.has(String(archive.patientId)))
+    : allArchives;
   if (!archives.length) {
     onProgress?.("Patient Image PDFs folder is ready; no patient PDFs are registered yet.");
     return;
@@ -1173,54 +1184,101 @@ export async function uploadPatientImageArchivesToDrive(onProgress?: (stage: str
   }
 }
 async function downloadPatientImageArchivesFromDrive(backup: any, onProgress?: (stage: string) => void): Promise<void> {
+  const patientById = new Map<string, any>(
+    (Array.isArray(backup?.patients) ? backup.patients : [])
+      .filter((patient: any) => patient?.id != null)
+      .map((patient: any) => [String(patient.id), patient]),
+  );
+  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
   const refs = new Map<string, any>();
+  const isRecentAndActive = (ref: any, patientId: string): boolean => {
+    if (!patientById.has(patientId)) return false; // stale PDF manifest for a deleted patient
+    const patient = patientById.get(patientId);
+    const dateText = String(ref?.archivedAt || patient?.date || patient?.created_at || "");
+    const timestamp = Date.parse(dateText);
+    return Number.isFinite(timestamp) && timestamp >= cutoff;
+  };
   for (const item of Array.isArray(backup?.patientImageArchives) ? backup.patientImageArchives : []) {
-    if (item?.patientId && item?.fileName) refs.set(String(item.fileName), item);
+    if (item?.patientId && item?.fileName && isRecentAndActive(item, String(item.patientId))) {
+      refs.set(String(item.fileName), item);
+    }
   }
   for (const patient of Array.isArray(backup?.patients) ? backup.patients : []) {
     if (patient?.id && patient?.photo_archive_file_name) {
       const fileName = String(patient.photo_archive_file_name);
-      if (!refs.has(fileName)) refs.set(fileName, {
+      const ref = {
         patientId: String(patient.id), patientName: String(patient.name || "Patient"), mrNo: String(patient.mr_no || ""),
         fileName, sourceStamp: String(patient.photo_archive_source_stamp || ""),
-        archivedAt: String(patient.photo_archived_at || ""), imageCount: Number(patient.photo_archive_image_count || 0),
-      });
+        archivedAt: String(patient.photo_archived_at || patient.date || patient.created_at || ""),
+        imageCount: Number(patient.photo_archive_image_count || 0),
+      };
+      if (isRecentAndActive(ref, String(patient.id)) && !refs.has(fileName)) refs.set(fileName, ref);
     }
   }
-  if (!refs.size) return;
+  if (!refs.size) {
+    onProgress?.("Patient PDFs skipped: no active-patient image PDFs dated within the last 30 days.");
+    return;
+  }
   const folder = await findPatientImagePdfFolder();
-  if (!folder?.id) throw new Error("The separate Patient Image PDFs folder is missing in Google Drive. No patient records were restored.");
-  if (!FileSystem.cacheDirectory) throw new Error("Temporary phone storage is unavailable for patient PDF restore.");
+  if (!folder?.id) {
+    onProgress?.("Patient PDFs skipped: the Patient Image PDFs folder is missing. Patient and inventory data can still be restored.");
+    return;
+  }
+  if (!FileSystem.cacheDirectory) {
+    onProgress?.("Patient PDFs skipped: temporary phone storage is unavailable. Patient and inventory data can still be restored.");
+    return;
+  }
   const token = await accessToken();
   const downloaded: Array<{ ref: any; uri: string; id: string }> = [];
   try {
     let i = 0;
     for (const [fileName, ref] of refs) {
       i++;
-      if (!/^[^/\\]{1,180}\.pdf$/i.test(fileName)) throw new Error("Invalid patient PDF filename in backup; restore stopped safely.");
-      onProgress?.("Finding patient PDF " + i + "/" + refs.size + ": " + fileName);
-      const remote = await findPatientPdfInFolder(fileName, String(folder.id));
+      if (!/^[^/\\]{1,180}\.pdf$/i.test(fileName)) {
+        onProgress?.("Skipping invalid patient PDF filename: " + fileName);
+        continue;
+      }
+      onProgress?.("Finding recent patient PDF " + i + "/" + refs.size + ": " + fileName);
+      let remote: any = null;
+      try {
+        remote = await findPatientPdfInFolder(fileName, String(folder.id));
+      } catch (error: any) {
+        onProgress?.("Skipping patient PDF " + fileName + ": " + String(error?.message || error));
+        continue;
+      }
       if (!remote?.id || remote.mimeType !== "application/pdf" || Number(remote.size || 0) < 8) {
-        throw new Error("Patient image PDF '" + fileName + "' is missing or invalid. Existing patient data was not changed.");
+        // A stale/missing PDF must not abort restoring unrelated valid records.
+        // This also fixes deleted-patient PDFs lingering in old master manifests.
+        onProgress?.("Skipping missing or invalid patient PDF: " + fileName + ". Other backup data will still restore.");
+        continue;
       }
       const target = FileSystem.cacheDirectory + "ortho-patient-pdf-restore-" + Date.now() + "-" + i + ".pdf";
-      onProgress?.("Downloading patient PDF " + i + "/" + refs.size + ": " + fileName);
-      const result = await FileSystem.downloadAsync(DRIVE_API + "/" + encodeURIComponent(String(remote.id)) + "?alt=media",
-        target, { headers: { Authorization: "Bearer " + token } });
-      const info = await FileSystem.getInfoAsync(result.uri);
-      if (Number(result.status || 0) < 200 || Number(result.status || 0) >= 300 ||
-          !info.exists || Number(info.size || 0) < 8 || Number(info.size || 0) !== Number(remote.size || 0)) {
-        throw new Error("Patient PDF download was incomplete: " + fileName + ". Existing patient data was not changed.");
+      onProgress?.("Downloading recent patient PDF " + i + "/" + refs.size + ": " + fileName);
+      try {
+        const result = await FileSystem.downloadAsync(DRIVE_API + "/" + encodeURIComponent(String(remote.id)) + "?alt=media",
+          target, { headers: { Authorization: "Bearer " + token } });
+        const info = await FileSystem.getInfoAsync(result.uri);
+        if (Number(result.status || 0) < 200 || Number(result.status || 0) >= 300 ||
+            !info.exists || Number(info.size || 0) < 8 || Number(info.size || 0) !== Number(remote.size || 0)) {
+          throw new Error("download was incomplete or size verification failed");
+        }
+        downloaded.push({ ref: { ...ref, driveFileId: String(remote.id) }, uri: result.uri, id: String(remote.id) });
+      } catch (error: any) {
+        try { await FileSystem.deleteAsync(target, { idempotent: true }); } catch {}
+        onProgress?.("Skipping patient PDF " + fileName + ": " + String(error?.message || error) + ". Other backup data will still restore.");
       }
-      downloaded.push({ ref: { ...ref, driveFileId: String(remote.id) }, uri: result.uri, id: String(remote.id) });
     }
     for (const item of downloaded) {
-      await installPatientImageArchivePdf({
-        patientId: String(item.ref.patientId), patientName: String(item.ref.patientName || "Patient"),
-        mrNo: String(item.ref.mrNo || ""), fileName: String(item.ref.fileName),
-        sourceStamp: String(item.ref.sourceStamp || ""), archivedAt: String(item.ref.archivedAt || ""),
-        imageCount: Number(item.ref.imageCount || 0), driveFileId: item.id,
-      }, item.uri);
+      try {
+        await installPatientImageArchivePdf({
+          patientId: String(item.ref.patientId), patientName: String(item.ref.patientName || "Patient"),
+          mrNo: String(item.ref.mrNo || ""), fileName: String(item.ref.fileName),
+          sourceStamp: String(item.ref.sourceStamp || ""), archivedAt: String(item.ref.archivedAt || ""),
+          imageCount: Number(item.ref.imageCount || 0), driveFileId: item.id,
+        }, item.uri);
+      } catch (error: any) {
+        onProgress?.("Could not install patient PDF " + String(item.ref.fileName) + ": " + String(error?.message || error) + ". Other backup data will still restore.");
+      }
     }
   } finally {
     for (const item of downloaded) { try { await FileSystem.deleteAsync(item.uri, { idempotent: true }); } catch {} }
@@ -2241,18 +2299,10 @@ async function archiveCompletedMonths(onProgress?: (stage: string) => void) {
 
 async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], onProgress?: (stage: string) => void) {
   onProgress?.("Checking whether saved records changed…");
-  // Patient PDF work is deliberately gated on patient-table changes. Previously
-  // every inventory/settings edit scanned every patient and checked every Drive
-  // PDF before syncing ordinary data, making unrelated syncs feel stuck.
-  // A patient-table sync still discovers missing PDFs and retries any failed PDF
-  // uploads; the normal record delta remains independent of image-PDF generation.
-  const patientDataChanged = changedTables.includes("patients");
-  let archiveChanged = false;
-  if (patientDataChanged) {
-    archiveChanged = await archiveEligiblePatientImages(onProgress);
-    await uploadPatientImageArchivesToDrive(onProgress);
-  }
-  const effectiveChangedTables = archiveChanged ? Array.from(new Set([...changedTables, "patients"])) : changedTables;
+  // Export the row-level delta first. This identifies the exact patient IDs
+  // changed since the last confirmed snapshot, so routine edits do not scan
+  // every patient's photos or verify every PDF in Drive.
+  const effectiveChangedTables = changedTables;
   const currentMonthName = driveBackupName({ type: "all" });
   const base = await findBackupByName(currentMonthName);
   if (!base?.id) return ensureGoogleDriveBaselineUnlocked(onProgress);
@@ -2273,6 +2323,33 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
     const backupText = await exportIncrementalBackup(effectiveChangedTables, onProgress, baselineKey);
     delta = JSON.parse(backupText);
   }
+
+  // Process only patient rows present in this actual delta. A full-table
+  // snapshot (first baseline/legacy migration) is handled by the full-backup
+  // path, while normal edits pass a bounded list of IDs.
+  const patientTableChanged = effectiveChangedTables.includes("patients");
+  const fullPatientTable = Array.isArray(delta.fullTables) && delta.fullTables.includes("patients");
+  const changedPatientIds = Array.isArray(delta.patients)
+    ? Array.from(new Set(delta.patients.map((row: any) => String(row?.id || "")).filter(Boolean)))
+    : [];
+  if (patientTableChanged) {
+    const deletedPatientIds = Array.isArray(delta.deletedIds?.patients)
+      ? delta.deletedIds.patients.map((id: any) => String(id)).filter(Boolean)
+      : [];
+    for (const deletedId of deletedPatientIds) await queuePatientPdfDeletion(deletedId);
+    if (fullPatientTable || delta._rowDelta !== true) {
+      await archiveEligiblePatientImages(onProgress);
+      await uploadPatientImageArchivesToDrive(onProgress);
+    } else {
+      if (changedPatientIds.length) {
+        await archiveEligiblePatientImages(onProgress, changedPatientIds);
+        await uploadPatientImageArchivesToDrive(onProgress, changedPatientIds);
+      } else if (deletedPatientIds.length) {
+        await processPendingPatientPdfDeletes(onProgress);
+      }
+    }
+  }
+
   const hasActualChanges = (Array.isArray(delta.changedTables) ? delta.changedTables : []).some((table: string) => {
     if (table === "branding" || table === "appSettings") return Object.prototype.hasOwnProperty.call(delta, table);
     if (Array.isArray(delta.fullTables) && delta.fullTables.includes(table)) return true;
