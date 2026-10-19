@@ -24,7 +24,7 @@ import { AssertNoExtras, StorageBase, StorageItemValue } from "./storage-base";
 
 function shouldBackupSettingChange(key: string): boolean {
   if (!String(key || "").startsWith("ortho_")) return false;
-  return !/(pending_tables|last_successful_backup|last_uploaded_content_hash|incremental_snapshot|delta_cache|backup_reminder|backup_cursor|last_backup)/i.test(key);
+  return !/(pending_tables|last_successful_backup|last_uploaded_content_hash|incremental_snapshot|delta_cache|backup_reminder|backup_cursor|last_backup|last_drive_restore)/i.test(key);
 }
 
 export class Storage extends StorageBase {
