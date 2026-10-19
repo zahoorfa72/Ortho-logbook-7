@@ -2077,7 +2077,7 @@ function parseDownloadedBackup(raw: string): any {
           const ch = text[i];
           if (inString) {
             if (escaped) escaped = false;
-            else if (ch === "\\\\") escaped = true;
+            else if (ch === "\\") escaped = true;
             else if (ch === '"') inString = false;
             continue;
           }
