@@ -966,7 +966,11 @@ export async function recognizeLabText(
   const initialText = String(best?.text || "").trim();
   const potentialLabMarker = /\b(?:hemoglobin|haemoglobin|hgb|platelets?|plt|hbs\s*ag|hbsag|hcv|hepatitis|hiv|wbc|rbc|mcv|mchc?|glucose|creatinine|bilirubin|urea|sodium|potassium|chloride|result|investigation|reference\s*range|lab(?:oratory)?\s*report)\b/i.test(initialText);
   const initialRows = parseLabReportRows(initialText, configuredTests, gender, 10, true);
-  if (!potentialLabMarker && initialRows.length === 0) {
+  const hasInitialLabSignal = potentialLabMarker || initialRows.length > 0;
+  // Keep automatic scanning quick for ordinary clinical photos, but permit two
+  // inexpensive orientation retries when the first pass barely reads anything.
+  const tryLightweightAutoRecovery = fastMode && !hasInitialLabSignal && initialText.length < 100;
+  if (fastMode && !hasInitialLabSignal && !tryLightweightAutoRecovery) {
     return { text: normalizeHemoglobinUnitText(initialText), structuredText: "", mode: "offline" };
   }
   const localScore = (value: any) => {
@@ -987,7 +991,7 @@ export async function recognizeLabText(
   };
   // If the first read is weak, retry sideways images at both orientations and
   // keep the OCR pass that reads the most text/numbers/lab terms.
-  if (!fastMode && (localScore(best) < 220 || parseLabReportRows(String(best?.text || ""), configuredTests, gender, 10, true).length === 0)) {
+  if ((!fastMode || tryLightweightAutoRecovery) && (localScore(best) < 220 || parseLabReportRows(String(best?.text || ""), configuredTests, gender, 10, true).length === 0)) {
     for (const degrees of [90, 270]) {
       let rotatedUri = "";
       try {
