@@ -786,7 +786,7 @@ function structureLabColumns(blocks: any[], imageWidth: number, imageHeight: num
   // Without a readable "Result" header, infer the result column from x-positions
   // repeated across rows instead of always taking each row's left-most number.
   const candidateCenters = rowCandidates.flatMap((items, rowIndex) =>
-    items.length ? [{ center: items[0].center, rowIndex }] : []
+    items.map(item => ({ center: item.center, rowIndex }))
   );
   let inferredResultX: number | null = headerResultX;
   if (inferredResultX === null && candidateCenters.length) {
