@@ -336,6 +336,7 @@ export async function restoreGoogleDriveBackupById(fileId: string, onProgress?: 
         const journal = await downloadDriveJsonValidated(String(journalFile.id), onProgress);
         if (journal?.incremental === true &&
             String(journal._baselineKey || "").startsWith(String(fileId) + ":") &&
+            Date.parse(String(journalFile.modifiedTime || "")) > Date.parse(String(metadata.modifiedTime || "")) &&
             Array.isArray(journal.changedTables)) {
           applyIncrementalToMaster(parsed, journal, journal._rowDelta !== true);
           parsed.createdAt = journal.createdAt || parsed.createdAt;
@@ -1767,7 +1768,7 @@ async function backupToGoogleDriveUnlocked(
       // Merge the old all-time master into the first six-month master without
       // deleting the old file. This prevents migration from silently omitting
       // records that exist only in the previous Drive backup.
-      if (options.preferDriveOnMigration) {
+      if (migrationMarker !== "1") {
         let legacyFile = await findBackupByName("Ortho Logbook Backup - All Time.orbackup");
         if (!legacyFile) legacyFile = await findBackupByName(BACKUP_NAME);
         if (!legacyFile) {
