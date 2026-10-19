@@ -31,6 +31,13 @@ type EncryptedBackup = {
   createdAt:string; salt:string; nonce:string; ciphertext:string; ciphertextEncoding?: "base64";
 };
 
+function normalizeSecureSetting(value: string): string {
+  // Older backups captured raw SecureStore JSON strings and may contain one
+  // extra pair of quotes. Normalize them before re-saving via the shared wrapper.
+  try { const parsed = JSON.parse(value); if (typeof parsed === "string") return parsed; } catch {}
+  return value;
+}
+
 async function restoreLabSettings(settings: BackupData["appSettings"] | undefined) {
   if (!settings) return;
   const mappings: Array<[keyof NonNullable<BackupData["appSettings"]>, string]> = [
@@ -384,8 +391,8 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
  }
  }
  const appSettings = include("appSettings") ? {
-   googleOAuthClientId: (await SecureStore.getItemAsync("ortho_google_drive_client_id").catch(() => null)) || null,
-   googleCloudProjectId: (await SecureStore.getItemAsync("ortho_google_drive_cloud_project_id").catch(() => null)) || null,
+   googleOAuthClientId: (await storage.secureGet("ortho_google_drive_client_id", "")) || null,
+   googleCloudProjectId: (await storage.secureGet("ortho_google_drive_cloud_project_id", "")) || null,
    // Recovery metadata only; Google credentials must be re-authorized after reinstall.
    googleAccountEmail: (await storage.secureGet("ortho_drive_account_email", "")) || null,
    labOcrEnabled: await AsyncStorage.getItem("ortho_lab_ocr_enabled"),
@@ -1479,12 +1486,12 @@ export async function restoreBackup(backup:BackupData){
  if (backup.appSettings && typeof backup.appSettings === "object") {
    const settings = backup.appSettings;
    if (typeof settings.googleOAuthClientId === "string" && settings.googleOAuthClientId.trim()) {
-     await SecureStore.setItemAsync("ortho_google_drive_client_id", settings.googleOAuthClientId);
+     if (!(await storage.secureSet("ortho_google_drive_client_id", normalizeSecureSetting(settings.googleOAuthClientId)))) throw new Error("Could not save Google OAuth client ID during restore.");
    } else {
      await SecureStore.deleteItemAsync("ortho_google_drive_client_id");
    }
    if (typeof settings.googleCloudProjectId === "string" && settings.googleCloudProjectId.trim()) {
-     await SecureStore.setItemAsync("ortho_google_drive_cloud_project_id", settings.googleCloudProjectId);
+     if (!(await storage.secureSet("ortho_google_drive_cloud_project_id", normalizeSecureSetting(settings.googleCloudProjectId)))) throw new Error("Could not save Google Cloud project ID during restore.");
    } else {
      await SecureStore.deleteItemAsync("ortho_google_drive_cloud_project_id");
    }
@@ -1658,12 +1665,12 @@ export async function mergeBackup(backup: BackupData) {
  if (backup.appSettings && typeof backup.appSettings === "object") {
    const settings = backup.appSettings;
    if (typeof settings.googleOAuthClientId === "string" && settings.googleOAuthClientId.trim()) {
-     await SecureStore.setItemAsync("ortho_google_drive_client_id", settings.googleOAuthClientId);
+     if (!(await storage.secureSet("ortho_google_drive_client_id", normalizeSecureSetting(settings.googleOAuthClientId)))) throw new Error("Could not save Google OAuth client ID during restore.");
    } else {
      await SecureStore.deleteItemAsync("ortho_google_drive_client_id");
    }
    if (typeof settings.googleCloudProjectId === "string" && settings.googleCloudProjectId.trim()) {
-     await SecureStore.setItemAsync("ortho_google_drive_cloud_project_id", settings.googleCloudProjectId);
+     if (!(await storage.secureSet("ortho_google_drive_cloud_project_id", normalizeSecureSetting(settings.googleCloudProjectId)))) throw new Error("Could not save Google Cloud project ID during restore.");
    } else {
      await SecureStore.deleteItemAsync("ortho_google_drive_cloud_project_id");
    }
