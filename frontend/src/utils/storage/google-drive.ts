@@ -264,12 +264,18 @@ async function findBackupByName(name: string) {
 
 export async function listGoogleDriveBackups(): Promise<Array<{id:string;name:string;modifiedTime:string;size?:string}>> {
   const files = await findLatestBackupCandidates();
-  // Expose the rolling full master plus each completed monthly/year/date archive.
-  // Change journals are implementation details and must not be offered as backups.
+  // Offer only complete snapshots that restoreGoogleDriveBackupById understands.
+  // Journals remain hidden implementation details; monthly snapshots must be
+  // selectable individually so users can recover one month without replacing
+  // unrelated months. Keep legacy full backups available for recovery.
   const backups = files.filter((file: any) => {
     if (!file?.id) return false;
     const name = String(file.name || "");
-    return name === BACKUP_NAME || name === "Ortho Logbook Backup - All Time.orbackup";
+    return name === BACKUP_NAME ||
+      name === "Ortho Logbook Backup - All Time.orbackup" ||
+      /^Ortho Logbook Backup - Month \d{4}-\d{2}\.orbackup$/.test(name) ||
+      /^Ortho Logbook Backup - Year \d{4}\.orbackup$/.test(name) ||
+      /^Ortho Logbook Backup - Date \d{4}-\d{2}-\d{2}\.orbackup$/.test(name);
   }).map((file: any) => ({
     id: String(file.id),
     name: String(file.name || "Ortho Logbook Backup"),
@@ -277,10 +283,13 @@ export async function listGoogleDriveBackups(): Promise<Array<{id:string;name:st
     size: file.size == null ? undefined : String(file.size),
   }));
   return backups.sort((a, b) => {
-    // Keep the rolling master first, then newest archived period first.
-    if (a.name === BACKUP_NAME) return -1;
-    if (b.name === BACKUP_NAME) return 1;
-    return Date.parse(b.modifiedTime || "") - Date.parse(a.modifiedTime || "");
+    // Prefer the rolling master, then show the newest dated snapshots first.
+    const rank = (name: string) => name === BACKUP_NAME ? 0 :
+      name === "Ortho Logbook Backup - All Time.orbackup" ? 1 :
+      /^Ortho Logbook Backup - Month /.test(name) ? 2 :
+      /^Ortho Logbook Backup - Year /.test(name) ? 3 : 4;
+    return rank(a.name) - rank(b.name) ||
+      Date.parse(b.modifiedTime || "") - Date.parse(a.modifiedTime || "");
   });
 }
 
