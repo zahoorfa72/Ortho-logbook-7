@@ -1696,6 +1696,37 @@ async function cleanupLegacyNonMonthlyBackups(_keepFileId: string): Promise<stri
 }
 type DriveBackupOptions = { skipIfUnchanged?: boolean; onProgress?: (stage: string) => void; preferDriveOnMigration?: boolean; backupTextOverride?: string; backupDataOverride?: any; localChanges?: any };
 
+async function mergeLegacyIntoFirstMaster(localSnapshot: any, onProgress?: (stage: string) => void): Promise<any> {
+  const targetName = driveBackupName({ type: "all" });
+  let legacyFile = await findBackupByName("Ortho Logbook Backup - All Time.orbackup");
+  if (!legacyFile) legacyFile = await findBackupByName(BACKUP_NAME);
+  if (!legacyFile) {
+    const candidates = await findLatestBackupCandidates();
+    legacyFile = candidates
+      .filter((item: any) => isSixMonthMasterName(String(item.name || "")) &&
+        String(item.name || "") !== targetName)
+      .sort((a: any, b: any) => Date.parse(String(b.modifiedTime || "")) - Date.parse(String(a.modifiedTime || "")))[0] || null;
+  }
+  if (!legacyFile) {
+    const candidates = await findLatestBackupCandidates();
+    legacyFile = candidates
+      .filter((item: any) => /^Ortho Logbook Backup - Month \d{4}-\d{2}\.orbackup$/.test(String(item.name || "")))
+      .sort((a: any, b: any) => Date.parse(String(b.modifiedTime || "")) - Date.parse(String(a.modifiedTime || "")))[0] || null;
+  }
+  if (!legacyFile?.id || String(legacyFile.name || "") === targetName) return localSnapshot;
+  try {
+    const legacy = await downloadDriveJsonValidated(String(legacyFile.id), onProgress);
+    if (legacy?.app === "Ortho Logbook" && Array.isArray(legacy.patients) && Array.isArray(legacy.inventory)) {
+      onProgress?.("Merging older Drive records and user accounts into the new master; keeping the old backup.");
+      return mergeFullBackupSnapshots(legacy, localSnapshot);
+    }
+    onProgress?.("The older Drive file was not a compatible full snapshot; keeping it unchanged.");
+  } catch (error: any) {
+    onProgress?.("Could not read the older Drive backup for migration: " + String(error?.message || error) + ". The old file was kept.");
+  }
+  return localSnapshot;
+}
+
 async function backupToGoogleDriveUnlocked(
   _password?: string,
   filter: BackupFilter = { type: "all" },
@@ -1731,13 +1762,14 @@ async function backupToGoogleDriveUnlocked(
       seededCacheForLocalSnapshot = true;
     }
     if (migrationMarker !== "1") {
-      // First upload after the new backup system starts is a fresh snapshot of
-      // this phone's complete app data. Never merge old Drive backups/journals.
       migrationAttempted = true;
       migrationComplete = true;
       cleanupSafe = true;
-      options.onProgress?.("Creating a fresh full backup from this phone; old backups will not be merged…");
-      backupData.version = Math.max(Number(backupData.version || 0), 7);
+      if (!Array.isArray(backupData.users)) {
+        throw new Error("The first full backup is missing user credentials; no Drive master was changed.");
+      }
+      backupData = await mergeLegacyIntoFirstMaster(backupData, options.onProgress);
+      backupData.version = Math.max(Number(backupData.version || 0), 8);
       backupData.createdAt = new Date().toISOString();
       backupData.filter = { type: "all" };
       delete backupData.incremental;
@@ -1767,8 +1799,8 @@ async function backupToGoogleDriveUnlocked(
       ? JSON.stringify(options.backupDataOverride)
       : await exportUnencryptedBackup(filter, options.onProgress));
     if (isMasterBackup && migrationMarker !== "1") {
-      // The first upload is always the complete local app snapshot. Do not read,
-      // merge, or apply any legacy Drive backup or its old change journal.
+      // The first master must contain local data and legacy Drive data, including
+      // account records. Keep all older backup files as recovery copies.
       migrationAttempted = true;
       migrationComplete = true;
       cleanupSafe = true;
@@ -1778,39 +1810,7 @@ async function backupToGoogleDriveUnlocked(
           !Array.isArray(initialMaster.users)) {
         throw new Error("The first full local backup is incomplete (patients, inventory, or user credentials are missing); existing Drive files were not changed.");
       }
-      // Merge the old all-time master into the first six-month master without
-      // deleting the old file. This prevents migration from silently omitting
-      // records that exist only in the previous Drive backup.
-      if (migrationMarker !== "1") {
-        let legacyFile = await findBackupByName("Ortho Logbook Backup - All Time.orbackup");
-        if (!legacyFile) legacyFile = await findBackupByName(BACKUP_NAME);
-        if (!legacyFile) {
-          const candidates = await findLatestBackupCandidates();
-          legacyFile = candidates
-            .filter((item: any) => isSixMonthMasterName(String(item.name || "")) &&
-              String(item.name || "") !== currentMonthName)
-            .sort((a: any, b: any) => Date.parse(String(b.modifiedTime || "")) - Date.parse(String(a.modifiedTime || "")))[0] || null;
-        }
-        if (!legacyFile) {
-          const candidates = await findLatestBackupCandidates();
-          legacyFile = candidates
-            .filter((item: any) => /^Ortho Logbook Backup - Month \d{4}-\d{2}\.orbackup$/.test(String(item.name || "")))
-            .sort((a: any, b: any) => Date.parse(String(b.modifiedTime || "")) - Date.parse(String(a.modifiedTime || "")))[0] || null;
-        }
-        if (legacyFile?.id && String(legacyFile.id) !== String(existing?.id || "")) {
-          try {
-            const legacy = await downloadDriveJsonValidated(String(legacyFile.id), options.onProgress);
-            if (legacy?.app === "Ortho Logbook" && Array.isArray(legacy.patients) && Array.isArray(legacy.inventory)) {
-              initialMaster = mergeFullBackupSnapshots(legacy, initialMaster);
-              options.onProgress?.("Merged older Drive records and user accounts into the new six-month master; old backup retained.");
-            } else {
-              options.onProgress?.("The older Drive file was not a compatible complete snapshot and was retained unchanged.");
-            }
-          } catch (error: any) {
-            options.onProgress?.("Could not read the older Drive backup for migration: " + String(error?.message || error) + ". The old file was retained unchanged.");
-          }
-        }
-      }
+      initialMaster = await mergeLegacyIntoFirstMaster(initialMaster, options.onProgress);
       initialMaster.version = Math.max(Number(initialMaster.version || 0), 8);
       initialMaster.createdAt = new Date().toISOString();
       initialMaster.filter = { type: "all" };
