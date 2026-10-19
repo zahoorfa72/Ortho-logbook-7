@@ -2062,6 +2062,40 @@ function parseDownloadedBackup(raw: string): any {
   if (dataUri) text = decodeBackupBase64(dataUri[1]);
   let parsed: any;
   try { parsed = JSON.parse(text); } catch (firstError: any) {
+    // Some Drive uploads contain a valid backup object wrapped in malformed
+    // outer quotes or extra text. Recover only a complete, balanced JSON object;
+    // string contents and escaped quotes are respected so braces in patient data
+    // cannot terminate the candidate early. The normal backup-shape validator
+    // below still rejects Drive error payloads and unrelated JSON objects.
+    if (parsed === undefined) {
+      const start = text.indexOf("{");
+      if (start >= 0) {
+        let depth = 0;
+        let inString = false;
+        let escaped = false;
+        for (let i = start; i < text.length; i++) {
+          const ch = text[i];
+          if (inString) {
+            if (escaped) escaped = false;
+            else if (ch === "\\\\") escaped = true;
+            else if (ch === '"') inString = false;
+            continue;
+          }
+          if (ch === '"') inString = true;
+          else if (ch === "{") depth++;
+          else if (ch === "}") {
+            depth--;
+            if (depth === 0) {
+              try {
+                const candidate = JSON.parse(text.slice(start, i + 1));
+                if (candidate && typeof candidate === "object" && !Array.isArray(candidate)) parsed = candidate;
+              } catch {}
+              break;
+            }
+          }
+        }
+      }
+    }
     // A legacy upload path occasionally wrote a JSON object surrounded by
     // literal quotes without escaping the inner quotes (for example: "{\"app\":...}").
     // It is invalid as-is but safe to recover when removing exactly one outer
