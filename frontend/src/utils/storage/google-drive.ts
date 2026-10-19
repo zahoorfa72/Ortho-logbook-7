@@ -1021,6 +1021,7 @@ async function uploadPatientPdf(archive: PatientImageArchive, folderId: string, 
   const uploaded = transfer.body ? (() => { try { return JSON.parse(transfer.body); } catch { return {}; } })() : {};
   const id = String(uploaded.id || existing?.id || "");
   if (!id) throw new Error("Google Drive did not return an ID for patient PDF " + archive.fileName + ".");
+  await ensureDriveFileInFolder(id, folderId);
   const verified = await verifyPatientPdf(id);
   const parents = Array.isArray(verified.parents) ? verified.parents : [];
   if (verified.name !== archive.fileName || Number(verified.size || 0) !== size ||
