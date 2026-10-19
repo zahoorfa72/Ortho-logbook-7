@@ -1621,6 +1621,20 @@ function applyIncrementalToMaster(local: any, incoming: any, preserveCurrent = f
   }
   if (Object.prototype.hasOwnProperty.call(incoming, "branding")) local.branding = incoming.branding;
   if (Object.prototype.hasOwnProperty.call(incoming, "appSettings")) local.appSettings = incoming.appSettings;
+
+  // A patient deletion tombstone must remove its separate-PDF manifest entry
+  // as well as its patient row. Otherwise a stale PDF reference can survive
+  // journal composition and make restore report an invalid/missing PDF.
+  if (Array.isArray(local.patientImageArchives)) {
+    const activePatientIds = new Set<string>(
+      (Array.isArray(local.patients) ? local.patients : [])
+        .filter((patient: any) => patient?.id != null)
+        .map((patient: any) => String(patient.id)),
+    );
+    local.patientImageArchives = local.patientImageArchives.filter(
+      (archive: any) => archive?.patientId != null && activePatientIds.has(String(archive.patientId)),
+    );
+  }
 }
 
 async function cleanupLegacyNonMonthlyBackups(_keepFileId: string): Promise<string[]> {
@@ -2170,6 +2184,19 @@ function mergeIncrementalPayloads(previous: any, incoming: any): any {
     if (!Object.prototype.hasOwnProperty.call(incoming, table) &&
         Object.prototype.hasOwnProperty.call(previous, table)) merged[table] = previous[table];
   }
+  // Keep the rolling journal's PDF manifest aligned with the merged active
+  // patient table. Deleted-patient PDF entries must not be reintroduced by an
+  // older manifest during restore.
+  if (Array.isArray(merged.patientImageArchives)) {
+    const activePatientIds = new Set<string>(
+      (Array.isArray(merged.patients) ? merged.patients : [])
+        .filter((patient: any) => patient?.id != null)
+        .map((patient: any) => String(patient.id)),
+    );
+    merged.patientImageArchives = merged.patientImageArchives.filter(
+      (archive: any) => archive?.patientId != null && activePatientIds.has(String(archive.patientId)),
+    );
+  }
   merged._rowDelta = true;
   merged.deletedIds = deletedIds;
   merged.fullTables = Array.from(fullTables);
@@ -2344,9 +2371,10 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
       if (changedPatientIds.length) {
         await archiveEligiblePatientImages(onProgress, changedPatientIds);
         await uploadPatientImageArchivesToDrive(onProgress, changedPatientIds);
-      } else if (deletedPatientIds.length) {
-        await processPendingPatientPdfDeletes(onProgress);
       }
+      // Process queued deletes even when other patients changed in the same
+      // transaction; previously this path could leave deleted PDFs in Drive.
+      if (deletedPatientIds.length) await processPendingPatientPdfDeletes(onProgress);
     }
   }
 
