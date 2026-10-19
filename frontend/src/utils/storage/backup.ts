@@ -1657,16 +1657,39 @@ export async function mergeBackup(backup: BackupData) {
     categoryIds.set(categoryName.toLowerCase(),categoryId);
    }
 
-   // A different phone may have created the same item with a different id.
-   // In that case combine the new stock once. Re-importing the same backup is
-   // already blocked above by the source id check.
-   const existing = db.getFirstSync<any>("SELECT id,quantity,minimum_stock,category_id,category,size FROM inventory WHERE LOWER(name)=LOWER(?) AND LOWER(COALESCE(size,''))=LOWER(?) AND LOWER(COALESCE(category,''))=LOWER(?) LIMIT 1", [i.name, i.size||"", categoryName]);
+   // A merge restore must never add the same stock quantity a second time.
+   // Match cross-phone copies only with a strong receipt identity (same bill
+   // image and date). Other rows remain separate because multiple batches may
+   // share the same name/category/size and even the same day.
+   const candidates = db.getAllSync<any>(
+    "SELECT id,quantity,minimum_stock,category_id,category,size,unit,added_date,bill_image FROM inventory WHERE LOWER(name)=LOWER(?) AND LOWER(COALESCE(size,''))=LOWER(?) AND LOWER(COALESCE(category,''))=LOWER(?)",
+    [i.name, i.size||"", categoryName]
+   );
+   const incomingBill = String(i.bill_image || "").trim();
+   const incomingDate = String(i.added_date || "").trim();
+   const existing = candidates.find((row: any) => {
+    const currentBill = String(row.bill_image || "").trim();
+    const currentDate = String(row.added_date || "").trim();
+    if (incomingBill && currentBill) return incomingBill === currentBill && incomingDate === currentDate;
+    // Legacy rows without any receipt identity can be matched only when the
+    // incoming row and the single existing candidate are both metadata-free.
+    return !incomingBill && !currentBill && !incomingDate && !currentDate && candidates.length === 1;
+   });
    if (existing) {
-    const q = Number(existing.quantity || 0) + Number(i.quantity || 0);
-    db.runSync("UPDATE inventory SET quantity=?,minimum_stock=?,category_id=?,category=?,size=? WHERE id=?", [q, Math.max(Number(existing.minimum_stock||0), Number(i.minimum_stock||0)), categoryId || existing.category_id || null, categoryName||existing.category||"", i.size||existing.size||"", existing.id]);
-   } else {
-    db.runSync("INSERT INTO inventory (id,name,category_id,category,size,quantity,unit,minimum_stock,low_stock_triggered_at,low_stock_since) VALUES (?,?,?,?,?,?,?,?,?,?)", [i.id, i.name, categoryId, categoryName, i.size||"", Number(i.quantity||0), i.unit||"pcs", Number(i.minimum_stock||0), restoreText(i.low_stock_triggered_at)||null, restoreText(i.low_stock_since)||null]);
+    // Preserve existing quantity rather than summing two snapshots of one row.
+    db.runSync("UPDATE inventory SET minimum_stock=?,category_id=?,category=?,size=? WHERE id=?", [
+     Math.max(Number(existing.minimum_stock||0), Number(i.minimum_stock||0)),
+     categoryId || existing.category_id || null, categoryName||existing.category||"",
+     i.size||existing.size||"", existing.id
+    ]);
+    continue;
    }
+   db.runSync("INSERT INTO inventory (id,name,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,low_stock_triggered_at,low_stock_since) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", [
+    sourceId || (Math.random().toString(36).slice(2)+Date.now().toString(36)),
+    i.name, categoryId, categoryName, i.size||"", Number(i.quantity||0), i.unit||"pcs",
+    Number(i.minimum_stock||0), incomingDate||null, incomingBill||null,
+    restoreText(i.low_stock_triggered_at)||null, restoreText(i.low_stock_since)||null
+   ]);
    stats.inventory++;
   }
   for (const rec of backup.implantRecords || []) {
