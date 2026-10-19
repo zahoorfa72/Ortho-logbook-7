@@ -69,6 +69,12 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
       deleted_by TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_deleted_records_expiry ON deleted_records(expires_at);
+    -- Keep large patient photos out of JS Trash payloads to avoid Android heap OOM.
+    CREATE TABLE IF NOT EXISTS deleted_patient_photos (
+      trash_id TEXT NOT NULL, patient_id TEXT NOT NULL, photo_uri TEXT, photos_json TEXT,
+      PRIMARY KEY (trash_id, patient_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_deleted_patient_photos_patient ON deleted_patient_photos(patient_id);
     CREATE TABLE IF NOT EXISTS patient_history (
       id TEXT PRIMARY KEY NOT NULL, patient_id TEXT NOT NULL, user_id TEXT,
       action TEXT NOT NULL, snapshot_json TEXT NOT NULL, created_at TEXT NOT NULL
@@ -212,6 +218,8 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
   // Expired Trash entries are permanently purged after their original 30-day deadline.
   // The expiry timestamp is backed up, so restoring a backup never resets the clock.
   db.runSync("DELETE FROM deleted_records WHERE expires_at <= ?", [new Date().toISOString()]);
+  // Clean sidecar image rows only after their corresponding Trash entry expires.
+  db.runSync("DELETE FROM deleted_patient_photos WHERE trash_id NOT IN (SELECT id FROM deleted_records)");
   if (!options?.skipInventoryReset) applyHoldInventoryResetOnce();
 }
 
