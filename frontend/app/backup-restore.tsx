@@ -176,9 +176,8 @@ export default function BackupRestoreScreen() {
     try {
       setDriveLoading(true);
       setDriveStatus("Preparing backup data…");
-      // Use the incremental sync path for manual backup too. Replacing a 700 MB
-      // monthly snapshot on every tap was unnecessary and made retries look like
-      // they restarted at 99.5%. A complete baseline is made only when required.
+      // Manual Drive backup updates the current six-month master and its change
+      // journal; it does not create a separate monthly snapshot file.
       const result = await backupIncrementalToGoogleDrive([
         "patients", "procedures", "inventoryCategories", "inventory", "patientImplants",
         "patientCustomFields", "implantRecords", "expenses", "users", "patientHistory",
@@ -189,14 +188,14 @@ export default function BackupRestoreScreen() {
       const migrationPending = (result as any).migrationPending === true;
       const baselineCreated = (result as any).baselineCreated === true;
       const skipped = (result as any).skipped === true;
-      const backupName = String((result as any).name || "the current monthly backup");
+      const backupName = String((result as any).name || "the current six-month master");
       const detail = baselineCreated
-        ? 'A complete monthly backup named "' + backupName + '" was saved to ' + googleAccount + "'s Google Drive."
+        ? 'A complete six-month master named "' + backupName + '" was saved to ' + googleAccount + "'s Google Drive."
         : skipped
-          ? "No changed records needed uploading. The existing monthly backup remains in place."
+          ? "No changed records needed uploading. The current six-month master remains in place."
           : 'Changed records were synchronized to "' + backupName + '". The app did not intentionally re-upload the whole photo archive for this manual check.';
       Alert.alert(
-        migrationPending ? "Monthly backup saved — older files kept" : baselineCreated ? "Monthly backup created and confirmed" : skipped ? "Drive backup is up to date" : "Drive sync complete",
+        migrationPending ? "Master backup saved — older files kept" : baselineCreated ? "Six-month master created and confirmed" : skipped ? "Drive backup is up to date" : "Drive sync complete",
         detail +
           (migrationPending
             ? "\nSome older backups could not be fully merged, so they were retained for safety. Retry after checking those files."
@@ -218,7 +217,7 @@ export default function BackupRestoreScreen() {
       setDriveStatus("Finding the single master backup…");
       const files = await listGoogleDriveBackups();
       setDriveBackups(files);
-      if (!files.length) Alert.alert("No Drive backups yet", "Tap Backup to Google Drive once. The app maintains one rolling master backup file. Existing older archives are left untouched.");
+      if (!files.length) Alert.alert("No Drive backups yet", "Tap Backup to Google Drive once. The app maintains one master for each six-month period. You can select a month from a master during restore. Existing older backups are left untouched.");
     } catch (error) {
       Alert.alert("Could not list backups", error instanceof Error ? error.message : "Unable to list Google Drive backups.");
     } finally {
@@ -499,7 +498,7 @@ export default function BackupRestoreScreen() {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Google Drive Backup</Text>
           <Text style={styles.cardSub}>
-            Connect a Google account on this phone. The app maintains one rolling master backup file rather than creating a new backup for every month. Drive backups are unencrypted; phone/file backups remain encrypted.
+            Connect a Google account on this phone. The app maintains one master backup per six-month period, rather than separate monthly files. During restore, choose a month from the selected master. Drive backups are unencrypted; phone/file backups remain encrypted.
           </Text>
           {googleAccount ? (
             <>
@@ -547,7 +546,7 @@ export default function BackupRestoreScreen() {
                     {file.modifiedTime ? new Date(file.modifiedTime).toLocaleString() : "Drive backup"}
                     {file.size ? " · " + (Number(file.size) / (1024 * 1024)).toFixed(1) + " MB" : ""}
                   </Text>
-                  <Text style={styles.hint}>{file.name.includes(" - Month ") ? "Monthly archive · restores this month without applying unrelated master changes" : "Full master · includes old data and current incremental changes"}</Text>
+                  <Text style={styles.hint}>{file.name.includes(" - Month ") ? "Legacy monthly archive" : "Six-month master · choose all data or a month/year during restore"}</Text>
                 </Pressable>
               ))}
               <Pressable
@@ -593,7 +592,7 @@ export default function BackupRestoreScreen() {
 
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Backup Range</Text>
-          <Text style={styles.cardSub}>Choose the patient date range for manual Drive snapshots and encrypted phone backups. Google Drive keeps one rolling master backup. Patient photos are compressed in the backup; month/year restore filters this master without creating separate monthly backup files.</Text>
+          <Text style={styles.cardSub}>Google Drive creates one complete master backup for each six-month period. Restore any month or year from the selected master without separate monthly backup files. Patient image PDFs are stored separately in the Patient Image PDFs folder. Date-range selection below applies to encrypted phone/file backups.</Text>
           <Segmented
             options={["All", "Date", "Month", "Year"] as any}
             value={backupFilter.type === "all" ? "All" : backupFilter.type.charAt(0).toUpperCase() + backupFilter.type.slice(1)}
