@@ -141,7 +141,7 @@ export default function LabTestSettingsScreen() {
     setOnlineKeyBusy(true);
     try {
       const key = onlineOcrKey.trim();
-      if (key) await AsyncStorage.setItem(ONLINE_OCR_KEY, key); triggerAutomaticDriveBackup("appSettings");
+      if (key) await AsyncStorage.setItem(ONLINE_OCR_KEY, key);
       else await AsyncStorage.removeItem(ONLINE_OCR_KEY);
       triggerAutomaticDriveBackup("appSettings");
       toast(key ? "Online OCR key saved on this device." : "Online OCR disabled; offline OCR remains available.", "success");
