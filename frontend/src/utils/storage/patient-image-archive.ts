@@ -230,11 +230,13 @@ export async function archivePatientImagesForPatient(patientId: string, onProgre
   return saved;
 }
 
-export async function archiveEligiblePatientImages(onProgress?: (stage: string) => void): Promise<boolean> {
+export async function archiveEligiblePatientImages(onProgress?: (stage: string) => void, patientIds?: string[]): Promise<boolean> {
   initializeDatabase();
   if (!FileSystem.documentDirectory) throw new Error("Private phone storage is unavailable for patient image archives.");
   await FileSystem.makeDirectoryAsync(ARCHIVE_DIR, { intermediates: true });
-  const patients = db.getAllSync<any>("SELECT id,name,mr_no,date,created_at,updated_at FROM patients ORDER BY created_at ASC");
+  const allPatients = db.getAllSync<any>("SELECT id,name,mr_no,date,created_at,updated_at FROM patients ORDER BY created_at ASC");
+  const requestedIds = patientIds === undefined ? null : new Set(patientIds.map(String));
+  const patients = requestedIds ? allPatients.filter((patient: any) => requestedIds.has(String(patient.id))) : allPatients;
   const archives = await readArchives();
   let changed = false;
   for (let i = 0; i < patients.length; i++) {
