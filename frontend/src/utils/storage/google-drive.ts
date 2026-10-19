@@ -366,7 +366,11 @@ export async function restoreGoogleDriveBackupById(fileId: string, onProgress?: 
   const composed = parsed;
   const baseTime = Date.parse(String(metadata.modifiedTime || ""));
   const deltas = (await listIncrementalFiles())
-    .filter((item: any) => item?.id)
+    // A journal is applicable only if it was modified after the selected master.
+    // This prevents stale legacy journals being replayed if cleanup failed after
+    // the same master file had already been updated in place.
+    .filter((item: any) => item?.id &&
+      Number.isFinite(baseTime) && Date.parse(String(item.modifiedTime || "")) > baseTime)
     .sort((a: any, b: any) => Date.parse(String(a.modifiedTime || "")) - Date.parse(String(b.modifiedTime || "")));
   const recoveryWarnings: string[] = [];
   let appliedIncrementals = 0;
@@ -1769,7 +1773,14 @@ async function backupToGoogleDriveUnlocked(
         if (!legacyFile) {
           const candidates = await findLatestBackupCandidates();
           legacyFile = candidates
-            .filter((item: any) => /^Ortho Logbook Backup - Month \\d{4}-\\d{2}\\.orbackup$/.test(String(item.name || "")))
+            .filter((item: any) => isSixMonthMasterName(String(item.name || "")) &&
+              String(item.name || "") !== currentMonthName)
+            .sort((a: any, b: any) => Date.parse(String(b.modifiedTime || "")) - Date.parse(String(a.modifiedTime || "")))[0] || null;
+        }
+        if (!legacyFile) {
+          const candidates = await findLatestBackupCandidates();
+          legacyFile = candidates
+            .filter((item: any) => /^Ortho Logbook Backup - Month \d{4}-\d{2}\.orbackup$/.test(String(item.name || "")))
             .sort((a: any, b: any) => Date.parse(String(b.modifiedTime || "")) - Date.parse(String(a.modifiedTime || "")))[0] || null;
         }
         if (legacyFile?.id && String(legacyFile.id) !== String(existing?.id || "")) {
@@ -2629,11 +2640,12 @@ export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) 
   // master. The master may have been updated in place after the journal was
   // written; the baseline file ID determines whether the journal still applies.
   const deltas = (await listIncrementalFiles())
-    .filter((item: any) => item?.id && (
-      String(item.name || "") === "Ortho Logbook Backup Changes.orbackup" ||
-      (isMasterBackupName(String(file.name || "")) && String(file.name || "") !== sixMonthMasterName() &&
-        /^Ortho Logbook Backup - Month \d{4}-\d{2} Changes\.orbackup$/i.test(String(item.name || "")))
-    ))
+    .filter((item: any) => item?.id &&
+      Date.parse(String(item.modifiedTime || "")) > baseTime && (
+        String(item.name || "") === "Ortho Logbook Backup Changes.orbackup" ||
+        (isMasterBackupName(String(file.name || "")) && String(file.name || "") !== sixMonthMasterName() &&
+          /^Ortho Logbook Backup - Month \d{4}-\d{2} Changes\.orbackup$/i.test(String(item.name || "")))
+      ))
     .sort((a: any, b: any) => Date.parse(String(a.modifiedTime || "")) - Date.parse(String(b.modifiedTime || "")));
   const recoveryWarnings: string[] = [];
   let appliedIncrementals = 0;
