@@ -105,9 +105,24 @@ function bytesToBase64(bytes: Uint8Array): string {
   return output;
 }
 function base64ToBytes(value: string): Uint8Array {
-  const binary = globalThis.atob(value);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  // atob() creates one additional enormous binary string. On large backup
+  // files Hermes/JSC can throw "String is too long" before decryption starts.
+  // Decode bounded, 4-character-aligned chunks into the final byte buffer.
+  const encoded = value.replace(/\\s/g, "");
+  if (!encoded) return new Uint8Array(0);
+  const padding = encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0;
+  const outputLength = Math.max(0, Math.floor(encoded.length * 3 / 4) - padding);
+  const bytes = new Uint8Array(outputLength);
+  const encodedChunkSize = 64 * 1024; // multiple of four; keeps each atob result small
+  let byteOffset = 0;
+  for (let offset = 0; offset < encoded.length; offset += encodedChunkSize) {
+    const end = Math.min(encoded.length, offset + encodedChunkSize);
+    const binary = globalThis.atob(encoded.slice(offset, end));
+    for (let i = 0; i < binary.length && byteOffset < outputLength; i++) {
+      bytes[byteOffset++] = binary.charCodeAt(i);
+    }
+  }
+  if (byteOffset !== outputLength) throw new Error("Encrypted backup data is incomplete or invalid.");
   return bytes;
 }
 async function deriveKey(password:string,salt:Uint8Array){if(!password||password.length<8)throw new Error("Backup password must contain at least 8 characters.");const h=await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256,`${bytesToHex(salt)}:${password}`);return hexToBytes(h);}
