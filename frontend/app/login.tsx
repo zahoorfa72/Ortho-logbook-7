@@ -13,7 +13,7 @@ import { useToast } from "@/src/components/toast";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 import { db, initializeDatabase } from "@/src/db/database";
 import { decryptBackup, getBackupInfo, mergeBackup, restoreBackup } from "@/src/utils/storage/backup";
-import { restoreLatestFromGoogleDrive, connectGoogleAccount } from "@/src/utils/storage/google-drive";
+import { listGoogleDriveBackups, restoreGoogleDriveBackupById, connectGoogleAccount } from "@/src/utils/storage/google-drive";
 import { queryClient } from "@/src/query-client";
 import { storage } from "@/src/utils/storage";
 import { setAutomaticDriveBackupPaused } from "@/src/utils/storage/drive-auto-backup";
@@ -52,8 +52,41 @@ export default function Login() {
       setDriveRestoreLoading(true);
       setDriveRestoreMessage("Connecting to Google Drive…");
       await connectGoogleAccount();
-      setDriveRestoreMessage("Searching for backup…");
-      const remote = await restoreLatestFromGoogleDrive((message) => setDriveRestoreMessage(message));
+      setDriveRestoreMessage("Finding your six-month master backup…");
+      const availableBackups = await listGoogleDriveBackups();
+      if (!availableBackups.length) throw new Error("No complete Ortho Logbook master backup was found in Google Drive. Your local data was not changed.");
+      // listGoogleDriveBackups sorts the current six-month master first, then
+      // older six-month masters and legacy full backups. Let the user choose
+      // explicitly on a new phone instead of silently restoring an arbitrary file.
+      const choices = availableBackups.slice(0, 3);
+      const recommended = choices[0];
+      const selectedBackup = await new Promise<typeof recommended | null>((resolve) => {
+        let settled = false;
+        const finish = (value: typeof recommended | null) => {
+          if (settled) return;
+          settled = true;
+          resolve(value);
+        };
+        Alert.alert(
+          "Choose a backup to restore",
+          "Recommended: " + recommended.name + "\\nModified: " + new Date(recommended.modifiedTime).toLocaleString() +
+            "\\n\\nChoose the current six-month master for the most complete clinic data. Older masters are offered for recovery if needed.",
+          [
+            ...choices.map((item, index) => ({
+              text: (index === 0 ? "Recommended: " : "") + item.name.replace("Ortho Logbook Backup - ", ""),
+              onPress: () => finish(item),
+            })),
+            { text: "Cancel", style: "cancel" as const, onPress: () => finish(null) },
+          ],
+          { cancelable: false, onDismiss: () => finish(null) },
+        );
+      });
+      if (!selectedBackup) {
+        setAutomaticDriveBackupPaused(false);
+        return;
+      }
+      setDriveRestoreMessage("Downloading " + selectedBackup.name + "…");
+      const remote = await restoreGoogleDriveBackupById(selectedBackup.id, (message) => setDriveRestoreMessage(message));
       const info = getBackupInfo(remote.backupText);
       if (info.encrypted) throw new Error("The Google Drive backup is encrypted. Restore it from Sync & Backup with its password.");
       Alert.alert(
