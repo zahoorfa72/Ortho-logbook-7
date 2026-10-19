@@ -285,9 +285,10 @@ export async function listGoogleDriveBackups(): Promise<Array<{id:string;name:st
   const backups = files.filter((file: any) => {
     if (!file?.id) return false;
     const name = String(file.name || "");
+    // New UI lists six-month masters, not separate monthly archive files.
+    // Keep legacy all-time backups selectable for recovery.
     return isMasterBackupName(name) ||
-      name === "Ortho Logbook Backup - All Time.orbackup" ||
-      /^Ortho Logbook Backup - Month \d{4}-\d{2}\.orbackup$/.test(name);
+      name === "Ortho Logbook Backup - All Time.orbackup";
   }).map((file: any) => ({
     id: String(file.id),
     name: String(file.name || "Ortho Logbook Backup"),
