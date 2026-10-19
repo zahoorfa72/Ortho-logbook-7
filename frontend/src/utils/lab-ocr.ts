@@ -888,17 +888,16 @@ function validateStructuredLabResults(
     if (!prefix) return line; // Keep unmatched labels visible for review.
 
     const rawResult = rawMeasuredResultForTest(prefix.name, rawText, configuredTests);
-    if (rawResult === null) {
-      // Keep the test label, but do not let an unverified value cause an alert.
-      cells[1] = "";
-    } else {
+    if (rawResult !== null) {
       const reconstructedResult = resultNumber(cells[1] || "");
       if (reconstructedResult === null || !sameMeasuredResult(reconstructedResult, rawResult)) {
-        // The label-associated raw value is stronger evidence than a value
-        // inferred only from x/y geometry; correct the cell rather than swap rows.
+        // Only override the geometric value when raw OCR clearly associates a
+        // different measured value with this same test label.
         cells[1] = rawResult;
       }
     }
+    // If raw OCR lost the table layout, retain the image-position result.
+    // A missing text cross-check is not proof that the geometric result is wrong.
     while (cells.length < 4) cells.push("");
     return cells.slice(0, 4).join(" | ");
   }).join("\n");
