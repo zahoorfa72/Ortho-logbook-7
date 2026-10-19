@@ -19,7 +19,18 @@ export async function getLastDriveBackupStatus(): Promise<string | null> {
 
 // Full Drive access is needed to discover backups created by earlier app builds or under a different file authorization.
 export const GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive";
-const BACKUP_NAME = "Ortho Logbook Backup.orbackup";
+const BACKUP_NAME = "Ortho Logbook Backup.orbackup"; // legacy all-time master name
+function sixMonthMasterName(date: Date = new Date()): string {
+  const year = date.getFullYear();
+  const half = date.getMonth() < 6 ? "H1" : "H2";
+  return "Ortho Logbook Backup - Master " + year + "-" + half + ".orbackup";
+}
+function isSixMonthMasterName(name: string): boolean {
+  return /^Ortho Logbook Backup - Master \d{4}-H[12]\.orbackup$/i.test(name);
+}
+function isMasterBackupName(name: string): boolean {
+  return name === BACKUP_NAME || isSixMonthMasterName(name);
+}
 const BACKUP_FOLDER_NAME = "Ortho Logbook Backups";
 const PATIENT_IMAGE_PDF_FOLDER = "Patient Image PDFs";
 const PENDING_PATIENT_PDF_DELETE_KEY = "ortho_pending_patient_pdf_drive_deletes_v1";
@@ -252,8 +263,10 @@ function driveBackupName(filter: BackupFilter): string {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error("Enter the date as YYYY-MM-DD before backing up.");
     return `Ortho Logbook Backup - Date ${date}.orbackup`;
   }
-  // A single rolling master is updated in place; period selection is a restore filter.
-  return BACKUP_NAME;
+  // One full master file is updated throughout each six-month period. Restore
+  // can still filter any month/year inside the selected master without separate
+  // monthly snapshot files.
+  return sixMonthMasterName();
 }
 
 async function findBackupByName(name: string) {
@@ -272,11 +285,9 @@ export async function listGoogleDriveBackups(): Promise<Array<{id:string;name:st
   const backups = files.filter((file: any) => {
     if (!file?.id) return false;
     const name = String(file.name || "");
-    return name === BACKUP_NAME ||
+    return isMasterBackupName(name) ||
       name === "Ortho Logbook Backup - All Time.orbackup" ||
-      /^Ortho Logbook Backup - Month \d{4}-\d{2}\.orbackup$/.test(name) ||
-      /^Ortho Logbook Backup - Year \d{4}\.orbackup$/.test(name) ||
-      /^Ortho Logbook Backup - Date \d{4}-\d{2}-\d{2}\.orbackup$/.test(name);
+      /^Ortho Logbook Backup - Month \d{4}-\d{2}\.orbackup$/.test(name);
   }).map((file: any) => ({
     id: String(file.id),
     name: String(file.name || "Ortho Logbook Backup"),
@@ -285,10 +296,10 @@ export async function listGoogleDriveBackups(): Promise<Array<{id:string;name:st
   }));
   return backups.sort((a, b) => {
     // Prefer the rolling master, then show the newest dated snapshots first.
-    const rank = (name: string) => name === BACKUP_NAME ? 0 :
-      name === "Ortho Logbook Backup - All Time.orbackup" ? 1 :
-      /^Ortho Logbook Backup - Month /.test(name) ? 2 :
-      /^Ortho Logbook Backup - Year /.test(name) ? 3 : 4;
+    const rank = (name: string) => name === sixMonthMasterName() ? 0 :
+      isSixMonthMasterName(name) ? 1 :
+      name === BACKUP_NAME ? 2 :
+      name === "Ortho Logbook Backup - All Time.orbackup" ? 3 : 4;
     return rank(a.name) - rank(b.name) ||
       Date.parse(b.modifiedTime || "") - Date.parse(a.modifiedTime || "");
   });
@@ -309,7 +320,7 @@ export async function restoreGoogleDriveBackupById(fileId: string, onProgress?: 
   // Monthly files contain full snapshots. Apply only the journal for the same
   // month and exact baseline file; never mix other months into this restore.
   const monthlyMatch = /^Ortho Logbook Backup - Month (\d{4}-\d{2})\.orbackup$/.exec(String(metadata.name || ""));
-  const isRollingMaster = String(metadata.name || "") === BACKUP_NAME;
+  const isRollingMaster = isMasterBackupName(String(metadata.name || ""));
   if (monthlyMatch || isRollingMaster) {
     const warnings: string[] = [];
     let applied = 0;
@@ -1662,7 +1673,8 @@ async function backupToGoogleDriveUnlocked(
   const fileName = driveBackupName(filter);
   options.onProgress?.("Finding the master Drive backup…");
   let existing = await findBackupByName(fileName);
-  if (!existing && filter.type === "all") existing = await findBackupByName(BACKUP_NAME);
+  // Do not overwrite the legacy all-time master when a new six-month period
+  // begins; each half-year must retain its own master snapshot.
   const previousHash = await storage.getItem(LAST_DRIVE_CONTENT_HASH_KEY + ":" + fileName, "");
   const previousSuccess = await getLastDriveBackupStatus();
   if (!stagedFileUri && existing?.id && previousSuccess && options.skipIfUnchanged && previousHash === contentHash &&
@@ -1706,11 +1718,9 @@ async function backupToGoogleDriveUnlocked(
     await commitIncrementalSnapshotCache(String(result.id) + ":" + String(result.modifiedTime || ""));
   }
   if (isMasterBackup) {
-    const archiveCursor = String((await storage.secureGet(MONTH_ARCHIVE_CURSOR_KEY, "")) || "");
-    if (!/^\d{4}-\d{2}$/.test(archiveCursor)) {
-      // Don't trigger a second huge archive upload right after the first baseline.
-      await storage.secureSet(MONTH_ARCHIVE_CURSOR_KEY, monthKeyFromDate(new Date()));
-    }
+    // Monthly restore selection is a filter over the six-month master. Do not
+    // create independent monthly Drive backup files.
+    await storage.secureSet(MONTH_ARCHIVE_CURSOR_KEY, monthKeyFromDate(new Date()));
   }
   // A verified full monthly snapshot supersedes that month's journal. Removing
   // the old journal prevents deletions/edits from being applied twice on restore.
@@ -2201,6 +2211,10 @@ async function archiveMonthSnapshot(month: string, onProgress?: (stage: string) 
 }
 
 async function archiveCompletedMonths(onProgress?: (stage: string) => void) {
+  // Monthly files are intentionally disabled. Each six-month master contains
+  // the complete snapshot and the restore screen filters a month on demand.
+  onProgress?.("Monthly files are disabled; month selection is inside the six-month master.");
+  return;
   const currentMonth = monthKeyFromDate(new Date());
   let cursor = String((await storage.secureGet(MONTH_ARCHIVE_CURSOR_KEY, "")) || "");
   // A monthly archive is finalized only after that month has ended. This avoids
@@ -2469,13 +2483,12 @@ export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) 
   // historical monthly snapshot during routine restore (it can take hours).
   onProgress?.("Finding the rolling master backup…");
   const candidates = (await findLatestBackupCandidates()).filter((item: any) =>
-    String(item.name || "") === BACKUP_NAME ||
-    /^Ortho Logbook Backup - Month \d{4}-\d{2}\.orbackup$/.test(String(item.name || "")) ||
+    isMasterBackupName(String(item.name || "")) ||
     String(item.name || "") === "Ortho Logbook Backup - All Time.orbackup" ||
-    /^Ortho Logbook Backup - (Year|Date) /.test(String(item.name || ""))
+    /^Ortho Logbook Backup - Month \d{4}-\d{2}\.orbackup$/.test(String(item.name || ""))
   );
   candidates.sort((a: any, b: any) => {
-    const rank = (name: string) => name === BACKUP_NAME ? 0 : /^Ortho Logbook Backup - Month \d{4}-\d{2}\.orbackup$/.test(name) ? 1 : /all time/i.test(name) ? 2 : 3;
+    const rank = (name: string) => name === sixMonthMasterName() ? 0 : isSixMonthMasterName(name) ? 1 : name === BACKUP_NAME ? 2 : /all time/i.test(name) ? 3 : 4;
     return rank(String(a.name || "")) - rank(String(b.name || "")) ||
       Date.parse(String(b.modifiedTime || "")) - Date.parse(String(a.modifiedTime || ""));
   });
@@ -2524,7 +2537,7 @@ export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) 
   const deltas = (await listIncrementalFiles())
     .filter((item: any) => item?.id && (
       String(item.name || "") === "Ortho Logbook Backup Changes.orbackup" ||
-      (String(file.name || "") !== BACKUP_NAME &&
+      (isMasterBackupName(String(file.name || "")) && String(file.name || "") !== sixMonthMasterName() &&
         /^Ortho Logbook Backup - Month \d{4}-\d{2} Changes\.orbackup$/i.test(String(item.name || "")))
     ))
     .sort((a: any, b: any) => Date.parse(String(a.modifiedTime || "")) - Date.parse(String(b.modifiedTime || "")));
