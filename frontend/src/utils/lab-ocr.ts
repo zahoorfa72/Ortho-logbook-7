@@ -752,7 +752,13 @@ function structureLabColumns(blocks: any[], imageWidth: number, imageHeight: num
     const labelRight = labelSpans.length
       ? Math.max(...labelSpans.map(span => (span.item.x + span.item.width) / imageWidth))
       : null;
-    return { ordered, spans, text, prefix, labelRight };
+    // Anchor every result candidate to the actual vertical baseline of its test
+    // label. OCR engines can return a value from the next row in reading order;
+    // horizontal column similarity alone must never pull that value into this row.
+    const labelY = labelSpans.length
+      ? mean(labelSpans.map(span => yCenter(span.item)))
+      : mean(ordered.map(yCenter));
+    return { ordered, spans, text, prefix, labelRight, labelY };
   });
 
   const knownRows = rowDetails.filter(row => row.prefix && row.labelRight !== null);
@@ -762,23 +768,30 @@ function structureLabColumns(blocks: any[], imageWidth: number, imageHeight: num
   const headerResultX = headerResult ? xCenter(headerResult) : null;
   const qualitative = /^(?:positive|negative|reactive|nonreactive|non[\s-]?reactive|not[\s-]?detected|detected|absent|present|normal|abnormal)$/i;
   const candidatesForRow = (row: typeof knownRows[number]) => {
-    const candidates: Array<{ item: OcrPositionedLine; text: string; center: number }> = [];
+    const candidates: Array<{ item: OcrPositionedLine; text: string; center: number; verticalDistance: number }> = [];
     for (let index = 0; index < row.ordered.length; index++) {
       const item = row.ordered[index];
       const center = xCenter(item);
       if (center <= row.labelRight! + 0.002) continue;
+      const verticalDistance = Math.abs(yCenter(item) - row.labelY);
+      // Reject boxes that are horizontally to the right but vertically belong
+      // to a neighboring test row. This is the key guard against Hb being
+      // attached to platelets/WBC when OCR returns columns out of order.
+      const sameRowTolerance = Math.max(typicalHeight * 0.72, imageHeight * 0.005);
+      if (verticalDistance > sameRowTolerance) continue;
       let valueText = item.text.trim();
       let parsed = resultNumber(valueText);
       if (!parsed && index + 1 < row.ordered.length) {
         const next = row.ordered[index + 1];
         const combined = valueText + " " + next.text.trim();
         const combinedParsed = resultNumber(combined);
-        if (combinedParsed && /^(?:non|not)$/i.test(valueText)) {
+        const combinedVerticalDistance = Math.abs(yCenter(next) - row.labelY);
+        if (combinedParsed && combinedVerticalDistance <= sameRowTolerance && /^(?:non|not)$/i.test(valueText)) {
           valueText = combined;
           parsed = combinedParsed;
         }
       }
-      if (parsed !== null || qualitative.test(valueText)) candidates.push({ item, text: valueText, center });
+      if (parsed !== null || qualitative.test(valueText)) candidates.push({ item, text: valueText, center, verticalDistance });
     }
     return candidates;
   };
@@ -804,9 +817,16 @@ function structureLabColumns(blocks: any[], imageWidth: number, imageHeight: num
     const candidates = rowCandidates[rowIndex];
     // Use the header or repeated column alignment when available; otherwise
     // fall back to the left-most measured value after the test label.
-    candidates.sort((a, b) => inferredResultX !== null
-      ? Math.abs(a.center - inferredResultX) - Math.abs(b.center - inferredResultX)
-      : a.center - b.center);
+    candidates.sort((a, b) => {
+      // First choose the value on the same physical row as the test label.
+      // Only then use the repeated result-column position as a tie-breaker.
+      const verticalDifference = a.verticalDistance - b.verticalDistance;
+      const verticalTieTolerance = Math.max(typicalHeight * 0.08, imageHeight * 0.0005);
+      if (Math.abs(verticalDifference) > verticalTieTolerance) return verticalDifference;
+      return inferredResultX !== null
+        ? Math.abs(a.center - inferredResultX) - Math.abs(b.center - inferredResultX)
+        : a.center - b.center;
+    });
     const chosen = candidates[0];
     if (!chosen) {
       // Keep the test name visible for review, but deliberately leave its result
