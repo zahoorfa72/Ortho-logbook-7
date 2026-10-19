@@ -172,11 +172,13 @@ function restoreStock(p: Patient, userId: string | null) {
 
 type TrashPayload = { [key: string]: any; _stockAdjustment?: { inventoryId: string; quantity: number } };
 
-function addTrashEntry(kind: string, title: string, payload: TrashPayload, deletedBy?: string | null) {
+function addTrashEntry(kind: string, title: string, payload: TrashPayload, deletedBy?: string | null): string {
+  const trashId = id();
   const deletedAt = nowIso();
   const expiresAt = new Date(Date.parse(deletedAt) + 30 * 24 * 60 * 60 * 1000).toISOString();
   db.runSync("INSERT INTO deleted_records (id,kind,title,payload_json,deleted_at,expires_at,deleted_by) VALUES (?,?,?,?,?,?,?)",
-    [id(), kind, title, JSON.stringify(payload), deletedAt, expiresAt, deletedBy || null]);
+    [trashId, kind, title, JSON.stringify(payload), deletedAt, expiresAt, deletedBy || null]);
+  return trashId;
 }
 
 const TRASH_TABLE_ORDER = ["inventory_categories", "inventory", "patients", "procedures", "patient_custom_fields",
@@ -249,6 +251,16 @@ function restoreTrashEntry(trashId: string, options?: { patientDate?: string }) 
       insertTrashRows(table, payload[table] || []);
     }
     if (stockAdjustment && Array.isArray(payload.stock_receipts)) insertTrashRows("stock_receipts", payload.stock_receipts);
+    // Restore photo columns directly inside SQLite. Do not fetch multi-megabyte
+    // data URIs into JavaScript, which can exceed Android's 256 MB heap.
+    db.runSync(
+      `UPDATE patients
+       SET photo_uri=(SELECT photo_uri FROM deleted_patient_photos d WHERE d.trash_id=? AND d.patient_id=patients.id),
+           photos_json=(SELECT photos_json FROM deleted_patient_photos d WHERE d.trash_id=? AND d.patient_id=patients.id)
+       WHERE id IN (SELECT patient_id FROM deleted_patient_photos WHERE trash_id=?)`,
+      [trashId, trashId, trashId],
+    );
+    db.runSync("DELETE FROM deleted_patient_photos WHERE trash_id=?", [trashId]);
     db.runSync("DELETE FROM deleted_records WHERE id=?", [trashId]);
   });
 }
@@ -260,17 +272,28 @@ function deletePatientRows(ids: string[], me: any) {
 
   db.withTransactionSync(() => {
     const placeholders = cleanIds.map(() => "?").join(",");
+    // Build a metadata-only projection from the live schema. Large photo_uri and
+    // photos_json values stay inside SQLite and are copied to a Trash sidecar below.
+    const patientColumns = db.getAllSync<any>("PRAGMA table_info(patients)")
+      .map((column: any) => String(column.name || ""))
+      .filter((name: string) => /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name) && name !== "photo_uri" && name !== "photos_json");
+    if (!patientColumns.includes("id") || !patientColumns.includes("created_by")) {
+      throw new Error("Patient table schema is incomplete; no records were deleted.");
+    }
+    const projection = patientColumns.join(",");
     const rows = db.getAllSync<any>(
-      `SELECT * FROM patients WHERE id IN (${placeholders})`,
+      `SELECT ${projection} FROM patients WHERE id IN (${placeholders})`,
       cleanIds,
     );
     const allowed = rows.filter((p: any) => me.role === "admin" || p.created_by === me.id);
 
     for (const patient of allowed) {
       restoreStock(hydratePatientImplants(patient.id, fromPatient(patient)), me.id);
+      // Audit snapshots are intentionally metadata-only; images remain recoverable
+      // in the SQLite sidecar and do not get duplicated into history JSON.
       db.runSync(
         "INSERT INTO patient_history (id,patient_id,user_id,action,snapshot_json,created_at) VALUES (?,?,?,?,?,?)",
-        [id(), patient.id, me.id, "delete", snapshot(fromPatient(patient)), nowIso()],
+        [id(), patient.id, me.id, "delete", snapshot({ ...fromPatient(patient), photoUri: "", photos: [] }), nowIso()],
       );
     }
 
@@ -278,11 +301,22 @@ function deletePatientRows(ids: string[], me: any) {
     if (!allowedIds.length) return;
 
     const allowedPlaceholders = allowedIds.map(() => "?").join(",");
-    const patientRows = db.getAllSync<any>(`SELECT * FROM patients WHERE id IN (${allowedPlaceholders})`, allowedIds);
     const implantRows = db.getAllSync<any>(`SELECT * FROM patient_implants WHERE patient_id IN (${allowedPlaceholders})`, allowedIds);
     const historyRows = db.getAllSync<any>(`SELECT * FROM patient_history WHERE patient_id IN (${allowedPlaceholders})`, allowedIds);
-    addTrashEntry("patients", patientRows.length === 1 ? "Patient: " + (patientRows[0].name || patientRows[0].mr_no || patientRows[0].id) : patientRows.length + " patients",
-      { patients: patientRows, patient_implants: implantRows, patient_history: historyRows }, me.id || null);
+    const trashId = addTrashEntry("patients", allowed.length === 1 ? "Patient: " + (allowed[0].name || allowed[0].mr_no || allowed[0].id) : allowed.length + " patients",
+      { patients: allowed, patient_implants: implantRows, patient_history: historyRows, _patientPhotoTrashId: "pending" }, me.id || null);
+    // Copy image blobs between SQLite rows without materializing them in JS.
+    db.runSync(
+      `INSERT OR REPLACE INTO deleted_patient_photos (trash_id,patient_id,photo_uri,photos_json)
+       SELECT ?, id, photo_uri, photos_json FROM patients WHERE id IN (${allowedPlaceholders})`,
+      [trashId, ...allowedIds],
+    );
+    const trashPayload = db.getFirstSync<any>("SELECT payload_json FROM deleted_records WHERE id=? LIMIT 1", [trashId]);
+    if (trashPayload?.payload_json) {
+      const parsed = JSON.parse(String(trashPayload.payload_json));
+      delete parsed._patientPhotoTrashId;
+      db.runSync("UPDATE deleted_records SET payload_json=? WHERE id=?", [JSON.stringify(parsed), trashId]);
+    }
     // A hard delete must remove the relational inventory selections as well.
     // Otherwise deleted patients can still appear in inventory usage/backup data.
     db.runSync(
