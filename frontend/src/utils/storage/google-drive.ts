@@ -1580,9 +1580,23 @@ function mergeFullBackupSnapshots(legacy: any, local: any): any {
 
 function mergeRowsByRecency(currentRows: any[], incomingRows: any[], table: string): any[] {
   const rows = new Map<string, any>();
-  const keyFor = (row: any) => table === "inventory"
-    ? "item:" + [row?.name, row?.category, row?.size].map((v) => String(v || "").trim().toLowerCase()).join("|")
-    : row?.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+  const keyFor = (row: any) => {
+    if (table !== "inventory") return row?.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+    // Prefer the stable record ID so separate stock batches with the same
+    // name/category/size are never collapsed. Across devices, only merge a
+    // row when it has a strong shared receipt identity (bill + date).
+    const bill = String(row?.bill_image || "").trim();
+    const date = String(row?.added_date || "").trim();
+    if (bill && date) {
+      return "inventory-receipt:" + [
+        row?.name, row?.category, row?.size, date, bill,
+      ].map((v) => String(v || "").trim().toLowerCase()).join("|");
+    }
+    if (row?.id != null) return "id:" + String(row.id);
+    return "inventory-row:" + [
+      row?.name, row?.category, row?.size, row?.added_date, row?.batch_id,
+    ].map((v) => String(v || "").trim().toLowerCase()).join("|");
+  };
   for (const row of currentRows || []) rows.set(keyFor(row), row);
   for (const row of incomingRows || []) {
     const key = keyFor(row);
@@ -1633,9 +1647,20 @@ function applyIncrementalToMaster(local: any, incoming: any, preserveCurrent = f
       continue;
     }
     const rows = new Map<string, any>();
-    const keyForRow = (row: any) => table === "inventory"
-      ? "item:" + [row?.name, row?.category, row?.size].map((v) => String(v || "").trim().toLowerCase()).join("|")
-      : row?.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+    const keyForRow = (row: any) => {
+      if (table !== "inventory") return row?.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+      const bill = String(row?.bill_image || "").trim();
+      const date = String(row?.added_date || "").trim();
+      if (bill && date) {
+        return "inventory-receipt:" + [
+          row?.name, row?.category, row?.size, date, bill,
+        ].map((v) => String(v || "").trim().toLowerCase()).join("|");
+      }
+      if (row?.id != null) return "id:" + String(row.id);
+      return "inventory-row:" + [
+        row?.name, row?.category, row?.size, row?.added_date, row?.batch_id,
+      ].map((v) => String(v || "").trim().toLowerCase()).join("|");
+    };
     for (const row of Array.isArray(local[table]) ? local[table] : []) rows.set(keyForRow(row), row);
     if (!preserveCurrent) {
       for (const id of Array.isArray(incoming.deletedIds?.[table]) ? incoming.deletedIds[table] : []) {
