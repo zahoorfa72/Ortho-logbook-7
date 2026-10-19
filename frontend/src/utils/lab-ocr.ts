@@ -761,16 +761,12 @@ function structureLabColumns(blocks: any[], imageWidth: number, imageHeight: num
   const headerResult = positioned.find(item => /^result\s*:?$/i.test(item.text.trim()));
   const headerResultX = headerResult ? xCenter(headerResult) : null;
   const qualitative = /^(?:positive|negative|reactive|nonreactive|non[\s-]?reactive|not[\s-]?detected|detected|absent|present|normal|abnormal)$/i;
-  const output: string[] = [];
-
-  for (const row of knownRows) {
-    const prefix = row.prefix!;
-    const labelRight = row.labelRight!;
+  const candidatesForRow = (row: typeof knownRows[number]) => {
     const candidates: Array<{ item: OcrPositionedLine; text: string; center: number }> = [];
     for (let index = 0; index < row.ordered.length; index++) {
       const item = row.ordered[index];
       const center = xCenter(item);
-      if (center <= labelRight + 0.002) continue;
+      if (center <= row.labelRight! + 0.002) continue;
       let valueText = item.text.trim();
       let parsed = resultNumber(valueText);
       if (!parsed && index + 1 < row.ordered.length) {
@@ -784,12 +780,32 @@ function structureLabColumns(blocks: any[], imageWidth: number, imageHeight: num
       }
       if (parsed !== null || qualitative.test(valueText)) candidates.push({ item, text: valueText, center });
     }
+    return candidates;
+  };
+  const rowCandidates = knownRows.map(row => candidatesForRow(row));
+  // Without a readable "Result" header, infer the result column from x-positions
+  // repeated across rows instead of always taking each row's left-most number.
+  const candidateCenters = rowCandidates.flatMap((items, rowIndex) =>
+    items.length ? [{ center: items[0].center, rowIndex }] : []
+  );
+  let inferredResultX: number | null = headerResultX;
+  if (inferredResultX === null && candidateCenters.length) {
+    const clusters = candidateCenters.map(seed => {
+      const members = candidateCenters.filter(candidate => Math.abs(candidate.center - seed.center) <= 0.035);
+      return { center: members.reduce((sum, item) => sum + item.center, 0) / members.length, rows: new Set(members.map(item => item.rowIndex)).size };
+    }).sort((a, b) => b.rows - a.rows || a.center - b.center);
+    if (clusters[0].rows >= 2) inferredResultX = clusters[0].center;
+  }
+  const output: string[] = [];
 
-    // A result header is the strongest column anchor. Without one, take the
-    // left-most valid measured value after the test label; reference ranges are
-    // farther right and are never used to infer a neighbouring test's result.
-    candidates.sort((a, b) => headerResultX !== null
-      ? Math.abs(a.center - headerResultX) - Math.abs(b.center - headerResultX)
+  for (let rowIndex = 0; rowIndex < knownRows.length; rowIndex++) {
+    const row = knownRows[rowIndex];
+    const prefix = row.prefix!;
+    const candidates = rowCandidates[rowIndex];
+    // Use the header or repeated column alignment when available; otherwise
+    // fall back to the left-most measured value after the test label.
+    candidates.sort((a, b) => inferredResultX !== null
+      ? Math.abs(a.center - inferredResultX) - Math.abs(b.center - inferredResultX)
       : a.center - b.center);
     const chosen = candidates[0];
     if (!chosen) {
