@@ -49,6 +49,37 @@ function getPhotoSources(row: any): string[] {
   } catch {}
   return Array.from(new Set(result)).filter(x => !x.startsWith("__ORTHO_PHOTO_REF__:"));
 }
+
+// SQLite's Android CursorWindow cannot return a single multi-megabyte text cell.
+// Read patient image columns in small substr() pieces so automatic Drive sync
+// can archive older photos without failing before JavaScript receives the row.
+function readTextColumnInChunks(column: "photo_uri" | "photos_json", id: string): string {
+  const lengthRow = db.getFirstSync<any>(
+    `SELECT length(${column}) AS value_length FROM patients WHERE id=?`, [id],
+  );
+  const length = Math.max(0, Number(lengthRow?.value_length || 0));
+  if (!length) return "";
+  const chunkSize = 48 * 1024;
+  let value = "";
+  for (let start = 1; start <= length; start += chunkSize) {
+    const part = db.getFirstSync<any>(
+      `SELECT substr(${column}, ?, ?) AS value_chunk FROM patients WHERE id=?`,
+      [start, chunkSize, id],
+    );
+    value += String(part?.value_chunk || "");
+  }
+  return value;
+}
+
+export function readPatientPhotoRow(patientId: string): { photo_uri: string; photos_json: string } {
+  initializeDatabase();
+  const id = String(patientId || "").trim();
+  if (!id) return { photo_uri: "", photos_json: "" };
+  return {
+    photo_uri: readTextColumnInChunks("photo_uri", id),
+    photos_json: readTextColumnInChunks("photos_json", id),
+  };
+}
 async function imageContentKey(source: string): Promise<string> {
   try {
     let bytes = source;
@@ -153,7 +184,7 @@ export async function archivePatientImagesForPatient(patientId: string, onProgre
   if (!FileSystem.documentDirectory) throw new Error("Private phone storage is unavailable for patient image archives.");
   const patient = db.getFirstSync<any>("SELECT id,name,mr_no,date,created_at,updated_at FROM patients WHERE id=?", [id]);
   if (!patient) throw new Error("This patient is not available in the phone database. Refresh the patient list and try again.");
-  const row = db.getFirstSync<any>("SELECT photo_uri,photos_json FROM patients WHERE id=?", [id]) || {};
+  const row = readPatientPhotoRow(id);
   const sources = await deduplicatePhotoSources(getPhotoSources(row));
   const name = String(patient.name || "Patient");
   const mrNo = String(patient.mr_no || "");
@@ -219,7 +250,7 @@ export async function archiveEligiblePatientImages(onProgress?: (stage: string) 
     // this optional background PDF archive block the independent data backup.
     let row: any;
     try {
-      row = db.getFirstSync<any>("SELECT photo_uri,photos_json FROM patients WHERE id=?", [id]) || {};
+      row = readPatientPhotoRow(id);
     } catch (error: any) {
       const message = String(error?.message || error);
       if (/CursorWindow|row too big|too big to fit/i.test(message)) {
