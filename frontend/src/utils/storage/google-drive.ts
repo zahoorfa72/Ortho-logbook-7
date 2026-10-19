@@ -1541,11 +1541,24 @@ function mergeFullBackupSnapshots(legacy: any, local: any): any {
     "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts", "trash",
   ];
   for (const table of tables) {
-    merged[table] = mergeRowsByRecency(
-      Array.isArray(legacy?.[table]) ? legacy[table] : [],
-      Array.isArray(local?.[table]) ? local[table] : [],
-      table,
-    );
+    const oldRows = Array.isArray(legacy?.[table]) ? legacy[table] : [];
+    const newRows = Array.isArray(local?.[table]) ? local[table] : [];
+    if (table === "users") {
+      // Account records are keyed by email as well as ID: a restored admin must
+      // not be duplicated just because an older installation used another ID.
+      // Keep legacy-only accounts, but let the current phone's credential hash,
+      // role and permissions win for a matching email.
+      const users = new Map<string, any>();
+      const keyForUser = (row: any) => String(row?.email || row?.id || "").trim().toLowerCase();
+      for (const row of oldRows) if (keyForUser(row)) users.set(keyForUser(row), row);
+      for (const row of newRows) {
+        const key = keyForUser(row);
+        if (key) users.set(key, { ...users.get(key), ...row });
+      }
+      merged[table] = Array.from(users.values());
+    } else {
+      merged[table] = mergeRowsByRecency(oldRows, newRows, table);
+    }
   }
   merged.photoAssets = { ...(legacy?.photoAssets || {}), ...(local?.photoAssets || {}) };
   const archives = new Map<string, any>();
