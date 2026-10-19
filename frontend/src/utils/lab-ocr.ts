@@ -916,18 +916,22 @@ function validateStructuredLabResults(
   }).join("\n");
 }
 
-async function recognizeOnlineLabText(uri: string, apiKey: string): Promise<string> {
+type OnlineOcrResult = { text: string; blocks: any[] };
+
+async function recognizeOnlineLabText(uri: string, apiKey: string): Promise<OnlineOcrResult> {
   const key = String(apiKey || "").trim();
-  if (!key) return "";
+  if (!key) return { text: "", blocks: [] };
   try {
     const body = new FormData();
     body.append("file", { uri, name: "lab-report.jpg", type: "image/jpeg" } as any);
     body.append("language", "eng");
-    body.append("isOverlayRequired", "false");
+    // Request word boxes as well as text so online OCR can participate in
+    // table reconstruction instead of returning unstructured text only.
+    body.append("isOverlayRequired", "true");
     body.append("detectOrientation", "true");
     body.append("scale", "true");
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
+    const timeout = setTimeout(() => controller.abort(), 20000);
     let response: Response;
     try {
       response = await fetch("https://api.ocr.space/parse/image", {
@@ -939,15 +943,34 @@ async function recognizeOnlineLabText(uri: string, apiKey: string): Promise<stri
     } finally {
       clearTimeout(timeout);
     }
-    if (!response.ok) return "";
+    if (!response.ok) return { text: "", blocks: [] };
     const payload: any = await response.json();
-    if (payload?.IsErroredOnProcessing) return "";
-    return Array.isArray(payload?.ParsedResults)
-      ? payload.ParsedResults.map((item: any) => String(item?.ParsedText || "")).filter(Boolean).join("\n").trim()
-      : "";
+    if (payload?.IsErroredOnProcessing) return { text: "", blocks: [] };
+    const parsed = Array.isArray(payload?.ParsedResults) ? payload.ParsedResults : [];
+    const text = parsed.map((item: any) => String(item?.ParsedText || "")).filter(Boolean).join("\n").trim();
+    const blocks: any[] = [];
+    for (const result of parsed) {
+      const lines = Array.isArray(result?.TextOverlay?.Lines) ? result.TextOverlay.Lines : [];
+      for (const line of lines) {
+        const words = Array.isArray(line?.Words) ? line.Words : [];
+        const validWords = words.filter((word: any) => String(word?.WordText || "").trim() &&
+          Number.isFinite(Number(word?.Left)) && Number.isFinite(Number(word?.Top)) &&
+          Number.isFinite(Number(word?.Width)) && Number.isFinite(Number(word?.Height)));
+        if (!validWords.length) continue;
+        const left = Math.min(...validWords.map((word: any) => Number(word.Left)));
+        const top = Math.min(...validWords.map((word: any) => Number(word.Top)));
+        const right = Math.max(...validWords.map((word: any) => Number(word.Left) + Number(word.Width)));
+        const bottom = Math.max(...validWords.map((word: any) => Number(word.Top) + Number(word.Height)));
+        blocks.push({
+          text: validWords.map((word: any) => String(word.WordText).trim()).join(" "),
+          boundingBox: { x: left, y: top, width: right - left, height: bottom - top },
+        });
+      }
+    }
+    return { text, blocks };
   } catch {
     // Network, service, or API-key errors fall back to offline OCR silently.
-    return "";
+    return { text: "", blocks: [] };
   }
 }
 
@@ -1081,16 +1104,17 @@ export async function recognizeLabText(
   let mode: "online" | "offline" = "offline";
   // Optional cloud OCR is attempted only when the admin explicitly saves a key.
   // If it is unavailable or returns less readable text, retain the offline result.
-  const onlineText = fastMode ? "" : await recognizeOnlineLabText(uri, onlineApiKey);
+  const onlineResult = fastMode ? { text: "", blocks: [] } : await recognizeOnlineLabText(uri, onlineApiKey);
+  const onlineText = onlineResult.text;
   const qualityScore = (value: string) =>
-    (isLikelyLabReportText(value) ? 80 : 0) +
+    (isLikelyLabReportText(value, configuredTests) ? 80 : 0) +
     (value.match(/\d+(?:[.,]\d+)?/g) || []).length * 8 +
-    (value.match(/\b(?:result|reference|range|hemoglobin|platelets|glucose|creatinine)\b/gi) || []).length * 12 +
+    (value.match(/\b(?:result|reference|range|hemoglobin|haemoglobin|platelets|glucose|creatinine)\b/gi) || []).length * 12 +
     parseLabReportRows(value, configuredTests, gender, 10, true).length * 160 +
     (extractLabReportDate(value) ? 25 : 0);
   if (onlineText && (
     qualityScore(onlineText) > qualityScore(text) ||
-    (isLikelyLabReportText(onlineText) && !isLikelyLabReportText(text))
+    (isLikelyLabReportText(onlineText, configuredTests) && !isLikelyLabReportText(text, configuredTests))
   )) {
     text = normalizeHemoglobinUnitText(onlineText);
     mode = "online";
@@ -1098,10 +1122,14 @@ export async function recognizeLabText(
   let structuredText = "";
   try {
     const size = bestSize || await imageSize(uri);
-    structuredText = structureLabColumns(best?.blocks || [], size.width, size.height, configuredTests);
+    // Use online word geometry when online OCR wins, otherwise use the
+    // on-device engine's original bounding boxes. Both go through identical
+    // table reconstruction and configured-range validation.
+    const sourceBlocks = mode === "online" && onlineResult.blocks.length ? onlineResult.blocks : (best?.blocks || []);
+    structuredText = structureLabColumns(sourceBlocks, size.width, size.height, configuredTests);
     structuredText = validateStructuredLabResults(structuredText, text, configuredTests);
   } catch {
-    // Raw on-device OCR text remains available if image geometry is unavailable.
+    // Raw OCR text remains available if image geometry is unavailable.
   }
-  return { text: normalizeHemoglobinUnitText(text), structuredText: mode === "online" ? "" : normalizeHemoglobinUnitText(structuredText), mode };
+  return { text: normalizeHemoglobinUnitText(text), structuredText: normalizeHemoglobinUnitText(structuredText), mode };
 }
