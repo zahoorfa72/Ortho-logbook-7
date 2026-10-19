@@ -2198,10 +2198,17 @@ async function archiveCompletedMonths(onProgress?: (stage: string) => void) {
 
 async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], onProgress?: (stage: string) => void) {
   onProgress?.("Checking whether saved records changed…");
-  // Do not attach new changes to a prior month's baseline. Create a complete
-  // snapshot the first time this phone syncs in each calendar month.
-  const archiveChanged = await archiveEligiblePatientImages(onProgress);
-  await uploadPatientImageArchivesToDrive(onProgress);
+  // Patient PDF work is deliberately gated on patient-table changes. Previously
+  // every inventory/settings edit scanned every patient and checked every Drive
+  // PDF before syncing ordinary data, making unrelated syncs feel stuck.
+  // A patient-table sync still discovers missing PDFs and retries any failed PDF
+  // uploads; the normal record delta remains independent of image-PDF generation.
+  const patientDataChanged = changedTables.includes("patients");
+  let archiveChanged = false;
+  if (patientDataChanged) {
+    archiveChanged = await archiveEligiblePatientImages(onProgress);
+    await uploadPatientImageArchivesToDrive(onProgress);
+  }
   const effectiveChangedTables = archiveChanged ? Array.from(new Set([...changedTables, "patients"])) : changedTables;
   const currentMonthName = driveBackupName({ type: "all" });
   const base = await findBackupByName(currentMonthName);
