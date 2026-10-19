@@ -858,11 +858,11 @@ export default function PatientForm() {
     // a previously compressed copy, to avoid cumulative quality loss.
     // Bound scan processing time: the old implementation could encode the same
     // multi-megapixel scan dozens of times before saving it, making the scanner
-    // appear frozen and increasing memory pressure. Start with a readable
-    // document-sized image, then use only a few measured fallbacks.
+    // appear frozen and increasing memory pressure. Keep a few full-detail quality
+    // attempts, then use a small number of progressively smaller document images.
     const candidateEdges = [3200, 2800, 2400, 2100, 1800].filter(edge => edge < longest);
     const attempts: Array<{ edge: number; quality: number }> = [
-      { edge: longest, quality: 0.92 },
+      ...[0.92, 0.88, 0.84].map(quality => ({ edge: longest, quality })),
       ...candidateEdges.map((edge, index) => ({
         edge,
         quality: [0.92, 0.90, 0.88, 0.86, 0.84][index],
