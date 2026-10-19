@@ -856,11 +856,17 @@ export default function PatientForm() {
     // above 1.5 MiB, reduce resolution gradually and then lower JPEG quality
     // in small steps. Every attempt starts from the original source, never from
     // a previously compressed copy, to avoid cumulative quality loss.
+    // Bound scan processing time: the old implementation could encode the same
+    // multi-megapixel scan dozens of times before saving it, making the scanner
+    // appear frozen and increasing memory pressure. Start with a readable
+    // document-sized image, then use only a few measured fallbacks.
+    const candidateEdges = [3200, 2800, 2400, 2100, 1800].filter(edge => edge < longest);
     const attempts: Array<{ edge: number; quality: number }> = [
-      ...[0.96, 0.94, 0.92, 0.90, 0.88, 0.86, 0.84].map(quality => ({ edge: longest, quality })),
-      ...[4400, 4000, 3600, 3400, 3200, 3000, 2800, 2600, 2400, 2200, 2000, 1800, 1600]
-        .filter(edge => edge < longest)
-        .flatMap(edge => [0.94, 0.92, 0.90, 0.88, 0.86, 0.84].map(quality => ({ edge, quality }))),
+      { edge: longest, quality: 0.92 },
+      ...candidateEdges.map((edge, index) => ({
+        edge,
+        quality: [0.92, 0.90, 0.88, 0.86, 0.84][index],
+      })),
     ];
     let normalizedUri = "";
     let fallbackUri = "";
