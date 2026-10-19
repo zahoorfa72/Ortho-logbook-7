@@ -758,7 +758,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
     fileName: archive.fileName, sourceStamp: archive.sourceStamp, archivedAt: archive.archivedAt,
     imageCount: archive.imageCount, driveFileId: archive.driveFileId,
   })),
-  photoAssets: includePatientImages ? Object.fromEntries(compressedPhotoCache.assets?.entries() || []) : {},
+  photoAssets: includeAttachedImages ? Object.fromEntries(compressedPhotoCache.assets?.entries() || []) : {},
  };
 }
 
