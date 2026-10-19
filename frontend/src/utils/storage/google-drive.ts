@@ -2329,12 +2329,12 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
   // path, while normal edits pass a bounded list of IDs.
   const patientTableChanged = effectiveChangedTables.includes("patients");
   const fullPatientTable = Array.isArray(delta.fullTables) && delta.fullTables.includes("patients");
-  const changedPatientIds = Array.isArray(delta.patients)
-    ? Array.from(new Set(delta.patients.map((row: any) => String(row?.id || "")).filter(Boolean)))
+  const changedPatientIds: string[] = Array.isArray(delta.patients)
+    ? Array.from(new Set<string>(delta.patients.map((row: any) => String(row?.id || "")).filter((id: string) => Boolean(id))))
     : [];
   if (patientTableChanged) {
-    const deletedPatientIds = Array.isArray(delta.deletedIds?.patients)
-      ? delta.deletedIds.patients.map((id: any) => String(id)).filter(Boolean)
+    const deletedPatientIds: string[] = Array.isArray(delta.deletedIds?.patients)
+      ? delta.deletedIds.patients.map((id: any) => String(id)).filter((id: string) => Boolean(id))
       : [];
     for (const deletedId of deletedPatientIds) await queuePatientPdfDeletion(deletedId);
     if (fullPatientTable || delta._rowDelta !== true) {
