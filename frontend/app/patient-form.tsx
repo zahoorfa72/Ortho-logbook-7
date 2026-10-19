@@ -34,7 +34,7 @@ import { formatInventoryLabel } from "@/src/utils/inventory-label";
 import { archivePatientImagesForPatient, createPatientImagePdfFile, getPatientImageArchive, openPatientImageArchivePdf } from "@/src/utils/storage/patient-image-archive";
 import { deletePatientImagePdfFromDrive, downloadPatientImageArchiveForPatient, uploadPatientImageArchivesToDrive } from "@/src/utils/storage/google-drive";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
-const LAB_OCR_PIPELINE_VERSION = "row-aware-2026-10-19-v6-scan-recovery";
+const LAB_OCR_PIPELINE_VERSION = "row-aware-2026-10-19-v7-structured-evidence";
 
 type Patient = {
   id: string; mrNo: string; name: string; gender: string; age: string;
@@ -232,13 +232,17 @@ export default function PatientForm() {
           // Prefer rows reconstructed from OCR bounding-box positions. Keep the
           // original OCR text too, so the admin can verify any uncertain mapping.
           // Unknown rows remain review-only; the parser never guesses a test name.
-          const recognizedRows = text && isLikelyLabReportText(text, configuredLabTests);
-          const labCues = /\b(?:laboratory|lab report|investigation|test name|test results?|reference range|normal range|biological reference|specimen|result|units?)\b/i.test(text);
-          const numericContent = /[-+]?\d+(?:[.,]\d+)?/.test(text);
-          if (text && (recognizedRows || (labCues && numericContent))) {
+          const evidenceText = [text, structuredText].filter(Boolean).join("\n");
+          const recognizedRows = (!!text && isLikelyLabReportText(text, configuredLabTests)) ||
+            (!!structuredText && isLikelyLabReportText(structuredText, configuredLabTests));
+          const labCues = /\b(?:laboratory|lab report|investigation|test name|test results?|reference range|normal range|biological reference|specimen|result|units?)\b/i.test(evidenceText);
+          const numericContent = /[-+]?\d+(?:[.,]\d+)?/.test(evidenceText);
+          // A reconstructed table may identify a lab page when raw OCR loses its
+          // headings/columns. Use both outputs so valid scans aren't silently discarded.
+          if (evidenceText && (recognizedRows || (labCues && numericContent))) {
             pages.push("LAB REPORT IMAGE " + (i + 1) + "\n" +
               (structuredText ? "RECONSTRUCTED TABLE ROWS (test | result | unit | reference range)\n" + structuredText + "\n" : "") +
-              "RAW OCR TEXT FOR REVIEW\n" + text);
+              "RAW OCR TEXT FOR REVIEW\n" + (text || "[No reliable plain-text OCR was returned.]"));
             recognizedPhotoUris.push(photoUris[i]);
           }
         } catch {
