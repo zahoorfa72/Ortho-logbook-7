@@ -20,6 +20,7 @@ export async function getLastDriveBackupStatus(): Promise<string | null> {
 // Full Drive access is needed to discover backups created by earlier app builds or under a different file authorization.
 export const GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive";
 const BACKUP_NAME = "Ortho Logbook Backup.orbackup";
+const BACKUP_FOLDER_NAME = "Ortho Logbook Backups";
 const PATIENT_IMAGE_PDF_FOLDER = "Patient Image PDFs";
 const PENDING_PATIENT_PDF_DELETE_KEY = "ortho_pending_patient_pdf_drive_deletes_v1";
 const DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder";
@@ -908,18 +909,44 @@ async function uploadStagedJsonFile(uri: string, totalBytes: number, existingId?
 function escapeDriveQuery(value: string): string {
   return String(value || "").replace(/\\/g, "\\\\").replace(/'/g, "\\'");
 }
+async function getOrCreateBackupFolder(): Promise<any> {
+  const q = encodeURIComponent("name = '" + escapeDriveQuery(BACKUP_FOLDER_NAME) + "' and mimeType = '" + DRIVE_FOLDER_MIME + "' and 'root' in parents and trashed = false");
+  const response = await driveRequest(DRIVE_API + "?q=" + q + "&spaces=drive&pageSize=20&fields=files(id,name,mimeType,parents)");
+  const data = await response.json();
+  const existing = Array.isArray(data.files) ? data.files.find((x: any) => x?.id && x.mimeType === DRIVE_FOLDER_MIME) : null;
+  if (existing?.id) return existing;
+  const createdResponse = await driveRequest(DRIVE_API + "?fields=id,name,mimeType,parents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: BACKUP_FOLDER_NAME, mimeType: DRIVE_FOLDER_MIME }) });
+  const created = await createdResponse.json();
+  if (!created?.id || created.mimeType !== DRIVE_FOLDER_MIME) throw new Error("Google Drive did not confirm the Ortho Logbook Backups folder.");
+  return created;
+}
+async function ensureDriveFileInFolder(fileId: string, folderId: string): Promise<any> {
+  const response = await driveRequest(DRIVE_API + "/" + encodeURIComponent(fileId) + "?supportsAllDrives=true&fields=id,name,mimeType,parents,trashed");
+  const item = await response.json();
+  if (!item?.id || item.trashed) throw new Error("Google Drive file could not be verified before folder placement.");
+  const parents = Array.isArray(item.parents) ? item.parents.map(String) : [];
+  if (parents.includes(folderId)) return item;
+  const remove = parents.filter((id: string) => id !== folderId).join(",");
+  const query = "addParents=" + encodeURIComponent(folderId) + (remove ? "&removeParents=" + encodeURIComponent(remove) : "") + "&supportsAllDrives=true&fields=id,name,mimeType,parents,trashed";
+  const movedResponse = await driveRequest(DRIVE_API + "/" + encodeURIComponent(fileId) + "?" + query, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
+  const moved = await movedResponse.json();
+  if (!moved?.id || !Array.isArray(moved.parents) || !moved.parents.map(String).includes(folderId)) throw new Error("Google Drive could not move " + String(item.name || "the file") + " into its required folder.");
+  return moved;
+}
 async function findPatientImagePdfFolder(): Promise<any | null> {
-  const q = encodeURIComponent("name = '" + escapeDriveQuery(PATIENT_IMAGE_PDF_FOLDER) + "' and mimeType = '" + DRIVE_FOLDER_MIME + "' and trashed = false");
-  const response = await driveRequest(DRIVE_API + "?q=" + q + "&spaces=drive&pageSize=50&includeItemsFromAllDrives=true&supportsAllDrives=true&fields=files(id,name,mimeType)");
+  const backupFolder = await getOrCreateBackupFolder();
+  const q = encodeURIComponent("name = '" + escapeDriveQuery(PATIENT_IMAGE_PDF_FOLDER) + "' and mimeType = '" + DRIVE_FOLDER_MIME + "' and '" + escapeDriveQuery(String(backupFolder.id)) + "' in parents and trashed = false");
+  const response = await driveRequest(DRIVE_API + "?q=" + q + "&spaces=drive&pageSize=50&includeItemsFromAllDrives=true&supportsAllDrives=true&fields=files(id,name,mimeType,parents)");
   const data = await response.json();
   return Array.isArray(data.files) ? data.files.find((x: any) => x?.id && x.mimeType === DRIVE_FOLDER_MIME) || null : null;
 }
 async function getOrCreatePatientImagePdfFolder(): Promise<any> {
+  const backupFolder = await getOrCreateBackupFolder();
   const existing = await findPatientImagePdfFolder();
   if (existing?.id) return existing;
-  const response = await driveRequest(DRIVE_API + "?fields=id,name,mimeType", {
+  const response = await driveRequest(DRIVE_API + "?fields=id,name,mimeType,parents", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name: PATIENT_IMAGE_PDF_FOLDER, mimeType: DRIVE_FOLDER_MIME }),
+    body: JSON.stringify({ name: PATIENT_IMAGE_PDF_FOLDER, mimeType: DRIVE_FOLDER_MIME, parents: [String(backupFolder.id)] }),
   });
   const created = await response.json();
   if (!created?.id || created.mimeType !== DRIVE_FOLDER_MIME) throw new Error("Google Drive did not confirm the separate Patient Image PDFs folder.");
@@ -1658,6 +1685,8 @@ async function backupToGoogleDriveUnlocked(
   await storage.secureSet(LAST_DRIVE_BACKUP_KEY, completedAt);
   await storage.setItem(LAST_DRIVE_CONTENT_HASH_KEY + ":" + fileName, contentHash);
   const cleanupFailures: string[] = [];
+  const backupFolder = await getOrCreateBackupFolder();
+  if (result?.id) await ensureDriveFileInFolder(String(result.id), String(backupFolder.id));
   if (isMasterBackup && result?.id) {
     if (stagedFileUri) {
       await verifyStreamedDriveFile(String(result.id), fileName, stagedFileSize);
