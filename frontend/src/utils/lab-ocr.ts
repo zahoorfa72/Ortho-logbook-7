@@ -821,11 +821,10 @@ function structureLabColumns(blocks: any[], imageWidth: number, imageHeight: num
  * alignment error can otherwise assign a neighboring CBC value (for example,
  * Hb) to another test (for example, platelets).
  *
- * We trust a value only when the original text can associate a single measured
- * value with the same test label on that line, or on a nearby line before the
- * next recognized test label. If the text cannot verify the association, the
- * value is deliberately blanked so the app requests human review instead of
- * silently guessing. Reference intervals are never treated as results.
+ * Prefer the original OCR text when it explicitly associates a measured value
+ * with a test. Otherwise retain the geometry-derived result instead of blanking
+ * it, while column inference uses repeated result positions to reduce row shifts.
+ * Reference intervals are never intentionally used as results.
  */
 function rawMeasuredResultForTest(
   testName: string,
@@ -889,15 +888,11 @@ function validateStructuredLabResults(
 
     const rawResult = rawMeasuredResultForTest(prefix.name, rawText, configuredTests);
     const reconstructedResult = resultNumber(cells[1] || "");
-    if (rawResult === null) {
-      // Geometry alone is not enough to prove that a value belongs to this
-      // test: adjacent CBC columns can shift (e.g. hemoglobin into platelets).
-      // Leave uncertain values empty so the admin must review the source image.
-      cells[1] = "";
-    } else if (reconstructedResult === null || !sameMeasuredResult(reconstructedResult, rawResult)) {
-      // The original OCR text must independently support the same test/value
-      // pairing. Prefer its value only when it is explicitly associated with
-      // this test label; never silently keep an unverified geometric value.
+    if (rawResult !== null && (reconstructedResult === null || !sameMeasuredResult(reconstructedResult, rawResult))) {
+      // When the flattened OCR text clearly associates a value with this test,
+      // use that value to correct a geometric row/column mismatch. If flattened
+      // text cannot pair it reliably, preserve the geometry-derived value rather
+      // than discarding a result that may be clearly readable in the image.
       cells[1] = rawResult;
     }
     while (cells.length < 4) cells.push("");
