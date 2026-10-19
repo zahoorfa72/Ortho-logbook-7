@@ -302,7 +302,21 @@ function deletePatientRows(ids: string[], me: any) {
 
     const allowedPlaceholders = allowedIds.map(() => "?").join(",");
     const implantRows = db.getAllSync<any>(`SELECT * FROM patient_implants WHERE patient_id IN (${allowedPlaceholders})`, allowedIds);
-    const historyRows = db.getAllSync<any>(`SELECT * FROM patient_history WHERE patient_id IN (${allowedPlaceholders})`, allowedIds);
+    // Historical snapshots created by older builds may also contain huge
+    // embedded photos. Strip those fields inside SQLite before they cross the
+    // Android CursorWindow/JS heap boundary; photo originals are kept in the
+    // deleted_patient_photos sidecar and the separate patient PDF archive.
+    const historyRows = db.getAllSync<any>(
+      `SELECT id,patient_id,user_id,action,
+        CASE WHEN json_valid(snapshot_json) THEN json_remove(
+          snapshot_json,
+          '$.photos', '$.photos_json', '$.photoUri', '$.photo_uri',
+          '$.patient.photos', '$.patient.photos_json', '$.patient.photoUri', '$.patient.photo_uri'
+        ) ELSE '{}' END AS snapshot_json,
+        created_at
+       FROM patient_history WHERE patient_id IN (${allowedPlaceholders})`,
+      allowedIds,
+    );
     const trashId = addTrashEntry("patients", allowed.length === 1 ? "Patient: " + (allowed[0].name || allowed[0].mr_no || allowed[0].id) : allowed.length + " patients",
       { patients: allowed, patient_implants: implantRows, patient_history: historyRows, _patientPhotoTrashId: "pending" }, me.id || null);
     // Copy image blobs between SQLite rows without materializing them in JS.
