@@ -605,11 +605,47 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
      onProgress?.("Processing deleted records and trash… " + (trashIndex + 1) + "/" + trashSourceRows.length);
      await new Promise<void>((resolve) => setTimeout(resolve, 0));
    }
-   const payloadRow = db.getFirstSync<any>("SELECT payload_json FROM deleted_records WHERE id=?", [entry.id]);
+    let payloadRow: any;
+    if (includePatientImages) {
+      payloadRow = db.getFirstSync<any>("SELECT payload_json FROM deleted_records WHERE id=?", [entry.id]);
+    } else {
+      // Strip patient image fields in SQLite before a large deleted-record JSON row
+      // is copied through CursorWindow into JavaScript.
+      const counts = db.getFirstSync<any>(
+        "SELECT CASE WHEN json_valid(payload_json) THEN json_array_length(payload_json, '$.patients') ELSE 0 END AS patient_count, CASE WHEN json_valid(payload_json) THEN json_array_length(payload_json, '$.patient_history') ELSE 0 END AS history_count FROM deleted_records WHERE id=?",
+        [entry.id],
+      ) || {};
+      const paths = ["$.photo_uri", "$.photoUri", "$.photos_json", "$.photos",
+        "$.patient.photo_uri", "$.patient.photoUri", "$.patient.photos_json", "$.patient.photos"];
+      const patientCount = Math.min(200, Math.max(0, Number(counts.patient_count || 0)));
+      const historyCount = Math.min(200, Math.max(0, Number(counts.history_count || 0)));
+      for (let n = 0; n < patientCount; n++) {
+        paths.push("$.patients[" + n + "].photo_uri", "$.patients[" + n + "].photoUri",
+          "$.patients[" + n + "].photos_json", "$.patients[" + n + "].photos");
+      }
+      for (let n = 0; n < historyCount; n++) {
+        paths.push("$.patient_history[" + n + "].photo_uri", "$.patient_history[" + n + "].photoUri",
+          "$.patient_history[" + n + "].photos_json", "$.patient_history[" + n + "].photos",
+          "$.patient_history[" + n + "].snapshot.photos", "$.patient_history[" + n + "].snapshot.photos_json",
+          "$.patient_history[" + n + "].snapshot.photo_uri", "$.patient_history[" + n + "].snapshot.photoUri");
+      }
+      let expression = "payload_json";
+      // SQLite limits function arguments. Nested small json_remove calls handle
+      // large multi-patient trash entries without returning the original image blob.
+      for (let start = 0; start < paths.length; start += 20) {
+        const group = paths.slice(start, start + 20).map(path => "'" + path.replace(/'/g, "''") + "'").join(", ");
+        expression = "json_remove(" + expression + ", " + group + ")";
+      }
+      payloadRow = db.getFirstSync<any>(
+        "SELECT CASE WHEN json_valid(payload_json) THEN " + expression + " ELSE '{}' END AS payload_json FROM deleted_records WHERE id=?",
+        [entry.id],
+      );
+    }
+
    const rawPayload = String(payloadRow?.payload_json || "{}");
    let payload:any = {};
    try { payload = JSON.parse(rawPayload); } catch { payload = {}; }
-   if (!includePatientImages) payload = stripBackupImages(payload);
+   if (!includePatientImages) payload = stripPatientPhotosDeep(payload);
    if (payloadRow) payloadRow.payload_json = "";
    for (const patient of Array.isArray(payload.patients) ? payload.patients : []) {
      const embedded = await embedPatientPhotos(patient, compressedPhotoCache, onProgress, "trash patient " + (trashIndex + 1) + "/" + trashSourceRows.length);
