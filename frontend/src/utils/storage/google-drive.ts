@@ -2045,13 +2045,23 @@ function parseDownloadedBackup(raw: string): any {
       throw new Error("Google Drive file is not valid backup JSON: " + String(firstError?.message || firstError));
     }
   }
-  if (typeof parsed === "string") {
+  // Some older upload paths accidentally JSON-stringified the whole backup
+  // more than once. Unwrap bounded layers until we reach the actual object;
+  // a single unwrap caused valid double-wrapped backups to fail at validation.
+  for (let wrapperDepth = 0; typeof parsed === "string" && wrapperDepth < 4; wrapperDepth++) {
     const inner = parsed.replace(/^\uFEFF/, "").trim();
     if (!inner) throw new Error("Google Drive backup contains an empty wrapped document.");
-    parsed = JSON.parse(inner);
+    try {
+      parsed = JSON.parse(inner);
+    } catch (error: any) {
+      throw new Error("Google Drive backup contains a wrapped document that is not valid JSON: " + String(error?.message || error));
+    }
+  }
+  if (typeof parsed === "string") {
+    throw new Error("Google Drive backup has too many nested JSON string wrappers to validate safely.");
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("Google Drive file does not contain a valid Ortho Logbook backup.");
+    throw new Error("Google Drive file does not contain a valid Ortho Logbook backup object.");
   }
   return parsed;
 }
