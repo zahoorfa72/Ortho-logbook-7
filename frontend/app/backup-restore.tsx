@@ -64,12 +64,19 @@ export default function BackupRestoreScreen() {
   const [googleAccount, setGoogleAccount] = useState<string | null>(null);
   const [driveLoading, setDriveLoading] = useState(false);
   const [driveStatus, setDriveStatus] = useState("");
+  const [lastRestoredBackup, setLastRestoredBackup] = useState("");
   const [driveBackups, setDriveBackups] = useState<Array<{id:string;name:string;modifiedTime:string;size?:string}>>([]);
   const [selectedBackup, setSelectedBackup] = useState<{
     name: string;
     backupText: string;
     info: { createdAt: string; encrypted: boolean };
   } | null>(null);
+
+  useEffect(() => {
+    void storage.getItem<string>("ortho_last_drive_restore", "").then((value) => {
+      if (typeof value === "string") setLastRestoredBackup(value);
+    }).catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -364,6 +371,11 @@ export default function BackupRestoreScreen() {
             }
             if (isReplace) {
               const result = await restoreBackup(backup);
+              const restoredLabel = selectedBackup.name +
+                (isPeriodRestore ? " · " + restorePeriodValue.trim() : "") +
+                " · " + new Date().toLocaleString();
+              await storage.setItem("ortho_last_drive_restore", restoredLabel);
+              setLastRestoredBackup(restoredLabel);
               if (backup.branding && typeof backup.branding === "object") await setBranding(backup.branding);
               else if (backup.version >= 6 && backup.branding === null) await resetBranding();
               await storage.secureRemove("ortho_current_user");
@@ -377,6 +389,11 @@ export default function BackupRestoreScreen() {
               );
             } else {
               const result = await mergeBackup(backup);
+              const restoredLabel = selectedBackup.name +
+                (isPeriodRestore ? " · " + restorePeriodValue.trim() : "") +
+                " · " + new Date().toLocaleString();
+              await storage.setItem("ortho_last_drive_restore", restoredLabel);
+              setLastRestoredBackup(restoredLabel);
               if (!isPeriodRestore) {
                 if (backup.branding && typeof backup.branding === "object") await setBranding(backup.branding);
                 else if (backup.version >= 6 && backup.branding === null) await resetBranding();
@@ -435,6 +452,16 @@ export default function BackupRestoreScreen() {
         contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xl }}
         keyboardShouldPersistTaps="handled"
       >
+        {lastRestoredBackup ? (
+          <View style={styles.tipCard}>
+            <Ionicons name="checkmark-circle-outline" size={20} color={colors.brandPrimary} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.selectedTitle}>Last backup restored</Text>
+              <Text style={styles.fileInfo}>{lastRestoredBackup}</Text>
+            </View>
+          </View>
+        ) : null}
+
         <View style={styles.tipCard}>
           <Ionicons name="phone-portrait-outline" size={22} color={colors.brandPrimary} />
           <View style={{ flex: 1 }}>
