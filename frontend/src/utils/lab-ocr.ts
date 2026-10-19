@@ -814,6 +814,96 @@ function structureLabColumns(blocks: any[], imageWidth: number, imageHeight: num
 
   return output.join("\n");
 }
+
+/**
+ * Validate geometry-reconstructed results against the OCR engine's original
+ * text before they can trigger an automatic clinical alert. A row/column
+ * alignment error can otherwise assign a neighboring CBC value (for example,
+ * Hb) to another test (for example, platelets).
+ *
+ * We trust a value only when the original text can associate a single measured
+ * value with the same test label on that line, or on a nearby line before the
+ * next recognized test label. If the text cannot verify the association, the
+ * value is deliberately blanked so the app requests human review instead of
+ * silently guessing. Reference intervals are never treated as results.
+ */
+function rawMeasuredResultForTest(
+  testName: string,
+  rawText: string,
+  configuredTests: LabTestDefinition[],
+): string | null {
+  const target = canonicalTestName(testName);
+  const lines = String(rawText || "").split(/\r?\n/).map(line => line.replace(/\s+/g, " ").trim());
+
+  const measuredValue = (value: string): string | null => {
+    const referenceStart = firstReferenceStart(value);
+    const measuredArea = referenceStart >= 0 ? value.slice(0, referenceStart) : value;
+    return resultNumber(measuredArea);
+  };
+
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+    const prefix = findTestPrefix(line, configuredTests);
+    if (!prefix || canonicalTestName(prefix.name) !== target) continue;
+
+    const rest = line.slice(prefix.end)
+      .replace(/^\s*\((?!\s*[-+]?\d)[^)]{1,30}\)\s*/, " ")
+      .replace(/^\s*[:|;\-]+\s*/, "");
+    const direct = measuredValue(rest);
+    if (direct !== null) return direct;
+
+    // OCR sometimes puts a value directly below its test label. Permit a short
+    // continuation, but never cross into the next recognized test row.
+    for (let offset = 1; offset <= 2 && index + offset < lines.length; offset++) {
+      const nearby = lines[index + offset];
+      if (!nearby) continue;
+      if (findTestPrefix(nearby, configuredTests)) break;
+      if (isNonResultLine(nearby, configuredTests) && resultNumber(nearby) === null) continue;
+      const paired = measuredValue(nearby);
+      if (paired !== null) return paired;
+    }
+  }
+  return null;
+}
+
+function sameMeasuredResult(first: string, second: string): boolean {
+  const firstNumber = Number(first.replace(",", "."));
+  const secondNumber = Number(second.replace(",", "."));
+  if (first.trim() && second.trim() && Number.isFinite(firstNumber) && Number.isFinite(secondNumber)) {
+    return Math.abs(firstNumber - secondNumber) < 0.000001;
+  }
+  return normaliseName(first) === normaliseName(second);
+}
+
+function validateStructuredLabResults(
+  structuredText: string,
+  rawText: string,
+  configuredTests: LabTestDefinition[],
+): string {
+  if (!String(structuredText || "").trim()) return "";
+  return structuredText.split(/\r?\n/).map(line => {
+    const cells = line.split("|").map(cell => cell.trim());
+    if (cells.length < 2) return line;
+    const prefix = findTestPrefix(cells[0], configuredTests);
+    if (!prefix) return line; // Keep unmatched labels visible for review.
+
+    const rawResult = rawMeasuredResultForTest(prefix.name, rawText, configuredTests);
+    if (rawResult === null) {
+      // Keep the test label, but do not let an unverified value cause an alert.
+      cells[1] = "";
+    } else {
+      const reconstructedResult = resultNumber(cells[1] || "");
+      if (reconstructedResult === null || !sameMeasuredResult(reconstructedResult, rawResult)) {
+        // The label-associated raw value is stronger evidence than a value
+        // inferred only from x/y geometry; correct the cell rather than swap rows.
+        cells[1] = rawResult;
+      }
+    }
+    while (cells.length < 4) cells.push("");
+    return cells.slice(0, 4).join(" | ");
+  }).join("\n");
+}
+
 async function recognizeOnlineLabText(uri: string, apiKey: string): Promise<string> {
   const key = String(apiKey || "").trim();
   if (!key) return "";
@@ -989,6 +1079,7 @@ export async function recognizeLabText(
   try {
     const size = bestSize || await imageSize(uri);
     structuredText = structureLabColumns(best?.blocks || [], size.width, size.height, configuredTests);
+    structuredText = validateStructuredLabResults(structuredText, text, configuredTests);
   } catch {
     // Raw on-device OCR text remains available if image geometry is unavailable.
   }
