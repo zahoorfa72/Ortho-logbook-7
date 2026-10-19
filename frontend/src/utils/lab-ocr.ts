@@ -969,10 +969,10 @@ export async function recognizeLabText(
   const hasInitialLabSignal = potentialLabMarker || initialRows.length > 0;
   // Keep automatic scanning quick for ordinary clinical photos, but permit two
   // inexpensive orientation retries when the first pass barely reads anything.
-  const tryLightweightAutoRecovery = fastMode && !hasInitialLabSignal && initialText.length < 100;
-  if (fastMode && !hasInitialLabSignal && !tryLightweightAutoRecovery) {
-    return { text: normalizeHemoglobinUnitText(initialText), structuredText: "", mode: "offline" };
-  }
+  // If the first OCR pass finds no lab marker, it may have read a rotated
+  // report as ordinary text. Try both orientations before rejecting the image.
+  // This is limited to photos with no lab signal; normal lab pages keep the fast path.
+  const tryLightweightAutoRecovery = fastMode && !hasInitialLabSignal;
   const localScore = (value: any) => {
     const text = String(value?.text || "");
     // Judge OCR passes by recognized test/result pairs and the saved sex-specific
