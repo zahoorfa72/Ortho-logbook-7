@@ -16,7 +16,8 @@ import { buildPerspectiveWarpHtml } from "@/src/utils/perspective-warp";
 import { recordDiagnosticError } from "@/src/utils/problem-report";
 import { Dimensions } from "react-native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, AppState, Image, InteractionManager, Linking, Modal, Pressable, ScrollView, Text, View } from "react-native";
+import { Alert, Animated, AppState, Image, InteractionManager, Linking, Modal, Pressable, ScrollView, Text, View } from "react-native";
+import { PinchGestureHandler, State as GestureState } from "react-native-gesture-handler";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { WebView } from "react-native-webview";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
@@ -141,6 +142,26 @@ export default function PatientForm() {
   const [labManualReviews, setLabManualReviews] = useState<Array<{ test: string; unit: string; result: string; reference: string; photoUri: string; reportDate?: string; min?: number; max?: number }>>([]);
   const [labTestTemplates, setLabTestTemplates] = useState<import("@/src/utils/lab-ocr").LabTestDefinition[]>([]);
   const [labDetailsExpanded, setLabDetailsExpanded] = useState(false);
+  const [labFindingsExpanded, setLabFindingsExpanded] = useState(false);
+  const pinchScale = useRef(new Animated.Value(1)).current;
+  const basePhotoScale = useRef(new Animated.Value(1)).current;
+  const basePhotoScaleNumber = useRef(1);
+  const combinedPhotoScale = Animated.multiply(basePhotoScale, pinchScale);
+  const onPhotoPinch = useRef(Animated.event([{ nativeEvent: { scale: pinchScale } }], { useNativeDriver: true })).current;
+  const finishPhotoPinch = (event: any) => {
+    const state = event?.nativeEvent?.state;
+    if (state === GestureState.END || state === GestureState.CANCELLED || state === GestureState.FAILED) {
+      const nextScale = Math.max(1, Math.min(5, basePhotoScaleNumber.current * (Number(event?.nativeEvent?.scale) || 1)));
+      basePhotoScaleNumber.current = nextScale;
+      basePhotoScale.setValue(nextScale);
+      pinchScale.setValue(1);
+    }
+  };
+  const resetPhotoZoom = () => {
+    basePhotoScaleNumber.current = 1;
+    basePhotoScale.setValue(1);
+    pinchScale.setValue(1);
+  };
   const [labAddedResults, setLabAddedResults] = useState<Array<{ test: string; unit: string; result: string; reference: string; photoUri: string; reportDate?: string; min?: number; max?: number }>>([]);
   const [manualTestName, setManualTestName] = useState("");
   const [manualTestUnit, setManualTestUnit] = useState("");
@@ -2057,12 +2078,12 @@ export default function PatientForm() {
           </View>
         </Modal>
         <View style={{ marginTop: spacing.md, marginBottom: spacing.md, padding: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md }}>
-          <Pressable testID="patient-lab-results-toggle" onPress={() => setLabDetailsExpanded(value => !value)} accessibilityRole="button" accessibilityLabel={labDetailsExpanded ? "Hide lab result entry" : "Show lab result entry"} style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.sm }}>
+          <Pressable testID="patient-lab-results-toggle" onPress={() => setLabDetailsExpanded(value => !value)} accessibilityRole="button" accessibilityLabel={labDetailsExpanded ? "Hide Add Result form" : "Show Add Result form"} style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.sm, minHeight: 48 }}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.section}>Lab results for this patient</Text>
+              <Text style={{ color: colors.error || "#B91C1C", fontFamily: fontFamily.bold, fontSize: 22, letterSpacing: 0.4 }}>ADD RESULT</Text>
               <Text style={{ color: colors.onSurfaceSecondary, fontSize: fontSize.xs }}>{savedManualLabResults.length} saved · {labAddedResults.length + labManualReviews.length} pending · Tap to {labDetailsExpanded ? "hide" : "show"}</Text>
             </View>
-            <Ionicons name={labDetailsExpanded ? "chevron-up" : "chevron-down"} size={21} color={colors.brandPrimary} />
+            <Ionicons name={labDetailsExpanded ? "chevron-up" : "chevron-down"} size={24} color={colors.error || "#B91C1C"} />
           </Pressable>
           {labDetailsExpanded ? <View>
           <Text style={styles.hint}>Choose an admin-defined test or add a patient-specific test. Enter the measured result and report date. Saved reference ranges are used when available; these entries are saved with this patient record.</Text>
@@ -2120,8 +2141,15 @@ export default function PatientForm() {
           </View> : null}
         </View>
         {labOcrEnabled ? (
-          <View style={{ marginTop: spacing.md, marginBottom: spacing.md }}>
-            <Text style={styles.section}>Automatic lab report check</Text>
+          <View style={{ marginTop: spacing.md, marginBottom: spacing.md, borderWidth: 1, borderColor: colors.error || "#B91C1C", borderRadius: radius.md, padding: spacing.md }}>
+            <Pressable testID="patient-find-labs-toggle" onPress={() => setLabFindingsExpanded(value => !value)} accessibilityRole="button" accessibilityLabel={labFindingsExpanded ? "Hide Find Labs details" : "Show Find Labs details"} style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", minHeight: 48, gap: spacing.sm }}>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: colors.error || "#B91C1C", fontFamily: fontFamily.bold, fontSize: 24, letterSpacing: 0.5 }}>FIND LABS</Text>
+                <Text style={{ color: colors.onSurfaceSecondary, fontSize: fontSize.xs }}>{labOcrBusy ? "Scanning lab photos…" : "Lab scan details are hidden until opened."}</Text>
+              </View>
+              <Ionicons name={labFindingsExpanded ? "chevron-up" : "chevron-down"} size={26} color={colors.error || "#B91C1C"} />
+            </Pressable>
+            {labFindingsExpanded ? <View>
             <Text style={styles.hint}>{labOcrBusy ? "Checking saved pictures for lab reports…" : "Saved photos are checked automatically. Unchanged photos use the previous scan to keep the app responsive; use Rescan if a clear test name or result was missed."}</Text>
             <Pressable disabled={labOcrBusy || !p.photos.length} onPress={() => { lastAutoLabScan.current = ""; void analyzeLabPhotos([...new Set(p.photos)], false, true); }} style={{ alignSelf: "flex-start", marginTop: spacing.xs, paddingVertical: spacing.sm, paddingHorizontal: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md }}>
               <Text style={{ color: colors.brandPrimary, fontFamily: fontFamily.semibold }}>{labOcrBusy ? "Scanning…" : "Rescan lab photos"}</Text>
@@ -2191,6 +2219,7 @@ export default function PatientForm() {
                 </Pressable> : null}
               </View> : null}
               {labOcrOnlineHelp.length ? <><Text style={[styles.label, { marginTop: spacing.md }]}>Test-name reference assistance</Text><Text style={{ color: colors.onSurfaceSecondary, marginTop: spacing.xs }}>Only non-identifying test-name labels are checked. No photo, patient details, report text, result values or units are uploaded. This assistance does not confirm whether a result is normal.</Text>{labOcrOnlineHelp.map((item, i) => <Text key={i} style={{ color: colors.onSurface, marginTop: spacing.xs }}>{item}</Text>)}</> : null}
+            </View> : null}
             </View> : null}
           </View>
         ) : null}
@@ -2419,8 +2448,14 @@ export default function PatientForm() {
             <Ionicons name="close" size={30} color="#FFFFFF" />
           </Pressable>
           {!!selectedPhoto && (
-            <ScrollView key={selectedPhoto || "none"} horizontal pagingEnabled showsHorizontalScrollIndicator={false} contentOffset={{ x: Math.max(0, allViewerPhotos.indexOf(selectedPhoto)) * screenWidth, y: 0 }} onMomentumScrollEnd={(event) => { const idx = Math.max(0, Math.min(allViewerPhotos.length - 1, Math.round(event.nativeEvent.contentOffset.x / screenWidth))); setSelectedPhoto(allViewerPhotos[idx] || null); }} style={{ flex: 1, width: screenWidth }} contentContainerStyle={{ alignItems: "center" }}>
-              {allViewerPhotos.map((uri, idx) => <View key={uri + "-" + idx} style={{ width: screenWidth, height: "100%", alignItems: "center", justifyContent: "center" }}><Image source={{ uri }} style={styles.photoFull} resizeMode="contain" /></View>)}
+            <ScrollView key={selectedPhoto || "none"} horizontal pagingEnabled showsHorizontalScrollIndicator={false} contentOffset={{ x: Math.max(0, allViewerPhotos.indexOf(selectedPhoto)) * screenWidth, y: 0 }} onMomentumScrollEnd={(event) => { const idx = Math.max(0, Math.min(allViewerPhotos.length - 1, Math.round(event.nativeEvent.contentOffset.x / screenWidth))); resetPhotoZoom(); setSelectedPhoto(allViewerPhotos[idx] || null); }} style={{ flex: 1, width: screenWidth }} contentContainerStyle={{ alignItems: "center" }}>
+              {allViewerPhotos.map((uri, idx) => <View key={uri + "-" + idx} style={{ width: screenWidth, height: "100%", alignItems: "center", justifyContent: "center" }}>
+                <PinchGestureHandler onGestureEvent={onPhotoPinch} onHandlerStateChange={finishPhotoPinch}>
+                  <Animated.View style={{ width: "100%", height: "100%", alignItems: "center", justifyContent: "center" }}>
+                    <Animated.Image source={{ uri }} style={[styles.photoFull, { transform: [{ scale: combinedPhotoScale }] }]} resizeMode="contain" />
+                  </Animated.View>
+                </PinchGestureHandler>
+              </View>)}
             </ScrollView>
           )}
           {!!selectedPhoto && (
