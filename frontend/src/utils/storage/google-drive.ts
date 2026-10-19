@@ -2037,11 +2037,24 @@ function parseDownloadedBackup(raw: string): any {
   if (dataUri) text = decodeBackupBase64(dataUri[1]);
   let parsed: any;
   try { parsed = JSON.parse(text); } catch (firstError: any) {
-    if (/^[A-Za-z0-9+/=\r\n]+$/.test(text) && text.length > 16) {
+    // A legacy upload path occasionally wrote a JSON object surrounded by
+    // literal quotes without escaping the inner quotes (for example: "{\"app\":...}").
+    // It is invalid as-is but safe to recover when removing exactly one outer
+    // quote pair produces a complete valid JSON object/array.
+    if (text.length > 2 && text.startsWith('"') && text.endsWith('"') &&
+        (text[1] === "{" || text[1] === "[" ) &&
+        (text[text.length - 2] === "}" || text[text.length - 2] === "]")) {
+      try {
+        const unwrapped = text.slice(1, -1);
+        const recovered = JSON.parse(unwrapped);
+        if (recovered && typeof recovered === "object" && !Array.isArray(recovered)) parsed = recovered;
+      } catch {}
+    }
+    if (parsed === undefined && /^[A-Za-z0-9+/=\r\n]+$/.test(text) && text.length > 16) {
       try { parsed = JSON.parse(decodeBackupBase64(text)); } catch {
         throw new Error("Google Drive file is not valid backup JSON (plain and base64 formats both failed).");
       }
-    } else {
+    } else if (parsed === undefined) {
       throw new Error("Google Drive file is not valid backup JSON: " + String(firstError?.message || firstError));
     }
   }
