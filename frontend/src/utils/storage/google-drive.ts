@@ -1109,9 +1109,8 @@ export async function uploadPatientImageArchivesToDrive(onProgress?: (stage: str
     onProgress?.("Checking patient image PDF " + (i + 1) + "/" + archives.length + ": " + archive.patientName);
     const local = await FileSystem.getInfoAsync(archive.localUri);
     if (!local.exists || Number(local.size || 0) < 8) throw new Error("The local patient PDF is missing: " + archive.fileName);
-    // Avoid a Drive network check for every patient after each one-record edit.
-    // A confirmed source stamp means this exact PDF was already uploaded.
-    if (archive.driveFileId && archive.driveSourceStamp === archive.sourceStamp) continue;
+    // Verify cached IDs and folder membership on every pass. Older versions
+    // could remember a PDF outside the expected folder and then skip uploading it.
     let remote: any = null;
     if (archive.driveFileId) {
       try {
