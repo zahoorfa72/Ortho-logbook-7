@@ -818,10 +818,19 @@ function structureLabColumns(blocks: any[], imageWidth: number, imageHeight: num
     // Use the header or repeated column alignment when available; otherwise
     // fall back to the left-most measured value after the test label.
     candidates.sort((a, b) => {
-      // First choose the value on the same physical row as the test label.
-      // Only then use the repeated result-column position as a tie-breaker.
+      // A detected RESULT header is the strongest evidence for the result
+      // column. Prefer that column over nearby reference-range numbers, while
+      // still rejecting candidates that belong to a different physical row.
       const verticalDifference = a.verticalDistance - b.verticalDistance;
       const verticalTieTolerance = Math.max(typicalHeight * 0.08, imageHeight * 0.0005);
+      if (headerResultX !== null && inferredResultX !== null) {
+        const columnDifference =
+          Math.abs(a.center - inferredResultX) - Math.abs(b.center - inferredResultX);
+        const columnTieTolerance = 0.006;
+        if (Math.abs(columnDifference) > columnTieTolerance) return columnDifference;
+      }
+      // When there is no explicit result header, baseline alignment is the
+      // safer first signal; repeated x-position is only a tie-breaker.
       if (Math.abs(verticalDifference) > verticalTieTolerance) return verticalDifference;
       return inferredResultX !== null
         ? Math.abs(a.center - inferredResultX) - Math.abs(b.center - inferredResultX)
