@@ -43,6 +43,7 @@ export default function Login() {
   const [adminExists, setAdminExists] = useState(true);
   const [driveRestoreLoading, setDriveRestoreLoading] = useState(false);
   const [driveRestoreMessage, setDriveRestoreMessage] = useState("");
+  const [lastRestoredBackup, setLastRestoredBackup] = useState("");
 
   const restoreFromGoogleDrive = async () => {
     let waitingForRestoreChoice = false;
@@ -69,6 +70,9 @@ export default function Login() {
                 setDriveRestoreMessage("Merging records, settings and patient PDFs…");
                 const backup = await decryptBackup(remote.backupText, "");
                 const result = await mergeBackup(backup);
+                const restoredLabel = remote.name + " · " + new Date(remote.modifiedTime).toLocaleString();
+                await storage.setItem("ortho_last_drive_restore", restoredLabel);
+                setLastRestoredBackup(restoredLabel);
                 queryClient.clear();
                 initializeDatabase();
                 setAdminExists(Number(db.getFirstSync<any>("SELECT COUNT(*) AS n FROM users WHERE role='admin' AND disabled=0")?.n || 0) > 0);
@@ -93,6 +97,9 @@ export default function Login() {
                 setDriveRestoreMessage("Restoring patients, settings and patient PDFs…");
                 const backup = await decryptBackup(remote.backupText, "");
                 const result = await restoreBackup(backup);
+                const restoredLabel = remote.name + " · " + new Date(remote.modifiedTime).toLocaleString();
+                await storage.setItem("ortho_last_drive_restore", restoredLabel);
+                setLastRestoredBackup(restoredLabel);
                 await storage.secureRemove("ortho_current_user");
                 queryClient.clear();
                 initializeDatabase();
@@ -121,6 +128,12 @@ export default function Login() {
       setDriveRestoreMessage("");
     }
   };
+
+  useEffect(() => {
+    void storage.getItem<string>("ortho_last_drive_restore", "").then((value) => {
+      if (typeof value === "string") setLastRestoredBackup(value);
+    }).catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     try {
@@ -230,6 +243,12 @@ export default function Login() {
             {driveRestoreLoading ? (driveRestoreMessage || "Restoring from Google Drive…") : "Restore directly from Google Drive"}
           </Text>
         </Pressable>
+
+        {lastRestoredBackup ? (
+          <Text style={{ color: colors.muted, fontSize: fontSize.xs, textAlign: "center", marginTop: spacing.sm }}>
+            Last Drive backup restored: {lastRestoredBackup}
+          </Text>
+        ) : null}
 
         <Pressable
           testID="join-clinic-button"
