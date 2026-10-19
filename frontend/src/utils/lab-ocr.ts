@@ -768,12 +768,16 @@ function structureLabColumns(blocks: any[], imageWidth: number, imageHeight: num
   const headerResultX = headerResult ? xCenter(headerResult) : null;
   const qualitative = /^(?:positive|negative|reactive|nonreactive|non[\s-]?reactive|not[\s-]?detected|detected|absent|present|normal|abnormal)$/i;
   const candidatesForRow = (row: typeof knownRows[number]) => {
+    // Some OCR row shapes do not have a reliable label baseline. Skip those
+    // rows rather than comparing numeric coordinates against undefined.
+    const rowLabelY = row.labelY;
+    if (rowLabelY === undefined || !Number.isFinite(rowLabelY)) return [];
     const candidates: Array<{ item: OcrPositionedLine; text: string; center: number; verticalDistance: number }> = [];
     for (let index = 0; index < row.ordered.length; index++) {
       const item = row.ordered[index];
       const center = xCenter(item);
       if (center <= row.labelRight! + 0.002) continue;
-      const verticalDistance = Math.abs(yCenter(item) - row.labelY);
+      const verticalDistance = Math.abs(yCenter(item) - rowLabelY);
       // Reject boxes that are horizontally to the right but vertically belong
       // to a neighboring test row. This is the key guard against Hb being
       // attached to platelets/WBC when OCR returns columns out of order.
@@ -785,7 +789,7 @@ function structureLabColumns(blocks: any[], imageWidth: number, imageHeight: num
         const next = row.ordered[index + 1];
         const combined = valueText + " " + next.text.trim();
         const combinedParsed = resultNumber(combined);
-        const combinedVerticalDistance = Math.abs(yCenter(next) - row.labelY);
+        const combinedVerticalDistance = Math.abs(yCenter(next) - rowLabelY);
         if (combinedParsed && combinedVerticalDistance <= sameRowTolerance && /^(?:non|not)$/i.test(valueText)) {
           valueText = combined;
           parsed = combinedParsed;
