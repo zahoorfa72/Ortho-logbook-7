@@ -2405,6 +2405,8 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
         throw new Error("The changed-record journal could not be verified. Local data remains safe; the sync will retry.");
       }
     }
+    const backupFolder = await getOrCreateBackupFolder();
+    await ensureDriveFileInFolder(String(uploaded.id), String(backupFolder.id));
     journalFile = { ...uploaded, id: String(uploaded.id), name: JOURNAL_NAME };
   }
 
