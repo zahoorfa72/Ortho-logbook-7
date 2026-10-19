@@ -713,7 +713,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
   patientHistory:embeddedHistory,
   inventoryMovements:include("inventoryMovements") ? (()=>{if(filter.type==="all") return db.getAllSync<any>("SELECT * FROM inventory_movements ORDER BY created_at ASC"); const f=filter.type==="date" ? {sql:" WHERE date(created_at)=?",args:[filter.value||""]} : filter.type==="month" ? {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]} : {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]}; return db.getAllSync<any>(`SELECT * FROM inventory_movements${f.sql} ORDER BY created_at ASC`,f.args);})() : [],
   inventoryPurchaseReceipts:include("inventoryPurchaseReceipts") ? await (async()=>{const f=whereForFilter(filter,"created_at");const rows=db.getAllSync<any>(`SELECT id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,description,created_at,created_by FROM inventory_purchase_receipts${f.sql} ORDER BY created_at ASC`,f.args);return await mapWithConcurrency(rows, 2, async (row:any)=>{const billRow=db.getFirstSync<any>("SELECT bill_image FROM inventory_purchase_receipts WHERE id=?",[row.id]);const source=billRow?.bill_image;const billImage=!includeAttachedImages ? "" : typeof source==="string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(source) ? await embedOptionalPhoto(source,compressedPhotoCache) : source; if(billRow)billRow.bill_image=""; return {...row,bill_image:billImage};});})() : [],
-  stockReceipts:include("stockReceipts") ? await (async()=>{const f=whereForFilter(filter,"created_at");const rows=db.getAllSync<any>(`SELECT id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,description,created_at,created_by FROM stock_receipts${f.sql} ORDER BY created_at ASC`,f.args);return await mapWithConcurrency(rows, 2, async (row:any)=>{const billRow=db.getFirstSync<any>("SELECT bill_image FROM stock_receipts WHERE id=?",[row.id]);const source=billRow?.bill_image;const billImage=!includePatientImages ? "" : typeof source==="string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(source) ? await embedOptionalPhoto(source,compressedPhotoCache) : source; if(billRow)billRow.bill_image=""; return {...row,bill_image:billImage};});})() : [],
+  stockReceipts:include("stockReceipts") ? await (async()=>{const f=whereForFilter(filter,"created_at");const rows=db.getAllSync<any>(`SELECT id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,description,created_at,created_by FROM stock_receipts${f.sql} ORDER BY created_at ASC`,f.args);return await mapWithConcurrency(rows, 2, async (row:any)=>{const billRow=db.getFirstSync<any>("SELECT bill_image FROM stock_receipts WHERE id=?",[row.id]);const source=billRow?.bill_image;const billImage=!includeAttachedImages ? "" : typeof source==="string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(source) ? await embedOptionalPhoto(source,compressedPhotoCache) : source; if(billRow)billRow.bill_image=""; return {...row,bill_image:billImage};});})() : [],
   trash:trashRows,
   branding,
   appSettings,
@@ -750,7 +750,6 @@ export async function exportUnencryptedBackupData(filter: BackupFilter = { type:
    cache?.tables?.patients,
    cache?.photoSources,
    false,
- );
  );
  backup.filter = filter;
  return backup;
@@ -1147,15 +1146,6 @@ export async function exportIncrementalBackupData(changedTables: string[], onPro
   if (!IMAGE_SIGNATURE_TABLES.has(table)) continue;
   const prefix = "images:" + table + ":";
   for (const key of Object.keys(nextPhotoSources)) if (key.startsWith(prefix)) delete nextPhotoSources[key];
-  if (table === "patientHistory") {
-   const sourceRows = db.getAllSync<any>("SELECT id,snapshot_json FROM patient_history");
-   for (const row of sourceRows) {
-    const id = rowKey(row);
-    if (id === null) continue;
-    const signature = rowImageSignature({ snapshot_json: String(row.snapshot_json || "") });
-    if (signature) nextPhotoSources[prefix + id] = signature;
-   }
-  } else {
    for (const row of currentRowsForCache[table] || []) {
     const id = rowKey(row);
     if (id === null) continue;
@@ -1163,7 +1153,7 @@ export async function exportIncrementalBackupData(changedTables: string[], onPro
     if (signature) nextPhotoSources[prefix + id] = signature;
    }
   }
- }
+
   if (tables.includes("patients")) {
    for (const key of Object.keys(nextPhotoSources)) {
     if (!key.startsWith("images:")) delete nextPhotoSources[key];
