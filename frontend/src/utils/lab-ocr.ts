@@ -991,7 +991,11 @@ export async function recognizeLabText(
   };
   // If the first read is weak, retry sideways images at both orientations and
   // keep the OCR pass that reads the most text/numbers/lab terms.
-  if ((!fastMode || tryLightweightAutoRecovery) && (localScore(best) < 220 || parseLabReportRows(String(best?.text || ""), configuredTests, gender, 10, true).length === 0)) {
+  // Fast automatic scans still retry when OCR returns no usable test/result
+  // rows, even if it detected a generic word such as "result" or "reference".
+  // That generic marker must not suppress orientation recovery for a rotated report.
+  if ((!fastMode || tryLightweightAutoRecovery || initialRows.length === 0) &&
+      (localScore(best) < 220 || parseLabReportRows(String(best?.text || ""), configuredTests, gender, 10, true).length === 0)) {
     for (const degrees of [90, 270]) {
       let rotatedUri = "";
       try {
