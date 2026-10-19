@@ -67,7 +67,7 @@ function isBackupableSettingKey(key: string): boolean {
   if (!normalized) return false;
   // Never restore stale login/session material or sync cursors from a backup.
   if (/(^|[_-])(access[_-]?token|refresh[_-]?token|auth[_-]?token|password|session|current[_-]?user|credential)([_-]|$)/i.test(normalized)) return false;
-  if (/(^|[_-])(query[_-]?cache|persisted[_-]?query|last[_-]?successful[_-]?backup|last[_-]?uploaded[_-]?content[_-]?hash|incremental[_-]?snapshot|delta[_-]?cache|backup[_-]?reminder)([_-]|$)/i.test(normalized)) return false;
+  if (/(^|[_-])(query[_-]?cache|persisted[_-]?query|last[_-]?successful[_-]?backup|last[_-]?uploaded[_-]?content[_-]?hash|incremental[_-]?snapshot|delta[_-]?cache|backup[_-]?reminder|last[_-]?drive[_-]?restore)([_-]|$)/i.test(normalized)) return false;
   return true;
 }
 async function captureAsyncStorageSettings(): Promise<Record<string, string | null>> {
