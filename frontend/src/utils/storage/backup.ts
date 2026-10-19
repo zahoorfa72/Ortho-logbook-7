@@ -108,7 +108,7 @@ function base64ToBytes(value: string): Uint8Array {
   // atob() creates one additional enormous binary string. On large backup
   // files Hermes/JSC can throw "String is too long" before decryption starts.
   // Decode bounded, 4-character-aligned chunks into the final byte buffer.
-  const encoded = value.replace(/\\s/g, "");
+  const encoded = value.replace(/\s/g, "");
   if (!encoded) return new Uint8Array(0);
   const padding = encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0;
   const outputLength = Math.max(0, Math.floor(encoded.length * 3 / 4) - padding);
