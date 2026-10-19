@@ -84,12 +84,12 @@ async function imageContentKey(source: string): Promise<string> {
   // Avoid loading an entire scanned image into a JavaScript base64 string merely
   // to compute a cache stamp. The old code read each image once for hashing and
   // again for PDF creation, increasing latency and memory pressure.
-  if (/^data:image\\//i.test(source)) {
+  if (/^data:image\//i.test(source)) {
     const comma = source.indexOf(",");
     const payload = comma >= 0 ? source.slice(comma + 1) : source;
     return Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, payload);
   }
-  if (/^(file|content):\\/\\//i.test(source)) {
+  if (/^(file|content):\/\//i.test(source)) {
     try {
       const info = await FileSystem.getInfoAsync(source, { md5: true } as any);
       if (info.exists && (info as any).md5) return "md5:" + String((info as any).md5);
