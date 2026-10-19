@@ -285,7 +285,19 @@ export function startAutomaticDriveBackup() {
   try {
     const { AppState } = require("react-native");
     appStateSubscription = AppState.addEventListener("change", (state: string) => {
-      if (state === "active" && pendingTables.size) scheduleBackup();
+      if (state === "active" && pendingTables.size) {
+        // Resume any changes retained while Android suspended the JS runtime.
+        scheduleBackup();
+        return;
+      }
+      if ((state === "background" || state === "inactive") && pendingTables.size && !uploading && !backupPaused) {
+        // Flush the debounce when the app is leaving the foreground. Otherwise
+        // Android can suspend the JS timer before the native foreground upload
+        // service has even been started, making background backup appear idle.
+        if (timer) clearTimeout(timer);
+        timer = null;
+        void runBackup();
+      }
     });
   } catch {}
 
