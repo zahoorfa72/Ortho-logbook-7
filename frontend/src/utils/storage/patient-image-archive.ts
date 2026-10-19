@@ -214,7 +214,20 @@ export async function archiveEligiblePatientImages(onProgress?: (stage: string) 
       const cached = await FileSystem.getInfoAsync(existing.localUri);
       if (cached.exists && Number(cached.size || 0) > 8) continue;
     }
-    const row = db.getFirstSync<any>("SELECT photo_uri,photos_json FROM patients WHERE id=?", [id]) || {};
+    // A single legacy patient can have a multi-megabyte base64 photo row.
+    // Android CursorWindow cannot always return that row to JavaScript. Never let
+    // this optional background PDF archive block the independent data backup.
+    let row: any;
+    try {
+      row = db.getFirstSync<any>("SELECT photo_uri,photos_json FROM patients WHERE id=?", [id]) || {};
+    } catch (error: any) {
+      const message = String(error?.message || error);
+      if (/CursorWindow|row too big|too big to fit/i.test(message)) {
+        onProgress?.("Patient image PDF deferred for " + name + " because its saved image row exceeds Android's database read limit. Other backup data can still sync.");
+        continue;
+      }
+      throw error;
+    }
     const sources = await deduplicatePhotoSources(getPhotoSources(row));
     // Do not create empty archive PDFs for patients who have never had images.
     if (!sources.length && !existing) continue;
