@@ -4,6 +4,7 @@ import * as FileSystem from "expo-file-system/legacy";
 import { exportUnencryptedBackup, exportUnencryptedBackupData, exportIncrementalBackup, exportIncrementalBackupData, prepareIncrementalSnapshotCacheFromBackupData, commitIncrementalSnapshotCache, pruneBackupPhotoAssets, type BackupFilter } from "@/src/utils/storage/backup";
 import { markBackupTaken } from "@/src/utils/backup-reminder";
 import { storage } from "@/src/utils/storage";
+import { db, initializeDatabase } from "@/src/db/database";
 import { archiveEligiblePatientImages, archivePatientImagesForPatient, getLocalPatientImageArchives, getPatientImageArchive, installPatientImageArchivePdf, removePatientImageArchive, setPatientImageArchiveDriveState, type PatientImageArchive } from "@/src/utils/storage/patient-image-archive";
 
 const LAST_DRIVE_BACKUP_KEY = "ortho_drive_last_successful_backup";
@@ -2604,6 +2605,56 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
   if (!master || master.app !== "Ortho Logbook" || !Array.isArray(master.patients) ||
       !Array.isArray(master.inventory) || !Array.isArray(master.users)) {
     throw new Error("The current six-month master is incomplete or unreadable. No change was marked as backed up.");
+  }
+
+  // Repair an incomplete master even if the incremental cache incorrectly says
+  // that there are no changes. Compare every local SQLite row ID with the master
+  // before applying deltas; this catches older uploads that stopped after only
+  // part of the patient/table data was serialized.
+  initializeDatabase({ skipInventoryReset: true });
+  const localTableNames: Array<[string, string]> = [
+    ["patients", "patients"], ["procedures", "procedures"],
+    ["inventoryCategories", "inventory_categories"], ["inventory", "inventory"],
+    ["patientImplants", "patient_implants"], ["patientCustomFields", "patient_custom_fields"],
+    ["implantRecords", "implant_records"], ["expenses", "expenses"], ["users", "users"],
+    ["patientHistory", "patient_history"], ["inventoryMovements", "inventory_movements"],
+    ["inventoryPurchaseReceipts", "inventory_purchase_receipts"], ["stockReceipts", "stock_receipts"],
+    ["trash", "deleted_records"],
+  ];
+  const missingLocalRows: string[] = [];
+  for (const [backupTable, sqlTable] of localTableNames) {
+    const localIds = db.getAllSync<any>("SELECT id FROM " + sqlTable).map((row: any) => String(row.id ?? "")).filter(Boolean);
+    const masterIds = new Set<string>((Array.isArray(master[backupTable]) ? master[backupTable] : [])
+      .map((row: any) => String(row?.id ?? "")).filter(Boolean));
+    if (localIds.some((id: string) => !masterIds.has(id))) missingLocalRows.push(backupTable);
+  }
+  const missingSettings = !master.appSettings || typeof master.appSettings !== "object" ||
+    !Object.prototype.hasOwnProperty.call(master, "branding");
+  if (missingLocalRows.length || missingSettings) {
+    onProgress?.("Repairing incomplete master: checking all local records, accounts, inventory and settings…");
+    const completeLocal = await exportUnencryptedBackupData({ type: "all" }, onProgress);
+    if (!Array.isArray(completeLocal.patients) || !Array.isArray(completeLocal.inventory) ||
+        !Array.isArray(completeLocal.users) || !completeLocal.appSettings) {
+      throw new Error("The full local backup failed its completeness check. The existing Drive master was not changed.");
+    }
+    const repairedMaster = mergeFullBackupSnapshots(master, completeLocal);
+    repairedMaster.version = Math.max(Number(repairedMaster.version || 0), 11);
+    repairedMaster.createdAt = new Date().toISOString();
+    repairedMaster.filter = { type: "all" };
+    pruneBackupPhotoAssets(repairedMaster);
+    await backupToGoogleDriveUnlocked(undefined, { type: "all" }, {
+      onProgress,
+      backupDataOverride: repairedMaster,
+    });
+    const confirmedMaster = await findBackupByName(currentMonthName);
+    if (!confirmedMaster?.id) throw new Error("The repaired master upload could not be confirmed. Keep all existing backups and retry.");
+    // The cache must represent this phone's real full local snapshot, not the
+    // merged Drive-only historical rows, or later delta comparisons can omit data.
+    await prepareIncrementalSnapshotCacheFromBackupData("", completeLocal);
+    await commitIncrementalSnapshotCache(String(confirmedMaster.id) + ":" + String(confirmedMaster.modifiedTime || ""));
+    onProgress?.("Incomplete master repaired and verified; all local table IDs are now represented.");
+    return { baselineCreated: true, repaired: true, completedAt: new Date().toISOString(),
+      name: currentMonthName, accountEmail: getConnectedGoogleAccount() };
   }
   const JOURNAL_NAME = "Ortho Logbook Backup Changes.orbackup";
   const journalFile = await findBackupByName(JOURNAL_NAME);
