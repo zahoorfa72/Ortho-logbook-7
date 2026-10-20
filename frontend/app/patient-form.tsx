@@ -224,6 +224,23 @@ export default function PatientForm() {
   const analyzeLabPhotos = async (photoUris: string[] = [...new Set(p.photos)], automatic = false, forceRescan = false) => {
     if (!labOcrEnabled || !photoUris.length) return;
     const photoSignature = [...new Set(photoUris)].filter(Boolean).join("|");
+    // A manual retry must discard the previous OCR cache immediately. This
+    // ensures a failed/partial retry cannot leave stale results to be reused.
+    if (forceRescan) {
+      setLabOcrText("");
+      setLabOcrFindings([]);
+      setP(prev => {
+        const customData = { ...(prev.customData || {}) };
+        delete customData.labOcrPhotoScanComplete;
+        delete customData.labOcrExtractedText;
+        delete customData.labOcrPhotoSignature;
+        delete customData.labOcrPipelineVersion;
+        delete customData.labOcrPossibleFlags;
+        delete customData.labOcrNeedsReview;
+        delete customData.labOcrOnlineTestNameHelp;
+        return { ...prev, customData };
+      });
+    }
     // Reuse the last completed scan for an unchanged photo set. This prevents
     // reopening a patient from running several expensive OCR passes on every
     // saved photo again. Administrators can explicitly force a fresh scan.
