@@ -557,7 +557,6 @@ export function parseLabReportRows(text: string, configuredTests: LabTestDefinit
       for (const structuredLine of structuredSource.split(/\r?\n/)) {
         const cells = structuredLine.split("|").map(cell => cell.trim());
         const structuredPrefix = cells.length >= 2 ? findTestPrefix(cells[0], configuredTests) : null;
-        const numericTokens = cells.length >= 2 ? (cells[1].match(/[-+]?\d+(?:[.,]\d+)?/g) || []) : [];
         // A structured row label reserves that test's row even when its
         // result is unreadable. Do not let the flattened OCR fallback borrow
         // a neighboring value (e.g. hemoglobin) for platelets.
