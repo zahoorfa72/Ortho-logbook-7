@@ -238,8 +238,11 @@ const INTERVAL_PATTERN = new RegExp("(" + NUMBER_PATTERN + ")\\s*(?:-|–|—|\\
 type ReferenceInterval = { low: number; high: number; text: string; start: number };
 
 function genderKind(gender: string): "male" | "female" | "" {
-  if (/^(?:m|male|man|men)$/i.test(gender.trim())) return "male";
-  if (/^(?:f|female|woman|women)$/i.test(gender.trim())) return "female";
+  // Patient records may store sex as F/M or as a full label (including
+  // forms like "F (Female)"). Use the first explicit token consistently.
+  const first = (String(gender || "").trim().toLowerCase().match(/[a-z]+/g) || [])[0] || "";
+  if (["m", "male", "man", "men"].includes(first)) return "male";
+  if (["f", "female", "woman", "women"].includes(first)) return "female";
   return "";
 }
 
@@ -1035,10 +1038,13 @@ export async function recognizeLabText(
   // from farther away, where the full-page OCR often loses small test values.
   // Keep the original full-page OCR blocks for table geometry and append crop text
   // as a fallback source so labels/results split across crops are not silently lost.
-  if (!fastMode || (hasInitialLabSignal && initialRows.length === 0)) try {
+  if (!fastMode || (hasInitialLabSignal && initialRows.length < Math.min(3, Math.max(1, configuredTests.length)))) try {
     const size = originalDimensions || await imageSize(uri);
     const rowCount = parseLabReportRows(String(best?.text || ""), configuredTests, gender, 10, true).length;
-    if ((fastMode && hasInitialLabSignal && initialRows.length === 0) ||
+    // For automatic scans, run enlarged overlapping crops only when the report
+    // appears incomplete. This recovers small printed values without making
+    // every patient photo pay the cost of extra OCR passes.
+    if ((fastMode && hasInitialLabSignal && rowCount < Math.min(3, Math.max(1, configuredTests.length))) ||
         (rowCount < Math.min(3, Math.max(1, configuredTests.length)) && localScore(best) < 420) ||
         localScore(best) < 220) {
       const bandHeight = Math.max(1, Math.round(size.height * 0.56));
