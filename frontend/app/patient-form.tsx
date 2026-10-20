@@ -335,12 +335,76 @@ export default function PatientForm() {
         else if (!automatic) toast("No readable lab text found. Use Rescan lab photos after checking the image.", "error");
         return;
       }
-      const parsedRows = parseLabReportRows(extracted, configuredLabTests, p.gender, labWarningThreshold, true);
+      const genderForRange = /^\s*(?:m|male|man|men)\s*$/i.test(p.gender)
+        ? "male" : /^\s*(?:f|female|woman|women)\s*$/i.test(p.gender) ? "female" : "";
+      const canonical = (value: string) => String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+      const configuredAliases = (item: any) => [String(item?.name || ""), ...String(item?.aliases || "").split(/[,;\n]+/)].map(value => value.trim()).filter(Boolean);
+      const hasSavedSexRange = (item: any) => {
+        if (!item || !genderForRange) return false;
+        const minRaw = String(genderForRange === "male" ? item.maleMin : item.femaleMin ?? "").trim();
+        const maxRaw = String(genderForRange === "male" ? item.maleMax : item.femaleMax ?? "").trim();
+        const min = Number(minRaw.replace(",", "."));
+        const max = Number(maxRaw.replace(",", "."));
+        return minRaw !== "" && maxRaw !== "" && Number.isFinite(min) && Number.isFinite(max) && max > min;
+      };
+      const editDistance = (a: string, b: string) => {
+        const previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+        for (let i = 1; i <= a.length; i++) {
+          let diagonal = previous[0];
+          previous[0] = i;
+          for (let j = 1; j <= b.length; j++) {
+            const above = previous[j];
+            previous[j] = Math.min(previous[j] + 1, previous[j - 1] + 1, diagonal + (a[i - 1] === b[j - 1] ? 0 : 1));
+            diagonal = above;
+          }
+        }
+        return previous[b.length];
+      };
+      const findSavedRangeTest = (rawName: string) => {
+        const name = canonical(rawName);
+        if (!name) return undefined;
+        const eligible = configuredLabTests.filter(hasSavedSexRange);
+        const exact = eligible.find(item => configuredAliases(item).some(alias => canonical(alias) === name));
+        if (exact) return exact;
+        // Permit only clear near-matches to a saved test name/alias; never
+        // display an unconfigured test or a test without this patient's sex range.
+        let best: any;
+        let bestScore = 0;
+        for (const item of eligible) {
+          for (const alias of configuredAliases(item)) {
+            const key = canonical(alias);
+            if (key.length < 4 || name.length < 4) continue;
+            const distance = editDistance(name, key);
+            const similarity = 1 - distance / Math.max(name.length, key.length);
+            const containsMatch = Math.min(name.length, key.length) >= 5 &&
+              (name.includes(key) || key.includes(name)) &&
+              Math.min(name.length, key.length) / Math.max(name.length, key.length) >= 0.72;
+            const score = containsMatch ? Math.max(similarity, 0.82) : similarity;
+            if (score > bestScore) { bestScore = score; best = item; }
+          }
+        }
+        return bestScore >= 0.78 ? best : undefined;
+      };
+      const parsedRows = parseLabReportRows(extracted, configuredLabTests, p.gender, labWarningThreshold, true)
+        .flatMap(row => {
+          const saved = findSavedRangeTest(row.test);
+          if (!saved) return [];
+          const min = Number(String(genderForRange === "male" ? saved.maleMin : saved.femaleMin).replace(",", "."));
+          const max = Number(String(genderForRange === "male" ? saved.maleMax : saved.femaleMax).replace(",", "."));
+          const value = Number(String(row.result || "").replace(",", ".").replace(/[<>≤≥\s]/g, ""));
+          if (!Number.isFinite(value)) return [];
+          const excursion = value < min ? (min === 0 ? 100 : Math.abs(min - value) / Math.abs(min) * 100)
+            : value > max ? Math.abs(value - max) / Math.max(Math.abs(max), 0.000001) * 100 : 0;
+          const severity = excursion > 1 ? (excursion <= labWarningThreshold ? "WARNING" : "ALERT") : "";
+          return [{
+            ...row, test: String(saved.name), unit: String(saved.unit || ""),
+            reference: String(saved[genderForRange === "male" ? "maleMin" : "femaleMin"]) + "–" + String(saved[genderForRange === "male" ? "maleMax" : "femaleMax"]),
+            min, max, severity,
+          }];
+        });
       const reviewSourcePhotos = cachedExtracted !== null
         ? [...new Set([...extracted.matchAll(/LAB REPORT IMAGE\s+(\d+)/gi)].map(match => photoUris[Number(match[1]) - 1]).filter(Boolean))]
         : [...new Set(recognizedPhotoUris)];
-      const canonical = (value: string) => String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
-      const configuredAliases = (item: any) => [String(item?.name || ""), ...String(item?.aliases || "").split(/[,;\n]+/)].map(value => value.trim()).filter(Boolean);
       const matchesConfiguredTest = (item: any, value: string) => configuredAliases(item).some(alias => canonical(alias) === canonical(value));
       const isHemoglobin = (value: string) => ["hemoglobin", "haemoglobin", "hgb", "hb"].includes(canonical(value));
       const reportDateForTest = (testName: string) => {
@@ -367,7 +431,7 @@ export default function PatientForm() {
       const genderKind = /^\s*(?:m|male|man|men)\s*$/i.test(p.gender)
         ? "male"
         : /^\s*(?:f|female|woman|women)\s*$/i.test(p.gender) ? "female" : "";
-      const configuredCandidates = configuredLabTests.map(item => ({
+      const configuredCandidates = configuredLabTests.filter(hasSavedSexRange).map(item => ({
         name: String(item.name || "").trim(), unit: String(item.unit || ""),
         min: genderKind === "male" ? item.maleMin : genderKind === "female" ? item.femaleMin : "",
         max: genderKind === "male" ? item.maleMax : genderKind === "female" ? item.femaleMax : ""
@@ -408,9 +472,8 @@ export default function PatientForm() {
           });
         }
       }
-      const testCandidates = [...configuredCandidates, ...commonCandidates, ...observedCandidates].filter((item, index, all) =>
-        item.name && all.findIndex(other => canonical(other.name) === canonical(item.name) ||
-          (isHemoglobin(other.name) && isHemoglobin(item.name))) === index
+      const testCandidates = configuredCandidates.filter((item, index, all) =>
+        item.name && all.findIndex(other => canonical(other.name) === canonical(item.name)) === index
       );
       const rawOnly = extracted;
       const rawLines = rawOnly.split(/\r?\n/);
@@ -496,14 +559,11 @@ export default function PatientForm() {
           // Ignore header/logo noise that OCR mistakenly placed in the test-name
           // column (e.g. "SASINS") when that row has no numeric patient result.
           // Keep warnings when an unknown name is paired with an actual result.
-          if (!knownTest && resultLooksNumeric) {
-            reason = "Check test name (OCR may have misread it)";
-          } else if (knownTest && !resultLooksNumeric) {
+          const saved = findSavedRangeTest(cells[0]);
+          if (!saved) continue;
+          if (!resultLooksNumeric) {
             reason = "Check result (OCR could not read a clear numeric value)";
-          } else if (knownTest && resultLooksNumeric) {
-            const testName = cells[0];
-            const saved = configuredLabTests.find(item => matchesConfiguredTest(item, testName) ||
-              (isHemoglobin(item.name) && isHemoglobin(testName)));
+          } else {
             const sex = /^\s*(?:m|male|man|men)\s*$/i.test(p.gender) ? "male" :
               /^\s*(?:f|female|woman|women)\s*$/i.test(p.gender) ? "female" : "";
             const savedRangeExists = !!saved && !!sex &&
