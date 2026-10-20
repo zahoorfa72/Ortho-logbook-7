@@ -2637,7 +2637,10 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
     }
   }
 
-  const hasActualChanges = (Array.isArray(delta.changedTables) ? delta.changedTables : []).some((table: string) => {
+  // This is a potential-change check for the one-time migration path.
+  // Routine sync compares settings to the confirmed master below, because
+  // appSettings may be queued again without any setting actually changing.
+  const hasPotentialChanges = (Array.isArray(delta.changedTables) ? delta.changedTables : []).some((table: string) => {
     if (table === "branding" || table === "appSettings") return Object.prototype.hasOwnProperty.call(delta, table);
     if (Array.isArray(delta.fullTables) && delta.fullTables.includes(table)) return true;
     const rows = Array.isArray(delta[table]) ? delta[table].length : 0;
@@ -2655,7 +2658,7 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
     const migrated = await backupToGoogleDriveUnlocked(undefined, { type: "all" }, {
       onProgress,
       preferDriveOnMigration: true,
-      localChanges: hasActualChanges ? delta : undefined,
+      localChanges: hasPotentialChanges ? delta : undefined,
     });
     const migratedBase = await findLatestBackup();
     if (!migratedBase?.id) throw new Error("The complete backup was uploaded but could not be confirmed. Local data remains safe.");
@@ -2687,6 +2690,28 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
       !Array.isArray(master.inventory) || !Array.isArray(master.users)) {
     throw new Error("The current six-month master is incomplete or unreadable. No change was marked as backed up.");
   }
+
+  // Compare settings semantically with sorted object keys. Settings are stored
+  // in AsyncStorage, so their key enumeration order can differ between runs;
+  // that must not trigger a redundant Drive upload.
+  const stableSettingsJson = (value: any): string => {
+    if (Array.isArray(value)) return "[" + value.map(stableSettingsJson).join(",") + "]";
+    if (value && typeof value === "object") {
+      return "{" + Object.keys(value).sort().filter(key => value[key] !== undefined)
+        .map(key => JSON.stringify(key) + ":" + stableSettingsJson(value[key])).join(",") + "}";
+    }
+    return JSON.stringify(value);
+  };
+  const hasActualChanges = (Array.isArray(delta.changedTables) ? delta.changedTables : []).some((table: string) => {
+    if (table === "branding" || table === "appSettings") {
+      return Object.prototype.hasOwnProperty.call(delta, table) &&
+        stableSettingsJson(delta[table]) !== stableSettingsJson(master[table]);
+    }
+    if (Array.isArray(delta.fullTables) && delta.fullTables.includes(table)) return true;
+    const rows = Array.isArray(delta[table]) ? delta[table].length : 0;
+    const deleted = Array.isArray(delta.deletedIds?.[table]) ? delta.deletedIds[table].length : 0;
+    return rows > 0 || deleted > 0;
+  });
 
   // Repair an incomplete master even if the incremental cache incorrectly says
   // that there are no changes. Compare every local SQLite row ID with the master
