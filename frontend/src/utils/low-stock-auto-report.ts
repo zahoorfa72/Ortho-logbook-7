@@ -349,8 +349,10 @@ export async function checkAndSendImmediateLowStockAlerts(): Promise<string> {
   const hasWhatsAppBaseline = Array.isArray(state.activeLowStockWhatsAppIds);
   const gmailNew = gmailOn && hasGmailBaseline ? low.filter((item: any) => Number(item.quantity) > 0 && !gmailActive.has(String(item.id) + ":minimum")) : [];
   const whatsappNew = whatsappOn && hasWhatsAppBaseline ? low.filter((item: any) => Number(item.quantity) > 0 && !whatsappActive.has(String(item.id) + ":minimum")) : [];
-  const gmailZeroNew = gmailOn ? low.filter((item: any) => Number(item.quantity) <= 0 && !gmailActive.has(String(item.id) + ":zero")) : [];
-  const whatsappZeroNew = whatsappOn ? low.filter((item: any) => Number(item.quantity) <= 0 && !whatsappActive.has(String(item.id) + ":zero")) : [];
+  // Do not send an immediate zero-stock email/WhatsApp for items already at zero on first run.
+  // Establish the baseline first; only a later transition to zero should trigger an urgent alert.
+  const gmailZeroNew = gmailOn && hasGmailBaseline ? low.filter((item: any) => Number(item.quantity) <= 0 && !gmailActive.has(String(item.id) + ":zero")) : [];
+  const whatsappZeroNew = whatsappOn && hasWhatsAppBaseline ? low.filter((item: any) => Number(item.quantity) <= 0 && !whatsappActive.has(String(item.id) + ":zero")) : [];
 
   const formatMessage = (items: any[]) => {
     const timestamp = new Date().toLocaleString();
