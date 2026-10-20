@@ -806,7 +806,7 @@ async function writeBackupTextInChunks(uri: string, content: string, chunkChars 
   if (first) await writer.writeTextChunk(uri, "", false);
 }
 
-async function writeBackupObjectToFile(uri: string, value: any, onProgress?: (stage: string) => void): Promise<void> {
+async function writeBackupObjectToFile(uri: string, value: any, onProgress?: (stage: string) => void): Promise<string> {
   pruneBackupPhotoAssets(value);
   const writer = NativeModules.DriveBackgroundUpload;
   if (!writer?.writeTextChunk) throw new Error("This Android build is missing the safe large-backup file writer. Install the latest APK and retry.");
@@ -814,6 +814,25 @@ async function writeBackupObjectToFile(uri: string, value: any, onProgress?: (st
   let first = true;
   let charactersWritten = 0;
   let lastReportedCharacters = 0;
+  // Hash the JSON as it is streamed, avoiding a second full-size string or
+  // reading a potentially multi-hundred-MB file back into Android memory.
+  // Ignore only the root createdAt value so opening the app does not make an
+  // unchanged backup look different merely because its timestamp advanced.
+  let contentHash = 2166136261;
+  const append = async (part: string, includeInHash = true) => {
+    charactersWritten += part.length;
+    if (includeInHash) {
+      for (let i = 0; i < part.length; i++) {
+        contentHash ^= part.charCodeAt(i);
+        contentHash = Math.imul(contentHash, 16777619);
+      }
+    }
+    for (let offset = 0; offset < part.length; offset += 16 * 1024) {
+      buffer += part.slice(offset, offset + 16 * 1024);
+      // Larger but bounded bridge writes reduce overhead for 700+ MB backups.
+      if (buffer.length >= 256 * 1024) await flush();
+    }
+  };
   const flush = async () => {
     if (!buffer) return;
     await writer.writeTextChunk(uri, buffer, !first);
@@ -824,15 +843,7 @@ async function writeBackupObjectToFile(uri: string, value: any, onProgress?: (st
       onProgress?.("Preparing backup file… " + (charactersWritten / (1024 * 1024)).toFixed(1) + " MB written");
     }
   };
-  const append = async (part: string) => {
-    charactersWritten += part.length;
-    for (let offset = 0; offset < part.length; offset += 16 * 1024) {
-      buffer += part.slice(offset, offset + 16 * 1024);
-      // Larger but bounded bridge writes reduce overhead for 700+ MB backups.
-      if (buffer.length >= 256 * 1024) await flush();
-    }
-  };
-  const writeValue = async (item: any): Promise<void> => {
+  const writeValue = async (item: any, includeInHash = true, depth = 0): Promise<void> => {
     if (typeof item === "string") {
       // Never JSON.stringify an entire image-heavy string (photos_json,
       // snapshot_json, or payload_json) at once. Escape bounded pieces and
@@ -841,21 +852,21 @@ async function writeBackupObjectToFile(uri: string, value: any, onProgress?: (st
       const stringChunkChars = 8 * 1024;
       for (let offset = 0; offset < item.length; offset += stringChunkChars) {
         const encodedChunk = JSON.stringify(item.slice(offset, Math.min(item.length, offset + stringChunkChars)));
-        await append(encodedChunk.slice(1, -1));
+        await append(encodedChunk.slice(1, -1), includeInHash);
       }
       await append('"');
       return;
     }
     if (item === null || typeof item !== "object") {
       const encoded = JSON.stringify(item);
-      await append(encoded === undefined ? "null" : encoded);
+      await append(encoded === undefined ? "null" : encoded, includeInHash);
       return;
     }
     if (Array.isArray(item)) {
       await append("[");
       for (let i = 0; i < item.length; i++) {
         if (i) await append(",");
-        await writeValue(item[i]);
+        await writeValue(item[i], includeInHash, depth + 1);
       }
       await append("]");
       return;
@@ -869,7 +880,8 @@ async function writeBackupObjectToFile(uri: string, value: any, onProgress?: (st
       firstKey = false;
       await append(JSON.stringify(key));
       await append(":");
-      await writeValue(child);
+      const hashChild = includeInHash && !(depth === 0 && key === "createdAt");
+      await writeValue(child, hashChild, depth + 1);
     }
     await append("}");
   };
@@ -877,6 +889,7 @@ async function writeBackupObjectToFile(uri: string, value: any, onProgress?: (st
   await flush();
   if (first) await writer.writeTextChunk(uri, "", false);
   onProgress?.("Backup file preparation complete · " + (charactersWritten / (1024 * 1024)).toFixed(1) + " MB");
+  return `fnv1a-${(contentHash >>> 0).toString(16)}-${charactersWritten}`;
 }
 
 async function uploadStagedJsonFile(uri: string, totalBytes: number, existingId?: string, onProgress?: (stage: string) => void, fileName: string = BACKUP_NAME) {
@@ -1847,6 +1860,7 @@ async function backupToGoogleDriveUnlocked(
   let backupText: string | null = null;
   let stagedFileUri: string | null = null;
   let stagedFileSize = 0;
+  let stagedContentHash = "";
   let migrationComplete = true;
   let cleanupSafe = true;
   let migrationAttempted = false;
@@ -1882,7 +1896,7 @@ async function backupToGoogleDriveUnlocked(
     if (!FileSystem.cacheDirectory) throw new Error("Device cache storage is unavailable for the Drive backup.");
     stagedFileUri = FileSystem.cacheDirectory + "ortho-drive-stream-" + Date.now() + ".json";
     try {
-      await writeBackupObjectToFile(stagedFileUri, backupData, options.onProgress);
+      stagedContentHash = await writeBackupObjectToFile(stagedFileUri, backupData, options.onProgress);
       const info = await FileSystem.getInfoAsync(stagedFileUri);
       if (!info.exists || typeof info.size !== "number" || info.size <= 0) {
         throw new Error("The streamed backup file is missing or empty. Local data remains unchanged.");
@@ -1925,7 +1939,7 @@ async function backupToGoogleDriveUnlocked(
 
   options.onProgress?.("Checking whether backup changed…");
   const contentHash = stagedFileUri
-    ? "streamed-" + stagedFileSize + "-" + Date.now()
+    ? stagedContentHash
     : await backupContentHash(backupText as string, options.onProgress);
   const fileName = driveBackupName(filter);
   options.onProgress?.("Finding the master Drive backup…");
@@ -1934,8 +1948,11 @@ async function backupToGoogleDriveUnlocked(
   // begins; each half-year must retain its own master snapshot.
   const previousHash = await storage.getItem(LAST_DRIVE_CONTENT_HASH_KEY + ":" + fileName, "");
   const previousSuccess = await getLastDriveBackupStatus();
-  if (!stagedFileUri && existing?.id && previousSuccess && options.skipIfUnchanged && previousHash === contentHash &&
+  if (existing?.id && previousSuccess && options.skipIfUnchanged && previousHash === contentHash &&
       (!isMasterBackup || (!migrationAttempted && migrationMarker === "1"))) {
+    if (stagedFileUri) {
+      try { await FileSystem.deleteAsync(stagedFileUri, { idempotent: true }); } catch {}
+    }
     return { skipped: true, completedAt: previousSuccess, accountEmail: getConnectedGoogleAccount(), name: fileName };
   }
 
