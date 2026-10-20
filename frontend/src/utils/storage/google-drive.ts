@@ -1210,8 +1210,8 @@ async function downloadPatientImageArchivesFromDrive(backup: any, onProgress?: (
       .map((patient: any) => [String(patient.id), patient]),
   );
   const refs = new Map<string, any>();
-  // Patient PDFs are durable archives, not a 30-day cache. Restore every PDF
-  // referenced by an active patient regardless of age, excluding deleted patients.
+  // Restore only patient PDFs created/updated in the last 48 hours. Older PDFs
+  // remain in Drive and can be downloaded from the individual patient's record.
   const isActivePatient = (_ref: any, patientId: string): boolean => patientById.has(patientId);
   for (const item of Array.isArray(backup?.patientImageArchives) ? backup.patientImageArchives : []) {
     if (item?.patientId && item?.fileName && isActivePatient(item, String(item.patientId))) {
@@ -1239,8 +1239,13 @@ async function downloadPatientImageArchivesFromDrive(backup: any, onProgress?: (
   // by their Drive appProperties patient ID, not by patient name alone, so a
   // new phone can restore archives that already exist in Drive without asking
   // the user to select PDFs manually or attaching another patient's images.
+  const cutoffIso = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+  const cutoffMs = Date.parse(cutoffIso);
+  const recentFileNames = new Set<string>();
+  // Let Drive filter old archives server-side so restore does not enumerate or
+  // inspect the whole patient PDF library on the phone.
   const folderQuery = encodeURIComponent("'" + escapeDriveQuery(String(folder.id)) +
-    "' in parents and mimeType = 'application/pdf' and trashed = false");
+    "' in parents and mimeType = 'application/pdf' and trashed = false and modifiedTime > '" + cutoffIso + "'");
   let pageToken = "";
   do {
     const tokenParam = pageToken ? "&pageToken=" + encodeURIComponent(pageToken) : "";
@@ -1249,27 +1254,41 @@ async function downloadPatientImageArchivesFromDrive(backup: any, onProgress?: (
       "&fields=files(id,name,mimeType,size,modifiedTime,parents,appProperties),nextPageToken" + tokenParam);
     const data = await response.json();
     for (const remote of Array.isArray(data.files) ? data.files : []) {
-      const patientId = String(remote?.appProperties?.orthoPatientId || "");
       const fileName = String(remote?.name || "");
+      const manifestRef = refs.get(fileName);
+      // Legacy PDFs without appProperties can only be matched using an exact
+      // filename already referenced by the backup manifest.
+      const remotePatientId = String(remote?.appProperties?.orthoPatientId || "");
+      const patientId = remotePatientId || String(manifestRef?.patientId || "");
+      const modifiedMs = Date.parse(String(remote?.modifiedTime || ""));
       if (!remote?.id || !patientId || !patientById.has(patientId) ||
+          (remotePatientId && manifestRef?.patientId && remotePatientId !== String(manifestRef.patientId)) ||
+          !Number.isFinite(modifiedMs) || modifiedMs <= cutoffMs ||
           remote.mimeType !== "application/pdf" || !/^[^/\\]{1,180}\.pdf$/i.test(fileName)) continue;
-      if (refs.has(fileName)) continue;
       const patient = patientById.get(patientId);
+      recentFileNames.add(fileName);
       refs.set(fileName, {
+        ...(manifestRef || {}),
         patientId,
-        patientName: String(patient?.name || "Patient"),
-        mrNo: String(patient?.mr_no || ""),
+        patientName: String(patient?.name || manifestRef?.patientName || "Patient"),
+        mrNo: String(patient?.mr_no || manifestRef?.mrNo || ""),
         fileName,
-        sourceStamp: String(remote?.appProperties?.orthoSourceStamp || ""),
-        archivedAt: String(patient?.date || patient?.created_at || ""),
-        imageCount: Number(remote?.appProperties?.orthoImageCount || 0),
+        sourceStamp: String(remote?.appProperties?.orthoSourceStamp || manifestRef?.sourceStamp || ""),
+        archivedAt: String(remote?.modifiedTime || manifestRef?.archivedAt || patient?.date || patient?.created_at || ""),
+        imageCount: Number(remote?.appProperties?.orthoImageCount ?? manifestRef?.imageCount ?? 0),
         driveFileId: String(remote.id),
+        driveModifiedTime: String(remote.modifiedTime),
       });
     }
     pageToken = typeof data.nextPageToken === "string" ? data.nextPageToken : "";
   } while (pageToken);
+  // The manifest may mention many older PDFs. Remove every one that was not
+  // confirmed by Drive as modified within the latest 48 hours.
+  for (const fileName of Array.from(refs.keys())) {
+    if (!recentFileNames.has(fileName)) refs.delete(fileName);
+  }
   if (!refs.size) {
-    onProgress?.("Patient PDFs skipped: no active-patient image PDFs were found in the Drive folder.");
+    onProgress?.("No patient PDFs from the latest 48 hours need restoring. Older patient PDFs remain in Google Drive and can be downloaded manually from that patient's record.");
     return;
   }
   if (!FileSystem.cacheDirectory) {
@@ -1286,7 +1305,7 @@ async function downloadPatientImageArchivesFromDrive(backup: any, onProgress?: (
         onProgress?.("Skipping invalid patient PDF filename: " + fileName);
         continue;
       }
-      onProgress?.("Finding patient PDF " + i + "/" + refs.size + ": " + fileName);
+      onProgress?.("Verifying recent patient PDF " + i + "/" + refs.size + ": " + fileName);
       let remote: any = null;
       try {
         if (ref.driveFileId) {
@@ -1307,7 +1326,7 @@ async function downloadPatientImageArchivesFromDrive(backup: any, onProgress?: (
         continue;
       }
       const target = FileSystem.cacheDirectory + "ortho-patient-pdf-restore-" + Date.now() + "-" + i + ".pdf";
-      onProgress?.("Downloading patient PDF " + i + "/" + refs.size + ": " + fileName);
+      onProgress?.("Downloading recent patient PDF " + i + "/" + refs.size + ": " + fileName);
       try {
         const result = await FileSystem.downloadAsync(DRIVE_API + "/" + encodeURIComponent(String(remote.id)) + "?alt=media",
           target, { headers: { Authorization: "Bearer " + token } });
