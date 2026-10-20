@@ -1147,18 +1147,24 @@ export async function deletePatientImagePdfFromDrive(patientId: string): Promise
 
 export async function uploadPatientImageArchivesToDrive(onProgress?: (stage: string) => void, patientIds?: string[]): Promise<void> {
   await processPendingPatientPdfDeletes(onProgress);
-  // Provision the folder and upload a PDF for every current patient, including newly added records.
-  onProgress?.("Checking the Patient Image PDFs folder in Google Drive…");
-  const folder = await getOrCreatePatientImagePdfFolder();
   const allArchives = await getLocalPatientImageArchives();
   const requestedPatientIds = patientIds === undefined ? null : new Set(patientIds.map(String));
-  const archives = requestedPatientIds
+  const selectedArchives = requestedPatientIds
     ? allArchives.filter((archive) => requestedPatientIds.has(String(archive.patientId)))
     : allArchives;
+  // Do not make a Drive request for every existing PDF on every sync. Archive
+  // metadata records the last verified uploaded source stamp; only new PDFs,
+  // legacy entries without a Drive ID and locally changed PDFs need remote work.
+  // Queued deletes were processed above independently of this upload filter.
+  const archives = selectedArchives.filter((archive) =>
+    !archive.driveFileId || String(archive.driveSourceStamp || "") !== String(archive.sourceStamp || "")
+  );
   if (!archives.length) {
-    onProgress?.("Patient Image PDFs folder is ready; no patient PDFs are registered yet.");
+    onProgress?.("Patient PDFs unchanged; skipped remote checks. Main backup can continue.");
     return;
   }
+  onProgress?.("Checking Drive for " + archives.length + " new or changed patient PDF(s)…");
+  const folder = await getOrCreatePatientImagePdfFolder();
   const folderId = String(folder.id);
   for (let i = 0; i < archives.length; i++) {
     const archive = archives[i];

@@ -35,6 +35,8 @@ export type Patient = {
   hcvPlus?: boolean;
   hbaSg?: boolean;
   hiv?: boolean;
+  mp?: boolean;
+  dengue?: boolean;
 };
 
 function parsePhotos(raw: any, legacyUri: string | null | undefined): string[] {
@@ -71,6 +73,8 @@ const fromPatient = (r: any): Patient => {
     hcvPlus: String(customData.hcvPlus || "").toLowerCase() === "true",
     hbaSg: String(customData.hbaSg || "").toLowerCase() === "true",
     hiv: String(customData.hiv || "").toLowerCase() === "true",
+    mp: String(customData.mp || "").toLowerCase() === "true",
+    dengue: String(customData.dengue || "").toLowerCase() === "true",
   };
 };
 

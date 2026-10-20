@@ -35,14 +35,14 @@ import { formatInventoryLabel } from "@/src/utils/inventory-label";
 import { archivePatientImagesForPatient, createPatientImagePdfFile, getPatientImageArchive, openPatientImageArchivePdf } from "@/src/utils/storage/patient-image-archive";
 import { deletePatientImagePdfFromDrive, downloadPatientImageArchiveForPatient, uploadPatientImageArchivesToDrive } from "@/src/utils/storage/google-drive";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
-const LAB_OCR_PIPELINE_VERSION = "row-aware-2026-10-19-v8-rotated-photo-recovery";
+const LAB_OCR_PIPELINE_VERSION = "row-safe-2026-10-20-v9-no-cross-line-pairing";
 
 type Patient = {
   id: string; mrNo: string; name: string; gender: string; age: string;
   diagnosis: string; procedure: string; procedureII?: string; implant: string; implantII: string; implants?: SelectedImplant[];
   address: string; fileName: string; photoUri: string; photos: string[]; date: string;
   operationCount?: number; totalOperations?: number; customData?: Record<string,string>;
-  hcvPlus?: boolean; hbaSg?: boolean; hiv?: boolean;
+  hcvPlus?: boolean; hbaSg?: boolean; hiv?: boolean; mp?: boolean; dengue?: boolean;
 };
 type Procedure = { id: string; name: string };
 type InventoryItem = { id: string; name: string; category: string; categoryId?: string; size: string; quantity: number };
@@ -60,7 +60,7 @@ const empty = (): Patient => ({
   id: "", mrNo: "", name: "", gender: "", age: "", diagnosis: "",
   procedure: "", procedureII: "", implant: "", implantII: "", address: "", fileName: "",
   photoUri: "", photos: [], date: today(), implants: [], customData: {},
-  hcvPlus: false, hbaSg: false, hiv: false,
+  hcvPlus: false, hbaSg: false, hiv: false, mp: false, dengue: false,
 });
 
 export default function PatientForm() {
@@ -500,6 +500,8 @@ export default function PatientForm() {
         ["hcvPlus", "HCV+"],
         ["hbaSg", "HBsAg"],
         ["hiv", "HIV"],
+        ["mp", "M.P"],
+        ["dengue", "Dengue"],
       ];
       const screeningConflicts = screeningLabels
         .filter(([key]) => screeningStatuses[key] === "conflict")
@@ -523,17 +525,23 @@ export default function PatientForm() {
         hcvPlus: applyScreeningStatus(screeningStatuses.hcvPlus, prev.hcvPlus),
         hbaSg: applyScreeningStatus(screeningStatuses.hbaSg, prev.hbaSg),
         hiv: applyScreeningStatus(screeningStatuses.hiv, prev.hiv),
+        mp: applyScreeningStatus(screeningStatuses.mp, prev.mp),
+        dengue: applyScreeningStatus(screeningStatuses.dengue, prev.dengue),
         customData: { ...(prev.customData || {}), labOcrExtractedText: extracted, labOcrPhotoSignature: photoSignature, labOcrPhotoScanComplete: "true", labOcrPipelineVersion: LAB_OCR_PIPELINE_VERSION, labOcrPossibleFlags: candidates.join("\n"), labOcrNeedsReview: uncertain.join("\n"), labOcrOnlineTestNameHelp: onlineHelp.join("\n") },
       }));
       const newlyTicked = [
         screeningStatuses.hcvPlus === "positive" && !p.hcvPlus ? "HCV+" : "",
         screeningStatuses.hbaSg === "positive" && !p.hbaSg ? "HBsAg" : "",
         screeningStatuses.hiv === "positive" && !p.hiv ? "HIV" : "",
+        screeningStatuses.mp === "positive" && !p.mp ? "M.P" : "",
+        screeningStatuses.dengue === "positive" && !p.dengue ? "Dengue" : "",
       ].filter(Boolean);
       const newlyCleared = [
         screeningStatuses.hcvPlus === "negative" && !!p.hcvPlus ? "HCV+" : "",
         screeningStatuses.hbaSg === "negative" && !!p.hbaSg ? "HBsAg" : "",
         screeningStatuses.hiv === "negative" && !!p.hiv ? "HIV" : "",
+        screeningStatuses.mp === "negative" && !!p.mp ? "M.P" : "",
+        screeningStatuses.dengue === "negative" && !!p.dengue ? "Dengue" : "",
       ].filter(Boolean);
       const screeningMessages = [
         newlyTicked.length ? "Possible positive screening result detected for " + newlyTicked.join(", ") + "; verify the original report." : "",
@@ -676,6 +684,8 @@ export default function PatientForm() {
       hcvPlus: readFlag((source as any).hcvPlus, customData.hcvPlus),
       hbaSg: readFlag((source as any).hbaSg, customData.hbaSg),
       hiv: readFlag((source as any).hiv, customData.hiv),
+      mp: readFlag((source as any).mp, customData.mp),
+      dengue: readFlag((source as any).dengue, customData.dengue),
     });
     setReady(true);
   }, [isEdit, detailedExisting, existing]);
@@ -1666,6 +1676,8 @@ export default function PatientForm() {
         hcvPlus: p.hcvPlus ? "true" : "false",
         hbaSg: p.hbaSg ? "true" : "false",
         hiv: p.hiv ? "true" : "false",
+        mp: p.mp ? "true" : "false",
+        dengue: p.dengue ? "true" : "false",
         ...((reviewedLabResults.length || !existingLabResults) ? {
           labOcrManualResults: JSON.stringify(allReviewedLabResults),
         } : {}),
@@ -1745,7 +1757,7 @@ export default function PatientForm() {
         {isEdit && canEdit ? (
           <Pressable testID="delete-patient-button" onPress={() => Alert.alert(
             "Move patient to Trash?",
-            "This patient and its saved details will be moved to Trash for 30 days. You can restore it from Settings → Trash before it expires.",
+            "This patient and its saved details will be moved to Trash for 30 days. After you confirm, the deletion will sync and the patient's separate Google Drive image PDF will be queued for removal. You can restore the patient from Settings → Trash before it expires; the PDF may need to be recreated or downloaded again.",
             [{ text: "Cancel", style: "cancel" }, { text: "Move to Trash", style: "destructive", onPress: () => del.mutate() }],
           )} style={styles.headerBtn}>
             <Ionicons name="trash-outline" size={22} color={colors.error} />
@@ -2319,8 +2331,10 @@ export default function PatientForm() {
         <Text style={styles.section}>Infection Screening</Text>
         {([
           ["hcvPlus", "HCV+"],
-          ["hbaSg", "HbAsg"],
+          ["hbaSg", "HBsAg"],
           ["hiv", "HIV"],
+          ["mp", "M.P"],
+          ["dengue", "Dengue"],
         ] as const).map(([key, label]) => (
           <Pressable
             key={key}

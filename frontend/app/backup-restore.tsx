@@ -70,6 +70,7 @@ export default function BackupRestoreScreen() {
     name: string;
     backupText: string;
     info: { createdAt: string; encrypted: boolean };
+    source: "drive" | "phone";
   } | null>(null);
 
   useEffect(() => {
@@ -239,7 +240,7 @@ export default function BackupRestoreScreen() {
       setDriveStatus("Downloading master backup…");
       const result = await restoreGoogleDriveBackupById(file.id, setDriveStatus);
       const info = getBackupInfo(result.backupText);
-      setSelectedBackup({ name: result.name, backupText: result.backupText, info });
+      setSelectedBackup({ name: result.name, backupText: result.backupText, info, source: "drive" });
       setRestorePassword("");
       setRestorePeriod("all");
       setRestorePeriodValue(new Date().toISOString().slice(0, 7));
@@ -258,7 +259,7 @@ export default function BackupRestoreScreen() {
       setDriveStatus("Finding the latest master backup…");
       const result = await restoreLatestFromGoogleDrive(setDriveStatus);
       const info = getBackupInfo(result.backupText);
-      setSelectedBackup({ name: result.name, backupText: result.backupText, info });
+      setSelectedBackup({ name: result.name, backupText: result.backupText, info, source: "drive" });
       setRestorePassword("");
       setRestorePeriod("all");
       setRestorePeriodValue(new Date().toISOString().slice(0, 7));
@@ -322,7 +323,7 @@ export default function BackupRestoreScreen() {
       setLoading(true);
       const result = await pickBackupFile();
       if (!result) return;
-      setSelectedBackup({ name: result.name, backupText: result.backupText, info: result.info });
+      setSelectedBackup({ name: result.name, backupText: result.backupText, info: result.info, source: "phone" });
       setRestorePassword("");
     } catch (error) {
       Alert.alert("Invalid backup", error instanceof Error ? error.message : "The selected file is not a valid backup.");
@@ -362,7 +363,18 @@ export default function BackupRestoreScreen() {
             const backup = isPeriodRestore
               ? filterBackupForPeriod(completeBackup, restorePeriod as "month" | "year", restorePeriodValue)
               : completeBackup;
-            await pickPatientImageArchivesForRestore(backup);
+            // Drive restore already manages separate PDFs through the Drive folder.
+            // Older PDFs can be downloaded individually from their patient record.
+            // Only a phone backup needs the optional external-PDF picker.
+            const missingPatientPdfs = selectedBackup.source === "phone"
+              ? await pickPatientImageArchivesForRestore(backup)
+              : [];
+            const missingPatientPdfNotice = missingPatientPdfs.length
+              ? "\n\nPatient data restored, but " + missingPatientPdfs.length +
+                " separate patient PDF(s) could not be added to this phone: " +
+                missingPatientPdfs.slice(0, 4).join(", ") +
+                (missingPatientPdfs.length > 4 ? ", and " + (missingPatientPdfs.length - 4) + " more" : "") + "."
+              : "";
             if (isPeriodRestore && !backup.patients.length && !backup.expenses.length && !backup.patientHistory.length &&
                 !backup.inventoryMovements.length && !backup.inventoryPurchaseReceipts.length && !backup.stockReceipts.length &&
                 !backup.implantRecords.length) {
@@ -384,7 +396,7 @@ export default function BackupRestoreScreen() {
                 "Restore complete",
                 "Replaced with backup:\nPatients: " + result.patients + "\nInventory categories: " + (result.inventoryCategories || 0) +
                 "\nInventory items: " + result.inventory + "\nPatient inventory records: " + (result.patientImplants || 0) +
-                "\nProcedures: " + result.procedures + "\nUsers: " + result.users + "\n\nPlease log in again.",
+                "\nProcedures: " + result.procedures + "\nUsers: " + result.users + "\n\nPlease log in again." + missingPatientPdfNotice,
                 [{ text: "OK", onPress: () => router.replace("/login") }],
               );
             } else {
@@ -403,7 +415,7 @@ export default function BackupRestoreScreen() {
                 isPeriodRestore ? "Period restore complete" : "Merge complete",
                 "Added:\nNew patients: " + result.patients + "\nInventory changes: " + result.inventory +
                 "\nInventory categories: " + (result.inventoryCategories || 0) + "\nPatient inventory records: " + (result.patientImplants || 0) +
-                "\nNew procedures: " + result.procedures + "\nNew users: " + result.users + "\nHistory entries: " + result.patientHistory,
+                "\nNew procedures: " + result.procedures + "\nNew users: " + result.users + "\nHistory entries: " + result.patientHistory + missingPatientPdfNotice,
               );
               setSelectedBackup(null);
               setRestorePassword("");

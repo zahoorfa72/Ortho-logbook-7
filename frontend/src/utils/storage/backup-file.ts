@@ -191,7 +191,7 @@ async function readPickedFile(uri: string, knownSize?: number | null): Promise<s
   }
 }
 
-export async function pickPatientImageArchivesForRestore(backup: any): Promise<void> {
+export async function pickPatientImageArchivesForRestore(backup: any): Promise<string[]> {
   const refs = new Map<string, any>();
   for (const item of Array.isArray(backup?.patientImageArchives) ? backup.patientImageArchives : []) {
     if (item?.patientId && item?.fileName) refs.set(String(item.fileName), item);
@@ -212,25 +212,34 @@ export async function pickPatientImageArchivesForRestore(backup: any): Promise<v
     if (local && local.sourceStamp === String(ref.sourceStamp || "")) continue;
     missing.push(ref);
   }
-  if (!missing.length) return;
+  if (!missing.length) return [];
   const selected = await DocumentPicker.getDocumentAsync({
     type: ["application/pdf", "application/octet-stream"], copyToCacheDirectory: true, multiple: true,
   });
-  if (selected.canceled) throw new Error("This backup needs separate patient PDFs. Select all matching PDFs from the 'Patient Image PDFs' folder before restoring.");
+  // Patient PDFs are optional attachments, stored separately from encrypted phone
+  // data. Cancelling must not block patient, inventory, account or settings restore.
+  if (selected.canceled) return missing.map(ref => String(ref.fileName));
   const assets = selected.assets || [];
   const byName = new Map<string, any>(assets.filter((item:any) => item?.name && item?.uri).map((item:any) => [String(item.name), item]));
-  const matched = missing.map(ref => ({ ref, asset: byName.get(String(ref.fileName)) }));
-  const absent = matched.filter(item => !item.asset);
-  if (absent.length) throw new Error("Missing patient PDF(s): " + absent.slice(0, 4).map(item => item.ref.fileName).join(", ") +
-    ". Select all PDFs from the separate 'Patient Image PDFs' folder. No patient records were changed.");
-  for (const item of matched) {
-    await installPatientImageArchivePdf({
-      patientId: String(item.ref.patientId), patientName: String(item.ref.patientName || "Patient"),
-      mrNo: String(item.ref.mrNo || ""), fileName: String(item.ref.fileName),
-      sourceStamp: String(item.ref.sourceStamp || ""), archivedAt: String(item.ref.archivedAt || ""),
-      imageCount: Number(item.ref.imageCount || 0),
-    }, String(item.asset.uri));
+  const absent: string[] = [];
+  for (const ref of missing) {
+    const asset = byName.get(String(ref.fileName));
+    if (!asset) {
+      absent.push(String(ref.fileName));
+      continue;
+    }
+    try {
+      await installPatientImageArchivePdf({
+        patientId: String(ref.patientId), patientName: String(ref.patientName || "Patient"),
+        mrNo: String(ref.mrNo || ""), fileName: String(ref.fileName),
+        sourceStamp: String(ref.sourceStamp || ""), archivedAt: String(ref.archivedAt || ""),
+        imageCount: Number(ref.imageCount || 0),
+      }, String(asset.uri));
+    } catch {
+      absent.push(String(ref.fileName));
+    }
   }
+  return absent;
 }
 
 export async function pickBackupFile() {

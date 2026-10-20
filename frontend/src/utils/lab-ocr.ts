@@ -225,18 +225,8 @@ export function isLikelyLabReportText(text: string, configuredTests: LabTestDefi
       continue;
     }
 
-    // OCR commonly splits labels and results over adjacent lines/blocks.
-    // Pair nearby values, but stop when another known test name appears.
-    for (let offset = 1; offset <= 3 && index + offset < lines.length; offset++) {
-      const nearby = lines[index + offset];
-      if (!nearby) continue;
-      if (findTestPrefix(nearby, configuredTests)) break;
-      if (isNonResultLine(nearby, configuredTests) && resultNumber(nearby) === null) continue;
-      if (hasMeasuredValue(nearby)) {
-        validRows++;
-        break;
-      }
-    }
+    // A test with no measured value on its own line does not increase the OCR
+    // quality score; guessing from adjacent rows can promote the wrong engine.
   }
   return validRows >= 1;
 }
@@ -602,27 +592,10 @@ export function parseLabReportRows(text: string, configuredTests: LabTestDefinit
         const resultArea = referenceStart >= 0 ? rest.slice(0, referenceStart) : rest;
         resultRaw = resultNumber(resultArea);
       }
-      let pairedLine = "";
-      let pairedUnit = "";
-      if (!resultRaw && !structured) {
-        // Some OCR engines place the label and its measured value on neighboring lines.
-        // Do not cross another known test label or mistake an interval for a result.
-        for (let offset = 1; offset <= 2 && lineIndex + offset < sourceLines.length; offset++) {
-          const nearby = sourceLines[lineIndex + offset].replace(/\s+/g, " ").trim();
-          if (!nearby) continue;
-          if (findTestPrefix(nearby, configuredTests)) break;
-          if (isNonResultLine(nearby, configuredTests) && resultNumber(nearby) === null) continue;
-          const referenceStart = firstReferenceStart(nearby);
-          const measuredArea = referenceStart >= 0 ? nearby.slice(0, referenceStart) : nearby;
-          const measured = resultNumber(measuredArea);
-          if (!measured) continue;
-          resultRaw = measured;
-          pairedLine = nearby;
-          pairedUnit = unitFromResultCell(measuredArea);
-          break;
-        }
-      }
-      unit = String(testPrefix.configured?.unit || pairedUnit || "").trim();
+      // Do not borrow numbers from neighboring unlabeled OCR lines. CBC and electrolyte
+      // tables are often flattened out of reading order; an uncertain value must stay
+      // missing for manual review rather than be silently assigned to another test.
+      unit = String(testPrefix.configured?.unit || "").trim();
       // Never use a reference interval printed on the report for alerting.
       // Use only the saved range for this patient's sex (M/male or F/female).
       if (!resultRaw) continue;
@@ -657,7 +630,7 @@ export function parseLabReportRows(text: string, configuredTests: LabTestDefinit
         unit: normalizeLabUnit(testPrefix.name, cleanedUnit || testPrefix.configured?.unit || defaultUnitForTest(testPrefix.name)).slice(0, 24),
         reference: reference?.text || "",
         severity,
-        sourceLine: pairedLine ? line + " | " + pairedLine : line,
+        sourceLine: line,
       });
     }
     }
@@ -900,16 +873,9 @@ function rawMeasuredResultForTest(
     const direct = measuredValue(rest);
     if (direct !== null) return direct;
 
-    // OCR sometimes puts a value directly below its test label. Permit a short
-    // continuation, but never cross into the next recognized test row.
-    for (let offset = 1; offset <= 2 && index + offset < lines.length; offset++) {
-      const nearby = lines[index + offset];
-      if (!nearby) continue;
-      if (findTestPrefix(nearby, configuredTests)) break;
-      if (isNonResultLine(nearby, configuredTests) && resultNumber(nearby) === null) continue;
-      const paired = measuredValue(nearby);
-      if (paired !== null) return paired;
-    }
+    // Accept only a result printed on the same line as its own test label.
+    // Never assign an unlabeled neighbor's number to this test because OCR may
+    // flatten CBC/electrolyte table columns in a different reading order.
   }
   return null;
 }

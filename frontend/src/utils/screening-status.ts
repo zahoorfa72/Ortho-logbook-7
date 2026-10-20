@@ -3,6 +3,8 @@ export type ScreeningStatusResults = {
   hcvPlus: ScreeningStatus;
   hbaSg: ScreeningStatus;
   hiv: ScreeningStatus;
+  mp: ScreeningStatus;
+  dengue: ScreeningStatus;
 };
 
 type ScreeningKey = keyof ScreeningStatusResults;
@@ -20,6 +22,15 @@ const SCREENING_LABELS: Array<{ key: ScreeningKey; pattern: RegExp }> = [
   {
     key: "hiv",
     pattern: /^h\s*i\s*v(?:\s*[- ]?\s*1\s*\/?\s*2)?(?:\s*(?:antibody|ab|screen|ag))?\b/i,
+  },
+  {
+    key: "mp",
+    // M.P / MP means malaria parasite here; MPV is deliberately not matched.
+    pattern: /^(?:malaria\s+parasite(?:s)?|malarial\s+parasite(?:s)?|m\.?\s*p\.?)(?=$|[^a-z0-9])/i,
+  },
+  {
+    key: "dengue",
+    pattern: /^dengue(?:\s*(?:ns1|igm|igg|antibod(?:y|ies)|antigen|serology|rapid|test|combo))?\b/i,
   },
 ];
 
@@ -82,11 +93,15 @@ export function detectScreeningStatuses(text: string): ScreeningStatusResults {
     hcvPlus: [],
     hbaSg: [],
     hiv: [],
+    mp: [],
+    dengue: [],
   };
   const raw: Record<ScreeningKey, Array<"positive" | "negative">> = {
     hcvPlus: [],
     hbaSg: [],
     hiv: [],
+    mp: [],
+    dengue: [],
   };
   const lines = String(text || "")
     .replace(/\u00a0/g, " ")
@@ -137,5 +152,7 @@ export function detectScreeningStatuses(text: string): ScreeningStatusResults {
     hcvPlus: resolve("hcvPlus"),
     hbaSg: resolve("hbaSg"),
     hiv: resolve("hiv"),
+    mp: resolve("mp"),
+    dengue: resolve("dengue"),
   };
 }
