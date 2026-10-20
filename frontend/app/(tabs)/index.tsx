@@ -559,7 +559,18 @@ export default function Logbook() {
       let onlineOcrKey = "";
       try {
         const onlineEnabled = (await AsyncStorage.getItem("ortho_lab_online_ocr_consent_v1")) === "true";
-        if (onlineEnabled) onlineOcrKey = (await SecureStore.getItemAsync("ortho_lab_online_ocr_api_key_v1")) || "";
+        if (onlineEnabled) {
+          onlineOcrKey = (await SecureStore.getItemAsync("ortho_lab_online_ocr_api_key_v1")) || "";
+          // Migrate keys saved by the previous version before SecureStore was used.
+          if (!onlineOcrKey) {
+            const legacyKey = await AsyncStorage.getItem("ortho_lab_online_ocr_api_key_v1");
+            if (legacyKey) {
+              await SecureStore.setItemAsync("ortho_lab_online_ocr_api_key_v1", legacyKey);
+              await AsyncStorage.removeItem("ortho_lab_online_ocr_api_key_v1");
+              onlineOcrKey = legacyKey;
+            }
+          }
+        }
       } catch {}
       let unreadableImages = 0;
       for (let offset = 0; offset < photos.length; offset += 1) {
