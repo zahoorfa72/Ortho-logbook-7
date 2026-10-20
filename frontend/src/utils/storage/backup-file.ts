@@ -62,7 +62,7 @@ export async function saveBackupToPhone(password: string, filter: BackupFilter =
   const savedText = await FileSystem.readAsStringAsync(fileUri, { encoding: FileSystem.EncodingType.UTF8 });
   const savedInfo = getBackupInfo(savedText.replace(/^\uFEFF/, "").trimStart());
   if (!savedInfo.encrypted || savedInfo.version !== generatedInfo.version ||
-      savedText.length !== encryptedBackup.length) {
+      savedText.trim() !== encryptedBackup.trim()) {
     throw new Error("The phone backup file failed read-back validation. The file was kept for diagnosis; please save a new backup and do not delete your existing backups.");
   }
   await markBackupTaken();
