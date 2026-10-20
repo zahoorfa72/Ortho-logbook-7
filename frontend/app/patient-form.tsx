@@ -341,8 +341,10 @@ export default function PatientForm() {
       const configuredAliases = (item: any) => [String(item?.name || ""), ...String(item?.aliases || "").split(/[,;\n]+/)].map(value => value.trim()).filter(Boolean);
       const hasSavedSexRange = (item: any) => {
         if (!item || !genderForRange) return false;
-        const minRaw = String(genderForRange === "male" ? item.maleMin : item.femaleMin ?? "").trim();
-        const maxRaw = String(genderForRange === "male" ? item.maleMax : item.femaleMax ?? "").trim();
+        const minValue = genderForRange === "male" ? item.maleMin : item.femaleMin;
+        const maxValue = genderForRange === "male" ? item.maleMax : item.femaleMax;
+        const minRaw = minValue == null ? "" : String(minValue).trim();
+        const maxRaw = maxValue == null ? "" : String(maxValue).trim();
         const min = Number(minRaw.replace(",", "."));
         const max = Number(maxRaw.replace(",", "."));
         return minRaw !== "" && maxRaw !== "" && Number.isFinite(min) && Number.isFinite(max) && max > min;
@@ -608,8 +610,11 @@ export default function PatientForm() {
       const visionReviewRows: Array<(typeof missingResultReviews)[number] & { source?: string; confidence?: number }> = [];
       for (const candidate of visionCandidates) {
         const configured: any = matchCandidateToConfiguredTest(candidate.test, configuredLabTests);
+        // AI suggestions are eligible only for an admin-configured test with
+        // a valid reference range for this patient's sex.
+        if (!configured || !hasSavedSexRange(configured)) continue;
         const numeric = /^\s*[<>≤≥]?\s*[-+]?\d+(?:[.,]\d+)?\s*$/.test(String(candidate.result || ""));
-        if (!configured || !numeric) {
+        if (!numeric) {
           uncertain.push("AI vision suggestion needs review: " + candidate.test + " — " + candidate.result + (candidate.reason ? " (" + candidate.reason + ")" : ""));
           continue;
         }
