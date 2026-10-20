@@ -74,7 +74,20 @@ export default function LabTestSettingsScreen() {
     AsyncStorage.getItem(WARNING_THRESHOLD_KEY).then(raw => { if (raw && Number.isFinite(Number(raw))) setWarningPercent(String(Math.max(1, Math.min(100, Math.round(Number(raw)))))); }).catch(() => {});
     AsyncStorage.getItem(OLD_RESULT_DAYS_KEY).then(raw => { if (raw && Number.isFinite(Number(raw))) setOldResultDays(String(Math.max(1, Math.min(3650, Math.round(Number(raw)))))); }).catch(() => {});
     AsyncStorage.getItem(ONLINE_OCR_CONSENT_KEY).then(raw => setOnlineOcrConsent(raw === "true")).catch(() => {});
-    SecureStore.getItemAsync(ONLINE_OCR_KEY).then(raw => setOnlineOcrKey(raw || "")).catch(() => {});
+    (async () => {
+      try {
+        let key = await SecureStore.getItemAsync(ONLINE_OCR_KEY);
+        if (!key) {
+          const legacyKey = await AsyncStorage.getItem(ONLINE_OCR_KEY);
+          if (legacyKey) {
+            await SecureStore.setItemAsync(ONLINE_OCR_KEY, legacyKey);
+            await AsyncStorage.removeItem(ONLINE_OCR_KEY);
+            key = legacyKey;
+          }
+        }
+        setOnlineOcrKey(key || "");
+      } catch {}
+    })();
   }, []);
   const update = (patch: Partial<LabTestDefinition>) => setForm(current => ({ ...current, ...patch }));
   const addBranch = async () => {
