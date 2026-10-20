@@ -974,12 +974,63 @@ function validateStructuredLabResults(
   }).join("\n");
 }
 
+type OnlineOcrResult = { text: string; blocks: any[] };
+
+async function recognizeOnlineLabText(uri: string, apiKey: string): Promise<OnlineOcrResult> {
+  const key = String(apiKey || "").trim();
+  if (!key) return { text: "", blocks: [] };
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const body = new FormData();
+    body.append("file", { uri, name: "lab-report.jpg", type: "image/jpeg" } as any);
+    body.append("language", "eng");
+    body.append("isOverlayRequired", "true");
+    body.append("detectOrientation", "true");
+    body.append("scale", "true");
+    body.append("isTable", "true");
+    body.append("OCREngine", "2");
+    const controller = new AbortController();
+    timeout = setTimeout(() => controller.abort(), 25000);
+    const response = await fetch("https://api.ocr.space/parse/image", {
+      method: "POST", headers: { apikey: key }, body, signal: controller.signal,
+    });
+    if (!response.ok) return { text: "", blocks: [] };
+    const payload: any = await response.json();
+    if (payload?.IsErroredOnProcessing || payload?.IsError) return { text: "", blocks: [] };
+    const parsed = Array.isArray(payload?.ParsedResults) ? payload.ParsedResults : [];
+    const text = parsed.map((item: any) => String(item?.ParsedText || "")).filter(Boolean).join("\n").trim();
+    const blocks: any[] = [];
+    for (const result of parsed) {
+      const lines = Array.isArray(result?.TextOverlay?.Lines) ? result.TextOverlay.Lines : [];
+      for (const line of lines) {
+        const words = Array.isArray(line?.Words) ? line.Words : [];
+        const validWords = words.filter((word: any) => String(word?.WordText || "").trim() &&
+          Number.isFinite(Number(word?.Left)) && Number.isFinite(Number(word?.Top)) &&
+          Number.isFinite(Number(word?.Width)) && Number.isFinite(Number(word?.Height)));
+        if (!validWords.length) continue;
+        const left = Math.min(...validWords.map((word: any) => Number(word.Left)));
+        const top = Math.min(...validWords.map((word: any) => Number(word.Top)));
+        const right = Math.max(...validWords.map((word: any) => Number(word.Left) + Number(word.Width)));
+        const bottom = Math.max(...validWords.map((word: any) => Number(word.Top) + Number(word.Height)));
+        blocks.push({ text: validWords.map((word: any) => String(word.WordText).trim()).join(" "),
+          boundingBox: { x: left, y: top, width: right - left, height: bottom - top } });
+      }
+    }
+    return { text, blocks };
+  } catch {
+    return { text: "", blocks: [] };
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 export async function recognizeLabText(
   uri: string,
   configuredTests: LabTestDefinition[] = [],
   gender = "",
   fastMode = false,
-): Promise<{ text: string; structuredText: string; mode: "offline" }> {
+  onlineApiKey = "",
+): Promise<{ text: string; structuredText: string; mode: "online" | "offline" }> {
   // Run on-device OCR on the original and, for small/blurry-looking captures,
   // an enlarged high-quality copy. Upscaling cannot restore lost detail, but
   // often helps OCR read small printed digits without sending data online.
@@ -1103,9 +1154,30 @@ export async function recognizeLabText(
     } catch {}
     if (headerUri) { try { await FileSystem.deleteAsync(headerUri, { idempotent: true }); } catch {} }
   }
+  // Prefer table-aware online OCR only when enabled and when it matches or
+  // improves on local OCR. Word bounding boxes feed the same row/column parser.
+  let selectedMode: "online" | "offline" = "offline";
+  if (String(onlineApiKey || "").trim()) {
+    try {
+      const online = await recognizeOnlineLabText(uri, onlineApiKey);
+      if (online.text.trim()) {
+        const onlineScore = localScore({ text: online.text });
+        const localScoreValue = localScore(best);
+        const onlineRows = parseLabReportRows(online.text, configuredTests, gender, 10, true).length;
+        const localRows = parseLabReportRows(String(best?.text || ""), configuredTests, gender, 10, true).length;
+        if (onlineRows > localRows || (onlineRows === localRows && onlineScore >= localScoreValue * 0.8)) {
+          best = { text: online.text, blocks: online.blocks };
+          bestSize = originalDimensions || await imageSize(uri);
+          selectedMode = "online";
+        }
+      }
+    } catch {
+      // Keep the local result if online OCR fails.
+    }
+  }
   const rawOcrText = normalizeHemoglobinUnitText(String(best?.text || ""));
   const reportDate = extractLabReportDate(rawOcrText);
-  const mode = "offline" as const;
+  const mode = selectedMode;
   // Keep the full raw OCR only inside this function for result association and
   // date extraction. The caller receives only configured test labels, their
   // result cells, and the report date; patient identifiers, headings, comments,
