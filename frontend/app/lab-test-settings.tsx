@@ -2,6 +2,8 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { router } from "expo-router";
 import { useEffect, useState } from "react";
+import { Switch } from "react-native";
+import * as SecureStore from "expo-secure-store";
 import { Alert, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "@/src/auth/AuthContext";
@@ -25,6 +27,8 @@ const STORAGE_KEY = "ortho_lab_test_definitions_v1";
 const BRANCHES_KEY = "ortho_lab_test_branches_v1";
 const WARNING_THRESHOLD_KEY = "ortho_lab_warning_threshold_percent_v1";
 const OLD_RESULT_DAYS_KEY = "ortho_lab_old_result_days_v1";
+const ONLINE_OCR_KEY = "ortho_lab_online_ocr_api_key_v1";
+const ONLINE_OCR_CONSENT_KEY = "ortho_lab_online_ocr_consent_v1";
 const CUSTOM_SCREENING_BOXES_KEY = "ortho_custom_screening_boxes_v1";
 type CustomScreeningBox = { id: string; label: string };
 const blank = (): LabTestDefinition => ({ id: "", name: "", maleMin: "", maleMax: "", femaleMin: "", femaleMax: "", unit: "", aliases: "", category: "" });
@@ -45,6 +49,9 @@ export default function LabTestSettingsScreen() {
   const [oldResultDays, setOldResultDays] = useState("10");
   const [oldDaysBusy, setOldDaysBusy] = useState(false);
   const [thresholdBusy, setThresholdBusy] = useState(false);
+  const [onlineOcrKey, setOnlineOcrKey] = useState("");
+  const [onlineOcrConsent, setOnlineOcrConsent] = useState(false);
+  const [onlineOcrBusy, setOnlineOcrBusy] = useState(false);
   const [customScreeningBoxes, setCustomScreeningBoxes] = useState<CustomScreeningBox[]>([]);
   const [customScreeningLabel, setCustomScreeningLabel] = useState("");
   const [editingCustomScreeningId, setEditingCustomScreeningId] = useState("");
@@ -66,6 +73,8 @@ export default function LabTestSettingsScreen() {
     }).catch(() => {});
     AsyncStorage.getItem(WARNING_THRESHOLD_KEY).then(raw => { if (raw && Number.isFinite(Number(raw))) setWarningPercent(String(Math.max(1, Math.min(100, Math.round(Number(raw)))))); }).catch(() => {});
     AsyncStorage.getItem(OLD_RESULT_DAYS_KEY).then(raw => { if (raw && Number.isFinite(Number(raw))) setOldResultDays(String(Math.max(1, Math.min(3650, Math.round(Number(raw)))))); }).catch(() => {});
+    AsyncStorage.getItem(ONLINE_OCR_CONSENT_KEY).then(raw => setOnlineOcrConsent(raw === "true")).catch(() => {});
+    SecureStore.getItemAsync(ONLINE_OCR_KEY).then(raw => setOnlineOcrKey(raw || "")).catch(() => {});
   }, []);
   const update = (patch: Partial<LabTestDefinition>) => setForm(current => ({ ...current, ...patch }));
   const addBranch = async () => {
@@ -140,6 +149,23 @@ export default function LabTestSettingsScreen() {
   };
 
 
+  const saveOnlineOcrSettings = async () => {
+    setOnlineOcrBusy(true);
+    try {
+      const key = onlineOcrKey.trim();
+      if (key) await SecureStore.setItemAsync(ONLINE_OCR_KEY, key);
+      else await SecureStore.deleteItemAsync(ONLINE_OCR_KEY);
+      const enabled = onlineOcrConsent && !!key;
+      await AsyncStorage.setItem(ONLINE_OCR_CONSENT_KEY, enabled ? "true" : "false");
+      setOnlineOcrConsent(enabled);
+      toast(enabled
+        ? "Online OCR saved and enabled. Lab images may be sent to OCR.space; local OCR remains the fallback."
+        : "Online OCR settings saved. Local OCR remains available.",
+        "success");
+    } catch { toast("Could not save online OCR settings securely.", "error"); }
+    finally { setOnlineOcrBusy(false); }
+  };
+
   const saveCustomScreeningBox = async () => {
     const label = customScreeningLabel.trim().replace(/\s+/g, " ");
     if (!label) { toast("Enter a label for the patient checkbox.", "error"); return; }
@@ -192,6 +218,15 @@ export default function LabTestSettingsScreen() {
     </View>
     <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xxl }}>
       <Text style={styles.help}>For strongest automatic results, add each test your lab reports, enter its alternate labels/abbreviations, assign its branch, and save the correct male/female limits and unit. These admin definitions are used first when matching OCR labels and deciding abnormal results. The scanner will leave uncertain results unclassified rather than invent a value.</Text>
+
+      <Text style={styles.section}>Online OCR for clearer lab scans</Text>
+      <Text style={styles.help}>Optional table-aware OCR for small text and lab columns. The API key is stored securely on this device and is not included in backups or source code. Enabling online OCR sends the selected lab image to OCR.space for processing. Only enable this if you have permission to send patient images to this service. If online OCR fails, the scanner falls back to on-device OCR.</Text>
+      <View style={styles.field}><Text style={styles.label}>OCR.space API key</Text><TextInput value={onlineOcrKey} onChangeText={setOnlineOcrKey} placeholder="Paste your OCR.space API key" placeholderTextColor={colors.muted} autoCapitalize="none" autoCorrect={false} secureTextEntry style={styles.input}/></View>
+      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.md, paddingVertical: spacing.sm }}>
+        <Text style={[styles.label, { flex: 1 }]}>Allow online processing of lab images</Text>
+        <Switch value={onlineOcrConsent} onValueChange={setOnlineOcrConsent} trackColor={{ false: colors.border, true: colors.brandPrimary }} thumbColor={onlineOcrConsent ? colors.onBrandPrimary : colors.muted} />
+      </View>
+      <Pressable disabled={onlineOcrBusy} onPress={saveOnlineOcrSettings} style={styles.action}><Text style={styles.actionText}>{onlineOcrBusy ? "Saving..." : "Save online OCR settings"}</Text></Pressable>
 
       <Text style={styles.section}>Patient form checkboxes</Text>
       <Text style={styles.help}>Add or edit extra patient checkboxes here. They appear alongside HCV+, HBsAg, HIV, MP ICT and Dengue. Existing standard checkboxes are unchanged.</Text>
