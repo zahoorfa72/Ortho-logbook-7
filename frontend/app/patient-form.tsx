@@ -10,7 +10,7 @@ import * as FileSystem from "expo-file-system/legacy";
 import { convert as convertPdfPagesToImages } from "@uzimandias/react-native-pdf-to-image";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { extractLabReportDate, hasKnownLabTestName, isLabMetadataLine, isLikelyLabReportText, parseLabReportRows, recognizeLabText } from "@/src/utils/lab-ocr";
-import { loadLabVisionSettings, matchCandidateToConfiguredTest, requestLabVisionCandidates, type LabVisionCandidate } from "@/src/utils/lab-vision";
+import { matchCandidateToConfiguredTest, type LabVisionCandidate } from "@/src/utils/lab-vision";
 import { detectScreeningStatuses } from "@/src/utils/screening-status";
 import { scanPatientDocuments } from "@/src/utils/document-scanner";
 import { buildPerspectiveWarpHtml } from "@/src/utils/perspective-warp";
@@ -268,28 +268,9 @@ export default function PatientForm() {
           await new Promise<void>(resolve => setTimeout(resolve, 0));
           const result = await recognizeLabText(photoUris[i], onlineOcrKey, configuredLabTests, p.gender, automatic);
           const text = String(result?.text || "").trim();
-          // Only likely lab reports can be sent externally; ordinary patient photos
-          // are never uploaded just because they are attached to a patient record.
-          try {
-            const hasLabEvidence = /\b(?:laboratory|lab report|investigation|test name|test results?|reference range|normal range|haemoglobin|hemoglobin|platelets?|glucose|creatinine|wbc|rbc|hbsag|hcv|hiv)\b/i.test(text) ||
-              hasKnownLabTestName(text, configuredLabTests) ||
-              parseLabReportRows(text, configuredLabTests, p.gender, 10, true).length > 0;
-            if (hasLabEvidence) {
-              const visionSettings = await loadLabVisionSettings();
-              if (visionSettings.consent && visionSettings.endpoint && visionSettings.clientToken) {
-                const vision = await requestLabVisionCandidates({
-                  uri: photoUris[i], endpoint: visionSettings.endpoint, clientToken: visionSettings.clientToken,
-                  configuredTests: configuredLabTests, templates: visionSettings.templates, offlineText: text,
-                });
-                visionCandidates.push(...vision.candidates);
-                if (vision.template) visionTemplateNotes.push("Matched report template: " + vision.template.name + " (AI suggestions still require administrator verification).");
-                if (vision.error) visionTemplateNotes.push(vision.error);
-              }
-            }
-          } catch {
-            // AI-service failure never blocks offline OCR or patient editing.
-          }
-          const structuredText = result?.mode === "online" ? "" : String(result?.structuredText || "").trim();
+          // Lab images and OCR text are processed locally only. Do not call
+          // configured remote vision endpoints from the patient form.
+          const structuredText = String(result?.structuredText || "").trim();
           // Prefer rows reconstructed from OCR bounding-box positions. Keep the
           // original OCR text too, so the admin can verify any uncertain mapping.
           // Unknown rows remain review-only; the parser never guesses a test name.
