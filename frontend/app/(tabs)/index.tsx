@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { router, useFocusEffect } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as SecureStore from "expo-secure-store";
 import { triggerAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-backup";
 import { extractLabReportDate, isLikelyLabReportText, parseLabReportRows, recognizeLabText } from "@/src/utils/lab-ocr";
 import {
@@ -555,6 +556,11 @@ export default function Logbook() {
         const parsed = Number(raw);
         if (raw && Number.isInteger(parsed) && parsed >= 1 && parsed <= 100) warningPercent = parsed;
       } catch {}
+      let onlineOcrKey = "";
+      try {
+        const onlineEnabled = (await AsyncStorage.getItem("ortho_lab_online_ocr_consent_v1")) === "true";
+        if (onlineEnabled) onlineOcrKey = (await SecureStore.getItemAsync("ortho_lab_online_ocr_api_key_v1")) || "";
+      } catch {}
       let unreadableImages = 0;
       for (let offset = 0; offset < photos.length; offset += 1) {
         if (stopLabScansRef.current.has(patientId) || !labOcrEnabledRef.current) return;
@@ -566,7 +572,7 @@ export default function Logbook() {
             return { uri, ...cached };
           }
           try {
-            const result = await recognizeLabText(uri, configuredTests, patient?.gender || "");
+            const result = await recognizeLabText(uri, configuredTests, patient?.gender || "", false, onlineOcrKey);
             const text = String(result?.text || "").trim();
             const structuredText = String(result?.structuredText || "").trim();
             const combined = text + "\n" + structuredText;
