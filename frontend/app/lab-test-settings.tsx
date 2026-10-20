@@ -29,6 +29,8 @@ const WARNING_THRESHOLD_KEY = "ortho_lab_warning_threshold_percent_v1";
 const OLD_RESULT_DAYS_KEY = "ortho_lab_old_result_days_v1";
 const ONLINE_OCR_KEY = "ortho_lab_online_ocr_api_key_v1";
 const ONLINE_OCR_CONSENT_KEY = "ortho_lab_online_ocr_consent_v1";
+const CUSTOM_SCREENING_BOXES_KEY = "ortho_custom_screening_boxes_v1";
+type CustomScreeningBox = { id: string; label: string };
 const blank = (): LabTestDefinition => ({ id: "", name: "", maleMin: "", maleMax: "", femaleMin: "", femaleMax: "", unit: "", aliases: "", category: "" });
 
 export default function LabTestSettingsScreen() {
@@ -57,8 +59,12 @@ export default function LabTestSettingsScreen() {
   const [templateName, setTemplateName] = useState("");
   const [templateMarkers, setTemplateMarkers] = useState("");
   const [templateColumns, setTemplateColumns] = useState("");
+  const [customScreeningBoxes, setCustomScreeningBoxes] = useState<CustomScreeningBox[]>([]);
+  const [customScreeningLabel, setCustomScreeningLabel] = useState("");
+  const [editingCustomScreeningId, setEditingCustomScreeningId] = useState("");
 
   useEffect(() => {
+    AsyncStorage.getItem(CUSTOM_SCREENING_BOXES_KEY).then(raw => { try { const parsed = raw ? JSON.parse(raw) : []; if (Array.isArray(parsed)) setCustomScreeningBoxes(parsed.filter(item => item && typeof item.id === "string" && typeof item.label === "string")); } catch {} }).catch(() => {});
     Promise.all([AsyncStorage.getItem(STORAGE_KEY), AsyncStorage.getItem(BRANCHES_KEY)]).then(([rawTests, rawBranches]) => {
       let loadedTests: LabTestDefinition[] = [];
       let loadedBranches: string[] = [];
@@ -213,6 +219,40 @@ export default function LabTestSettingsScreen() {
     } catch { toast("Could not delete the lab report template.", "error"); }
   };
 
+  const saveCustomScreeningBox = async () => {
+    const label = customScreeningLabel.trim().replace(/\s+/g, " ");
+    if (!label) { toast("Enter a label for the patient checkbox.", "error"); return; }
+    if (label.length > 40) { toast("Use a label of 40 characters or fewer.", "error"); return; }
+    const duplicate = customScreeningBoxes.some(item => item.label.toLocaleLowerCase() === label.toLocaleLowerCase() && item.id !== editingCustomScreeningId);
+    if (duplicate) { toast("A checkbox with that label already exists.", "error"); return; }
+    const id = editingCustomScreeningId || String(Date.now());
+    const next = editingCustomScreeningId
+      ? customScreeningBoxes.map(item => item.id === editingCustomScreeningId ? { ...item, label } : item)
+      : [...customScreeningBoxes, { id, label }];
+    try {
+      await AsyncStorage.setItem(CUSTOM_SCREENING_BOXES_KEY, JSON.stringify(next));
+      triggerAutomaticDriveBackup("appSettings");
+      setCustomScreeningBoxes(next);
+      setCustomScreeningLabel("");
+      setEditingCustomScreeningId("");
+      toast(editingCustomScreeningId ? "Patient checkbox updated." : "Patient checkbox added.", "success");
+    } catch { toast("Could not save the patient checkbox.", "error"); }
+  };
+  const editCustomScreeningBox = (item: CustomScreeningBox) => { setCustomScreeningLabel(item.label); setEditingCustomScreeningId(item.id); };
+  const deleteCustomScreeningBox = (item: CustomScreeningBox) => Alert.alert("Delete checkbox?", "Remove " + item.label + " from the patient form? Existing patient values will be retained in their records.", [
+    { text: "Cancel", style: "cancel" },
+    { text: "Delete", style: "destructive", onPress: async () => {
+      const next = customScreeningBoxes.filter(box => box.id !== item.id);
+      try {
+        await AsyncStorage.setItem(CUSTOM_SCREENING_BOXES_KEY, JSON.stringify(next));
+        triggerAutomaticDriveBackup("appSettings");
+        setCustomScreeningBoxes(next);
+        if (editingCustomScreeningId === item.id) { setEditingCustomScreeningId(""); setCustomScreeningLabel(""); }
+        toast("Checkbox removed from the patient form.", "success");
+      } catch { toast("Could not delete the checkbox.", "error"); }
+    } },
+  ]);
+
   const saveOnlineOcrKey = async () => {
     setOnlineKeyBusy(true);
     try {
@@ -242,6 +282,17 @@ export default function LabTestSettingsScreen() {
     </View>
     <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xxl }}>
       <Text style={styles.help}>For strongest automatic results, add each test your lab reports, enter its alternate labels/abbreviations, assign its branch, and save the correct male/female limits and unit. These admin definitions are used first when matching OCR labels and deciding abnormal results. The scanner will leave uncertain results unclassified rather than invent a value.</Text>
+
+      <Text style={styles.section}>Patient form checkboxes</Text>
+      <Text style={styles.help}>Add or edit extra patient checkboxes here. They appear alongside HCV+, HBsAg, HIV, MP ICT and Dengue. Existing standard checkboxes are unchanged.</Text>
+      <View style={styles.field}><Text style={styles.label}>{editingCustomScreeningId ? "Edit checkbox label" : "New checkbox label"}</Text><TextInput value={customScreeningLabel} onChangeText={setCustomScreeningLabel} placeholder="e.g. MRSA" placeholderTextColor={colors.muted} maxLength={40} style={styles.input}/></View>
+      <Pressable onPress={saveCustomScreeningBox} style={styles.action}><Text style={styles.actionText}>{editingCustomScreeningId ? "Save checkbox changes" : "Add patient checkbox"}</Text></Pressable>
+      {editingCustomScreeningId ? <Pressable onPress={() => { setEditingCustomScreeningId(""); setCustomScreeningLabel(""); }} style={styles.action}><Text style={styles.actionText}>Cancel edit</Text></Pressable> : null}
+      {customScreeningBoxes.map(item => <View key={item.id} style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: spacing.sm, borderBottomWidth: 1, borderBottomColor: colors.border }}>
+        <Text style={{ flex: 1, color: colors.onSurface, fontFamily: fontFamily.semibold }}>{item.label}</Text>
+        <Pressable onPress={() => editCustomScreeningBox(item)} style={styles.iconBtn}><Ionicons name="create-outline" size={21} color={colors.brandPrimary}/></Pressable>
+        <Pressable onPress={() => deleteCustomScreeningBox(item)} style={styles.iconBtn}><Ionicons name="trash-outline" size={21} color={colors.error}/></Pressable>
+      </View>)}
 
       <Text style={styles.section}>AI vision + lab report templates</Text>
       <Text style={styles.help}>Configure an HTTPS endpoint approved by your organization. Keep provider API keys on the server, not in this app. The endpoint must have suitable healthcare privacy terms, no-training and no-retention controls. The image itself can contain patient identifiers, so do not enable this unless your organization has approved sending lab images. AI results are suggestions only and must be checked by an administrator against the original image before they are saved.</Text>

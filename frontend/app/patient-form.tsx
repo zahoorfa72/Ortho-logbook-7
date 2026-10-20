@@ -37,6 +37,8 @@ import { archivePatientImagesForPatient, createPatientImagePdfFile, getPatientIm
 import { deletePatientImagePdfFromDrive, downloadPatientImageArchiveForPatient, uploadPatientImageArchivesToDrive } from "@/src/utils/storage/google-drive";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 const LAB_OCR_PIPELINE_VERSION = "row-safe-2026-10-20-v11-ai-vision-review";
+const CUSTOM_SCREENING_BOXES_KEY = "ortho_custom_screening_boxes_v1";
+type CustomScreeningBox = { id: string; label: string };
 
 type Patient = {
   id: string; mrNo: string; name: string; gender: string; age: string;
@@ -198,6 +200,8 @@ export default function PatientForm() {
   const [photoPreviewSize, setPhotoPreviewSize] = useState({ width: 0, height: 0 });
   const [editingPhotoDimensions, setEditingPhotoDimensions] = useState<{ width: number; height: number } | null>(null);
   const [p, setP] = useState<Patient>(empty);
+  const [customScreeningBoxes, setCustomScreeningBoxes] = useState<CustomScreeningBox[]>([]);
+  useEffect(() => { AsyncStorage.getItem(CUSTOM_SCREENING_BOXES_KEY).then(raw => { try { const parsed = raw ? JSON.parse(raw) : []; if (Array.isArray(parsed)) setCustomScreeningBoxes(parsed.filter(item => item && typeof item.id === "string" && typeof item.label === "string")); } catch {} }).catch(() => {}); }, []);
   const savedManualLabResults = useMemo(() => {
     try {
       const raw = p.customData?.labOcrManualResults;
@@ -589,7 +593,7 @@ export default function PatientForm() {
         ["hcvPlus", "HCV+"],
         ["hbaSg", "HBsAg"],
         ["hiv", "HIV"],
-        ["mp", "M.P"],
+        ["mp", "MP ICT"],
         ["dengue", "Dengue"],
       ];
       const screeningConflicts = screeningLabels
@@ -2440,6 +2444,20 @@ export default function PatientForm() {
             <Text style={styles.screeningText}>{label}</Text>
           </Pressable>
         ))}
+        {customScreeningBoxes.map(box => {
+          const fieldKey = "customScreening_" + box.id;
+          const checked = asBooleanFlag(p.customData?.[fieldKey]);
+          return <Pressable
+            key={"custom-screening-" + box.id}
+            onPress={() => setP(prev => ({ ...prev, customData: { ...(prev.customData || {}), [fieldKey]: asBooleanFlag(prev.customData?.[fieldKey]) ? "false" : "true" } }))}
+            style={styles.screeningRow}
+            testID={"patient-screening-custom-" + box.id}
+          >
+            <Ionicons name={checked ? "checkbox" : "square-outline"} size={22} color={checked ? colors.brandPrimary : colors.muted} />
+            <Text style={styles.screeningText}>{box.label}</Text>
+          </Pressable>;
+        })}
+
 
         <Text style={styles.section}>Inventory Items Used</Text>
         <Field
