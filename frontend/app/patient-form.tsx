@@ -258,9 +258,15 @@ export default function PatientForm() {
             (!!structuredText && isLikelyLabReportText(structuredText, configuredLabTests));
           const labCues = /\b(?:laboratory|lab report|investigation|test name|test results?|reference range|normal range|biological reference|specimen|result|units?)\b/i.test(evidenceText);
           const numericContent = /[-+]?\d+(?:[.,]\d+)?/.test(evidenceText);
+          // Some reports have no "Result" heading and OCR emits test labels and
+          // scalar results on separate lines. Preserve those pages for the safe
+          // row-aware parser instead of rejecting them before parsing.
+          const knownTestLabels = evidenceText.split(/\r?\n/)
+            .filter(line => hasKnownLabTestName(line, configuredLabTests)).length;
+          const splitLineLabEvidence = knownTestLabels > 0 && numericContent;
           // A reconstructed table may identify a lab page when raw OCR loses its
           // headings/columns. Use both outputs so valid scans aren't silently discarded.
-          if (evidenceText && (recognizedRows || (labCues && numericContent))) {
+          if (evidenceText && (recognizedRows || (labCues && numericContent) || splitLineLabEvidence)) {
             pages.push("LAB REPORT IMAGE " + (i + 1) + "\n" +
               (structuredText ? "RECONSTRUCTED TABLE ROWS (test | result | unit | reference range)\n" + structuredText + "\n" : "") +
               "RAW OCR TEXT FOR REVIEW\n" + (text || "[No reliable plain-text OCR was returned.]"));
