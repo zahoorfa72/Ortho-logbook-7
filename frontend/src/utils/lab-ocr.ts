@@ -953,71 +953,12 @@ function validateStructuredLabResults(
   }).join("\n");
 }
 
-type OnlineOcrResult = { text: string; blocks: any[] };
-
-async function recognizeOnlineLabText(uri: string, apiKey: string): Promise<OnlineOcrResult> {
-  const key = String(apiKey || "").trim();
-  if (!key) return { text: "", blocks: [] };
-  try {
-    const body = new FormData();
-    body.append("file", { uri, name: "lab-report.jpg", type: "image/jpeg" } as any);
-    body.append("language", "eng");
-    // Request word boxes as well as text so online OCR can participate in
-    // table reconstruction instead of returning unstructured text only.
-    body.append("isOverlayRequired", "true");
-    body.append("detectOrientation", "true");
-    body.append("scale", "true");
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 20000);
-    let response: Response;
-    try {
-      response = await fetch("https://api.ocr.space/parse/image", {
-        method: "POST",
-        headers: { apikey: key },
-        body,
-        signal: controller.signal,
-      });
-    } finally {
-      clearTimeout(timeout);
-    }
-    if (!response.ok) return { text: "", blocks: [] };
-    const payload: any = await response.json();
-    if (payload?.IsErroredOnProcessing) return { text: "", blocks: [] };
-    const parsed = Array.isArray(payload?.ParsedResults) ? payload.ParsedResults : [];
-    const text = parsed.map((item: any) => String(item?.ParsedText || "")).filter(Boolean).join("\n").trim();
-    const blocks: any[] = [];
-    for (const result of parsed) {
-      const lines = Array.isArray(result?.TextOverlay?.Lines) ? result.TextOverlay.Lines : [];
-      for (const line of lines) {
-        const words = Array.isArray(line?.Words) ? line.Words : [];
-        const validWords = words.filter((word: any) => String(word?.WordText || "").trim() &&
-          Number.isFinite(Number(word?.Left)) && Number.isFinite(Number(word?.Top)) &&
-          Number.isFinite(Number(word?.Width)) && Number.isFinite(Number(word?.Height)));
-        if (!validWords.length) continue;
-        const left = Math.min(...validWords.map((word: any) => Number(word.Left)));
-        const top = Math.min(...validWords.map((word: any) => Number(word.Top)));
-        const right = Math.max(...validWords.map((word: any) => Number(word.Left) + Number(word.Width)));
-        const bottom = Math.max(...validWords.map((word: any) => Number(word.Top) + Number(word.Height)));
-        blocks.push({
-          text: validWords.map((word: any) => String(word.WordText).trim()).join(" "),
-          boundingBox: { x: left, y: top, width: right - left, height: bottom - top },
-        });
-      }
-    }
-    return { text, blocks };
-  } catch {
-    // Network, service, or API-key errors fall back to offline OCR silently.
-    return { text: "", blocks: [] };
-  }
-}
-
 export async function recognizeLabText(
   uri: string,
-  onlineApiKey = "",
   configuredTests: LabTestDefinition[] = [],
   gender = "",
   fastMode = false,
-): Promise<{ text: string; structuredText: string; mode: "online" | "offline" }> {
+): Promise<{ text: string; structuredText: string; mode: "offline" }> {
   // Run on-device OCR on the original and, for small/blurry-looking captures,
   // an enlarged high-quality copy. Upscaling cannot restore lost detail, but
   // often helps OCR read small printed digits without sending data online.
@@ -1144,7 +1085,7 @@ export async function recognizeLabText(
     if (headerUri) { try { await FileSystem.deleteAsync(headerUri, { idempotent: true }); } catch {} }
   }
   let text = normalizeHemoglobinUnitText(String(best?.text || ""));
-  let mode: "online" | "offline" = "offline";
+  const mode = "offline" as const;
   // Patient lab images must remain on-device. Never send them to a cloud OCR
   // endpoint, even if an older version has an API key saved in settings.
   // The current native OCR engine runs locally; high-capacity offline vision
