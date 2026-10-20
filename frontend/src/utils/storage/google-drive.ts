@@ -352,11 +352,14 @@ export async function restoreGoogleDriveBackupById(fileId: string, onProgress?: 
     parsed.incremental = false;
     delete parsed.changedTables; delete parsed._rowDelta; delete parsed.deletedIds;
     delete parsed.fullTables; delete parsed._baselineKey; delete parsed._updateCount;
-    try {
-      await downloadPatientImageArchivesFromDrive(parsed, onProgress);
-    } catch (error: any) {
-      warnings.push("The master backup data was downloaded, but some separate patient image PDFs could not be downloaded: " + String(error?.message || error));
-    }
+    // Start the recent-PDF restore in the background. Backup data must be
+    // returned to the restore flow immediately; slow or large PDFs must not
+    // hold up patient/inventory/settings restore. The helper already filters
+    // to Drive PDFs modified within the latest 48 hours and leaves older PDFs
+    // available through downloadPatientImageArchiveForPatient().
+    void downloadPatientImageArchivesFromDrive(parsed, onProgress).catch((error: any) => {
+      onProgress?.("Recent patient PDF download had a problem; the main backup is ready. You can download any patient's PDF from their record. " + String(error?.message || error));
+    });
     return { name: String(metadata.name), modifiedTime: effectiveModifiedTime,
       backupText: JSON.stringify(parsed), appliedIncrementals: applied, recoveryWarnings: warnings };
   }
@@ -509,11 +512,11 @@ export async function restoreGoogleDriveBackupById(fileId: string, onProgress?: 
   delete composed._baselineKey;
   delete composed._updateCount;
   composed.filter = { type: "all" };
-  try {
-    await downloadPatientImageArchivesFromDrive(composed, onProgress);
-  } catch (error: any) {
-    recoveryWarnings.push("The master backup data was downloaded, but some separate patient image PDFs could not be downloaded: " + String(error?.message || error));
-  }
+  // Restore the main backup first; recent patient PDFs continue downloading
+  // in the background so a slow PDF never delays the data restore.
+  void downloadPatientImageArchivesFromDrive(composed, onProgress).catch((error: any) => {
+    onProgress?.("Recent patient PDF download had a problem; the main backup is ready. You can download any patient's PDF from their record. " + String(error?.message || error));
+  });
   return {
     name: String(metadata.name || "Ortho Logbook Backup"),
     modifiedTime: String(metadata.modifiedTime || ""),
