@@ -558,7 +558,10 @@ export function parseLabReportRows(text: string, configuredTests: LabTestDefinit
         const cells = structuredLine.split("|").map(cell => cell.trim());
         const structuredPrefix = cells.length >= 2 ? findTestPrefix(cells[0], configuredTests) : null;
         const numericTokens = cells.length >= 2 ? (cells[1].match(/[-+]?\d+(?:[.,]\d+)?/g) || []) : [];
-        if (structuredPrefix && numericTokens.length <= 1 && resultNumber(cells[1]) !== null) {
+        // A structured row label reserves that test's row even when its
+        // result is unreadable. Do not let the flattened OCR fallback borrow
+        // a neighboring value (e.g. hemoglobin) for platelets.
+        if (structuredPrefix) {
           structuredResultKeys.add(canonicalTestName(structuredPrefix.name));
         }
       }
@@ -921,11 +924,19 @@ function validateStructuredLabResults(
     const rawResult = rawMeasuredResultForTest(prefix.name, rawText, configuredTests);
     const reconstructedResult = resultNumber(cells[1] || "");
     if (rawResult !== null && (reconstructedResult === null || !sameMeasuredResult(reconstructedResult, rawResult))) {
-      // When the flattened OCR text clearly associates a value with this test,
-      // use that value to correct a geometric row/column mismatch. If flattened
-      // text cannot pair it reliably, preserve the geometry-derived value rather
-      // than discarding a result that may be clearly readable in the image.
+      // Prefer a result explicitly associated with this exact test in raw OCR.
       cells[1] = rawResult;
+    } else if (rawResult === null && reconstructedResult !== null) {
+      // If the same reconstructed number is explicitly tied to a different
+      // configured test, it may have drifted across rows. Fail closed instead
+      // of silently attaching (for example) Hb's number to platelets.
+      const target = canonicalTestName(prefix.name);
+      const borrowedByAnotherTest = configuredTests.some(other => {
+        if (canonicalTestName(other.name) === target) return false;
+        const otherResult = rawMeasuredResultForTest(other.name, rawText, configuredTests);
+        return otherResult !== null && sameMeasuredResult(otherResult, reconstructedResult);
+      });
+      if (borrowedByAnotherTest) cells[1] = "";
     }
     while (cells.length < 4) cells.push("");
     return cells.slice(0, 4).join(" | ");
