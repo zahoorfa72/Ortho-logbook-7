@@ -1129,30 +1129,17 @@ export async function recognizeLabText(
   }
   let text = normalizeHemoglobinUnitText(String(best?.text || ""));
   let mode: "online" | "offline" = "offline";
-  // Optional cloud OCR is attempted only when the admin explicitly saves a key.
-  // If it is unavailable or returns less readable text, retain the offline result.
-  const onlineResult = fastMode ? { text: "", blocks: [] } : await recognizeOnlineLabText(uri, onlineApiKey);
-  const onlineText = onlineResult.text;
-  const qualityScore = (value: string) =>
-    (isLikelyLabReportText(value, configuredTests) ? 80 : 0) +
-    (value.match(/\d+(?:[.,]\d+)?/g) || []).length * 8 +
-    (value.match(/\b(?:result|reference|range|hemoglobin|haemoglobin|platelets|glucose|creatinine)\b/gi) || []).length * 12 +
-    parseLabReportRows(value, configuredTests, gender, 10, true).length * 160 +
-    (extractLabReportDate(value) ? 25 : 0);
-  if (onlineText && (
-    qualityScore(onlineText) > qualityScore(text) ||
-    (isLikelyLabReportText(onlineText, configuredTests) && !isLikelyLabReportText(text, configuredTests))
-  )) {
-    text = normalizeHemoglobinUnitText(onlineText);
-    mode = "online";
-  }
+  // Patient lab images must remain on-device. Never send them to a cloud OCR
+  // endpoint, even if an older version has an API key saved in settings.
+  // The current native OCR engine runs locally; high-capacity offline vision
+  // models require a separately bundled native model and are not implied here.
   let structuredText = "";
   try {
     const size = bestSize || await imageSize(uri);
     // Use online word geometry when online OCR wins, otherwise use the
     // on-device engine's original bounding boxes. Both go through identical
     // table reconstruction and configured-range validation.
-    const sourceBlocks = mode === "online" && onlineResult.blocks.length ? onlineResult.blocks : (best?.blocks || []);
+    const sourceBlocks = best?.blocks || [];
     structuredText = structureLabColumns(sourceBlocks, size.width, size.height, configuredTests);
     structuredText = validateStructuredLabResults(structuredText, text, configuredTests);
   } catch {
