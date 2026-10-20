@@ -1230,13 +1230,46 @@ async function downloadPatientImageArchivesFromDrive(backup: any, onProgress?: (
       if (isActivePatient(ref, String(patient.id)) && !refs.has(fileName)) refs.set(fileName, ref);
     }
   }
-  if (!refs.size) {
-    onProgress?.("Patient PDFs skipped: no image PDF archives are referenced by active patients in this backup.");
-    return;
-  }
   const folder = await findPatientImagePdfFolder();
   if (!folder?.id) {
     onProgress?.("Patient PDFs skipped: the Patient Image PDFs folder is missing. Patient and inventory data can still be restored.");
+    return;
+  }
+  // Older master backups may not contain a PDF manifest. Discover those PDFs
+  // by their Drive appProperties patient ID, not by patient name alone, so a
+  // new phone can restore archives that already exist in Drive without asking
+  // the user to select PDFs manually or attaching another patient's images.
+  const folderQuery = encodeURIComponent("'" + escapeDriveQuery(String(folder.id)) +
+    "' in parents and mimeType = 'application/pdf' and trashed = false");
+  let pageToken = "";
+  do {
+    const tokenParam = pageToken ? "&pageToken=" + encodeURIComponent(pageToken) : "";
+    const response = await driveRequest(DRIVE_API + "?q=" + folderQuery +
+      "&spaces=drive&pageSize=1000&orderBy=modifiedTime%20desc&includeItemsFromAllDrives=true&supportsAllDrives=true" +
+      "&fields=files(id,name,mimeType,size,modifiedTime,parents,appProperties),nextPageToken" + tokenParam);
+    const data = await response.json();
+    for (const remote of Array.isArray(data.files) ? data.files : []) {
+      const patientId = String(remote?.appProperties?.orthoPatientId || "");
+      const fileName = String(remote?.name || "");
+      if (!remote?.id || !patientId || !patientById.has(patientId) ||
+          remote.mimeType !== "application/pdf" || !/^[^/\\]{1,180}\.pdf$/i.test(fileName)) continue;
+      if (refs.has(fileName)) continue;
+      const patient = patientById.get(patientId);
+      refs.set(fileName, {
+        patientId,
+        patientName: String(patient?.name || "Patient"),
+        mrNo: String(patient?.mr_no || ""),
+        fileName,
+        sourceStamp: String(remote?.appProperties?.orthoSourceStamp || ""),
+        archivedAt: String(patient?.date || patient?.created_at || ""),
+        imageCount: Number(remote?.appProperties?.orthoImageCount || 0),
+        driveFileId: String(remote.id),
+      });
+    }
+    pageToken = typeof data.nextPageToken === "string" ? data.nextPageToken : "";
+  } while (pageToken);
+  if (!refs.size) {
+    onProgress?.("Patient PDFs skipped: no active-patient image PDFs were found in the Drive folder.");
     return;
   }
   if (!FileSystem.cacheDirectory) {
@@ -1256,14 +1289,20 @@ async function downloadPatientImageArchivesFromDrive(backup: any, onProgress?: (
       onProgress?.("Finding patient PDF " + i + "/" + refs.size + ": " + fileName);
       let remote: any = null;
       try {
-        remote = await findPatientPdfInFolder(fileName, String(folder.id));
+        if (ref.driveFileId) {
+          try { remote = await verifyPatientPdf(String(ref.driveFileId)); } catch { remote = null; }
+        }
+        if (!remote?.id) remote = await findPatientPdfInFolder(fileName, String(folder.id));
       } catch (error: any) {
         onProgress?.("Skipping patient PDF " + fileName + ": " + String(error?.message || error));
         continue;
       }
-      if (!remote?.id || remote.mimeType !== "application/pdf" || Number(remote.size || 0) < 8) {
-        // A stale/missing PDF must not abort restoring unrelated valid records.
-        // This also fixes deleted-patient PDFs lingering in old master manifests.
+      const remotePatientId = String(remote?.appProperties?.orthoPatientId || "");
+      if (!remote?.id || remote.mimeType !== "application/pdf" || Number(remote.size || 0) < 8 ||
+          (remotePatientId && remotePatientId !== String(ref.patientId)) ||
+          (Array.isArray(remote.parents) && !remote.parents.includes(String(folder.id)))) {
+        // A stale/missing or differently-owned PDF must not abort restoring
+        // unrelated records, and must never be attached to the wrong patient.
         onProgress?.("Skipping missing or invalid patient PDF: " + fileName + ". Other backup data will still restore.");
         continue;
       }

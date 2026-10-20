@@ -10,9 +10,9 @@ import { storage } from "@/src/utils/storage";
 
 // Batch rapid edits into one sync; this avoids repeated uploads while typing/saving related fields.
 const DEBOUNCE_MS = 7000;
-// Re-scan every syncable table on app launch/foreground. SQLite change events can be
-// missed while Android suspends/recreates the app; the incremental exporter compares
-// local rows with its last confirmed snapshot, so unchanged data is not re-uploaded.
+// The full table list is reserved for first sync and explicit manual refresh.
+// Normal app launches resume only previously queued changes; SQLite change events
+// identify actual writes, and the exporter still compares them with the last snapshot.
 const ALL_SYNC_TABLES = [
   "patients", "procedures", "inventoryCategories", "inventory", "patientImplants",
   "patientCustomFields", "implantRecords", "expenses", "users", "patientHistory",
