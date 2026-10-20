@@ -71,6 +71,7 @@ export default function BackupRestoreScreen() {
     backupText: string;
     info: { createdAt: string; encrypted: boolean };
     source: "drive" | "phone";
+    recoveryWarnings?: string[];
   } | null>(null);
 
   useEffect(() => {
@@ -240,7 +241,7 @@ export default function BackupRestoreScreen() {
       setDriveStatus("Downloading master backup…");
       const result = await restoreGoogleDriveBackupById(file.id, setDriveStatus);
       const info = getBackupInfo(result.backupText);
-      setSelectedBackup({ name: result.name, backupText: result.backupText, info, source: "drive" });
+      setSelectedBackup({ name: result.name, backupText: result.backupText, info, source: "drive", recoveryWarnings: (result as any).recoveryWarnings || [] });
       setRestorePassword("");
       setRestorePeriod("all");
       setRestorePeriodValue(new Date().toISOString().slice(0, 7));
@@ -259,11 +260,15 @@ export default function BackupRestoreScreen() {
       setDriveStatus("Finding the latest master backup…");
       const result = await restoreLatestFromGoogleDrive(setDriveStatus);
       const info = getBackupInfo(result.backupText);
-      setSelectedBackup({ name: result.name, backupText: result.backupText, info, source: "drive" });
+      setSelectedBackup({ name: result.name, backupText: result.backupText, info, source: "drive", recoveryWarnings: (result as any).recoveryWarnings || [] });
       setRestorePassword("");
       setRestorePeriod("all");
       setRestorePeriodValue(new Date().toISOString().slice(0, 7));
-      Alert.alert("Master backup found", "Updated: " + new Date(result.modifiedTime).toLocaleString() + "\nChoose all-time or a month/year to restore.");
+      const warningText = result.recoveryWarnings?.length
+        ? "\n\nWarnings:\n" + result.recoveryWarnings.slice(0, 3).join("\n")
+        : "";
+      Alert.alert("Master backup found", "Updated: " + new Date(result.modifiedTime).toLocaleString() +
+        "\nChoose all-time or a month/year to restore." + warningText);
     } catch (error) {
       Alert.alert("Drive restore failed", error instanceof Error ? error.message : "Unable to download the latest Google Drive backup.");
     } finally {
@@ -346,11 +351,14 @@ export default function BackupRestoreScreen() {
     // Period restore is merge-only so other months/years are never wiped.
     const isReplace = !isPeriodRestore && mode === "Replace";
     const title = isPeriodRestore ? "Restore selected period?" : isReplace ? "Replace with backup?" : "Merge backup?";
-    const message = isPeriodRestore
+    const message = (isPeriodRestore
       ? "Merge records from " + (restorePeriod === "month" ? "month " : "year ") + restorePeriodValue.trim() + " into this phone. Other periods stay untouched; current stock quantities are not replayed."
       : isReplace
         ? "This wipes all current data and replaces it with the backup. You will be logged out."
-        : "New records will be added. Re-importing the same backup will not add inventory again. Inventory from a different phone can be combined by item.";
+        : "New records will be added. Re-importing the same backup will not add inventory again. Inventory from a different phone can be combined by item.") +
+      (selectedBackup.recoveryWarnings?.length
+        ? "\n\nDrive backup warnings:\n" + selectedBackup.recoveryWarnings.slice(0, 3).join("\n")
+        : "");
     Alert.alert(title, message, [
       { text: "Cancel", style: "cancel" },
       {

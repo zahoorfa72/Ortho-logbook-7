@@ -2912,10 +2912,61 @@ export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) 
       }
     }
   }
+  const lastSuccessfulBackup = Date.parse(String(await getLastDriveBackupStatus() || ""));
+  const selectedContentTime = Date.parse(String(effectiveModifiedTime || file.modifiedTime || ""));
+  if (Number.isFinite(lastSuccessfulBackup) && Number.isFinite(selectedContentTime) &&
+      lastSuccessfulBackup - selectedContentTime > 5 * 60 * 1000) {
+    throw new Error("The selected Drive master is older than the last successful Drive backup recorded on this phone. To prevent restoring stale data, restore was stopped and your local data was not changed. Return to Backup, complete a fresh Google Drive backup, then reload the latest backup.");
+  }
+
+  // If a newer-looking file was unreadable, never hide that fact behind a fallback.
+  if (rejectedFiles.length && String(file.id) !== String(candidates[0]?.id || "")) {
+    recoveryWarnings.push("The newest matching backup could not be validated; automatic restore selected the fallback \"" +
+      String(file.name || "backup") + "\". Check the backup warnings before replacing current data: " +
+      rejectedFiles.slice(0, 2).join("; "));
+  }
+
+  // On this same phone, warn if the selected master misses local rows; this is
+  // a strong sign that the cloud master may be incomplete. New phones have no
+  // local rows yet and are unaffected. This audit never changes local data.
+  try {
+    initializeDatabase({ skipInventoryReset: true });
+    const localTableNames: Array<[string, string]> = [
+      ["patients", "patients"], ["procedures", "procedures"],
+      ["inventoryCategories", "inventory_categories"], ["inventory", "inventory"],
+      ["patientImplants", "patient_implants"], ["patientCustomFields", "patient_custom_fields"],
+      ["implantRecords", "implant_records"], ["expenses", "expenses"], ["users", "users"],
+      ["patientHistory", "patient_history"], ["inventoryMovements", "inventory_movements"],
+      ["inventoryPurchaseReceipts", "inventory_purchase_receipts"], ["stockReceipts", "stock_receipts"],
+      ["trash", "deleted_records"],
+    ];
+    const missingLocalTables: string[] = [];
+    for (const [backupTable, sqlTable] of localTableNames) {
+      const localIds = db.getAllSync<any>("SELECT id FROM " + sqlTable)
+        .map((row: any) => String(row.id ?? "")).filter(Boolean);
+      const driveIds = new Set<string>((Array.isArray(composed[backupTable]) ? composed[backupTable] : [])
+        .map((row: any) => String(row?.id ?? "")).filter(Boolean));
+      if (localIds.some((id: string) => !driveIds.has(id))) missingLocalTables.push(backupTable);
+    }
+    if (missingLocalTables.length) {
+      recoveryWarnings.push("Safety check: the Drive master is missing local record IDs from " +
+        missingLocalTables.join(", ") + ". Do not choose Replace until a complete Drive backup succeeds; this phone's local data is still intact.");
+    }
+  } catch (error) {
+    console.warn("[drive-restore] local completeness audit could not run", error);
+  }
+
   composed.incremental = false;
   delete composed.changedTables;
   composed.filter = { type: "all" };
-  await downloadPatientImageArchivesFromDrive(composed, onProgress);
+  // Patient PDFs are separate attachments. Failure to retrieve them must not
+  // block restoring the patient/inventory/settings backup.
+  try {
+    await downloadPatientImageArchivesFromDrive(composed, onProgress);
+  } catch (error: any) {
+    recoveryWarnings.push("Separate patient PDF download was skipped; the main backup is still available. " +
+      String(error?.message || error));
+  }
   return { backupText: JSON.stringify(composed), name: file.name, modifiedTime: effectiveModifiedTime || String(file.modifiedTime || ""), appliedIncrementals, recoveryWarnings };
 }
 
