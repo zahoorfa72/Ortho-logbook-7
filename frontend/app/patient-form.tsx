@@ -241,7 +241,12 @@ export default function PatientForm() {
       const pages: string[] = [];
       const recognizedPhotoUris: string[] = [];
       let onlineOcrKey = "";
-      try { onlineOcrKey = (await AsyncStorage.getItem("ortho_lab_online_ocr_api_key_v1")) || ""; } catch {}
+      // External OCR is disabled unless the administrator separately opts in.
+      // Saving an API key alone must never upload patient lab images.
+      try {
+        const externalProcessingApproved = (await AsyncStorage.getItem("ortho_lab_online_ocr_consent_v1")) === "true";
+        if (externalProcessingApproved) onlineOcrKey = (await AsyncStorage.getItem("ortho_lab_online_ocr_api_key_v1")) || "";
+      } catch {}
       if (cachedExtracted === null) for (let i = 0; i < photoUris.length; i++) {
         try {
           // Yield between photos so the form can repaint and respond while a

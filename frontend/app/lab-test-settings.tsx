@@ -2,7 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { router } from "expo-router";
 import { useEffect, useState } from "react";
-import { Alert, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { Alert, Pressable, ScrollView, Text, TextInput, View, Switch } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "@/src/auth/AuthContext";
 import { useToast } from "@/src/components/toast";
@@ -26,6 +26,7 @@ const BRANCHES_KEY = "ortho_lab_test_branches_v1";
 const WARNING_THRESHOLD_KEY = "ortho_lab_warning_threshold_percent_v1";
 const OLD_RESULT_DAYS_KEY = "ortho_lab_old_result_days_v1";
 const ONLINE_OCR_KEY = "ortho_lab_online_ocr_api_key_v1";
+const ONLINE_OCR_CONSENT_KEY = "ortho_lab_online_ocr_consent_v1";
 const blank = (): LabTestDefinition => ({ id: "", name: "", maleMin: "", maleMax: "", femaleMin: "", femaleMax: "", unit: "", aliases: "", category: "" });
 
 export default function LabTestSettingsScreen() {
@@ -45,6 +46,7 @@ export default function LabTestSettingsScreen() {
   const [oldDaysBusy, setOldDaysBusy] = useState(false);
   const [thresholdBusy, setThresholdBusy] = useState(false);
   const [onlineOcrKey, setOnlineOcrKey] = useState("");
+  const [onlineOcrConsent, setOnlineOcrConsent] = useState(false);
   const [onlineKeyBusy, setOnlineKeyBusy] = useState(false);
 
   useEffect(() => {
@@ -63,6 +65,7 @@ export default function LabTestSettingsScreen() {
     }).catch(() => {});
     AsyncStorage.getItem(WARNING_THRESHOLD_KEY).then(raw => { if (raw && Number.isFinite(Number(raw))) setWarningPercent(String(Math.max(1, Math.min(100, Math.round(Number(raw)))))); }).catch(() => {});
     AsyncStorage.getItem(ONLINE_OCR_KEY).then(raw => setOnlineOcrKey(raw || "")).catch(() => {});
+    AsyncStorage.getItem(ONLINE_OCR_CONSENT_KEY).then(raw => setOnlineOcrConsent(raw === "true")).catch(() => setOnlineOcrConsent(false));
     AsyncStorage.getItem(OLD_RESULT_DAYS_KEY).then(raw => { if (raw && Number.isFinite(Number(raw))) setOldResultDays(String(Math.max(1, Math.min(3650, Math.round(Number(raw)))))); }).catch(() => {});
   }, []);
   const update = (patch: Partial<LabTestDefinition>) => setForm(current => ({ ...current, ...patch }));
@@ -166,8 +169,19 @@ export default function LabTestSettingsScreen() {
     </View>
     <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xxl }}>
       <Text style={styles.help}>For strongest automatic results, add each test your lab reports, enter its alternate labels/abbreviations, assign its branch, and save the correct male/female limits and unit. These admin definitions are used first when matching OCR labels and deciding abnormal results. The scanner will leave uncertain results unclassified rather than invent a value.</Text>
-      <Text style={styles.section}>Online OCR (optional)</Text>
-      <Text style={styles.help}>When a key is saved, the app tries OCR.space online and uses its text only if it appears more complete than offline OCR. If internet or the service fails, offline OCR continues. Lab images are sent to OCR.space while online OCR is enabled. Obtain an API key from ocr.space; do not paste a Google/GitHub key here.</Text>
+      <Text style={styles.section}>Optional third-party OCR (not AI vision)</Text>
+      <Text style={styles.help}>OCR.space is a third-party OCR service, not the proposed AI-vision system. Do not enable it for identifiable patient reports unless your organization has reviewed and approved the service and its data handling. When enabled, the lab image is sent to OCR.space. Until the combined secure AI-vision service is configured, offline processing remains the default.</Text>
+      <View style={styles.field}>
+        <Text style={styles.label}>Allow sending lab images to OCR.space</Text>
+        <Switch value={onlineOcrConsent} onValueChange={async value => {
+          setOnlineOcrConsent(value);
+          try {
+            await AsyncStorage.setItem(ONLINE_OCR_CONSENT_KEY, value ? "true" : "false");
+            triggerAutomaticDriveBackup("appSettings");
+            toast(value ? "Third-party image processing enabled. Lab images may leave this device." : "Third-party image processing disabled. Offline OCR remains available.", value ? "info" : "success");
+          } catch { setOnlineOcrConsent(!value); toast("Could not save the external-processing permission.", "error"); }
+        }} trackColor={{ false: colors.border, true: colors.brandPrimary }} thumbColor={onlineOcrConsent ? colors.onBrandPrimary : colors.muted} accessibilityLabel="Allow sending lab images to OCR.space" />
+      </View>
       <View style={styles.field}>
         <Text style={styles.label}>OCR.space API key</Text>
         <TextInput value={onlineOcrKey} onChangeText={setOnlineOcrKey} placeholder="Enter API key (optional)" placeholderTextColor={colors.muted} autoCapitalize="none" autoCorrect={false} secureTextEntry style={styles.input}/>
