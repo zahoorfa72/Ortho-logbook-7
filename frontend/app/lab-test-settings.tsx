@@ -8,6 +8,8 @@ import { useAuth } from "@/src/auth/AuthContext";
 import { useToast } from "@/src/components/toast";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 import { triggerAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-backup";
+import * as SecureStore from "expo-secure-store";
+import { LAB_VISION_CLIENT_TOKEN_KEY, LAB_VISION_CONSENT_KEY, LAB_VISION_ENDPOINT_KEY, LAB_VISION_TEMPLATES_KEY, type LabVisionTemplate, validateLabVisionEndpoint } from "@/src/utils/lab-vision";
 
 export type LabTestDefinition = {
   id: string;
@@ -48,6 +50,13 @@ export default function LabTestSettingsScreen() {
   const [onlineOcrKey, setOnlineOcrKey] = useState("");
   const [onlineOcrConsent, setOnlineOcrConsent] = useState(false);
   const [onlineKeyBusy, setOnlineKeyBusy] = useState(false);
+  const [visionEndpoint, setVisionEndpoint] = useState("");
+  const [visionToken, setVisionToken] = useState("");
+  const [visionConsent, setVisionConsent] = useState(false);
+  const [visionTemplates, setVisionTemplates] = useState<LabVisionTemplate[]>([]);
+  const [templateName, setTemplateName] = useState("");
+  const [templateMarkers, setTemplateMarkers] = useState("");
+  const [templateColumns, setTemplateColumns] = useState("");
 
   useEffect(() => {
     Promise.all([AsyncStorage.getItem(STORAGE_KEY), AsyncStorage.getItem(BRANCHES_KEY)]).then(([rawTests, rawBranches]) => {
@@ -66,6 +75,20 @@ export default function LabTestSettingsScreen() {
     AsyncStorage.getItem(WARNING_THRESHOLD_KEY).then(raw => { if (raw && Number.isFinite(Number(raw))) setWarningPercent(String(Math.max(1, Math.min(100, Math.round(Number(raw)))))); }).catch(() => {});
     AsyncStorage.getItem(ONLINE_OCR_KEY).then(raw => setOnlineOcrKey(raw || "")).catch(() => {});
     AsyncStorage.getItem(ONLINE_OCR_CONSENT_KEY).then(raw => setOnlineOcrConsent(raw === "true")).catch(() => setOnlineOcrConsent(false));
+    Promise.all([
+      AsyncStorage.getItem(LAB_VISION_ENDPOINT_KEY),
+      AsyncStorage.getItem(LAB_VISION_CONSENT_KEY),
+      AsyncStorage.getItem(LAB_VISION_TEMPLATES_KEY),
+      SecureStore.getItemAsync(LAB_VISION_CLIENT_TOKEN_KEY),
+    ]).then(([endpoint, consent, rawTemplates, token]) => {
+      setVisionEndpoint(endpoint || "");
+      setVisionConsent(consent === "true");
+      setVisionToken(token || "");
+      try {
+        const parsed = rawTemplates ? JSON.parse(rawTemplates) : [];
+        if (Array.isArray(parsed)) setVisionTemplates(parsed.filter(item => item && item.id && item.name && Array.isArray(item.markers)));
+      } catch {}
+    }).catch(() => {});
     AsyncStorage.getItem(OLD_RESULT_DAYS_KEY).then(raw => { if (raw && Number.isFinite(Number(raw))) setOldResultDays(String(Math.max(1, Math.min(3650, Math.round(Number(raw)))))); }).catch(() => {});
   }, []);
   const update = (patch: Partial<LabTestDefinition>) => setForm(current => ({ ...current, ...patch }));
@@ -140,6 +163,56 @@ export default function LabTestSettingsScreen() {
     finally { setOldDaysBusy(false); }
   };
 
+
+  const saveVisionEndpoint = async () => {
+    try {
+      const endpoint = validateLabVisionEndpoint(visionEndpoint);
+      await AsyncStorage.setItem(LAB_VISION_ENDPOINT_KEY, endpoint);
+      if (visionToken.trim()) await SecureStore.setItemAsync(LAB_VISION_CLIENT_TOKEN_KEY, visionToken.trim());
+      else await SecureStore.deleteItemAsync(LAB_VISION_CLIENT_TOKEN_KEY);
+      if (!endpoint || !visionToken.trim()) {
+        await AsyncStorage.setItem(LAB_VISION_CONSENT_KEY, "false");
+        setVisionConsent(false);
+      }
+      triggerAutomaticDriveBackup("appSettings");
+      setVisionEndpoint(endpoint);
+      toast(endpoint ? "HTTPS AI-vision endpoint saved. External processing remains off until separately enabled." : "AI-vision endpoint cleared and external processing disabled.", "success");
+    } catch (error: any) { toast(error?.message || "Could not save the AI-vision endpoint.", "error"); }
+  };
+  const setVisionPermission = async (value: boolean) => {
+    try {
+      const endpoint = validateLabVisionEndpoint(visionEndpoint);
+      if (value && (!endpoint || !visionToken.trim())) { toast("Save a valid HTTPS endpoint and client token before enabling external processing.", "error"); return; }
+      await AsyncStorage.setItem(LAB_VISION_CONSENT_KEY, value ? "true" : "false");
+      setVisionConsent(value);
+      triggerAutomaticDriveBackup("appSettings");
+      toast(value ? "AI-vision external processing enabled. Lab images may leave this device." : "AI-vision external processing disabled; offline OCR remains available.", value ? "info" : "success");
+    } catch (error: any) { toast(error?.message || "Could not change AI-vision permission.", "error"); }
+  };
+  const saveTemplate = async () => {
+    const name = templateName.trim();
+    const markers = templateMarkers.split(/[,;\n]+/).map(value => value.trim()).filter(Boolean);
+    const columnHints = templateColumns.split(/[,;\n]+/).map(value => value.trim()).filter(Boolean);
+    if (!name || !markers.length) { toast("Enter a template name and at least one distinctive report phrase.", "error"); return; }
+    const next = [...visionTemplates.filter(item => item.name.toLowerCase() !== name.toLowerCase()), { id: String(Date.now()), name, markers, columnHints }];
+    try {
+      await AsyncStorage.setItem(LAB_VISION_TEMPLATES_KEY, JSON.stringify(next));
+      triggerAutomaticDriveBackup("appSettings");
+      setVisionTemplates(next);
+      setTemplateName(""); setTemplateMarkers(""); setTemplateColumns("");
+      toast("Lab report template saved. Matching phrases will guide AI vision.", "success");
+    } catch { toast("Could not save the lab report template.", "error"); }
+  };
+  const deleteTemplate = async (template: LabVisionTemplate) => {
+    const next = visionTemplates.filter(item => item.id !== template.id);
+    try {
+      await AsyncStorage.setItem(LAB_VISION_TEMPLATES_KEY, JSON.stringify(next));
+      triggerAutomaticDriveBackup("appSettings");
+      setVisionTemplates(next);
+      toast("Lab report template deleted.", "success");
+    } catch { toast("Could not delete the lab report template.", "error"); }
+  };
+
   const saveOnlineOcrKey = async () => {
     setOnlineKeyBusy(true);
     try {
@@ -169,6 +242,29 @@ export default function LabTestSettingsScreen() {
     </View>
     <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xxl }}>
       <Text style={styles.help}>For strongest automatic results, add each test your lab reports, enter its alternate labels/abbreviations, assign its branch, and save the correct male/female limits and unit. These admin definitions are used first when matching OCR labels and deciding abnormal results. The scanner will leave uncertain results unclassified rather than invent a value.</Text>
+
+      <Text style={styles.section}>AI vision + lab report templates</Text>
+      <Text style={styles.help}>Configure an HTTPS endpoint approved by your organization. Keep provider API keys on the server, not in this app. The endpoint must have suitable healthcare privacy terms, no-training and no-retention controls. The image itself can contain patient identifiers, so do not enable this unless your organization has approved sending lab images. AI results are suggestions only and must be checked by an administrator against the original image before they are saved.</Text>
+      <View style={styles.field}><Text style={styles.label}>Secure AI-vision HTTPS endpoint</Text><TextInput value={visionEndpoint} onChangeText={setVisionEndpoint} placeholder="https://your-approved-service.example/api/lab-vision" placeholderTextColor={colors.muted} autoCapitalize="none" autoCorrect={false} keyboardType="url" style={styles.input}/></View>
+      <View style={styles.field}><Text style={styles.label}>AI-vision client token (from server administrator)</Text><TextInput value={visionToken} onChangeText={setVisionToken} placeholder="Paste client token" placeholderTextColor={colors.muted} autoCapitalize="none" autoCorrect={false} secureTextEntry style={styles.input}/></View>
+      <Pressable onPress={saveVisionEndpoint} style={styles.action}><Text style={styles.actionText}>Save AI-vision endpoint and token</Text></Pressable>
+      <View style={styles.field}>
+        <Text style={styles.label}>Allow sending lab images to this AI service</Text>
+        <Switch value={visionConsent} onValueChange={setVisionPermission} trackColor={{ false: colors.border, true: colors.brandPrimary }} thumbColor={visionConsent ? colors.onBrandPrimary : colors.muted} accessibilityLabel="Allow sending lab images to configured AI vision endpoint" />
+        <Text style={styles.help}>{visionConsent ? "Enabled: lab images may be sent to the configured HTTPS endpoint. Disable any time." : "Disabled by default. AI vision will not send images until you enable this switch."}</Text>
+      </View>
+      <Text style={styles.section}>Lab report layout templates</Text>
+      <Text style={styles.help}>Create a template for a recurring laboratory layout. Add distinctive printed phrases such as the lab name or report heading, and optional column headings. The app chooses a template only when its phrases match; templates never define medical ranges.</Text>
+      <View style={styles.field}><Text style={styles.label}>Template name / laboratory</Text><TextInput value={templateName} onChangeText={setTemplateName} placeholder="e.g. City Lab CBC format" placeholderTextColor={colors.muted} style={styles.input}/></View>
+      <View style={styles.field}><Text style={styles.label}>Distinctive phrases (comma separated)</Text><TextInput value={templateMarkers} onChangeText={setTemplateMarkers} placeholder="e.g. City Diagnostic, Complete Blood Count" placeholderTextColor={colors.muted} style={styles.input}/></View>
+      <View style={styles.field}><Text style={styles.label}>Column headings (comma separated, optional)</Text><TextInput value={templateColumns} onChangeText={setTemplateColumns} placeholder="e.g. Test Name, Result, Unit, Reference Range" placeholderTextColor={colors.muted} style={styles.input}/></View>
+      <Pressable onPress={saveTemplate} style={styles.action}><Text style={styles.actionText}>Save lab report template</Text></Pressable>
+      {visionTemplates.map(template => <View key={template.id} style={[styles.field, { borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, padding: spacing.sm }]}>
+        <Text style={styles.label}>{template.name}</Text><Text style={styles.help}>Matches: {template.markers.join(", ")}</Text>
+        {template.columnHints?.length ? <Text style={styles.help}>Columns: {template.columnHints.join(", ")}</Text> : null}
+        <Pressable onPress={() => deleteTemplate(template)}><Text style={[styles.actionText, { color: colors.error || "#B91C1C" }]}>Delete template</Text></Pressable>
+      </View>)}
+      <Text style={styles.help}>Service contract: POST multipart/form-data with a file and metadata; return JSON rows containing test, result, optional unit, confidence (0 to 1), and optional reason. See docs/lab-vision-endpoint.md.</Text>
       <Text style={styles.section}>Optional third-party OCR (not AI vision)</Text>
       <Text style={styles.help}>OCR.space is a third-party OCR service, not the proposed AI-vision system. Do not enable it for identifiable patient reports unless your organization has reviewed and approved the service and its data handling. When enabled, the lab image is sent to OCR.space. Until the combined secure AI-vision service is configured, offline processing remains the default.</Text>
       <View style={styles.field}>
