@@ -35,7 +35,7 @@ import { formatInventoryLabel } from "@/src/utils/inventory-label";
 import { archivePatientImagesForPatient, createPatientImagePdfFile, getPatientImageArchive, openPatientImageArchivePdf } from "@/src/utils/storage/patient-image-archive";
 import { deletePatientImagePdfFromDrive, downloadPatientImageArchiveForPatient, uploadPatientImageArchivesToDrive } from "@/src/utils/storage/google-drive";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
-const LAB_OCR_PIPELINE_VERSION = "row-safe-2026-10-20-v9-no-cross-line-pairing";
+const LAB_OCR_PIPELINE_VERSION = "row-safe-2026-10-20-v10-safe-adjacent-scalar";
 
 type Patient = {
   id: string; mrNo: string; name: string; gender: string; age: string;

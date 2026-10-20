@@ -519,6 +519,18 @@ export function extractLabReportDate(text: string): string {
 }
 
 
+// Recover a result printed immediately below its own test label only when the
+// next OCR line is a single scalar (optionally followed by a common unit).
+// Never cross another test label, a reference-range heading, or a multi-number row.
+function safeAdjacentMeasuredResult(lines: string[], index: number, configuredTests: LabTestDefinition[]): string | null {
+  const candidate = String(lines[index + 1] || "").replace(/\s+/g, " ").trim();
+  if (!candidate || candidate.length > 32 ||
+      /(?:reference|normal|range|male|female|result|units?|specimen|method|interpretation|flag|previous|\bdate\b)/i.test(candidate) ||
+      findTestPrefix(candidate, configuredTests)) return null;
+  const match = /^\s*[<>≤≥]?\s*([-+]?\d+(?:[.,]\d+)?)\s*(?:%|g\s*\/\s*d?l|mg\s*\/\s*dl|mmol\s*\/\s*l|µ?mol\s*\/\s*l|fl|pg)?\s*$/i.exec(candidate);
+  return match?.[1] || null;
+}
+
 export function parseLabReportRows(text: string, configuredTests: LabTestDefinition[] = [], gender = "", warningPercent = 10, includeNormal = false): ParsedLabRow[] {
   const rows: ParsedLabRow[] = [];
   const seen = new Set<string>();
@@ -591,6 +603,11 @@ export function parseLabReportRows(text: string, configuredTests: LabTestDefinit
         const referenceStart = firstReferenceStart(rest);
         const resultArea = referenceStart >= 0 ? rest.slice(0, referenceStart) : rest;
         resultRaw = resultNumber(resultArea);
+        if (resultRaw === null) {
+          // Some reports put the value directly below its test label. Recover
+          // only an isolated scalar on the immediately following OCR line.
+          resultRaw = safeAdjacentMeasuredResult(sourceLines, lineIndex, configuredTests);
+        }
       }
       // Do not borrow numbers from neighboring unlabeled OCR lines. CBC and electrolyte
       // tables are often flattened out of reading order; an uncertain value must stay
@@ -652,17 +669,16 @@ function imageSize(uri: string): Promise<{ width: number; height: number }> {
  */
 function structureLabColumns(blocks: any[], imageWidth: number, imageHeight: number, configuredTests: LabTestDefinition[] = []): string {
   const suppliedBlocks = Array.isArray(blocks) ? blocks : [];
-  // Paragraph boxes contain multiple baselines; do not pretend they are word geometry.
-  if (suppliedBlocks.some(block =>
-    /\r|\n/.test(String(block?.text || "")) &&
-    Number(block?.boundingBox?.height || 0) > 0
-  )) return "";
+  // Paragraph boxes can be mixed with valid single-baseline boxes. Ignore
+  // multi-line boxes individually below instead of discarding all table geometry.
 
   const positioned: OcrPositionedLine[] = [];
   for (const block of suppliedBlocks) {
     const box = block?.boundingBox;
     const text = String(block?.text || "").trim();
-    if (!box || !text) continue;
+    // A paragraph box has no per-line baseline or result-column coordinates.
+    // Skip that box only; retain the usable single-line OCR boxes.
+    if (!box || !text || /\r|\n/.test(text)) continue;
     positioned.push({
       text,
       x: Number(box.x) || 0,
@@ -872,10 +888,11 @@ function rawMeasuredResultForTest(
       .replace(/^\s*[:|;\-]+\s*/, "");
     const direct = measuredValue(rest);
     if (direct !== null) return direct;
+    const adjacent = safeAdjacentMeasuredResult(lines, index, configuredTests);
+    if (adjacent !== null) return adjacent;
 
-    // Accept only a result printed on the same line as its own test label.
-    // Never assign an unlabeled neighbor's number to this test because OCR may
-    // flatten CBC/electrolyte table columns in a different reading order.
+    // A result on another line is accepted only by the scalar-only helper above;
+    // multi-value or label-separated layouts remain unpaired.
   }
   return null;
 }

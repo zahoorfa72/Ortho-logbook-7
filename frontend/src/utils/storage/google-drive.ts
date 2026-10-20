@@ -1209,17 +1209,12 @@ async function downloadPatientImageArchivesFromDrive(backup: any, onProgress?: (
       .filter((patient: any) => patient?.id != null)
       .map((patient: any) => [String(patient.id), patient]),
   );
-  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
   const refs = new Map<string, any>();
-  const isRecentAndActive = (ref: any, patientId: string): boolean => {
-    if (!patientById.has(patientId)) return false; // stale PDF manifest for a deleted patient
-    const patient = patientById.get(patientId);
-    const dateText = String(ref?.archivedAt || patient?.date || patient?.created_at || "");
-    const timestamp = Date.parse(dateText);
-    return Number.isFinite(timestamp) && timestamp >= cutoff;
-  };
+  // Patient PDFs are durable archives, not a 30-day cache. Restore every PDF
+  // referenced by an active patient regardless of age, excluding deleted patients.
+  const isActivePatient = (_ref: any, patientId: string): boolean => patientById.has(patientId);
   for (const item of Array.isArray(backup?.patientImageArchives) ? backup.patientImageArchives : []) {
-    if (item?.patientId && item?.fileName && isRecentAndActive(item, String(item.patientId))) {
+    if (item?.patientId && item?.fileName && isActivePatient(item, String(item.patientId))) {
       refs.set(String(item.fileName), item);
     }
   }
@@ -1232,11 +1227,11 @@ async function downloadPatientImageArchivesFromDrive(backup: any, onProgress?: (
         archivedAt: String(patient.photo_archived_at || patient.date || patient.created_at || ""),
         imageCount: Number(patient.photo_archive_image_count || 0),
       };
-      if (isRecentAndActive(ref, String(patient.id)) && !refs.has(fileName)) refs.set(fileName, ref);
+      if (isActivePatient(ref, String(patient.id)) && !refs.has(fileName)) refs.set(fileName, ref);
     }
   }
   if (!refs.size) {
-    onProgress?.("Patient PDFs skipped: no active-patient image PDFs dated within the last 30 days.");
+    onProgress?.("Patient PDFs skipped: no image PDF archives are referenced by active patients in this backup.");
     return;
   }
   const folder = await findPatientImagePdfFolder();
@@ -1258,7 +1253,7 @@ async function downloadPatientImageArchivesFromDrive(backup: any, onProgress?: (
         onProgress?.("Skipping invalid patient PDF filename: " + fileName);
         continue;
       }
-      onProgress?.("Finding recent patient PDF " + i + "/" + refs.size + ": " + fileName);
+      onProgress?.("Finding patient PDF " + i + "/" + refs.size + ": " + fileName);
       let remote: any = null;
       try {
         remote = await findPatientPdfInFolder(fileName, String(folder.id));
@@ -1273,7 +1268,7 @@ async function downloadPatientImageArchivesFromDrive(backup: any, onProgress?: (
         continue;
       }
       const target = FileSystem.cacheDirectory + "ortho-patient-pdf-restore-" + Date.now() + "-" + i + ".pdf";
-      onProgress?.("Downloading recent patient PDF " + i + "/" + refs.size + ": " + fileName);
+      onProgress?.("Downloading patient PDF " + i + "/" + refs.size + ": " + fileName);
       try {
         const result = await FileSystem.downloadAsync(DRIVE_API + "/" + encodeURIComponent(String(remote.id)) + "?alt=media",
           target, { headers: { Authorization: "Bearer " + token } });

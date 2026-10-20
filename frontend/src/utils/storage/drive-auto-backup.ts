@@ -262,12 +262,10 @@ export function startAutomaticDriveBackup() {
     if (!pendingTables.size) {
       if (!lastSuccessfulBackup) {
         ALL_SYNC_TABLES.forEach((name) => pendingTables.add(name));
-      } else {
-        // A lightweight maintenance check also creates any missing current-month
-        // baseline and advances a completed-month archive without scanning every
-        // image table on every launch.
-        pendingTables.add("appSettings");
       }
+      // A successful backup plus an empty pending queue means there is nothing
+      // to sync. Do not enqueue appSettings just because the app opened; startup
+      // and navigation are not data changes.
     }
     await persistPendingTables();
     scheduleBackup();
@@ -290,13 +288,11 @@ export function startAutomaticDriveBackup() {
         scheduleBackup();
         return;
       }
-      if ((state === "background" || state === "inactive") && pendingTables.size && !uploading && !backupPaused) {
-        // Flush the debounce when the app is leaving the foreground. Otherwise
-        // Android can suspend the JS timer before the native foreground upload
-        // service has even been started, making background backup appear idle.
-        if (timer) clearTimeout(timer);
+      if ((state === "background" || state === "inactive") && timer) {
+        // Keep pending edits queued for the next foreground session. Do not
+        // start a new Drive transfer as the app is leaving the foreground.
+        clearTimeout(timer);
         timer = null;
-        void runBackup();
       }
     });
   } catch {}
