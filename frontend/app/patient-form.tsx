@@ -35,7 +35,7 @@ import { formatInventoryLabel } from "@/src/utils/inventory-label";
 import { archivePatientImagesForPatient, createPatientImagePdfFile, getPatientImageArchive, openPatientImageArchivePdf } from "@/src/utils/storage/patient-image-archive";
 import { deletePatientImagePdfFromDrive, downloadPatientImageArchiveForPatient, uploadPatientImageArchivesToDrive } from "@/src/utils/storage/google-drive";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
-const LAB_OCR_PIPELINE_VERSION = "row-safe-2026-10-20-v14-test-result-only-strict-platelet";
+const LAB_OCR_PIPELINE_VERSION = "row-safe-2026-10-20-v15-fm-sex-range-tiny-text-retry";
 const CUSTOM_SCREENING_BOXES_KEY = "ortho_custom_screening_boxes_v1";
 type CustomScreeningBox = { id: string; label: string };
 
@@ -316,8 +316,9 @@ export default function PatientForm() {
         else if (!automatic) toast("No readable lab text found. Use Rescan lab photos after checking the image.", "error");
         return;
       }
-      const genderForRange = /^\s*(?:m|male|man|men)\s*$/i.test(p.gender)
-        ? "male" : /^\s*(?:f|female|woman|women)\s*$/i.test(p.gender) ? "female" : "";
+      const genderToken = (String(p.gender || "").trim().toLowerCase().match(/[a-z]+/g) || [])[0] || "";
+      const genderForRange = ["m", "male", "man", "men"].includes(genderToken)
+        ? "male" : ["f", "female", "woman", "women"].includes(genderToken) ? "female" : "";
       const canonical = (value: string) => String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
       const configuredAliases = (item: any) => [String(item?.name || ""), ...String(item?.aliases || "").split(/[,;\n]+/)].map(value => value.trim()).filter(Boolean);
       const hasSavedSexRange = (item: any) => {
