@@ -893,7 +893,7 @@ function rawMeasuredResultForTest(
     // Platelet values are especially easy to misassign when OCR flattens a CBC
     // table by columns. Require a value on the same explicitly labelled line;
     // never borrow the next scalar line for a platelet result.
-    const isPlateletTest = /^(?:platelet|platelets|platelet count|plt)$/.test(canonicalTestName(testName));
+    const isPlateletTest = isPlateletTestName(testName);
     if (!isPlateletTest) {
       const adjacent = safeAdjacentMeasuredResult(lines, index, configuredTests);
       if (adjacent !== null) return adjacent;
@@ -903,6 +903,14 @@ function rawMeasuredResultForTest(
     // multi-value or label-separated layouts remain unpaired.
   }
   return null;
+}
+
+function isPlateletTestName(name: string): boolean {
+  const normal = normaliseName(name);
+  // Include configured labels such as "Platelets (PLT)" and "Platelet Count - PLT".
+  return /^(?:platelet|platelets|platelet count|plt)(?: (?:plt|count|platelets?))*$/.test(normal) ||
+    /\b(?:platelet|platelets)\b/.test(normal) ||
+    /\bplt\b/.test(normal);
 }
 
 function sameMeasuredResult(first: string, second: string): boolean {
@@ -928,7 +936,7 @@ function validateStructuredLabResults(
 
     const rawResult = rawMeasuredResultForTest(prefix.name, rawText, configuredTests);
     const reconstructedResult = resultNumber(cells[1] || "");
-    const isPlateletTest = /^(?:platelet|platelets|platelet count|plt)$/.test(canonicalTestName(prefix.name));
+    const isPlateletTest = isPlateletTestName(prefix.name);
     if (isPlateletTest && rawResult === null) {
       // Fail closed: a geometry-derived platelet number without a matching
       // same-line OCR association may actually be hemoglobin or another CBC row.
@@ -1079,23 +1087,39 @@ export async function recognizeLabText(
     } catch {}
     if (headerUri) { try { await FileSystem.deleteAsync(headerUri, { idempotent: true }); } catch {} }
   }
-  let text = normalizeHemoglobinUnitText(String(best?.text || ""));
+  const rawOcrText = normalizeHemoglobinUnitText(String(best?.text || ""));
+  const reportDate = extractLabReportDate(rawOcrText);
   const mode = "offline" as const;
-  // Patient lab images must remain on-device. Never send them to a cloud OCR
-  // endpoint, even if an older version has an API key saved in settings.
-  // The current native OCR engine runs locally; high-capacity offline vision
-  // models require a separately bundled native model and are not implied here.
+  // Keep the full raw OCR only inside this function for result association and
+  // date extraction. The caller receives only configured test labels, their
+  // result cells, and the report date; patient identifiers, headings, comments,
+  // units, and printed reference ranges are not exposed as OCR output.
   let structuredText = "";
   try {
     const size = bestSize || await imageSize(uri);
-    // Use online word geometry when online OCR wins, otherwise use the
-    // on-device engine's original bounding boxes. Both go through identical
-    // table reconstruction and configured-range validation.
     const sourceBlocks = best?.blocks || [];
-    structuredText = structureLabColumns(sourceBlocks, size.width, size.height, configuredTests);
-    structuredText = validateStructuredLabResults(structuredText, text, configuredTests);
+    const reconstructed = structureLabColumns(sourceBlocks, size.width, size.height, configuredTests);
+    structuredText = validateStructuredLabResults(reconstructed, rawOcrText, configuredTests);
   } catch {
-    // Raw OCR text remains available if image geometry is unavailable.
+    // Return no guessed rows if geometry is unavailable.
   }
-  return { text: normalizeHemoglobinUnitText(text), structuredText: normalizeHemoglobinUnitText(structuredText), mode };
+  const filteredRows = structuredText.split(/\r?\n/).map(line => {
+    const cells = line.split("|").map(cell => cell.trim());
+    if (cells.length < 2) return "";
+    const prefix = findTestPrefix(cells[0], configuredTests);
+    if (!prefix) return "";
+    let result = resultNumber(cells[1] || "") || "";
+    if (isPlateletTestName(prefix.name)) {
+      const rawPlatelet = rawMeasuredResultForTest(prefix.name, rawOcrText, configuredTests);
+      // A platelet number must be explicitly read beside its own label. If raw
+      // OCR did not capture that pair, do not publish a geometry-only number.
+      if (rawPlatelet === null) result = "";
+      else result = rawPlatelet;
+    }
+    // Return only the saved test name and its result, never OCR-derived units/ranges.
+    return String(prefix.configured?.name || prefix.name).trim() + " | " + result + " |  | ";
+  }).filter(Boolean);
+  const dateLine = reportDate ? "REPORT DATE: " + reportDate : "";
+  const reviewText = [dateLine, ...filteredRows].filter(Boolean).join("\n");
+  return { text: reviewText, structuredText: filteredRows.join("\n"), mode };
 }
