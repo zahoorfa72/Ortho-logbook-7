@@ -890,8 +890,14 @@ function rawMeasuredResultForTest(
       .replace(/^\s*[:|;\-]+\s*/, "");
     const direct = measuredValue(rest);
     if (direct !== null) return direct;
-    const adjacent = safeAdjacentMeasuredResult(lines, index, configuredTests);
-    if (adjacent !== null) return adjacent;
+    // Platelet values are especially easy to misassign when OCR flattens a CBC
+    // table by columns. Require a value on the same explicitly labelled line;
+    // never borrow the next scalar line for a platelet result.
+    const isPlateletTest = /^(?:platelet|platelets|platelet count|plt)$/.test(canonicalTestName(testName));
+    if (!isPlateletTest) {
+      const adjacent = safeAdjacentMeasuredResult(lines, index, configuredTests);
+      if (adjacent !== null) return adjacent;
+    }
 
     // A result on another line is accepted only by the scalar-only helper above;
     // multi-value or label-separated layouts remain unpaired.
@@ -922,7 +928,12 @@ function validateStructuredLabResults(
 
     const rawResult = rawMeasuredResultForTest(prefix.name, rawText, configuredTests);
     const reconstructedResult = resultNumber(cells[1] || "");
-    if (rawResult !== null && (reconstructedResult === null || !sameMeasuredResult(reconstructedResult, rawResult))) {
+    const isPlateletTest = /^(?:platelet|platelets|platelet count|plt)$/.test(canonicalTestName(prefix.name));
+    if (isPlateletTest && rawResult === null) {
+      // Fail closed: a geometry-derived platelet number without a matching
+      // same-line OCR association may actually be hemoglobin or another CBC row.
+      cells[1] = "";
+    } else if (rawResult !== null && (reconstructedResult === null || !sameMeasuredResult(reconstructedResult, rawResult))) {
       // Prefer a result explicitly associated with this exact test in raw OCR.
       cells[1] = rawResult;
     } else if (rawResult === null && reconstructedResult !== null) {
@@ -1056,8 +1067,14 @@ export async function recognizeLabText(
   // Fast automatic scans still retry when OCR returns no usable test/result
   // rows, even if it detected a generic word such as "result" or "reference".
   // That generic marker must not suppress orientation recovery for a rotated report.
-  if ((!fastMode || tryLightweightAutoRecovery || initialRows.length === 0) &&
-      (localScore(best) < 220 || parseLabReportRows(String(best?.text || ""), configuredTests, gender, 10, true).length === 0)) {
+  const shouldRetryOrientation = fastMode
+    // In automatic mode, do not run two extra OCR passes on every ordinary
+    // clinical photo just because it contains no lab text; that was a major
+    // source of form lag. Retry rotated images only when OCR saw lab-like text
+    // but could not recover any test/result rows.
+    ? hasInitialLabSignal && initialRows.length === 0
+    : localScore(best) < 220 || initialRows.length === 0;
+  if (shouldRetryOrientation) {
     for (const degrees of [90, 270]) {
       let rotatedUri = "";
       try {
