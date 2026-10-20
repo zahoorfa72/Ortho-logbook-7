@@ -35,7 +35,7 @@ import { formatInventoryLabel } from "@/src/utils/inventory-label";
 import { archivePatientImagesForPatient, createPatientImagePdfFile, getPatientImageArchive, openPatientImageArchivePdf } from "@/src/utils/storage/patient-image-archive";
 import { deletePatientImagePdfFromDrive, downloadPatientImageArchiveForPatient, uploadPatientImageArchivesToDrive } from "@/src/utils/storage/google-drive";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
-const LAB_OCR_PIPELINE_VERSION = "row-safe-2026-10-20-v13-platelet-fail-closed-offline";
+const LAB_OCR_PIPELINE_VERSION = "row-safe-2026-10-20-v14-test-result-only-strict-platelet";
 const CUSTOM_SCREENING_BOXES_KEY = "ortho_custom_screening_boxes_v1";
 type CustomScreeningBox = { id: string; label: string };
 
