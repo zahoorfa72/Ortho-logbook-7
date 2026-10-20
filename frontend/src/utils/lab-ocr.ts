@@ -986,7 +986,6 @@ export async function recognizeLabText(
   // If the first OCR pass finds no lab marker, it may have read a rotated
   // report as ordinary text. Try both orientations before rejecting the image.
   // This is limited to photos with no lab signal; normal lab pages keep the fast path.
-  const tryLightweightAutoRecovery = fastMode && !hasInitialLabSignal;
   const localScore = (value: any) => {
     const text = String(value?.text || "");
     // Judge OCR passes by recognized test/result pairs and the saved sex-specific
@@ -1008,13 +1007,7 @@ export async function recognizeLabText(
   // Fast automatic scans still retry when OCR returns no usable test/result
   // rows, even if it detected a generic word such as "result" or "reference".
   // That generic marker must not suppress orientation recovery for a rotated report.
-  const shouldRetryOrientation = fastMode
-    // In automatic mode, do not run two extra OCR passes on every ordinary
-    // clinical photo just because it contains no lab text; that was a major
-    // source of form lag. Retry rotated images only when OCR saw lab-like text
-    // but could not recover any test/result rows.
-    ? hasInitialLabSignal && initialRows.length === 0
-    : localScore(best) < 220 || initialRows.length === 0;
+  const shouldRetryOrientation = !fastMode && (localScore(best) < 220 || initialRows.length === 0);
   if (shouldRetryOrientation) {
     for (const degrees of [90, 270]) {
       let rotatedUri = "";
@@ -1034,10 +1027,12 @@ export async function recognizeLabText(
   // from farther away, where the full-page OCR often loses small test values.
   // Keep the original full-page OCR blocks for table geometry and append crop text
   // as a fallback source so labels/results split across crops are not silently lost.
-  if (!fastMode) try {
+  if (!fastMode || (hasInitialLabSignal && initialRows.length === 0)) try {
     const size = originalDimensions || await imageSize(uri);
     const rowCount = parseLabReportRows(String(best?.text || ""), configuredTests, gender, 10, true).length;
-    if ((rowCount < Math.min(3, Math.max(1, configuredTests.length)) && localScore(best) < 420) || localScore(best) < 220) {
+    if ((fastMode && hasInitialLabSignal && initialRows.length === 0) ||
+        (rowCount < Math.min(3, Math.max(1, configuredTests.length)) && localScore(best) < 420) ||
+        localScore(best) < 220) {
       const bandHeight = Math.max(1, Math.round(size.height * 0.56));
       const starts = [0, Math.max(0, size.height - bandHeight)];
       const cropTexts: string[] = [];
