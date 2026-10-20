@@ -39,16 +39,32 @@ async function getOrCreateSafFolder(parentUri: string, name: string): Promise<st
 }
 export async function saveBackupToPhone(password: string, filter: BackupFilter = { type: "all" }) {
   const encryptedBackup = await exportBackup(password, filter);
+  // Validate the generated envelope before opening the system file picker.
+  const generatedInfo = getBackupInfo(encryptedBackup);
+  if (!generatedInfo.encrypted) throw new Error("The phone backup was not encrypted; no file was saved.");
+
   const permissions = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
   if (!permissions.granted) throw new Error("Save cancelled. Please choose a folder in the phone's File Manager.");
 
-  // Phone backup is data-only: patient/report and inventory bill images are not
-  // embedded or copied as sidecar PDFs. Branding logos remain in branding settings.
-  // Patient PDFs can still be exported separately with the dedicated PDF action.
-  const existingBackup = await findSafChild(permissions.directoryUri, BACKUP_FILE_NAME);
-  const fileUri = existingBackup || await FileSystem.StorageAccessFramework.createFileAsync(
-    permissions.directoryUri, BACKUP_FILE_NAME, "application/json");
+  // Phone backup is data-only: patient photos and inventory bill images are not
+  // embedded. Use a unique filename instead of rewriting an existing SAF file:
+  // some Android document providers leave stale trailing bytes on overwrite,
+  // making a freshly created backup fail JSON validation during restore.
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const fileName = "ortho-logbook-backup-" + stamp + ".orbackup.json";
+  const fileUri = await FileSystem.StorageAccessFramework.createFileAsync(
+    permissions.directoryUri, fileName, "application/json");
   await FileSystem.writeAsStringAsync(fileUri, encryptedBackup);
+
+  // Read the saved file back and validate the actual bytes, not just the
+  // in-memory payload. Do not report success if Android saved a truncated or
+  // malformed backup.
+  const savedText = await FileSystem.readAsStringAsync(fileUri, { encoding: FileSystem.EncodingType.UTF8 });
+  const savedInfo = getBackupInfo(savedText.replace(/^\\uFEFF/, "").trimStart());
+  if (!savedInfo.encrypted || savedInfo.version !== generatedInfo.version ||
+      savedText.length !== encryptedBackup.length) {
+    throw new Error("The phone backup file failed read-back validation. The file was kept for diagnosis; please save a new backup and do not delete your existing backups.");
+  }
   await markBackupTaken();
   return fileUri;
 }
