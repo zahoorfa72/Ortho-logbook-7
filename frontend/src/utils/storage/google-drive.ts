@@ -1163,10 +1163,8 @@ export async function uploadPatientImageArchivesToDrive(onProgress?: (stage: str
   for (let i = 0; i < archives.length; i++) {
     const archive = archives[i];
     onProgress?.("Checking patient image PDF " + (i + 1) + "/" + archives.length + ": " + archive.patientName);
-    const local = await FileSystem.getInfoAsync(archive.localUri);
-    if (!local.exists || Number(local.size || 0) < 8) throw new Error("The local patient PDF is missing: " + archive.fileName);
-    // Verify cached IDs and folder membership on every pass. Older versions
-    // could remember a PDF outside the expected folder and then skip uploading it.
+    // Check Drive first: a previously uploaded, verified PDF remains usable even
+    // if Android has since removed its local cache file.
     let remote: any = null;
     if (archive.driveFileId) {
       try {
@@ -1176,12 +1174,22 @@ export async function uploadPatientImageArchivesToDrive(onProgress?: (stage: str
       } catch { remote = null; }
     }
     if (!remote) remote = await findPatientPdfInFolder(archive.fileName, folderId);
-    if (remote && remote.mimeType === "application/pdf" &&
-        Number(remote.size || 0) === Number(local.size || 0) &&
-        String(remote.appProperties?.orthoSourceStamp || "") === archive.sourceStamp &&
-        String(remote.appProperties?.orthoPatientId || "") === archive.patientId &&
-        (Array.isArray(remote.parents) ? remote.parents : []).includes(folderId)) {
+    const local = await FileSystem.getInfoAsync(archive.localUri);
+    const localExists = local.exists && Number(local.size || 0) >= 8;
+    const remoteMatchesArchive = !!remote &&
+      remote.mimeType === "application/pdf" &&
+      String(remote.appProperties?.orthoSourceStamp || "") === archive.sourceStamp &&
+      String(remote.appProperties?.orthoPatientId || "") === archive.patientId &&
+      (Array.isArray(remote.parents) ? remote.parents : []).includes(folderId);
+    if (remoteMatchesArchive && (!localExists || Number(remote.size || 0) === Number(local.size || 0))) {
       await setPatientImageArchiveDriveState(archive.fileName, archive.sourceStamp, String(remote.id));
+      continue;
+    }
+    if (!localExists) {
+      // A missing local PDF must never abort the main patient/settings/inventory
+      // backup. Keep any existing Drive copy untouched and report the skipped
+      // media asset so it can be recovered separately.
+      onProgress?.("Skipped missing local patient PDF (main backup will continue): " + archive.fileName);
       continue;
     }
     onProgress?.("Uploading patient PDF " + (i + 1) + "/" + archives.length + ": " + archive.fileName);
