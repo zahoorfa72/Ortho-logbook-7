@@ -68,6 +68,8 @@ def _lab_vision_model_call(image_bytes: bytes, content_type: str, metadata: dict
     model = os.environ.get("LAB_VISION_MODEL", "gpt-4o-mini").strip()
     if not api_key:
         raise RuntimeError("AI vision provider is not configured")
+    if not api_url.lower().startswith("https://"):
+        raise RuntimeError("AI vision provider endpoint must use HTTPS")
     image_data = "data:" + content_type + ";base64," + base64.b64encode(image_bytes).decode("ascii")
     allowed_tests = metadata.get("configuredTests", [])
     if not isinstance(allowed_tests, list):

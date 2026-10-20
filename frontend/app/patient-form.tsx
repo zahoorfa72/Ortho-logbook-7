@@ -550,17 +550,31 @@ export default function PatientForm() {
           continue;
         }
         const normalizedTest = normalizeReviewTestName(configured.name);
-        if (parsedRows.some(row => normalizeReviewTestName(row.test) === normalizedTest) ||
-            pendingManualReviews.some(row => normalizeReviewTestName(row.test) === normalizedTest) ||
-            visionReviewRows.some(row => normalizeReviewTestName(row.test) === normalizedTest) ||
+        const candidateValue = Number(String(candidate.result).replace(",", ".").replace(/[<>≤≥+\s]/g, ""));
+        const existingParsed = parsedRows.find(row => normalizeReviewTestName(row.test) === normalizedTest);
+        const parsedValue = existingParsed ? Number(String(existingParsed.result).replace(",", ".")) : NaN;
+        const agreesWithParsed = !!existingParsed && Number.isFinite(candidateValue) && Number.isFinite(parsedValue) && Math.abs(candidateValue - parsedValue) < 0.000001;
+        if (agreesWithParsed || visionReviewRows.some(row => normalizeReviewTestName(row.test) === normalizedTest) ||
             alreadyVerifiedNames.has(normalizedTest)) continue;
+        const existingReviewIndex = pendingManualReviews.findIndex(row => normalizeReviewTestName(row.test) === normalizedTest);
+        const suggestedResult = String(candidate.result).replace(/,/g, ".").replace(/[<>≤≥+\s]/g, "");
+        if (existingReviewIndex >= 0) {
+          (pendingManualReviews as any)[existingReviewIndex] = {
+            ...pendingManualReviews[existingReviewIndex],
+            result: suggestedResult,
+            unit: String(configured.unit || candidate.unit || ""),
+            source: "AI vision suggestion — verify original image",
+            confidence: candidate.confidence,
+          };
+          continue;
+        }
         const minRaw = configuredSex === "male" ? configured.maleMin : configuredSex === "female" ? configured.femaleMin : "";
         const maxRaw = configuredSex === "male" ? configured.maleMax : configuredSex === "female" ? configured.femaleMax : "";
         const min = minRaw !== "" && Number.isFinite(Number(minRaw)) ? Number(minRaw) : undefined;
         const max = maxRaw !== "" && Number.isFinite(Number(maxRaw)) ? Number(maxRaw) : undefined;
         const validRange = min !== undefined && max !== undefined && max > min;
         visionReviewRows.push({
-          test: String(configured.name), result: String(candidate.result).replace(/,/g, ".").replace(/[<>≤≥+\s]/g, ""),
+          test: String(configured.name), result: suggestedResult,
           unit: String(configured.unit || candidate.unit || ""),
           reference: validRange ? String(minRaw) + "–" + String(maxRaw) : "",
           photoUri: candidate.photoUri || reviewSourcePhotos[0] || "",
