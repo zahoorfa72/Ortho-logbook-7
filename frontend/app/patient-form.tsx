@@ -1405,14 +1405,42 @@ export default function PatientForm() {
     }
   };
 
-  const removePhoto = (idx: number) => {
-    // Removing an image from the patient record must not prompt about, or
-    // silently modify, the separately archived Drive PDF. PDF changes require
-    // the explicit admin approval action shown in this patient file.
-    setP((x) => {
-      const photos = x.photos.filter((_, i) => i !== idx);
-      return { ...x, photos, photoUri: photos[0] || "" };
-    });
+  const removePhoto = async (idx: number) => {
+    // Persist removals to the patient record immediately. A UI-only setP()
+    // left the old photos in storage, so they reappeared when the record was
+    // fetched again. The separate Drive PDF remains unchanged until the
+    // administrator explicitly approves a PDF update.
+    const photos = p.photos.filter((_, i) => i !== idx);
+    if (photos.length === p.photos.length) return;
+    const updatedPatient = { ...p, photos, photoUri: photos[0] || "" };
+    if (isEdit && id) {
+      setPhotoBusy(true);
+      try {
+        const saved = await api.put("/patients/" + encodeURIComponent(String(id)), updatedPatient);
+        setP((current) => ({ ...current, photos, photoUri: photos[0] || "" }));
+        if (saved && typeof saved === "object") {
+          qc.setQueryData(["patient-detail", id], saved);
+          qc.setQueryData<Patient[]>(["patients"], (current) =>
+            Array.isArray(current) ? current.map((patient) =>
+              String(patient.id) === String(id)
+                ? { ...patient, photos, photoUri: photos[0] || "" }
+                : patient
+            ) : current
+          );
+        }
+        await Promise.all([
+          qc.invalidateQueries({ queryKey: ["patient-detail", id] }),
+          qc.invalidateQueries({ queryKey: ["patients"] }),
+        ]);
+        toast("Image removed from this patient record.", "success");
+      } catch (error: any) {
+        toast(error?.message || "Could not remove image. The patient record was not changed.", "error");
+      } finally {
+        setPhotoBusy(false);
+      }
+      return;
+    }
+    setP(updatedPatient);
   };
 
   const approveAndUpdateDrivePatientPdf = async () => {
