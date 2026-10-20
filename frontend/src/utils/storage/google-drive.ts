@@ -2556,15 +2556,6 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
   });
 
   const migrationNeeded = String((await storage.secureGet(MASTER_MIGRATION_KEY, "")) || "") !== "1";
-  // A failed monthly archive must be retried even when the master has no new
-  // rows; otherwise a month file can remain missing forever after one failure.
-  // The cursor advances only after the month file is verified, so this is a
-  // no-op for already completed months.
-  if (!hasActualChanges && !migrationNeeded) {
-    await commitIncrementalSnapshotCache(baselineKey);
-    return { skipped: true, completedAt: new Date().toISOString(), name: "No changes", accountEmail: getConnectedGoogleAccount() };
-  }
-
   // The one-time legacy migration is the only normal sync path that needs a
   // full snapshot immediately. Thereafter, keep the full master stable and
   // update one compact rolling delta journal instead of re-uploading all photos
@@ -2655,6 +2646,13 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
     onProgress?.("Incomplete master repaired and verified; all local table IDs are now represented.");
     return { baselineCreated: true, repaired: true, completedAt: new Date().toISOString(),
       name: currentMonthName, accountEmail: getConnectedGoogleAccount() };
+  }
+  // Only report "up to date" after the master has passed the completeness audit.
+  // This repairs older partial uploads even when the local delta cache says no
+  // rows changed, while healthy no-op checks still avoid an upload.
+  if (!hasActualChanges && !migrationNeeded) {
+    await commitIncrementalSnapshotCache(baselineKey);
+    return { skipped: true, completedAt: new Date().toISOString(), name: "No changes", accountEmail: getConnectedGoogleAccount() };
   }
   const JOURNAL_NAME = "Ortho Logbook Backup Changes.orbackup";
   const journalFile = await findBackupByName(JOURNAL_NAME);
