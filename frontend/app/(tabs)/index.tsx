@@ -540,18 +540,16 @@ export default function Logbook() {
       }
       let photoCache: Record<string, { text: string; structuredText: string; isReport: boolean; reportDate: string; checkedAt?: number }> = {};
       let configuredTests: import("@/src/utils/lab-ocr").LabTestDefinition[] = [];
-      let onlineOcrKey = "";
       let warningPercent = 10;
       try {
         // Read the current cache first, then migrate the older cache key if needed.
-        let raw = await AsyncStorage.getItem("ortho_lab_ocr_photo_cache_v5");
+        let raw = await AsyncStorage.getItem("ortho_lab_ocr_photo_cache_v6");
         if (raw) photoCache = JSON.parse(raw);
       } catch {}
       try {
         const raw = await AsyncStorage.getItem("ortho_lab_test_definitions_v1");
         if (raw) { const value = JSON.parse(raw); if (Array.isArray(value)) configuredTests = value; }
       } catch {}
-      try { onlineOcrKey = (await AsyncStorage.getItem("ortho_lab_online_ocr_api_key_v1")) || ""; } catch {}
       try {
         const raw = await AsyncStorage.getItem("ortho_lab_warning_threshold_percent_v1");
         const parsed = Number(raw);
@@ -568,9 +566,9 @@ export default function Logbook() {
             return { uri, ...cached };
           }
           try {
-            const result = await recognizeLabText(uri, onlineOcrKey, configuredTests, patient?.gender || "");
+            const result = await recognizeLabText(uri, configuredTests, patient?.gender || "");
             const text = String(result?.text || "").trim();
-            const structuredText = result?.mode === "online" ? "" : String(result?.structuredText || "").trim();
+            const structuredText = String(result?.structuredText || "").trim();
             const combined = text + "\n" + structuredText;
             const hasNumbers = /[-+]?\d+(?:[.,]\d+)?/.test(combined);
             const hasLabCue = /\b(?:laboratory|lab report|investigation|test name|test results?|reference range|normal range|biological reference|specimen|hemoglobin|haemoglobin|platelets|glucose|creatinine|hbsag|hcv|hiv|wbc|rbc)\b/i.test(combined);
@@ -594,7 +592,7 @@ export default function Logbook() {
             checkedAt: result.checkedAt || Date.now(),
           };
         }
-        await AsyncStorage.setItem("ortho_lab_ocr_photo_cache_v5", JSON.stringify(photoCache)).catch(() => {});
+        await AsyncStorage.setItem("ortho_lab_ocr_photo_cache_v6", JSON.stringify(photoCache)).catch(() => {});
       }
       if (stopLabScansRef.current.has(patientId) || !labOcrEnabledRef.current) return;
 
