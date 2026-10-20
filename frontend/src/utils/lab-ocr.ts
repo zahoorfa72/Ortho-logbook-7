@@ -564,7 +564,17 @@ export function parseLabReportRows(text: string, configuredTests: LabTestDefinit
         // result is unreadable. Do not let the flattened OCR fallback borrow
         // a neighboring value (e.g. hemoglobin) for platelets.
         if (structuredPrefix) {
-          structuredResultKeys.add(canonicalTestName(structuredPrefix.name));
+          const testKey = canonicalTestName(structuredPrefix.name);
+          const resultCell = cells[1] || "";
+          const resultNumbers = resultCell.match(/[-+]?\\d+(?:[.,]\\d+)?/g) || [];
+          // Hemoglobin is often missed when OCR merges its measured value and
+          // the printed reference interval into the same result cell (e.g.
+          // "7.0 g/dL 12-16"). Let the labeled raw OCR line recover that value
+          // instead of marking the test as already handled with no usable result.
+          // Keep the conservative row reservation for every other test.
+          const ambiguousHemoglobinCell =
+            testKey === canonicalTestName("hemoglobin") && resultNumbers.length > 1;
+          if (!ambiguousHemoglobinCell) structuredResultKeys.add(testKey);
         }
       }
     }
