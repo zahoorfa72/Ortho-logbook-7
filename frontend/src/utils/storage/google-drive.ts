@@ -1160,7 +1160,10 @@ export async function uploadPatientImageArchivesToDrive(onProgress?: (stage: str
   // legacy entries without a Drive ID and locally changed PDFs need remote work.
   // Queued deletes were processed above independently of this upload filter.
   const archives = selectedArchives.filter((archive) =>
-    !archive.driveFileId || String(archive.driveSourceStamp || "") !== String(archive.sourceStamp || "")
+    // Never upload an image-less/legacy empty archive after restoring a
+    // data-only backup. PDF deletion is handled only by the explicit delete flow.
+    Number(archive.imageCount || 0) > 0 &&
+    (!archive.driveFileId || String(archive.driveSourceStamp || "") !== String(archive.sourceStamp || ""))
   );
   if (!archives.length) {
     onProgress?.("Patient PDFs unchanged; skipped remote checks. Main backup can continue.");

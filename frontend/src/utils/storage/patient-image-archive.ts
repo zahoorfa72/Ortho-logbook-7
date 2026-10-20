@@ -195,9 +195,25 @@ export async function archivePatientImagesForPatient(patientId: string, onProgre
   const sources = await deduplicatePhotoSources(getPhotoSources(row));
   const name = String(patient.name || "Patient");
   const mrNo = String(patient.mr_no || "");
-  const stamp = await stampFor(id, name, mrNo, String(patient.created_at || patient.date || ""), sources);
   const all = await readArchives();
   const existing = all[id];
+
+  // A data-only backup may intentionally contain no photo bytes. Never turn
+  // that absence into an empty PDF and never overwrite a good Drive archive.
+  // Reuse a verified local archive if available; otherwise require the admin
+  // to download the original PDF or explicitly delete it before changing it.
+  if (!sources.length) {
+    if (existing?.localUri) {
+      const info = await FileSystem.getInfoAsync(existing.localUri);
+      if (info.exists && Number(info.size || 0) > 8) return existing;
+    }
+    if (existing?.driveFileId || existing?.driveSourceStamp) {
+      throw new Error("No patient images are available on this phone. The existing Google Drive PDF was left unchanged. Download that patient's PDF into the patient record before updating it.");
+    }
+    throw new Error("This patient has no locally available images. No empty PDF was created or uploaded.");
+  }
+
+  const stamp = await stampFor(id, name, mrNo, String(patient.created_at || patient.date || ""), sources);
   if (existing?.sourceStamp === stamp) {
     const info = await FileSystem.getInfoAsync(existing.localUri);
     if (info.exists && Number(info.size || 0) > 8) return existing;
@@ -269,8 +285,13 @@ export async function archiveEligiblePatientImages(onProgress?: (stage: string) 
       throw error;
     }
     const sources = await deduplicatePhotoSources(getPhotoSources(row));
-    // Do not create empty archive PDFs for patients who have never had images.
-    if (!sources.length && !existing) continue;
+    // Data-only restores intentionally omit photos. An empty photo field is
+    // not an instruction to replace or delete the patient's existing PDF.
+    // Only an explicit admin delete action may remove the Drive archive.
+    if (!sources.length) {
+      onProgress?.("Skipped patient PDF for " + name + ": no local images are available; any existing Drive PDF was preserved.");
+      continue;
+    }
     const stamp = await stampFor(id, name, mrNo, String(patient.created_at || patient.date || ""), sources);
     if (existing?.sourceStamp === stamp) {
       const info = await FileSystem.getInfoAsync(existing.localUri);
