@@ -10,7 +10,6 @@ import * as FileSystem from "expo-file-system/legacy";
 import { convert as convertPdfPagesToImages } from "@uzimandias/react-native-pdf-to-image";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { extractLabReportDate, hasKnownLabTestName, isLabMetadataLine, isLikelyLabReportText, parseLabReportRows, recognizeLabText } from "@/src/utils/lab-ocr";
-import { matchCandidateToConfiguredTest, type LabVisionCandidate } from "@/src/utils/lab-vision";
 import { detectScreeningStatuses } from "@/src/utils/screening-status";
 import { scanPatientDocuments } from "@/src/utils/document-scanner";
 import { buildPerspectiveWarpHtml } from "@/src/utils/perspective-warp";
@@ -36,7 +35,7 @@ import { formatInventoryLabel } from "@/src/utils/inventory-label";
 import { archivePatientImagesForPatient, createPatientImagePdfFile, getPatientImageArchive, openPatientImageArchivePdf } from "@/src/utils/storage/patient-image-archive";
 import { deletePatientImagePdfFromDrive, downloadPatientImageArchiveForPatient, uploadPatientImageArchivesToDrive } from "@/src/utils/storage/google-drive";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
-const LAB_OCR_PIPELINE_VERSION = "row-safe-2026-10-20-v12-offline-row-guard";
+const LAB_OCR_PIPELINE_VERSION = "row-safe-2026-10-20-v13-platelet-fail-closed-offline";
 const CUSTOM_SCREENING_BOXES_KEY = "ortho_custom_screening_boxes_v1";
 type CustomScreeningBox = { id: string; label: string };
 
@@ -245,28 +244,12 @@ export default function PatientForm() {
       try { const savedTests = await AsyncStorage.getItem("ortho_lab_test_definitions_v1"); if (savedTests) configuredLabTests = JSON.parse(savedTests); } catch {}
       const pages: string[] = [];
       const recognizedPhotoUris: string[] = [];
-      const visionTemplateNotes: string[] = [];
-      let visionCandidates: LabVisionCandidate[] = [];
-      if (cachedExtracted !== null) {
-        try {
-          const savedCandidates = p.customData?.labOcrVisionCandidates;
-          const parsedCandidates = savedCandidates ? JSON.parse(savedCandidates) : [];
-          if (Array.isArray(parsedCandidates)) visionCandidates = parsedCandidates.filter((item: any) => item && typeof item.test === "string" && typeof item.result === "string");
-        } catch {}
-      }
-      let onlineOcrKey = "";
-      // External OCR is disabled unless the administrator separately opts in.
-      // Saving an API key alone must never upload patient lab images.
-      try {
-        const externalProcessingApproved = (await AsyncStorage.getItem("ortho_lab_online_ocr_consent_v1")) === "true";
-        if (externalProcessingApproved) onlineOcrKey = (await AsyncStorage.getItem("ortho_lab_online_ocr_api_key_v1")) || "";
-      } catch {}
       if (cachedExtracted === null) for (let i = 0; i < photoUris.length; i++) {
         try {
           // Yield between photos so the form can repaint and respond while a
           // large patient file is being checked.
           await new Promise<void>(resolve => setTimeout(resolve, 0));
-          const result = await recognizeLabText(photoUris[i], onlineOcrKey, configuredLabTests, p.gender, automatic);
+          const result = await recognizeLabText(photoUris[i], configuredLabTests, p.gender, automatic);
           const text = String(result?.text || "").trim();
           // Lab images and OCR text are processed locally only. Do not call
           // configured remote vision endpoints from the patient form.
@@ -563,7 +546,7 @@ export default function PatientForm() {
       }
       // Lab analysis is deliberately offline-only. Uncertain rows are shown for
       // human review; the app never guesses a test name or uploads OCR text.
-      const onlineHelp: string[] = [...visionTemplateNotes];
+      const onlineHelp: string[] = [];
       // Do not ask the admin to manually verify a test again once a result for
       // that patient/test has been saved as manually verified. Compare normalized
       // test names so small differences in spaces/case do not create repeat prompts.
@@ -584,56 +567,6 @@ export default function PatientForm() {
       const pendingManualReviews = missingResultReviews.filter(item =>
         !alreadyVerifiedNames.has(normalizeReviewTestName(item.test))
       );
-      // AI candidates only pre-fill the administrator review form; they are not
-      // treated as confirmed OCR results, alerts, screening flags, or saved data.
-      const configuredSex = /^\s*(?:m|male|man|men)\s*$/i.test(p.gender) ? "male" :
-        /^\s*(?:f|female|woman|women)\s*$/i.test(p.gender) ? "female" : "";
-      const visionReviewRows: Array<(typeof missingResultReviews)[number] & { source?: string; confidence?: number }> = [];
-      for (const candidate of visionCandidates) {
-        const configured: any = matchCandidateToConfiguredTest(candidate.test, configuredLabTests);
-        // AI suggestions are eligible only for an admin-configured test with
-        // a valid reference range for this patient's sex.
-        if (!configured || !hasSavedSexRange(configured)) continue;
-        const numeric = /^\s*[<>≤≥]?\s*[-+]?\d+(?:[.,]\d+)?\s*$/.test(String(candidate.result || ""));
-        if (!numeric) {
-          uncertain.push("AI vision suggestion needs review: " + candidate.test + " — " + candidate.result + (candidate.reason ? " (" + candidate.reason + ")" : ""));
-          continue;
-        }
-        const normalizedTest = normalizeReviewTestName(configured.name);
-        const candidateValue = Number(String(candidate.result).replace(",", ".").replace(/[<>≤≥+\s]/g, ""));
-        const existingParsed = parsedRows.find(row => normalizeReviewTestName(row.test) === normalizedTest);
-        const parsedValue = existingParsed ? Number(String(existingParsed.result).replace(",", ".")) : NaN;
-        const agreesWithParsed = !!existingParsed && Number.isFinite(candidateValue) && Number.isFinite(parsedValue) && Math.abs(candidateValue - parsedValue) < 0.000001;
-        if (agreesWithParsed || visionReviewRows.some(row => normalizeReviewTestName(row.test) === normalizedTest) ||
-            alreadyVerifiedNames.has(normalizedTest)) continue;
-        const existingReviewIndex = pendingManualReviews.findIndex(row => normalizeReviewTestName(row.test) === normalizedTest);
-        const suggestedResult = String(candidate.result).replace(/,/g, ".").replace(/[<>≤≥+\s]/g, "");
-        if (existingReviewIndex >= 0) {
-          (pendingManualReviews as any)[existingReviewIndex] = {
-            ...pendingManualReviews[existingReviewIndex],
-            result: suggestedResult,
-            unit: String(configured.unit || candidate.unit || ""),
-            source: "AI vision suggestion — verify original image",
-            confidence: candidate.confidence,
-          };
-          continue;
-        }
-        const minRaw = configuredSex === "male" ? configured.maleMin : configuredSex === "female" ? configured.femaleMin : "";
-        const maxRaw = configuredSex === "male" ? configured.maleMax : configuredSex === "female" ? configured.femaleMax : "";
-        const min = minRaw !== "" && Number.isFinite(Number(minRaw)) ? Number(minRaw) : undefined;
-        const max = maxRaw !== "" && Number.isFinite(Number(maxRaw)) ? Number(maxRaw) : undefined;
-        const validRange = min !== undefined && max !== undefined && max > min;
-        visionReviewRows.push({
-          test: String(configured.name), result: suggestedResult,
-          unit: String(configured.unit || candidate.unit || ""),
-          reference: validRange ? String(minRaw) + "–" + String(maxRaw) : "",
-          photoUri: candidate.photoUri || reviewSourcePhotos[0] || "",
-          reportDate: extractLabReportDate(extracted) || "",
-          min: validRange ? min : undefined, max: validRange ? max : undefined,
-          source: "AI vision suggestion — verify original image", confidence: candidate.confidence,
-        });
-      }
-      pendingManualReviews.push(...visionReviewRows);
       const screeningStatuses = detectScreeningStatuses(extracted);
       const screeningLabels: Array<[keyof typeof screeningStatuses, string]> = [
         ["hcvPlus", "HCV+"],
@@ -666,7 +599,7 @@ export default function PatientForm() {
         hiv: applyScreeningStatus(screeningStatuses.hiv, prev.hiv),
         mp: applyScreeningStatus(screeningStatuses.mp, prev.mp),
         dengue: applyScreeningStatus(screeningStatuses.dengue, prev.dengue),
-        customData: { ...(prev.customData || {}), labOcrExtractedText: extracted, labOcrPhotoSignature: photoSignature, labOcrPhotoScanComplete: "true", labOcrPipelineVersion: LAB_OCR_PIPELINE_VERSION, labOcrPossibleFlags: candidates.join("\n"), labOcrNeedsReview: uncertain.join("\n"), labOcrOnlineTestNameHelp: onlineHelp.join("\n"), labOcrVisionCandidates: JSON.stringify(visionCandidates) },
+        customData: { ...(prev.customData || {}), labOcrExtractedText: extracted, labOcrPhotoSignature: photoSignature, labOcrPhotoScanComplete: "true", labOcrPipelineVersion: LAB_OCR_PIPELINE_VERSION, labOcrPossibleFlags: candidates.join("\n"), labOcrNeedsReview: uncertain.join("\n"), labOcrOnlineTestNameHelp: onlineHelp.join("\n") },
       }));
       const newlyTicked = [
         screeningStatuses.hcvPlus === "positive" && !p.hcvPlus ? "HCV+" : "",
