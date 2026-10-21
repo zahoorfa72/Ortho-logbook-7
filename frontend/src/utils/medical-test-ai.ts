@@ -15,6 +15,16 @@ const TRUSTED_MEDICAL_DOMAINS = [
   "heart.org", "med.umich.edu", "ucsfhealth.org", "health.harvard.edu",
 ];
 
+async function fetchWithTimeout(input: string, init?: RequestInit, timeoutMs = 25000): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function trustedUrl(value: unknown): value is string {
   if (typeof value !== "string") return false;
   try {
@@ -88,7 +98,7 @@ async function fetchDirectOpenAiMedicalInfo(
   aliases: string,
   abnormalDirection: string,
 ): Promise<MedicalTestOnlineInfo | null> {
-  const response = await fetch("https://api.openai.com/v1/responses", {
+  const response = await fetchWithTimeout("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
       Authorization: "Bearer " + apiKey,
@@ -173,7 +183,7 @@ export async function fetchAiMedicalTestInfo(
     return null;
   }
   try {
-    const response = await fetch(baseUrl + "/api/medical-test-info", {
+    const response = await fetchWithTimeout(baseUrl + "/api/medical-test-info", {
       method: "POST",
       headers: {
         Accept: "application/json",
