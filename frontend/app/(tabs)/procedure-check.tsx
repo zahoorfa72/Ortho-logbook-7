@@ -139,7 +139,7 @@ const useStyles = makeStyles((colors) => ({
   titleBlock: { flex: 1 },
   title: { fontFamily: fontFamily.bold, fontSize: fontSize.xxl, color: colors.onSurface },
   subtitle: { fontFamily: fontFamily.regular, fontSize: fontSize.sm, color: colors.muted, marginTop: 2 },
-  countPill: { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: spacing.xs, paddingHorizontal: spacing.md, paddingVertical: spacing.xs, borderRadius: radius.full, backgroundColor: "#FEE2E2" },
+  countPill: { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: spacing.xs, paddingHorizontal: spacing.md, paddingVertical: spacing.xs, borderRadius: radius.pill, backgroundColor: "#FEE2E2" },
   redDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: "#DC2626" },
   countText: { fontFamily: fontFamily.bold, fontSize: fontSize.sm, color: "#991B1B" },
   alertBanner: { marginHorizontal: spacing.lg, marginTop: spacing.md, padding: spacing.md, borderRadius: radius.md, borderWidth: 1, borderColor: "#FCA5A5", backgroundColor: "#FEF2F2", flexDirection: "row", alignItems: "flex-start", gap: spacing.sm },
