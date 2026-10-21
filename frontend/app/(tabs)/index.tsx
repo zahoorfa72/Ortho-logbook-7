@@ -551,8 +551,24 @@ export default function Logbook() {
       // Only the identified test label/aliases are sent to the public medical
       // terminology service. Patient details, values, photos and ranges are not.
       // Prefer the AI-assisted, web-cited summary when configured; fall back to existing trusted sources if unavailable.
-      const fetchedRaw = (await fetchAiMedicalTestInfo(testName, definition?.aliases || "", "low or high (outside the configured reference range)").catch(() => null))
-        || await fetchTrustedMedicalTestInfo(testName, definition?.aliases || "");
+      let aiLookupError = "";
+      const aiFetched = await fetchAiMedicalTestInfo(
+        testName,
+        definition?.aliases || "",
+        "low or high (outside the configured reference range)",
+      ).catch((error: any) => {
+        aiLookupError = String(error?.message || "AI medical lookup failed.").slice(0, 220);
+        return null;
+      });
+      let trustedFetched: MedicalTestOnlineInfo | null = null;
+      if (!aiFetched) {
+        try {
+          trustedFetched = await fetchTrustedMedicalTestInfo(testName, definition?.aliases || "");
+        } catch {
+          trustedFetched = null;
+        }
+      }
+      const fetchedRaw = aiFetched || trustedFetched;
       const fetched = fetchedRaw ? {
         ...fetchedRaw,
         // Keep website fallback summaries compact too; do not pad missing evidence with invented claims.
@@ -561,7 +577,9 @@ export default function Logbook() {
           .map(line => line.length > 180 ? line.slice(0, 177).trimEnd() + "…" : line).join("\n"),
       } : null;
       if (!fetched) {
-        setMedicalInfoError("No relevant explanation was found in the trusted medical sources checked. The app will not show an unrelated result.");
+        setMedicalInfoError(aiLookupError
+          ? aiLookupError + " Trusted medical websites also did not return a matching test page. Check internet access and retry."
+          : "No matching information was returned by trusted medical websites. Check internet access and retry; the app will not invent medical facts.");
         return;
       }
       let nextCache: Record<string, MedicalTestOnlineInfo> = {};
