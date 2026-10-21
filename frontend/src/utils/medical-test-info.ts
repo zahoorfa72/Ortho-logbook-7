@@ -215,11 +215,11 @@ function getCuratedMedicalInfo(testName: string, aliases: string): MedicalTestOn
   return {
     title: candidate.title,
     summary: (() => {
-      const lines = candidate.summary.split("\\n").map(line => line.trim()).filter(Boolean);
+      const lines = candidate.summary.split("\n").map(line => line.trim()).filter(Boolean);
       const first = lines[0] || "This test measures a specific component or function in the body.";
       const abnormal = lines.slice(1).filter(line => !/^Source page:/i.test(line));
-      return "WHAT THIS TEST IS\\n" + first +
-        "\\n\\nWHAT THE ABNORMAL RESULT MAY MEAN\\n" + abnormal.slice(0, 6).join("\\n");
+      return "WHAT THIS TEST IS\n" + first +
+        "\n\nWHAT THE ABNORMAL RESULT MAY MEAN\n" + abnormal.slice(0, 6).join("\n");
     })(),
     sourceName: "MedlinePlus (curated fallback information; verify current guidance online)",
     sourceUrl: candidate.url,
