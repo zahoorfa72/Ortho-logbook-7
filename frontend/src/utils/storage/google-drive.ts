@@ -1098,13 +1098,20 @@ export async function ensurePatientImagePdfOnDrive(patientId: string, onProgress
             (Array.isArray(verified.parents) ? verified.parents : []).includes(folderId)) remote = verified;
       } catch { remote = null; }
     }
+    if (!remote) {
+      const samePatientFiles = await findPatientPdfsByPatientId(String(archive.patientId), folderId);
+      remote = samePatientFiles.find((item: any) => item.id && item.mimeType === "application/pdf") || null;
+    }
     if (!remote) remote = await findPatientPdfInFolder(archive.fileName, folderId);
+    if (remote && String(remote.appProperties?.orthoPatientId || "") &&
+        String(remote.appProperties?.orthoPatientId || "") !== String(archive.patientId)) remote = null;
     if (remote && remote.mimeType === "application/pdf" &&
         Number(remote.size || 0) === Number(local.size || 0) &&
         String(remote.appProperties?.orthoPatientId || "") === archive.patientId &&
         String(remote.appProperties?.orthoSourceStamp || "") === archive.sourceStamp &&
         (Array.isArray(remote.parents) ? remote.parents : []).includes(folderId)) {
       await setPatientImageArchiveDriveState(archive.fileName, archive.sourceStamp, String(remote.id));
+      await moveDuplicatePatientPdfsToTrash(String(archive.patientId), folderId, String(remote.id));
       return { fileId: String(remote.id), fileName: archive.fileName, url: "https://drive.google.com/file/d/" + encodeURIComponent(String(remote.id)) + "/view" };
     }
     onProgress?.("Uploading this patient's PDF to Google Drive…");
