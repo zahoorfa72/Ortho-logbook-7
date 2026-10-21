@@ -1099,12 +1099,12 @@ export const api = {
           const date = importDate(item?.date ?? item?.entryDate);
           if (!name || !date || !procedureName) { skippedInvalid++; continue; }
 
-          const signature = [mrNo, name.toLocaleLowerCase(), date, diagnosis.toLocaleLowerCase(), procedureName.toLocaleLowerCase(), procedureII.toLocaleLowerCase()].join("|");
+          const signature = [mrNo, name, gender, age, date, diagnosis, procedureName, procedureII, implant, implantII, address, fileName].map(value => value.toLocaleLowerCase()).join("|");
           if (seenInFile.has(signature)) { skippedDuplicates++; continue; }
           seenInFile.add(signature);
           const exists = db.getFirstSync<any>(
-            "SELECT id FROM patients WHERE mr_no=? AND date=? AND LOWER(TRIM(name))=LOWER(TRIM(?)) AND LOWER(TRIM(diagnosis))=LOWER(TRIM(?)) AND LOWER(TRIM(procedure))=LOWER(TRIM(?)) AND LOWER(TRIM(procedure_ii))=LOWER(TRIM(?)) LIMIT 1",
-            [mrNo, date, name, diagnosis, procedureName, procedureII],
+            "SELECT id FROM patients WHERE mr_no=? AND date=? AND LOWER(TRIM(name))=LOWER(TRIM(?)) AND LOWER(TRIM(gender))=LOWER(TRIM(?)) AND LOWER(TRIM(age))=LOWER(TRIM(?)) AND LOWER(TRIM(diagnosis))=LOWER(TRIM(?)) AND LOWER(TRIM(procedure))=LOWER(TRIM(?)) AND LOWER(TRIM(procedure_ii))=LOWER(TRIM(?)) AND LOWER(TRIM(implant))=LOWER(TRIM(?)) AND LOWER(TRIM(implant_ii))=LOWER(TRIM(?)) AND LOWER(TRIM(address))=LOWER(TRIM(?)) AND LOWER(TRIM(file_name))=LOWER(TRIM(?)) LIMIT 1",
+            [mrNo, date, name, gender, age, diagnosis, procedureName, procedureII, implant, implantII, address, fileName],
           );
           if (exists) { skippedDuplicates++; continue; }
 
