@@ -435,6 +435,29 @@ function classifyDeviation(resultRaw: string, reference: ReferenceInterval, warn
   return excursionPercent <= Math.max(1, Math.min(100, warningPercent)) ? "WARNING" : "ALERT";
 }
 
+/**
+ * Re-evaluate an administrator-reviewed result using only the saved admin range
+ * for the patient's sex. The photographed report's printed interval is never
+ * used to determine severity.
+ */
+export function evaluateLabResultForReview(
+  testName: string,
+  resultRaw: string,
+  configuredTests: LabTestDefinition[] = [],
+  gender = "",
+  warningPercent = 10,
+): { severity: ParsedLabRow["severity"]; reference: string; unit: string } {
+  const configured = configuredTestForName(testName, configuredTests);
+  const reference = configuredReference(configured, gender);
+  const severity = qualitativePositiveForViralMarker(testName, resultRaw) ||
+    (reference ? classifyDeviation(resultRaw, reference, warningPercent) : null) || "";
+  return {
+    severity,
+    reference: reference?.text || "",
+    unit: normalizeLabUnit(testName, configured?.unit || ""),
+  };
+}
+
 
 /**
  * Extract only an explicitly labelled laboratory report/sample/test date.
