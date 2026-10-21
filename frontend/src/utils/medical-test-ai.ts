@@ -48,11 +48,16 @@ function responseText(payload: any): { text: string; citations: Array<{ title: s
 }
 
 function compactSummary(value: string): string {
-  return value
-    .replace(/^\s*\d+[.)]\s*/gm, "")
-    .split("\n")
+  const cleaned = String(value || "").replace(/^\s*\d+[.)]\s*/gm, "").trim();
+  let lines = cleaned.split(/\n+/)
     .map(line => line.replace(/^[-•*]\s*/, "").trim())
-    .filter(Boolean)
+    .filter(Boolean);
+  // Some responses arrive as one paragraph; split that into short sentences.
+  if (lines.length <= 1 && cleaned.length > 180) {
+    lines = (cleaned.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [cleaned])
+      .map(line => line.trim()).filter(Boolean);
+  }
+  return lines
     .slice(0, 7)
     .map(line => line.length > 180 ? line.slice(0, 177).trimEnd() + "…" : line)
     .join("\n")
