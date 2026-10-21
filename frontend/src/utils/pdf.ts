@@ -560,7 +560,7 @@ export function buildStatsHtml(
             <div class="kpiValue">${reportKey === "procedureIIStatistics" ? stats.procedures.length : new Set([...stats.procedures.map((p) => p.name), ...secondProcedures.map((p) => p.name)]).size}</div>
           </div>
         </div>
-        <div class="section">Procedure Breakdown</div>
+        <div class="section">${reportKey === "procedureIIStatistics" ? "Second Procedure Breakdown" : "Procedure Breakdown"}</div>
         <table>
           <thead>
             <tr>

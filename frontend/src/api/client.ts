@@ -830,20 +830,17 @@ export const api = {
         : await listPatients();
       const counts: Record<string, number> = {};
       const countsII: Record<string, number> = {};
+      let totalSurgeries = 0;
       (rows as any[]).forEach((r) => {
         const n = String(r.procedure || "").trim();
         const nII = String(r.procedure_ii || "").trim();
-        // Main statistics count every procedure performed, whether it was
-        // entered in the first or second procedure field. If both fields have
-        // the same name on one patient, count both operations as entered.
-        if (n) counts[n] = (counts[n] || 0) + 1;
-        if (nII) {
-          counts[nII] = (counts[nII] || 0) + 1;
-          countsII[nII] = (countsII[nII] || 0) + 1;
-        }
+        // Keep primary and second-procedure breakdowns separate, but count both
+        // fields in the total surgeries performed.
+        if (n) { counts[n] = (counts[n] || 0) + 1; totalSurgeries++; }
+        if (nII) { countsII[nII] = (countsII[nII] || 0) + 1; totalSurgeries++; }
       });
       return {
-        total_patients: rows.length,
+        total_patients: totalSurgeries,
         procedures: Object.entries(counts).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),
         proceduresII: Object.entries(countsII).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),
       } as any;

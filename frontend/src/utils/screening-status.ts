@@ -156,3 +156,43 @@ export function detectScreeningStatuses(text: string): ScreeningStatusResults {
     dengue: resolve("dengue"),
   };
 }
+
+
+/**
+ * Detect an admin-configured screening checkbox from explicit results for that
+ * exact test label. Structured rows only inspect the result column, never ranges.
+ */
+export function detectCustomScreeningStatus(text: string, configuredLabel: string): ScreeningStatus {
+  const target = String(configuredLabel || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+  if (!target) return "unknown";
+  const values: Array<"positive" | "negative"> = [];
+  const lines = String(text || "").replace(/\u00a0/g, " ").split(/\r?\n/).map(line => line.replace(/\s+/g, " ").trim()).filter(Boolean);
+  const normalize = (value: string) => String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+  for (const line of lines) {
+    if (!line.includes("|")) continue;
+    const cells = line.split("|").map(cell => cell.trim());
+    if (cells.length < 2 || normalize(cells[0]) !== target) continue;
+    const status = statusInText(cells[1]);
+    if (status) values.push(status);
+  }
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+    if (line.includes("|")) continue;
+    const match = line.match(/^\s*(.*?)\s*(?::|=|—|-)\s*(.*?)\s*$/);
+    if (match && normalize(match[1]) === target) {
+      const status = statusInText(beforeReference(match[2]));
+      if (status) values.push(status);
+      continue;
+    }
+    if (normalize(line) === target) {
+      for (let offset = 1; offset <= 2 && index + offset < lines.length; offset++) {
+        const next = lines[index + offset];
+        if (next.includes("|") || normalize(next) === target) break;
+        if (!isStandaloneStatusLine(next)) continue;
+        const status = statusInText(next);
+        if (status) { values.push(status); break; }
+      }
+    }
+  }
+  return resolveStatuses(values);
+}

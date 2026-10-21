@@ -40,7 +40,7 @@ export default function InventoryCategories() {
       setName("");
       setShowAdd(false);
       toast("Category added.", "success");
-      router.push({ pathname: "/(tabs)/inventory", params: { categoryId: category.id, categoryName: category.name } } as any);
+      router.replace({ pathname: "/(tabs)/inventory", params: { categoryId: category.id, categoryName: category.name } } as any);
     },
     onError: (e: any) => toast(e?.message || "Could not add category.", "error"),
   });
@@ -92,7 +92,7 @@ export default function InventoryCategories() {
     <View style={styles.container}>
       <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
         <View style={styles.headerTop}>
-          <Pressable testID="categories-back" onPress={() => router.back()} style={styles.iconBtn}>
+          <Pressable testID="categories-back" onPress={() => router.replace("/(tabs)/inventory" as any)} style={styles.iconBtn}>
             <Ionicons name="arrow-back" size={21} color={colors.onSurface} />
           </Pressable>
           <View style={{ flex: 1 }}>
@@ -172,7 +172,7 @@ export default function InventoryCategories() {
               </Pressable>
               <Pressable
                 testID={`open-category-${item.id}`}
-                onPress={() => router.push({ pathname: "/(tabs)/inventory", params: { categoryId: item.id, categoryName: item.name } } as any)}
+                onPress={() => router.replace({ pathname: "/(tabs)/inventory", params: { categoryId: item.id, categoryName: item.name } } as any)}
                 style={styles.openBtn}
               >
                 <Ionicons name="chevron-forward" size={20} color={colors.brandPrimary} />

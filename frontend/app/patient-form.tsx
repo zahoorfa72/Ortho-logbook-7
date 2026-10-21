@@ -10,7 +10,7 @@ import * as FileSystem from "expo-file-system/legacy";
 import { convert as convertPdfPagesToImages } from "@uzimandias/react-native-pdf-to-image";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { extractLabReportDate, hasKnownLabTestName, isLabMetadataLine, isLikelyLabReportText, parseLabReportRows, recognizeLabText } from "@/src/utils/lab-ocr";
-import { detectScreeningStatuses } from "@/src/utils/screening-status";
+import { detectScreeningStatuses, detectCustomScreeningStatus } from "@/src/utils/screening-status";
 import { buildPerspectiveWarpHtml } from "@/src/utils/perspective-warp";
 import { recordDiagnosticError } from "@/src/utils/problem-report";
 import { Dimensions } from "react-native";
@@ -600,6 +600,13 @@ export default function PatientForm() {
         !alreadyVerifiedNames.has(normalizeReviewTestName(item.test))
       );
       const screeningStatuses = detectScreeningStatuses(extracted);
+      // Automatically tick admin-created screening boxes only for a clearly
+      // detected result tied to that exact configured test label.
+      const customScreeningStatuses = customScreeningBoxes.map(box => ({
+        box,
+        status: detectCustomScreeningStatus(extracted, box.label),
+        fieldKey: "customScreening_" + box.id,
+      }));
       const screeningLabels: Array<[keyof typeof screeningStatuses, string]> = [
         ["hcvPlus", "HCV+"],
         ["hbaSg", "HBsAg"],
@@ -631,22 +638,28 @@ export default function PatientForm() {
         hiv: applyScreeningStatus(screeningStatuses.hiv, prev.hiv),
         mp: applyScreeningStatus(screeningStatuses.mp, prev.mp),
         dengue: applyScreeningStatus(screeningStatuses.dengue, prev.dengue),
-        customData: { ...(prev.customData || {}), labOcrExtractedText: extracted, labOcrPhotoSignature: photoSignature, labOcrPhotoScanComplete: "true", labOcrPipelineVersion: LAB_OCR_PIPELINE_VERSION, labOcrPossibleFlags: candidates.join("\n"), labOcrNeedsReview: uncertain.join("\n"), labOcrOnlineTestNameHelp: onlineHelp.join("\n") },
+        customData: {
+          ...(prev.customData || {}),
+          ...Object.fromEntries(customScreeningStatuses.map(({fieldKey,status}) => [fieldKey, status === "positive" ? "true" : status === "negative" ? "false" : (prev.customData || {})[fieldKey] || "false"])),
+          labOcrExtractedText: extracted, labOcrPhotoSignature: photoSignature, labOcrPhotoScanComplete: "true", labOcrPipelineVersion: LAB_OCR_PIPELINE_VERSION, labOcrPossibleFlags: candidates.join("\n"), labOcrNeedsReview: uncertain.join("\n"), labOcrOnlineTestNameHelp: onlineHelp.join("\n")
+        },
       }));
       const newlyTicked = [
         screeningStatuses.hcvPlus === "positive" && !p.hcvPlus ? "HCV+" : "",
         screeningStatuses.hbaSg === "positive" && !p.hbaSg ? "HBsAg" : "",
         screeningStatuses.hiv === "positive" && !p.hiv ? "HIV" : "",
-        screeningStatuses.mp === "positive" && !p.mp ? "M.P" : "",
+        screeningStatuses.mp === "positive" && !p.mp ? "MP ICT" : "",
         screeningStatuses.dengue === "positive" && !p.dengue ? "Dengue" : "",
       ].filter(Boolean);
       const newlyCleared = [
         screeningStatuses.hcvPlus === "negative" && !!p.hcvPlus ? "HCV+" : "",
         screeningStatuses.hbaSg === "negative" && !!p.hbaSg ? "HBsAg" : "",
         screeningStatuses.hiv === "negative" && !!p.hiv ? "HIV" : "",
-        screeningStatuses.mp === "negative" && !!p.mp ? "M.P" : "",
+        screeningStatuses.mp === "negative" && !!p.mp ? "MP ICT" : "",
         screeningStatuses.dengue === "negative" && !!p.dengue ? "Dengue" : "",
       ].filter(Boolean);
+      newlyTicked.push(...customScreeningStatuses.filter(({fieldKey,status}) => status === "positive" && !asBooleanFlag(p.customData?.[fieldKey])).map(({box}) => box.label));
+      newlyCleared.push(...customScreeningStatuses.filter(({fieldKey,status}) => status === "negative" && asBooleanFlag(p.customData?.[fieldKey])).map(({box}) => box.label));
       const screeningMessages = [
         newlyTicked.length ? "Possible positive screening result detected for " + newlyTicked.join(", ") + "; verify the original report." : "",
         newlyCleared.length ? "Clear negative/non-reactive result found; checkbox cleared for " + newlyCleared.join(", ") + ". Verify the original report." : "",
@@ -2454,7 +2467,7 @@ export default function PatientForm() {
           ["hcvPlus", "HCV+"],
           ["hbaSg", "HBsAg"],
           ["hiv", "HIV"],
-          ["mp", "M.P"],
+          ["mp", "MP ICT"],
           ["dengue", "Dengue"],
         ] as const).map(([key, label]) => (
           <Pressable
