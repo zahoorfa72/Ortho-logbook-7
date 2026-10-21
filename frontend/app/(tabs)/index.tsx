@@ -7,6 +7,7 @@ import { triggerAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-back
 import { evaluateLabResultForReview, extractLabReportDate, isLikelyLabReportText, parseLabReportRows, recognizeLabText, type LabTestDefinition } from "@/src/utils/lab-ocr";
 import { fetchTrustedMedicalTestInfo, isMedicalTestInfoFresh, LAB_TEST_DEFINITIONS_KEY, MEDICAL_INFO_CACHE_KEY, medicalInfoCacheKey, type MedicalTestOnlineInfo } from "@/src/utils/medical-test-info";
 import { fetchAiMedicalTestInfo } from "@/src/utils/medical-test-ai";
+import { loadLabVisionSettings, matchCandidateToConfiguredTest, requestLabVisionCandidates } from "@/src/utils/lab-vision";
 import {
   ActivityIndicator,
   Image,
@@ -918,6 +919,8 @@ export default function Logbook() {
         if (raw && Number.isInteger(parsed) && parsed >= 1 && parsed <= 100) warningPercent = parsed;
       } catch {}
       let onlineOcrKey = "";
+      let aiVisionSettings: Awaited<ReturnType<typeof loadLabVisionSettings>> | null = null;
+      try { aiVisionSettings = await loadLabVisionSettings(); } catch {}
       try {
         const onlineEnabled = (await AsyncStorage.getItem("ortho_lab_online_ocr_consent_v1")) === "true";
         if (onlineEnabled) {
@@ -947,8 +950,8 @@ export default function Logbook() {
           try {
             const result = await recognizeLabText(uri, configuredTests, patient?.gender || "", false, onlineOcrKey);
             const text = String(result?.text || "").trim();
-            const structuredText = String(result?.structuredText || "").trim();
-            const combined = text + "\n" + structuredText;
+            let structuredText = String(result?.structuredText || "").trim();
+            let combined = text + "\n" + structuredText;
             const hasNumbers = /[-+]?\d+(?:[.,]\d+)?/.test(combined);
             const hasLabCue = /\b(?:laboratory|lab report|investigation|test name|test results?|reference range|normal range|biological reference|specimen|hemoglobin|haemoglobin|platelets|glucose|creatinine|hbsag|hcv|hiv|wbc|rbc)\b/i.test(combined);
             const isReport = !!combined.trim() && (
@@ -956,8 +959,52 @@ export default function Logbook() {
               isLikelyLabReportText(structuredText, configuredTests) ||
               (hasNumbers && hasLabCue)
             );
+            let aiVisionUsed = false;
+            // Send an image to the AI provider only after local OCR has identified a likely lab report,
+            // and only when the admin explicitly enabled this feature in Lab Test Reference Ranges.
+            if (isReport && aiVisionSettings?.consent && aiVisionSettings.endpoint && aiVisionSettings.clientToken) {
+              try {
+                const vision = await requestLabVisionCandidates({
+                  uri,
+                  endpoint: aiVisionSettings.endpoint,
+                  clientToken: aiVisionSettings.clientToken,
+                  configuredTests,
+                  templates: aiVisionSettings.templates,
+                  offlineText: combined,
+                });
+                const knownRows = parseLabReportRows(structuredText, configuredTests, patient?.gender || "", warningPercent, true);
+                const rowKey = (test: unknown, value: unknown) => String(test || "").toLowerCase().replace(/[^a-z0-9]+/g, "")
+                  + "|" + String(value ?? "").replace(/,/g, ".").match(/[-+]?\d+(?:\.\d+)?/)?.[0];
+                const existingKeys = new Set(knownRows.map(row => rowKey(row.test, row.result)));
+                const addedLines: string[] = [];
+                for (const candidate of vision.candidates) {
+                  if (candidate.confidence < 0.5) continue;
+                  const configured = matchCandidateToConfiguredTest(candidate.test, configuredTests);
+                  if (!configured?.name) continue;
+                  const value = String(candidate.result || "").trim();
+                  if (!value) continue;
+                  const key = rowKey(configured.name, value);
+                  if (existingKeys.has(key)) continue;
+                  existingKeys.add(key);
+                  const unit = String(configured.unit || "").replace(/[|\r\n]/g, " ").trim();
+                  addedLines.push(String(configured.name).trim() + " | " + value + " | " + unit);
+                }
+                if (addedLines.length) {
+                  structuredText = [structuredText, ...addedLines].filter(Boolean).join("\n");
+                  combined = text + "\n" + structuredText;
+                  aiVisionUsed = true;
+                }
+              } catch {
+                // Keep all local OCR output if the optional AI-vision service fails.
+              }
+            }
             if (!text && !structuredText) unreadableImages += 1;
-            return { uri, text, structuredText, isReport, reportDate: extractLabReportDate(text + "\n" + structuredText), checkedAt: Date.now(), needsReview: result?.needsReview === true, reviewReasons: Array.isArray(result?.reviewReasons) ? result.reviewReasons : [] };
+            return {
+              uri, text, structuredText, isReport: isReport || (aiVisionUsed && isLikelyLabReportText(structuredText, configuredTests)),
+              reportDate: extractLabReportDate(combined), checkedAt: Date.now(),
+              needsReview: result?.needsReview === true || aiVisionUsed,
+              reviewReasons: [...(Array.isArray(result?.reviewReasons) ? result.reviewReasons : []), ...(aiVisionUsed ? ["AI vision suggested additional rows; verify every value against the original report."] : [])],
+            };
           } catch {
             unreadableImages += 1;
             return { uri, text: "", structuredText: "", isReport: false, reportDate: "", checkedAt: Date.now(), needsReview: true, reviewReasons: ["OCR failed; manual review required"] };

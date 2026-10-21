@@ -63,7 +63,11 @@ LAB_VISION_MAX_IMAGE_BYTES = 12 * 1024 * 1024
 
 def _lab_vision_model_call(image_bytes: bytes, content_type: str, metadata: dict):
     import requests
-    api_key = os.environ.get("LAB_VISION_API_KEY", "").strip()
+    # Reuse the same server-side OpenAI key as medical explanations when a dedicated vision key is not set.
+    # Never place OPENAI_API_KEY in the mobile app or send it to the client.
+    api_key = (os.environ.get("LAB_VISION_API_KEY", "").strip()
+               or os.environ.get("OPENAI_API_KEY", "").strip()
+               or os.environ.get("LAB_MEDICAL_INFO_API_KEY", "").strip())
     api_url = os.environ.get("LAB_VISION_API_URL", "https://api.openai.com/v1/chat/completions").strip()
     model = os.environ.get("LAB_VISION_MODEL", "gpt-4o-mini").strip()
     if not api_key:

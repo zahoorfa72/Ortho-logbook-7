@@ -29,3 +29,8 @@ Android, iOS simulator and web/Windows validation workflows pass these values in
 - Successful summaries are cached by test name and remain available offline.
 - Educational information is not a diagnosis or substitute for clinician judgment. No patient-specific result interpretation is sent to this endpoint.
 - The client token is a basic access gate, not a substitute for strong per-user authentication. The endpoint also applies a modest per-IP request limit.
+
+
+## Reusing the same OpenAI key for lab-image scanning
+
+The backend lab-vision endpoint now uses `OPENAI_API_KEY` as its default key too, so one OpenAI API key can power both medical-test explanations and AI lab-image transcription. Set `LAB_VISION_API_KEY` only if you want a separate key for vision. The app never needs the OpenAI key: in Lab Test Reference Ranges, enter the deployed HTTPS `/api/lab-vision` endpoint and the matching `LAB_VISION_CLIENT_TOKEN`, then explicitly enable AI image processing. The endpoint is called only after local OCR detects likely lab-report content, and all AI-suggested rows remain subject to administrator review. Images may contain patient identifiers, so obtain appropriate organizational approval before enabling external processing.
