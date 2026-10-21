@@ -1270,7 +1270,9 @@ export default function Logbook() {
               if (pdfCleanupFailures) {
                 Alert.alert("Patient records deleted", "The selected records were moved to Trash, but " + pdfCleanupFailures + " Drive patient PDF(s) could not be deleted. Reconnect Google Drive and retry the PDF cleanup.");
               }
-              await Promise.allSettled(idsToDelete.map(patientId => deletePatientImagePdfFromDrive(String(patientId))));
+              // Each PDF cleanup was already attempted above. Do not issue a
+              // second batch of the same Drive deletes, which doubled network
+              // traffic and could slow down bulk deletion on mobile data.
               // Refresh directly from SQLite after the transaction has committed.
               setSelectedIds([]);
               setSelectMode(false);
