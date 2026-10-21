@@ -31,7 +31,7 @@ async function fetchWithTimeout(input: string, init?: RequestInit, timeoutMs = 8
 
 
 
-export const MEDICAL_INFO_CACHE_KEY = "ortho_lab_medical_info_cache_v1";
+export const MEDICAL_INFO_CACHE_KEY = "ortho_lab_medical_info_cache_v2";
 export const LAB_TEST_DEFINITIONS_KEY = "ortho_lab_test_definitions_v1";
 const CACHE_FRESH_MS = 24 * 60 * 60 * 1000;
 
@@ -235,6 +235,9 @@ export function medicalInfoCacheKey(testName: string): string {
 
 export function isMedicalTestInfoFresh(info?: MedicalTestOnlineInfo | null): boolean {
   if (!info?.summary || !info.fetchedAt) return false;
+  // Older cached entries only had one generic paragraph. Refresh them once so
+  // the new two-part test explanation and abnormal-result section are shown.
+  if (!/WHAT THIS TEST IS/i.test(info.summary) || !/WHAT THE ABNORMAL RESULT MAY MEAN/i.test(info.summary)) return false;
   const fetched = new Date(info.fetchedAt).getTime();
   const age = Date.now() - fetched;
   return Number.isFinite(fetched) && age >= 0 && age < CACHE_FRESH_MS;
