@@ -4,9 +4,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
 import { triggerAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-backup";
-import { extractLabReportDate, isLikelyLabReportText, parseLabReportRows, recognizeLabText } from "@/src/utils/lab-ocr";
+import { evaluateLabResultForReview, extractLabReportDate, isLikelyLabReportText, parseLabReportRows, recognizeLabText, type LabTestDefinition } from "@/src/utils/lab-ocr";
 import {
   ActivityIndicator,
+  Image,
   Linking,
   Alert,
   DeviceEventEmitter,
@@ -49,7 +50,7 @@ import { buildPatientListHtml, generateAndSharePdf } from "@/src/utils/pdf";
 import { deletePatientImagePdfFromDrive } from "@/src/utils/storage/google-drive";
 
 type LabScanStatus = {
-  status: "not-scanned" | "queued" | "scanning" | "success" | "failed" | "stopped";
+  status: "not-scanned" | "queued" | "scanning" | "success" | "failed" | "stopped" | "review";
   message: string;
   reportDate?: string;
   resultCount?: number;
@@ -57,8 +58,34 @@ type LabScanStatus = {
 };
 
 const LAB_SCAN_STATUS_STORAGE_KEY = "ortho_lab_ocr_scan_states_v1";
+const PENDING_LAB_REVIEWS_STORAGE_KEY = "ortho_lab_ocr_pending_reviews_v1";
+const LAB_OCR_REVIEW_GATE_VERSION = "pre-save-review-2026-10-21-v1";
 const NEW_PATIENT_LAB_SCAN_QUEUE_KEY = "ortho_lab_ocr_new_patient_queue_v1";
 const LAB_OCR_PIPELINE_VERSION = "row-aware-2026-10-21-v5-confidence-review";
+
+type PendingLabReviewRow = {
+  test: string;
+  result: string;
+  unit: string;
+  reference: string;
+  severity: string;
+  date: string;
+};
+
+type PendingLabReview = {
+  patientId: string;
+  patientName: string;
+  gender: string;
+  rows: PendingLabReviewRow[];
+  photoUris: string[];
+  signature: string;
+  flags: string[];
+  reportDate: string;
+  reportDateNeedsAdmin: boolean;
+  reviewReasons: string[];
+  createdAt: string;
+  confirmUndated: boolean;
+};
 
 type Patient = {
   id: string;
@@ -360,7 +387,13 @@ export default function Logbook() {
   const [labFlagsByPatient, setLabFlagsByPatient] = useState<Record<string, { signature: string; flags: string[]; reportDate?: string }>>({});
   const [labScanStates, setLabScanStates] = useState<Record<string, LabScanStatus>>({});
   const [labScanStateLoaded, setLabScanStateLoaded] = useState(false);
+  const [pendingLabReviews, setPendingLabReviews] = useState<Record<string, PendingLabReview>>({});
+  const [pendingLabReviewsLoaded, setPendingLabReviewsLoaded] = useState(false);
+  const [activeLabReviewPatientId, setActiveLabReviewPatientId] = useState<string | null>(null);
+  const [labReviewSaving, setLabReviewSaving] = useState(false);
+  const pendingLabReviewsRef = useRef<Record<string, PendingLabReview>>({});
   const labScanStatesRef = useRef<Record<string, LabScanStatus>>({});
+  const activeLabReview = activeLabReviewPatientId ? pendingLabReviews[activeLabReviewPatientId] || null : null;
   const latestPatientsRef = useRef<Patient[]>([]);
   const pendingLabScansRef = useRef<string[]>([]);
   const runningLabScansRef = useRef<Set<string>>(new Set());
@@ -380,6 +413,28 @@ export default function Logbook() {
       setLabOcrEnabled(enabled);
     });
     return () => subscription.remove();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    AsyncStorage.getItem(PENDING_LAB_REVIEWS_STORAGE_KEY).then(raw => {
+      let saved: Record<string, PendingLabReview> = {};
+      try {
+        const parsed = raw ? JSON.parse(raw) : {};
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          for (const [id, value] of Object.entries(parsed)) {
+            if (!value || typeof value !== "object" || !Array.isArray((value as PendingLabReview).rows)) continue;
+            saved[id] = value as PendingLabReview;
+          }
+        }
+      } catch {}
+      if (!cancelled) {
+        pendingLabReviewsRef.current = saved;
+        setPendingLabReviews(saved);
+        setPendingLabReviewsLoaded(true);
+      }
+    }).catch(() => { if (!cancelled) setPendingLabReviewsLoaded(true); });
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -491,6 +546,175 @@ export default function Logbook() {
     } catch {}
   }, []);
 
+  const updatePendingLabReview = useCallback((patientId: string, updater: (draft: PendingLabReview) => PendingLabReview) => {
+    const current = pendingLabReviewsRef.current[patientId];
+    if (!current) return;
+    const next = { ...pendingLabReviewsRef.current, [patientId]: updater(current) };
+    pendingLabReviewsRef.current = next;
+    setPendingLabReviews(next);
+    AsyncStorage.setItem(PENDING_LAB_REVIEWS_STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+  }, []);
+
+  const updatePendingLabReviewRow = useCallback((index: number, field: "test" | "result" | "unit" | "date", value: string) => {
+    const patientId = activeLabReviewPatientId;
+    if (!patientId) return;
+    updatePendingLabReview(patientId, draft => ({
+      ...draft,
+      rows: draft.rows.map((row, rowIndex) => rowIndex === index ? { ...row, [field]: value } : row),
+    }));
+  }, [activeLabReviewPatientId, updatePendingLabReview]);
+
+  const openPendingLabReview = useCallback((patientId: string) => {
+    if (user?.role !== "admin") {
+      Alert.alert("Administrator review required", "These OCR results have not been saved. Ask an administrator to compare them with the original lab report.");
+      return;
+    }
+    if (!pendingLabReviewsRef.current[patientId]) {
+      Alert.alert("Review not ready", pendingLabReviewsLoaded ? "No pending OCR review was found. Retry the lab scan." : "Pending review is still loading. Please try again.");
+      return;
+    }
+    setActiveLabReviewPatientId(patientId);
+  }, [pendingLabReviewsLoaded, user?.role]);
+
+  const addPendingLabReviewRow = useCallback(() => {
+    const patientId = activeLabReviewPatientId;
+    if (!patientId) return;
+    updatePendingLabReview(patientId, draft => ({
+      ...draft,
+      rows: [...draft.rows, { test: "", result: "", unit: "", reference: "", severity: "", date: draft.reportDate || "" }],
+    }));
+  }, [activeLabReviewPatientId, updatePendingLabReview]);
+
+  const removePendingLabReviewRow = useCallback((index: number) => {
+    const patientId = activeLabReviewPatientId;
+    if (!patientId) return;
+    updatePendingLabReview(patientId, draft => ({ ...draft, rows: draft.rows.filter((_, rowIndex) => rowIndex !== index) }));
+  }, [activeLabReviewPatientId, updatePendingLabReview]);
+
+  const confirmPendingLabReview = useCallback(async () => {
+    const patientId = activeLabReviewPatientId;
+    if (!patientId) return;
+    if (user?.role !== "admin") {
+      Alert.alert("Administrator required", "Only an administrator can confirm and save OCR results.");
+      return;
+    }
+    const draft = pendingLabReviewsRef.current[patientId];
+    if (!draft || !draft.rows.length) {
+      Alert.alert("No results to save", "Add or correct at least one test/result row after checking the original lab report.");
+      return;
+    }
+    const patient = latestPatientsRef.current.find(item => item.id === patientId);
+    if (!patient) {
+      Alert.alert("Patient not available", "The patient record is not currently loaded. Close this review, refresh the patient list, and retry.");
+      return;
+    }
+    const reviewedRows = draft.rows.map(row => {
+      const rawDate = String(row.date || "").trim() || String(draft.reportDate || "").trim();
+      const normalizedDate = rawDate ? normalizeLabDateInput(rawDate) : "";
+      return {
+        test: String(row.test || "").trim(),
+        result: String(row.result || "").trim(),
+        unit: String(row.unit || "").trim(),
+        date: normalizedDate || "",
+        rawDate,
+      };
+    });
+    if (reviewedRows.some(row => !row.test || !row.result)) {
+      Alert.alert("Incomplete result row", "Every row must have both a test name and a result. Correct the row or remove it before saving.");
+      return;
+    }
+    if (reviewedRows.some(row => row.rawDate && !row.date)) {
+      Alert.alert("Invalid report date", "Use a recognizable date such as 06-Oct-2026 or YYYY-MM-DD, or leave it blank and explicitly confirm that the date is unreadable.");
+      return;
+    }
+    const hasUndatedRows = reviewedRows.some(row => !row.date);
+    if (hasUndatedRows && !draft.confirmUndated) {
+      Alert.alert("Confirm report date", "Enter the report date for each undated row, or tick the explicit confirmation that the date is not readable on the original report.");
+      return;
+    }
+
+    setLabReviewSaving(true);
+    try {
+      let configuredTests: LabTestDefinition[] = [];
+      try {
+        const raw = await AsyncStorage.getItem("ortho_lab_test_definitions_v1");
+        const parsed = raw ? JSON.parse(raw) : [];
+        if (Array.isArray(parsed)) configuredTests = parsed;
+      } catch {}
+      let warningPercent = 10;
+      try {
+        const raw = await AsyncStorage.getItem("ortho_lab_warning_threshold_percent_v1");
+        const parsed = Number(raw);
+        if (raw && Number.isInteger(parsed) && parsed >= 1 && parsed <= 100) warningPercent = parsed;
+      } catch {}
+
+      const confirmedRows = reviewedRows.map(row => {
+        const evaluated = evaluateLabResultForReview(row.test, row.result, configuredTests, String(patient.gender || draft.gender || ""), warningPercent);
+        return {
+          test: row.test,
+          result: row.result,
+          unit: row.unit || evaluated.unit,
+          reference: evaluated.reference,
+          severity: evaluated.severity,
+          date: row.date,
+        };
+      }).filter((row, index, all) => all.findIndex(other =>
+        other.test.toLowerCase() === row.test.toLowerCase()
+          && other.result.replace(/,/g, ".") === row.result.replace(/,/g, ".")
+          && other.unit.toLowerCase() === row.unit.toLowerCase()
+          && other.date === row.date) === index).slice(0, 200);
+
+      const uniqueFlags = confirmedRows.filter(row => row.severity === "WARNING" || row.severity === "ALERT").map(row =>
+        row.severity + ": " + row.test + " " + row.result
+          + (row.unit ? " " + row.unit : "")
+          + " | Date: " + (row.date || "Date not detected")
+          + " | Ref: " + (row.reference || "No saved admin range")
+      ).filter((flag, index, all) => all.indexOf(flag) === index).slice(0, 20);
+      const distinctDates = [...new Set(confirmedRows.map(row => row.date).filter(Boolean))];
+      const reportDateNeedsAdmin = confirmedRows.some(row => !row.date);
+      const reportDateSummary = distinctDates.length === 0 ? "Date not detected"
+        : distinctDates.length > 1 ? "Multiple report dates — see each result" : distinctDates[0];
+      const now = new Date().toISOString();
+      await api.put("/patients/" + patientId, {
+        ...patient,
+        customData: {
+          ...(patient.customData || {}),
+          labOcrPossibleFlags: uniqueFlags.join("\n"),
+          labOcrDetectedResults: JSON.stringify(confirmedRows),
+          labOcrPipelineVersion: LAB_OCR_PIPELINE_VERSION,
+          labOcrPhotoSignature: draft.photoUris.join("|"),
+          labOcrDetectedAt: now,
+          labOcrReportDate: reportDateSummary,
+          labOcrDateNeedsAdmin: reportDateNeedsAdmin ? "true" : "false",
+          labOcrDateManuallyConfirmed: reportDateNeedsAdmin ? "false" : "true",
+        },
+      });
+      queryClient.invalidateQueries({ queryKey: ["patients"] });
+      setLabFlagsByPatient(previous => ({
+        ...previous,
+        [patientId]: { signature: draft.signature, flags: uniqueFlags, reportDate: reportDateSummary },
+      }));
+      const next = { ...pendingLabReviewsRef.current };
+      delete next[patientId];
+      pendingLabReviewsRef.current = next;
+      setPendingLabReviews(next);
+      AsyncStorage.setItem(PENDING_LAB_REVIEWS_STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+      saveLabScanState(patientId, {
+        status: "success",
+        message: "Administrator reviewed and saved " + confirmedRows.length + " lab result(s)." + (reportDateNeedsAdmin ? " Report date still needs confirmation." : ""),
+        reportDate: reportDateSummary,
+        resultCount: uniqueFlags.length,
+        updatedAt: now,
+      });
+      setActiveLabReviewPatientId(null);
+      await removeNewPatientQueueEntry(patientId);
+    } catch (error: any) {
+      Alert.alert("Could not save reviewed results", error?.message || "The patient record was not updated. Your review remains saved on this phone; try again.");
+    } finally {
+      setLabReviewSaving(false);
+    }
+  }, [activeLabReviewPatientId, queryClient, removeNewPatientQueueEntry, saveLabScanState, user?.role]);
+
   useEffect(() => {
     let cancelled = false;
     AsyncStorage.getItem(LAB_SCAN_STATUS_STORAGE_KEY).then(raw => {
@@ -539,7 +763,7 @@ export default function Logbook() {
         await removeNewPatientQueueEntry(patientId);
         return;
       }
-      let photoCache: Record<string, { text: string; structuredText: string; isReport: boolean; reportDate: string; checkedAt?: number; needsReview?: boolean; reviewReasons?: string[] }> = {};
+      let photoCache: Record<string, { text: string; structuredText: string; isReport: boolean; reportDate: string; checkedAt?: number; needsReview?: boolean; reviewReasons?: string[]; reviewGateVersion?: string }> = {};
       let configuredTests: import("@/src/utils/lab-ocr").LabTestDefinition[] = [];
       let warningPercent = 10;
       try {
@@ -580,7 +804,7 @@ export default function Logbook() {
         const results = await Promise.all(batch.map(async uri => {
           const key = labPhotoCacheKey(uri);
           const cached = photoCache[key];
-          if (!forceRetry && cached && typeof cached.needsReview === "boolean" && cached.checkedAt && Date.now() - cached.checkedAt < 10 * 60 * 1000) {
+          if (!forceRetry && cached && cached.reviewGateVersion === LAB_OCR_REVIEW_GATE_VERSION && typeof cached.needsReview === "boolean" && cached.checkedAt && Date.now() - cached.checkedAt < 10 * 60 * 1000) {
             return { uri, ...cached };
           }
           try {
@@ -611,6 +835,7 @@ export default function Logbook() {
             checkedAt: result.checkedAt || Date.now(),
             needsReview: result.needsReview === true,
             reviewReasons: Array.isArray(result.reviewReasons) ? result.reviewReasons : [],
+            reviewGateVersion: LAB_OCR_REVIEW_GATE_VERSION,
           };
         }
         await AsyncStorage.setItem("ortho_lab_ocr_photo_cache_v6", JSON.stringify(photoCache)).catch(() => {});
@@ -698,6 +923,46 @@ export default function Logbook() {
         .slice(0, 200);
       const signature = LAB_OCR_PIPELINE_VERSION + "|" + photos.join("|") + "|gender:" + String(patient.gender || "") +
         "|ranges:" + configuredTests.map(item => [item.name,item.maleMin,item.maleMax,item.femaleMin,item.femaleMax,item.unit].join(":")).join(";");
+      const reportPhotoUris = photos.filter(uri => photoCache[labPhotoCacheKey(uri)]?.isReport);
+      const reviewReasons = [...new Set(reportPhotoUris.flatMap(uri => {
+        const cached = photoCache[labPhotoCacheKey(uri)];
+        return cached?.needsReview ? (cached.reviewReasons?.length ? cached.reviewReasons : ["OCR confidence or row alignment needs manual checking"]) : [];
+      }))];
+      if (reportDateNeedsAdmin) reviewReasons.push("Report date could not be read confidently; confirm it or explicitly mark it unreadable.");
+      const requiresManualReview = reportPhotoUris.some(uri => photoCache[labPhotoCacheKey(uri)]?.needsReview === true) || reportDateNeedsAdmin;
+      if (requiresManualReview) {
+        const pendingDraft: PendingLabReview = {
+          patientId,
+          patientName: String(patient.name || "Patient"),
+          gender: String(patient.gender || ""),
+          rows: uniqueDetectedResults.map(row => ({
+            test: row.test, result: row.result, unit: row.unit, reference: row.reference,
+            severity: row.severity, date: row.date,
+          })),
+          photoUris: reportPhotoUris.length ? reportPhotoUris : photos,
+          signature,
+          flags: uniqueFlags,
+          reportDate: !reportDateNeedsAdmin && distinctReportDates.length === 1 ? distinctReportDates[0] : "",
+          reportDateNeedsAdmin,
+          reviewReasons: [...new Set(reviewReasons)],
+          createdAt: new Date().toISOString(),
+          confirmUndated: false,
+        };
+        const next = { ...pendingLabReviewsRef.current, [patientId]: pendingDraft };
+        pendingLabReviewsRef.current = next;
+        setPendingLabReviews(next);
+        await AsyncStorage.setItem(PENDING_LAB_REVIEWS_STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+        saveLabScanState(patientId, {
+          status: "review",
+          message: "OCR results are pending administrator review. Nothing from this scan has been saved to the patient result fields yet.",
+          reportDate: reportDateSummary,
+          resultCount: uniqueDetectedResults.length,
+          updatedAt: new Date().toISOString(),
+        });
+        await removeNewPatientQueueEntry(patientId);
+        return;
+      }
+
       setLabFlagsByPatient(previous => ({ ...previous, [patientId]: { signature, flags: uniqueFlags, reportDate: reportDateSummary } }));
       try {
         const existingCustomData = patient.customData || {};
@@ -1472,11 +1737,13 @@ export default function Logbook() {
                 const hasWarning = !hidden && labLabels.some(label => label.startsWith("WARNING:"));
                 const tone = hasAlert ? (colors.error || "#B91C1C") : hasWarning ? (colors.warning || "#B7791F")
                   : status.status === "failed" ? (colors.error || "#B91C1C")
+                  : status.status === "review" ? (colors.warning || "#B7791F")
                   : status.status === "success" ? "#15803D" : colors.brandPrimary;
                 const statusLabel = status.status === "queued" ? "WAITING"
                   : status.status === "scanning" ? "SCANNING"
                   : status.status === "success" ? "SUCCESS"
                   : status.status === "failed" ? "FAILED"
+                  : status.status === "review" ? "REVIEW REQUIRED"
                   : status.status === "stopped" ? "STOPPED" : "NOT SCANNED";
                 const canStop = status.status === "queued" || status.status === "scanning";
                 const defaultDate = dateNeedsAdmin ? "" : (uniquePerResultDates.length === 1 ? uniquePerResultDates[0] : summaryDate);
@@ -1486,19 +1753,24 @@ export default function Logbook() {
                   <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 5 }}>
                     {status.status === "scanning" || status.status === "queued"
                       ? <ActivityIndicator size="small" color={tone} />
-                      : <Ionicons name={hasAlert ? "alert-circle" : hasWarning ? "warning" : status.status === "success" ? "checkmark-circle" : status.status === "failed" ? "close-circle" : status.status === "stopped" ? "pause-circle" : "flask-outline"} size={14} color={tone} />}
+                      : <Ionicons name={status.status === "review" ? "eye" : hasAlert ? "alert-circle" : hasWarning ? "warning" : status.status === "success" ? "checkmark-circle" : status.status === "failed" ? "close-circle" : status.status === "stopped" ? "pause-circle" : "flask-outline"} size={14} color={tone} />}
                     <Text style={{ color: tone, fontFamily: fontFamily.bold, fontSize: 10 }}>
-                      {hidden ? "LAB RESULTS HIDDEN · " + statusLabel : oldResultLabels.length ? "OLD LAB RESULT" : hasAlert ? "LAB ALERT" : hasWarning ? "LAB WARNING" : "LAB SCAN · " + statusLabel}
+                      {hidden ? "LAB RESULTS HIDDEN · " + statusLabel : status.status === "review" ? "LAB RESULTS PENDING REVIEW" : oldResultLabels.length ? "OLD LAB RESULT" : hasAlert ? "LAB ALERT" : hasWarning ? "LAB WARNING" : "LAB SCAN · " + statusLabel}
                     </Text>
-                    {user?.role === "admin" ? (canStop
-                      ? <Pressable onPress={event => { event.stopPropagation(); stopLabScan(item.id); }} hitSlop={8} style={{ paddingHorizontal: 7, paddingVertical: 2, borderRadius: 5, borderWidth: 1, borderColor: tone }}><Text style={{ color: tone, fontFamily: fontFamily.semibold, fontSize: 10 }}>Stop</Text></Pressable>
-                      : <Pressable onPress={event => { event.stopPropagation(); requestLabScan(item.id, false); }} hitSlop={8} style={{ paddingHorizontal: 7, paddingVertical: 2, borderRadius: 5, borderWidth: 1, borderColor: tone }}><Text style={{ color: tone, fontFamily: fontFamily.semibold, fontSize: 10 }}>Retry</Text></Pressable>) : null}
+                    {user?.role === "admin" ? (status.status === "review"
+                      ? pendingLabReviews[item.id]
+                        ? <Pressable onPress={event => { event.stopPropagation(); openPendingLabReview(item.id); }} hitSlop={8} style={{ paddingHorizontal: 7, paddingVertical: 2, borderRadius: 5, borderWidth: 1, borderColor: tone }}><Text style={{ color: tone, fontFamily: fontFamily.semibold, fontSize: 10 }}>Review OCR</Text></Pressable>
+                        : <Text style={{ color: tone, fontSize: 10 }}>{pendingLabReviewsLoaded ? "Review unavailable" : "Loading review…"}</Text>
+                      : canStop
+                        ? <Pressable onPress={event => { event.stopPropagation(); stopLabScan(item.id); }} hitSlop={8} style={{ paddingHorizontal: 7, paddingVertical: 2, borderRadius: 5, borderWidth: 1, borderColor: tone }}><Text style={{ color: tone, fontFamily: fontFamily.semibold, fontSize: 10 }}>Stop</Text></Pressable>
+                        : <Pressable onPress={event => { event.stopPropagation(); requestLabScan(item.id, false); }} hitSlop={8} style={{ paddingHorizontal: 7, paddingVertical: 2, borderRadius: 5, borderWidth: 1, borderColor: tone }}><Text style={{ color: tone, fontFamily: fontFamily.semibold, fontSize: 10 }}>Retry</Text></Pressable>) : status.status === "review" ? <Text style={{ color: tone, fontSize: 10 }}>Admin review required</Text> : null}
                     {allDisplayLabLabels.length || reportDateDisplay || dateNeedsAdmin ? <Pressable onPress={event => { event.stopPropagation(); void toggleLabResultsHidden(item.id); }} hitSlop={8} accessibilityLabel={hidden ? "Show this patient's lab results" : "Hide this patient's lab results"} style={{ flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 4, paddingVertical: 2 }}>
                       <Ionicons name={hidden ? "eye-outline" : "eye-off-outline"} size={14} color={tone} />
                       <Text style={{ color: tone, fontFamily: fontFamily.semibold, fontSize: 10 }}>{hidden ? "Show" : "Hide"}</Text>
                     </Pressable> : null}
                   </View>
                   {!hidden ? <>
+                    {status.status === "review" ? <Text style={{ color: colors.warning || "#B7791F", fontSize: 11, lineHeight: 15, marginTop: 4 }}>{status.message}</Text> : null}
                     {dateNeedsAdmin ? <View style={{ marginTop: 4, flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 5 }}>
                       <Text style={{ color: colors.warning || "#B7791F", fontFamily: fontFamily.semibold, fontSize: 10 }}>REPORT DATE NEEDS ADMIN CONFIRMATION</Text>
                       {user?.role === "admin" ? <Pressable onPress={event => {
@@ -1588,6 +1860,89 @@ export default function Logbook() {
       >
         <Ionicons name="add" size={30} color={colors.onBrandPrimary} />
       </Pressable>
+
+      <Modal visible={!!activeLabReview} transparent animationType="slide" onRequestClose={() => setActiveLabReviewPatientId(null)}>
+        <View style={styles.pdfModalOverlay}>
+          <View style={[styles.pdfModalCard, { paddingBottom: insets.bottom + spacing.lg, maxHeight: "96%" }]}>
+            <View style={styles.pdfModalHeader}>
+              <Text style={styles.pdfModalTitle}>Review lab OCR results</Text>
+              <Pressable onPress={() => setActiveLabReviewPatientId(null)} disabled={labReviewSaving} accessibilityLabel="Close pending lab review">
+                <Ionicons name="close" size={24} color={colors.onSurface} />
+              </Pressable>
+            </View>
+            {activeLabReview ? <>
+              <Text style={{ color: colors.onSurface, fontFamily: fontFamily.semibold, fontSize: fontSize.base }}>{activeLabReview.patientName}</Text>
+              <Text style={styles.pdfModalHint}>These results are still pending and have not been saved. Compare each row with the original report image. OCR can be wrong; do not approve a value unless you can verify it.</Text>
+              {activeLabReview.photoUris.length ? <ScrollView horizontal showsHorizontalScrollIndicator contentContainerStyle={{ gap: spacing.sm, paddingVertical: spacing.xs }}>
+                {activeLabReview.photoUris.map((uri, index) => <View key={"review-photo-" + index} style={{ width: 260 }}>
+                  <Image source={{ uri }} resizeMode="contain" style={{ width: 260, height: 170, borderRadius: radius.md, backgroundColor: colors.surfaceSecondary }} />
+                  <Text style={{ color: colors.muted, fontSize: fontSize.xs, textAlign: "center", marginTop: 3 }}>Report image {index + 1} of {activeLabReview.photoUris.length}</Text>
+                </View>)}
+              </ScrollView> : null}
+              {activeLabReview.reviewReasons.length ? <View style={{ borderWidth: 1, borderColor: colors.warning || "#B7791F", borderRadius: radius.md, padding: spacing.sm, marginTop: spacing.sm }}>
+                <Text style={{ color: colors.warning || "#B7791F", fontFamily: fontFamily.semibold, fontSize: fontSize.sm }}>Why review is required</Text>
+                {activeLabReview.reviewReasons.map((reason, index) => <Text key={reason + index} style={{ color: colors.onSurface, fontSize: fontSize.xs, marginTop: 3 }}>• {reason}</Text>)}
+              </View> : null}
+              <Text style={styles.pdfModalLabel}>Report date (DD-MMM-YYYY or YYYY-MM-DD)</Text>
+              <TextInput
+                value={activeLabReview.reportDate}
+                onChangeText={value => updatePendingLabReview(activeLabReview.patientId, draft => ({ ...draft, reportDate: value }))}
+                placeholder="Leave blank if not readable"
+                placeholderTextColor={colors.muted}
+                autoCapitalize="none"
+                autoCorrect={false}
+                style={styles.pdfDateInput}
+                editable={!labReviewSaving}
+              />
+              <Text style={styles.pdfModalLabel}>Detected test rows — correct test, result, unit and date</Text>
+              <ScrollView style={{ maxHeight: 300 }} keyboardShouldPersistTaps="handled">
+                {activeLabReview.rows.map((row, index) => {
+                  const configuredRange = (() => {
+                    const sexFields = activeLabReview.gender.toLowerCase().startsWith("f")
+                      ? ["femaleMin", "femaleMax"] : activeLabReview.gender.toLowerCase().startsWith("m") ? ["maleMin", "maleMax"] : [];
+                    const definitions = configuredLabTestDefinitions as Array<any>;
+                    const definition = definitions.find(item => String(item.name || "").trim().toLowerCase() === row.test.trim().toLowerCase()
+                      || String(item.aliases || "").split(/[,;\n]+/).some((alias: string) => alias.trim().toLowerCase() === row.test.trim().toLowerCase()));
+                    return definition && sexFields.length ? String(definition[sexFields[0]] || "") + "–" + String(definition[sexFields[1]] || "") + (definition.unit ? " " + definition.unit : "") : "No saved admin range";
+                  })();
+                  return <View key={"pending-lab-row-" + index} style={{ borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, padding: spacing.sm, marginTop: spacing.sm, gap: spacing.xs }}>
+                    <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                      <Text style={{ color: colors.onSurfaceSecondary, fontSize: fontSize.xs, fontFamily: fontFamily.semibold }}>Result {index + 1}</Text>
+                      <Pressable onPress={() => removePendingLabReviewRow(index)} disabled={labReviewSaving} hitSlop={8}>
+                        <Text style={{ color: colors.error || "#B91C1C", fontSize: fontSize.xs, fontFamily: fontFamily.semibold }}>Remove row</Text>
+                      </Pressable>
+                    </View>
+                    <TextInput value={row.test} onChangeText={value => updatePendingLabReviewRow(index, "test", value)} placeholder="Test name" placeholderTextColor={colors.muted} style={styles.pdfDateInput} editable={!labReviewSaving} />
+                    <View style={{ flexDirection: "row", gap: spacing.sm }}>
+                      <TextInput value={row.result} onChangeText={value => updatePendingLabReviewRow(index, "result", value)} placeholder="Result" placeholderTextColor={colors.muted} style={[styles.pdfDateInput, { flex: 1 }]} editable={!labReviewSaving} />
+                      <TextInput value={row.unit} onChangeText={value => updatePendingLabReviewRow(index, "unit", value)} placeholder="Unit" placeholderTextColor={colors.muted} style={[styles.pdfDateInput, { flex: 1 }]} editable={!labReviewSaving} />
+                    </View>
+                    <Text style={{ color: colors.muted, fontSize: fontSize.xs }}>Saved admin reference range: {configuredRange}. The printed range on the photo is not used for alert classification.</Text>
+                    <TextInput value={row.date} onChangeText={value => updatePendingLabReviewRow(index, "date", value)} placeholder="Result date (optional if confirmed unreadable)" placeholderTextColor={colors.muted} autoCapitalize="none" autoCorrect={false} style={styles.pdfDateInput} editable={!labReviewSaving} />
+                  </View>;
+                })}
+              </ScrollView>
+              <Pressable onPress={addPendingLabReviewRow} disabled={labReviewSaving} style={{ marginTop: spacing.sm, padding: spacing.sm, alignItems: "center", borderWidth: 1, borderColor: colors.border, borderRadius: radius.md }}>
+                <Text style={{ color: colors.brandPrimary, fontFamily: fontFamily.semibold }}>+ Add a test/result row</Text>
+              </Pressable>
+              {activeLabReview.rows.some(row => !String(row.date || "").trim()) && !String(activeLabReview.reportDate || "").trim()
+                ? <Pressable onPress={() => updatePendingLabReview(activeLabReview.patientId, draft => ({ ...draft, confirmUndated: !draft.confirmUndated }))} disabled={labReviewSaving} style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm, marginTop: spacing.md }}>
+                    <Ionicons name={activeLabReview.confirmUndated ? "checkbox" : "square-outline"} size={22} color={activeLabReview.confirmUndated ? colors.brandPrimary : colors.muted} />
+                    <Text style={{ color: colors.onSurface, flex: 1, fontSize: fontSize.sm }}>I checked the original image and confirm the report date cannot be read; save the reviewed results without a date.</Text>
+                  </Pressable> : null}
+              <Text style={styles.pdfModalHint}>After confirmation, abnormal values and HIV/HCV/HBsAg positives are re-evaluated using configured admin ranges/rules. OCR never silently changes values.</Text>
+              <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.md }}>
+                <Pressable onPress={() => setActiveLabReviewPatientId(null)} disabled={labReviewSaving} style={{ flex: 1, padding: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, alignItems: "center" }}>
+                  <Text style={{ color: colors.onSurface, fontFamily: fontFamily.semibold }}>Keep pending</Text>
+                </Pressable>
+                <Pressable onPress={() => void confirmPendingLabReview()} disabled={labReviewSaving || !activeLabReview.rows.length} style={{ flex: 1, padding: spacing.md, backgroundColor: colors.brandPrimary, borderRadius: radius.md, alignItems: "center", opacity: labReviewSaving || !activeLabReview.rows.length ? 0.6 : 1 }}>
+                  {labReviewSaving ? <ActivityIndicator color={colors.onBrandPrimary} /> : <Text style={{ color: colors.onBrandPrimary, fontFamily: fontFamily.semibold }}>Confirm and save</Text>}
+                </Pressable>
+              </View>
+            </> : <Text style={{ color: colors.onSurface }}>Loading pending review…</Text>}
+          </View>
+        </View>
+      </Modal>
 
       <Modal visible={pdfFilterOpen} transparent animationType="slide" onRequestClose={() => setPdfFilterOpen(false)}>
         <View style={styles.pdfModalOverlay}><View style={[styles.pdfModalCard,{paddingBottom:insets.bottom+spacing.lg}]}>
