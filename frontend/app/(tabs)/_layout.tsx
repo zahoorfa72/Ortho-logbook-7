@@ -32,6 +32,10 @@ export default function TabsLayout() {
           <NativeTabs.Trigger.Icon sf="cross.case.fill" />
           <NativeTabs.Trigger.Label>Procedures</NativeTabs.Trigger.Label>
         </NativeTabs.Trigger>
+        <NativeTabs.Trigger name="procedure-check">
+          <NativeTabs.Trigger.Icon sf="checklist" />
+          <NativeTabs.Trigger.Label>Procedure Check</NativeTabs.Trigger.Label>
+        </NativeTabs.Trigger>
         <NativeTabs.Trigger name="stats">
           <NativeTabs.Trigger.Icon sf="chart.bar.fill" />
           <NativeTabs.Trigger.Label>Stats</NativeTabs.Trigger.Label>
@@ -92,6 +96,15 @@ export default function TabsLayout() {
           title: "Procedures",
           tabBarIcon: ({ color, size, focused }) => (
             <Ionicons name={focused ? "medkit" : "medkit-outline"} size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="procedure-check"
+        options={{
+          title: "Procedure Check",
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons name={focused ? "clipboard" : "clipboard-outline"} size={size} color={color} />
           ),
         }}
       />
