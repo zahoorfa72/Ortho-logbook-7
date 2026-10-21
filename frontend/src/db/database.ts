@@ -331,7 +331,10 @@ function ensureInventoryCategoryLinks() {
     );
   }
   // Recover category text when an older backup retained the ID but omitted the name.
-  db.runSync(
-    "UPDATE inventory SET category=c.name,category_id=c.id FROM inventory_categories c WHERE inventory.category_id=c.id AND TRIM(COALESCE(inventory.category,''))=''",
+  const missingCategoryNames = db.getAllSync<any>(
+    "SELECT i.id,c.id AS category_id,c.name FROM inventory i JOIN inventory_categories c ON c.id=i.category_id WHERE TRIM(COALESCE(i.category,''))=''",
   );
+  for (const item of missingCategoryNames) {
+    db.runSync("UPDATE inventory SET category=?,category_id=? WHERE id=? AND TRIM(COALESCE(category,''))=''", [String(item.name || ""), String(item.category_id), String(item.id)]);
+  }
 }
