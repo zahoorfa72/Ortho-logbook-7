@@ -1098,18 +1098,11 @@ export default function Logbook() {
         requestLabScanRef.current(patientId, true);
       }
 
-      // Upgrade existing records that were already scanned under the old parser.
-      // They have a saved photo signature; rescan each once so the new row-aware
-      // extractor replaces stale/manual-review-only results. The queue is serial.
-      for (const patient of (data || []) as Patient[]) {
-        const priorPhotoSignature = String(patient.customData?.labOcrPhotoSignature || "").trim();
-        const currentVersion = String(patient.customData?.labOcrPipelineVersion || "");
-        if (!priorPhotoSignature || currentVersion === LAB_OCR_PIPELINE_VERSION) continue;
-        if (autoQueuedPatientIdsRef.current.has(patient.id) ||
-            runningLabScansRef.current.has(patient.id) ||
-            pendingLabScansRef.current.includes(patient.id)) continue;
-        requestLabScanRef.current(patient.id, true);
-      }
+      // Do not automatically re-scan every historical patient when the OCR
+      // pipeline version changes. On large logbooks this can enqueue hundreds
+      // of image reads/OCR jobs at launch and make the whole app feel frozen.
+      // New-patient scans still run from the saved queue, and administrators can
+      // use the existing Retry control to rescan an older patient's current photos.
     }).catch(() => {});
   }, [labScanStateLoaded, labOcrEnabled, isLoading, data]);
 
