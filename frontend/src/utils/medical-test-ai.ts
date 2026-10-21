@@ -114,7 +114,17 @@ async function fetchDirectOpenAiMedicalInfo(
         "\nProvide a concise, medically reliable explanation of this test and what this direction may indicate.",
     }),
   });
-  if (!response.ok) return null;
+  if (!response.ok) {
+    let statusMessage = "OpenAI request failed (" + response.status + ").";
+    if (response.status === 401 || response.status === 403) {
+      statusMessage = "OpenAI rejected the saved API key or project access (" + response.status + "). Check the key and API project permissions.";
+    } else if (response.status === 429) {
+      statusMessage = "OpenAI API quota or rate limit reached (429). Check API billing and usage limits.";
+    } else if (response.status >= 500) {
+      statusMessage = "OpenAI service is temporarily unavailable (" + response.status + ").";
+    }
+    throw new Error(statusMessage);
+  }
   const payload = await response.json();
   const parsed = responseText(payload);
   const summary = compactSummary(parsed.text);
@@ -144,19 +154,24 @@ export async function fetchAiMedicalTestInfo(
   const safeName = String(testName || "").trim().slice(0, 120);
   if (safeName.length < 2) return null;
 
+  let directError: Error | null = null;
   try {
     const key = String(await SecureStore.getItemAsync(LAB_VISION_OPENAI_API_KEY_KEY) || "").trim();
     if (key) {
       const direct = await fetchDirectOpenAiMedicalInfo(key, safeName, String(aliases || ""), abnormalDirection);
       if (direct) return direct;
+      directError = new Error("OpenAI returned no usable, source-cited explanation for this test.");
     }
-  } catch {
-    // If direct API access is unavailable, preserve the existing fallback path.
+  } catch (error: any) {
+    directError = error instanceof Error ? error : new Error("OpenAI medical lookup failed.");
   }
 
   const baseUrl = String(process.env.EXPO_PUBLIC_MEDICAL_INFO_API_URL || "").trim().replace(/\/+$/, "");
   const clientToken = String(process.env.EXPO_PUBLIC_MEDICAL_INFO_CLIENT_TOKEN || "").trim();
-  if (!baseUrl || !clientToken || !/^https:\/\//i.test(baseUrl)) return null;
+  if (!baseUrl || !clientToken || !/^https:\/\//i.test(baseUrl)) {
+    if (directError) throw directError;
+    return null;
+  }
   try {
     const response = await fetch(baseUrl + "/api/medical-test-info", {
       method: "POST",
@@ -188,6 +203,7 @@ export async function fetchAiMedicalTestInfo(
       loincCode: String(payload.loincCode || "trusted-ai-proxy"),
     };
   } catch {
+    if (directError) throw directError;
     return null;
   }
 }
