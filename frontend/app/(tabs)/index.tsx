@@ -6,7 +6,7 @@ import * as SecureStore from "expo-secure-store";
 import { triggerAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-backup";
 import { evaluateLabResultForReview, extractLabReportDate, isLikelyLabReportText, parseLabReportRows, recognizeLabText, type LabTestDefinition } from "@/src/utils/lab-ocr";
 import { fetchTrustedMedicalTestInfo, isMedicalTestInfoFresh, LAB_TEST_DEFINITIONS_KEY, MEDICAL_INFO_CACHE_KEY, medicalInfoCacheKey, type MedicalTestOnlineInfo } from "@/src/utils/medical-test-info";
-import { fetchAiMedicalTestInfo } from "@/src/utils/medical-test-ai";
+import { generateLocalLabMedicalInfo, getLocalLabModelDownloaded } from "@/src/utils/local-lab-ai";
 import { loadLabVisionSettings, matchCandidateToConfiguredTest, requestLabVisionCandidates } from "@/src/utils/lab-vision";
 import {
   ActivityIndicator,
@@ -541,24 +541,24 @@ export default function Logbook() {
     return () => { cancelled = true; };
   }, []));
 
-  const loadMedicalInfoForResult = async (testName: string, definition?: LabTestDefinition) => {
+  const loadMedicalInfoForResult = async (testName: string, definition?: LabTestDefinition, resultLabel = "") => {
     const key = medicalInfoCacheKey(testName);
     const existing = definition?.onlineMedicalInfo || medicalInfoCache[key];
-    if (isMedicalTestInfoFresh(existing)) return;
+    const localModelReady = await getLocalLabModelDownloaded().catch(() => false);
+    const alreadyLocallyGenerated = existing?.modelProvider === "local-gemma4-e2b";
+    if (isMedicalTestInfoFresh(existing) && (!localModelReady || alreadyLocallyGenerated)) return;
     setMedicalInfoBusy(true);
     setMedicalInfoError("");
     try {
-      // Only the identified test label/aliases are sent to the public medical
-      // terminology service. Patient details, values, photos and ranges are not.
-      // Prefer the AI-assisted, web-cited summary when configured; fall back to existing trusted sources if unavailable.
-      let aiLookupError = "";
-      // Prefer the explicit HIGH/LOW label, otherwise compare the displayed result
-      // with its printed reference interval without sending the numeric value to AI.
-      let abnormalDirection = /^(?:HIGH)\s*:/i.test(label) ? "HIGH"
-        : /^LOW\s*:/i.test(label) ? "LOW"
+      // Only the generic test name/aliases are used for public medical lookup.
+      // The offline model receives trusted source text and the HIGH/LOW direction only;
+      // patient identity, numeric results, reference ranges and report content are never sent.
+      // Direction is inferred from the label/reference interval locally on this device.
+      let abnormalDirection = /^(?:HIGH)\s*:/i.test(resultLabel) ? "HIGH"
+        : /^LOW\s*:/i.test(resultLabel) ? "LOW"
         : "direction unknown";
       if (abnormalDirection === "direction unknown") {
-        const body = label.replace(/^(?:WARNING|ALERT)\s*:\s*/i, "");
+        const body = resultLabel.replace(/^(?:WARNING|ALERT)\s*:\s*/i, "");
         const refText = /(?:\(Ref\s*([^)]*)\)|\|\s*Ref\s*:\s*([^|]+))/i.exec(body);
         const interval = String(refText?.[1] || refText?.[2] || "").match(/([-+]?\d+(?:[.,]\d+)?)\s*(?:-|–|—|\bto\b)\s*([-+]?\d+(?:[.,]\d+)?)/i);
         const testAt = body.toLocaleLowerCase().indexOf(testName.toLocaleLowerCase());
@@ -574,23 +574,53 @@ export default function Logbook() {
           }
         }
       }
-      const aiFetched = await fetchAiMedicalTestInfo(
-        testName,
-        definition?.aliases || "",
-        abnormalDirection,
-      ).catch((error: any) => {
-        aiLookupError = String(error?.message || "AI medical lookup failed.").slice(0, 220);
-        return null;
-      });
       let trustedFetched: MedicalTestOnlineInfo | null = null;
-      if (!aiFetched) {
-        try {
-          trustedFetched = await fetchTrustedMedicalTestInfo(testName, definition?.aliases || "");
-        } catch {
-          trustedFetched = null;
+      try {
+        trustedFetched = await fetchTrustedMedicalTestInfo(testName, definition?.aliases || "");
+      } catch {
+        trustedFetched = null;
+      }
+      // If online sources are unavailable, allow the administrator's saved medical
+      // notes to act as the reference for this configured test. Do not generate new
+      // factual claims if neither a trusted source nor admin notes exist.
+      if (!trustedFetched && definition && [
+        definition.purpose, definition.lowMeaning, definition.highMeaning,
+        definition.possibleEffects, definition.seekCare,
+      ].some(value => String(value || "").trim())) {
+        const adminSummary = [
+          definition.purpose?.trim() ? "WHAT THIS TEST IS\\n" + definition.purpose.trim() : "",
+          "WHAT THE ABNORMAL RESULT MAY MEAN\\n" +
+            (abnormalDirection === "LOW"
+              ? definition.lowMeaning?.trim() || "The administrator has not documented a low-result interpretation for this test."
+              : abnormalDirection === "HIGH"
+                ? definition.highMeaning?.trim() || "The administrator has not documented a high-result interpretation for this test."
+                : [
+                    definition.lowMeaning?.trim() ? "Low: " + definition.lowMeaning.trim() : "",
+                    definition.highMeaning?.trim() ? "High: " + definition.highMeaning.trim() : "",
+                  ].filter(Boolean).join("\\n") || "The administrator has not documented a direction-specific interpretation for this test."),
+          definition.possibleEffects?.trim() ? "Possible effects: " + definition.possibleEffects.trim() : "",
+          definition.seekCare?.trim() ? "When medical review may be needed: " + definition.seekCare.trim() : "",
+        ].filter(Boolean).join("\\n\\n");
+        if (adminSummary.trim()) {
+          trustedFetched = {
+            title: testName + " — administrator-configured information",
+            summary: adminSummary,
+            sourceName: definition.sourceName?.trim() || "Administrator-configured lab notes",
+            sourceUrl: /^https:\\/\\//i.test(String(definition.sourceUrl || "")) ? String(definition.sourceUrl) : "",
+            fetchedAt: new Date().toISOString(),
+            loincCode: "admin-configured",
+          };
         }
       }
-      const fetchedRaw = aiFetched || trustedFetched;
+      const locallyGenerated = localModelReady && trustedFetched
+        ? await generateLocalLabMedicalInfo(
+            testName,
+            definition?.aliases || "",
+            abnormalDirection,
+            trustedFetched,
+          ).catch(() => null)
+        : null;
+      const fetchedRaw = locallyGenerated || trustedFetched;
       const fetched = fetchedRaw ? {
         ...fetchedRaw,
         // Keep website fallback summaries compact too; do not pad missing evidence with invented claims.
@@ -607,9 +637,7 @@ export default function Logbook() {
             })(),
       } : null;
       if (!fetched) {
-        setMedicalInfoError(aiLookupError
-          ? aiLookupError + " Trusted medical websites also did not return a matching test page. Check internet access and retry."
-          : "No matching information was returned by trusted medical websites. Check internet access and retry; the app will not invent medical facts.");
+        setMedicalInfoError("No matching medical reference or saved lab explanation is available for this test yet. Connect to Wi-Fi or mobile data and retry, or ask an administrator to add the test explanation in Lab Test Reference Ranges.");
         return;
       }
       let nextCache: Record<string, MedicalTestOnlineInfo> = {};
@@ -657,7 +685,7 @@ export default function Logbook() {
       setMedicalInfoError("The test name could not be identified confidently from this result. An administrator can add the printed label as an alias in Lab Test Reference Ranges.");
       return;
     }
-    void loadMedicalInfoForResult(testName, definition);
+    void loadMedicalInfoForResult(testName, definition, label);
   };
 
   // Re-evaluate the daily backup reminder whenever the Logbook tab regains focus.
@@ -2142,7 +2170,7 @@ export default function Logbook() {
                 <Text style={{ color: colors.onSurface, fontFamily: fontFamily.semibold, marginTop: spacing.md }}>When medical review may be needed</Text>
                 <Text style={{ color: colors.onSurface, lineHeight: 20 }}>{activeMedicalTest.definition.seekCare}</Text>
               </> : null}
-              {medicalInfoError ? <Pressable onPress={() => activeMedicalTest?.testName && void loadMedicalInfoForResult(activeMedicalTest.testName, activeMedicalTest.definition)} style={{ alignSelf: "flex-start", marginTop: spacing.md, paddingVertical: spacing.sm, paddingHorizontal: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md }}><Text style={{ color: colors.brandPrimary, fontFamily: fontFamily.semibold }}>Retry online lookup</Text></Pressable> : null}
+              {medicalInfoError ? <Pressable onPress={() => activeMedicalTest?.testName && void loadMedicalInfoForResult(activeMedicalTest.testName, activeMedicalTest.definition, activeMedicalTest.label)} style={{ alignSelf: "flex-start", marginTop: spacing.md, paddingVertical: spacing.sm, paddingHorizontal: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md }}><Text style={{ color: colors.brandPrimary, fontFamily: fontFamily.semibold }}>Retry online lookup</Text></Pressable> : null}
               <Text style={{ color: colors.muted, fontSize: fontSize.xs, lineHeight: 16, marginTop: spacing.lg }}>Educational information only. A result outside its reference range is not a diagnosis. Interpretation depends on the lab's range, units, symptoms, and clinical context. Test details remain inside Ortho Logbook.</Text>
             </ScrollView>
           </View>

@@ -62,7 +62,10 @@
     "expo-ocr-kit": "0.1.4",
     "@uzimandias/react-native-pdf-to-image": "0.1.0",
     "react-native-document-scanner-plugin": "2.0.4",
-    "buffer": "6.0.3"
+    "buffer": "6.0.3",
+    "expo-build-properties": "~57.0.19",
+    "react-native-blob-util": "0.25.1",
+    "react-native-executorch": "0.10.5"
   },
   "devDependencies": {
     "@types/react": "19.2.10",

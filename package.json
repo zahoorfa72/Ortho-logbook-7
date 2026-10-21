@@ -6,5 +6,13 @@
     "frontend"
   ],
   "main": "expo-router/entry",
-  "packageManager": "yarn@1.22.22"
+  "packageManager": "yarn@1.22.22",
+  "react-native-executorch": {
+    "features": [
+      "llm"
+    ],
+    "backends": [
+      "xnnpack"
+    ]
+  }
 }

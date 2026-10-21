@@ -15,6 +15,8 @@ export type MedicalTestOnlineInfo = {
   fetchedAt: string;
   loincCode: string;
   sources?: Array<{ title: string; url: string }>;
+  /** Marks summaries formatted with the downloaded on-device lab model. */
+  modelProvider?: string;
 };
 
 type KnownLoinc = { code: string; labels: string[] };

@@ -1,6 +1,6 @@
-# AI-assisted lab-test medical information
+# Medical-test information and local lab AI
 
-This optional feature keeps the OpenAI API key on the backend. The app sends only the generic lab-test name and configured aliases. Never add patient names, MR numbers, measured values, reference ranges, report text, or photos to this endpoint. Existing patient records and the offline source cache remain local.
+The current Ortho Logbook medical-test explanation flow uses trusted medical references and, when downloaded, a Gemma 4 E2B model running on the phone through React Native ExecuTorch. It does not call OpenAI for medical explanations and does not need OpenAI API credits. The model can work offline after its model files and a medical reference summary are available locally. It receives the generic test name, aliases, high/low direction, and trusted source text only; it must not receive patient identity, measured values, reference ranges, report text, or photos. The hosted OpenAI medical-info endpoint described below is legacy/optional and is not needed by the current client flow.
 
 ## Backend environment
 
@@ -22,13 +22,12 @@ In repository Settings → Secrets and variables → Actions, add:
 
 Android, iOS simulator and web/Windows validation workflows pass these values into Expo as build-time environment variables. If they are missing, the app still works and falls back to existing MedlinePlus/PubMed/trusted-site lookup; AI remains inactive. Build a new APK after adding the GitHub secrets.
 
-## Behavior and safety
+## Current medical explanation behavior and safety
 
-- AI lookup uses OpenAI Responses API web search and returns citations only from an allowlist of trusted medical/academic domains.
-- If AI is down or lacks trusted citations, the app falls back to the existing trusted-source lookup; uncited AI output is not displayed.
-- Successful summaries are cached by test name and remain available offline.
-- Educational information is not a diagnosis or substitute for clinician judgment. No patient-specific result interpretation is sent to this endpoint.
-- The client token is a basic access gate, not a substitute for strong per-user authentication. The endpoint also applies a modest per-IP request limit.
+- Trusted medical lookup and the curated offline library provide the source material. When the on-device Gemma model is downloaded, it may reformat source material into exactly two sections: `WHAT THIS TEST IS` and `WHAT THE ABNORMAL RESULT MAY MEAN`.
+- If the local model is not installed, has an error, or returns an invalid structure, the app falls back to the source-grounded summary; it does not depend on OpenAI credits.
+- Successfully retrieved summaries are cached on the device for offline viewing. A new device still needs the model downloaded to that device for local generation.
+- The model is not guaranteed to be clinically correct. Its answers must be checked against the displayed source and interpreted by a healthcare professional. No patient-specific result values are sent to online medical explanation services.
 
 
 ## AI lab-image scanning without a backend

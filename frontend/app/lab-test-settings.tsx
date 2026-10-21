@@ -1,16 +1,17 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { router } from "expo-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Switch } from "react-native";
 import * as SecureStore from "expo-secure-store";
-import { Alert, Linking, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, Linking, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "@/src/auth/AuthContext";
 import { useToast } from "@/src/components/toast";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 import { triggerAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-backup";
 import { LAB_VISION_CONSENT_KEY, LAB_VISION_OPENAI_API_KEY_KEY } from "@/src/utils/lab-vision";
+import { downloadLocalLabModel, getLocalLabModelDownloaded, LOCAL_LAB_AI_MODEL_NAME, LOCAL_LAB_AI_MODEL_SIZE } from "@/src/utils/local-lab-ai";
 
 export type LabTestDefinition = {
   id: string;
@@ -66,11 +67,17 @@ export default function LabTestSettingsScreen() {
   const [aiVisionApiKey, setAiVisionApiKey] = useState("");
   const [aiVisionConsent, setAiVisionConsent] = useState(false);
   const [aiVisionBusy, setAiVisionBusy] = useState(false);
+  const [localModelDownloaded, setLocalModelDownloaded] = useState(false);
+  const [localModelStatusLoading, setLocalModelStatusLoading] = useState(true);
+  const [localModelBusy, setLocalModelBusy] = useState(false);
+  const [localModelProgress, setLocalModelProgress] = useState(0);
+  const localModelAbortRef = useRef<AbortController | null>(null);
   const [customScreeningBoxes, setCustomScreeningBoxes] = useState<CustomScreeningBox[]>([]);
   const [customScreeningLabel, setCustomScreeningLabel] = useState("");
   const [editingCustomScreeningId, setEditingCustomScreeningId] = useState("");
 
   useEffect(() => {
+    getLocalLabModelDownloaded().then(setLocalModelDownloaded).catch(() => setLocalModelDownloaded(false)).finally(() => setLocalModelStatusLoading(false));
     AsyncStorage.getItem(CUSTOM_SCREENING_BOXES_KEY).then(raw => { try { const parsed = raw ? JSON.parse(raw) : []; if (Array.isArray(parsed)) setCustomScreeningBoxes(parsed.filter(item => item && typeof item.id === "string" && typeof item.label === "string")); } catch {} }).catch(() => {});
     Promise.all([AsyncStorage.getItem(STORAGE_KEY), AsyncStorage.getItem(BRANCHES_KEY)]).then(([rawTests, rawBranches]) => {
       let loadedTests: LabTestDefinition[] = [];
@@ -210,8 +217,8 @@ export default function LabTestSettingsScreen() {
       setAiVisionApiKey(key);
       setAiVisionConsent(enabled);
       toast(enabled
-        ? "Shared OpenAI features enabled on this device. Lab images are sent only after local OCR detects a likely lab report; AI scan rows still require admin review. Short abnormal-result explanations use cited trusted medical sources."
-        : "Direct AI lab-image scanning is disabled. If a key remains saved, it can still power short abnormal-result explanations; local OCR remains available.",
+        ? "Direct OpenAI lab-image scanning is enabled. Medical-test explanations use the downloaded local model and trusted medical sources, not OpenAI API credits."
+        : "Direct OpenAI lab-image scanning is disabled. The local lab-explanation model and trusted-source fallback remain separate; local OCR remains available.",
         "success");
     } catch (error: any) {
       toast(error?.message || "Could not save the OpenAI API key securely on this device.", "error");
@@ -282,9 +289,42 @@ export default function LabTestSettingsScreen() {
       </View>
       <Pressable disabled={onlineOcrBusy} onPress={saveOnlineOcrSettings} style={styles.action}><Text style={styles.actionText}>{onlineOcrBusy ? "Saving..." : "Save online OCR settings"}</Text></Pressable>
 
+      <Text style={styles.section}>Offline AI for laboratory-test explanations</Text>
+      <Text style={styles.help}>Model: {LOCAL_LAB_AI_MODEL_NAME}. The first download is about {LOCAL_LAB_AI_MODEL_SIZE}. You may download it over Wi-Fi or mobile data (mobile data charges may apply). The downloaded model stays on this phone and can generate the two requested sections — WHAT THIS TEST IS and WHAT THE ABNORMAL RESULT MAY MEAN — without OpenAI credits or an internet connection. For safer answers, it receives the trusted medical source text and only the HIGH/LOW direction, never patient identity or the numeric result. The model can still make mistakes, so this is educational support and not a diagnosis.</Text>
+      {Platform.OS === "web" ? <Text style={styles.help}>Model downloading and local inference require the native Android/iOS app build; they are not available in the web build.</Text> : <>
+        <Text style={styles.help}>{localModelStatusLoading ? "Checking local model…" : localModelDownloaded ? "Local model is downloaded on this device. It can be used offline." : "Local model has not been downloaded yet."}</Text>
+        {localModelBusy ? <>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm, marginBottom: spacing.sm }}>
+            <ActivityIndicator color={colors.brandPrimary} />
+            <Text style={[styles.help, { flex: 1, marginBottom: 0 }]}>Downloading model: {localModelProgress}%</Text>
+          </View>
+          <View style={{ height: 8, borderRadius: 5, overflow: "hidden", backgroundColor: colors.border, marginBottom: spacing.sm }}>
+            <View style={{ height: 8, width: Math.max(2, localModelProgress) + "%", borderRadius: 5, backgroundColor: colors.brandPrimary }} />
+          </View>
+          <Pressable onPress={() => localModelAbortRef.current?.abort()} style={styles.action}><Text style={styles.actionText}>Cancel model download</Text></Pressable>
+        </> : <Pressable disabled={localModelStatusLoading || localModelDownloaded} onPress={async () => {
+          const controller = new AbortController();
+          localModelAbortRef.current = controller;
+          setLocalModelBusy(true);
+          setLocalModelProgress(0);
+          try {
+            await downloadLocalLabModel(progress => setLocalModelProgress(progress), controller.signal);
+            setLocalModelDownloaded(true);
+            setLocalModelProgress(100);
+            toast("Offline lab-test AI model downloaded successfully. It is stored on this device.", "success");
+          } catch (error: any) {
+            toast(controller.signal.aborted ? "Model download cancelled. You can retry later." : String(error?.message || "Model download failed. Check available storage and internet, then retry.").slice(0, 220), "error");
+          } finally {
+            if (localModelAbortRef.current === controller) localModelAbortRef.current = null;
+            setLocalModelBusy(false);
+          }
+        }} style={styles.action}><Text style={styles.actionText}>{localModelStatusLoading ? "Checking model…" : localModelDownloaded ? "Offline model ready" : "Download offline model (about 2.7 GB)"}</Text></Pressable>}
+      </>}
+      <Text style={styles.help}>A new Android/iOS app build is required to install the native model runtime. The first model download also needs a stable connection and several GB of free storage; after download, test explanations work offline.</Text>
+
       <Text style={styles.section}>OpenAI AI vision for automatic lab scanning</Text>
-      <Text style={styles.help}>One OpenAI API key powers both direct AI lab scanning and short AI-assisted explanations for abnormal lab results. No Ortho Logbook backend or database is required for these direct features. Paste an OpenAI API key created in your OpenAI Platform account. The key is stored in this device's secure storage and is not placed in the source code or app backup. Important: OpenAI advises against putting API keys in mobile apps because an extracted key can be misused and create charges. Use a dedicated restricted API project/key with usage limits, only on your own trusted device, and rotate it if the device is lost or the key may be exposed. When enabled, images are sent directly to OpenAI over HTTPS only after local OCR identifies a likely lab report. The image itself may show patient names or MR numbers; enable only if you have permission for external processing. AI suggestions are never saved automatically; an admin must verify every row against the original report. Local OCR remains the fallback.</Text>
-      <View style={styles.field}><Text style={styles.label}>Shared OpenAI API key (lab scanning + abnormal-result information)</Text><TextInput value={aiVisionApiKey} onChangeText={setAiVisionApiKey} placeholder="Paste your OpenAI API key" placeholderTextColor={colors.muted} autoCapitalize="none" autoCorrect={false} secureTextEntry keyboardType="default" style={styles.input}/></View>
+      <Text style={styles.help}>This OpenAI API key is used only for optional direct AI lab-image scanning; it is separate from the offline medical-test explanation model. No OpenAI API credits are needed for lab-test explanations. No Ortho Logbook backend or database is required for direct image scanning. Paste an OpenAI API key created in your OpenAI Platform account. The key is stored in this device's secure storage and is not placed in the source code or app backup. Important: OpenAI advises against putting API keys in mobile apps because an extracted key can be misused and create charges. Use a dedicated restricted API project/key with usage limits, only on your own trusted device, and rotate it if the device is lost or the key may be exposed. When enabled, images are sent directly to OpenAI over HTTPS only after local OCR identifies a likely lab report. The image itself may show patient names or MR numbers; enable only if you have permission for external processing. AI suggestions are never saved automatically; an admin must verify every row against the original report. Local OCR remains the fallback.</Text>
+      <View style={styles.field}><Text style={styles.label}>OpenAI API key (direct lab-image scanning only)</Text><TextInput value={aiVisionApiKey} onChangeText={setAiVisionApiKey} placeholder="Paste your OpenAI API key" placeholderTextColor={colors.muted} autoCapitalize="none" autoCorrect={false} secureTextEntry keyboardType="default" style={styles.input}/></View>
       <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.md, paddingVertical: spacing.sm }}>
         <Text style={[styles.label, { flex: 1 }]}>Allow detected lab-report images to be sent directly to OpenAI</Text>
         <Switch value={aiVisionConsent} onValueChange={setAiVisionConsent} trackColor={{ false: colors.border, true: colors.brandPrimary }} thumbColor={aiVisionConsent ? colors.onBrandPrimary : colors.muted} />

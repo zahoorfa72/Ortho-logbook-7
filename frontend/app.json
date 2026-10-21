@@ -75,11 +75,23 @@
         }
       ],
       "./plugins/with-ocr-word-boxes",
-      "./plugins/with-drive-background-upload"
+      "./plugins/with-drive-background-upload",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 26
+          },
+          "ios": {
+            "deploymentTarget": "17.0"
+          }
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
     },
-    "description": "Offline-first orthopaedic patient logbook with local records, inventory, statistics and encrypted backup."
+    "description": "Offline-first orthopaedic patient logbook with local records, inventory, statistics and encrypted backup.",
+    "newArchEnabled": true
   }
 }
