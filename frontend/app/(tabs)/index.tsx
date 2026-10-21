@@ -552,10 +552,13 @@ export default function Logbook() {
       // terminology service. Patient details, values, photos and ranges are not.
       // Prefer the AI-assisted, web-cited summary when configured; fall back to existing trusted sources if unavailable.
       let aiLookupError = "";
+      const abnormalDirection = /^(?:WARNING|ALERT|HIGH)\\s*:/i.test(label) ? "HIGH"
+        : /^LOW\\s*:/i.test(label) ? "LOW"
+        : "direction unknown";
       const aiFetched = await fetchAiMedicalTestInfo(
         testName,
         definition?.aliases || "",
-        "low or high (outside the configured reference range)",
+        abnormalDirection,
       ).catch((error: any) => {
         aiLookupError = String(error?.message || "AI medical lookup failed.").slice(0, 220);
         return null;
