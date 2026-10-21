@@ -604,7 +604,7 @@ export default function Logbook() {
         }));
         if (stopLabScansRef.current.has(patientId) || !labOcrEnabledRef.current) return;
         for (const result of results) {
-          if (result.needsReview) uncertainImages += 1;
+          if (result.needsReview && result.isReport) uncertainImages += 1;
           photoCache[labPhotoCacheKey(result.uri)] = {
             text: result.text, structuredText: result.structuredText, isReport: result.isReport,
             reportDate: result.reportDate || extractLabReportDate(result.text + "\n" + result.structuredText),
