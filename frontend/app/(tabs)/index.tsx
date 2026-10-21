@@ -332,30 +332,23 @@ function abnormalLabLabels(patient: Patient, automaticFlags?: string[], includeW
 }
 function labTestNameFromDisplayLabel(label: string, definitions: LabTestDefinition[]): string {
   const body = String(label || "")
-    .replace(/^(?:WARNING|ALERT|HIGH|LOW|OLD RESULT)\\s*:\\s*/i, "")
-    .replace(/^\\[MANUAL\\]\\s*/i, "")
-    .replace(/\\s·\\s*DATE:\\s*.+$/i, "")
-    .replace(/\\s*\\(Ref\\s*[^)]*\\).*$/i, "")
-    .replace(/\\s*\\|\\s*Ref\\s*:.+$/i, "")
+    .replace(/^(?:WARNING|ALERT|HIGH|LOW|OLD RESULT)\s*:\s*/i, "")
+    .replace(/^\[MANUAL\]\s*/i, "")
+    .replace(/\s·\s*DATE:\s*.+$/i, "")
+    .replace(/\s*\(Ref\s*[^)]*\).*$/i, "")
+    .replace(/\s*\|\s*Ref\s*:.+$/i, "")
     .trim();
   const aliases = definitions.flatMap(definition => [
     { definition, alias: String(definition.name || "").trim() },
-    ...String(definition.aliases || "").split(/[,;\\n]+/).map(alias => ({ definition, alias: alias.trim() })),
+    ...String(definition.aliases || "").split(/[,;\n]+/).map(alias => ({ definition, alias: alias.trim() })),
   ]).filter(item => item.alias.length > 1).sort((a, b) => b.alias.length - a.alias.length);
   for (const item of aliases) {
     const match = body.slice(0, item.alias.length).toLocaleLowerCase() === item.alias.toLocaleLowerCase();
     const boundary = body.length === item.alias.length || !/[a-z0-9]/i.test(body[item.alias.length] || " ");
     if (match && boundary) return item.definition.name;
   }
-  const resultMatch = /\\s+[-+]?\\d|\\s+(?:positive|negative|reactive|nonreactive|non-reactive|detected|not\\s+detected)\\b/i.exec(body);
-  const candidate = (resultMatch && resultMatch.index > 0 ? body.slice(0, resultMatch.index) : body).trim().replace(/^[\\s:|•-]+|[\\s:|•-]+$/g, "");
-  return candidate.length > 1 && candidate.length <= 80 ? candidate : "";
-}
-function labTestBranch(label: string, definitions: Array<{ name: string; aliases?: string; category?: string }>): string {");
-    if (new RegExp("^" + escaped + "(?=$|[\\s:|•-])", "i").test(body)) return item.definition.name;
-  }
-  const resultStart = body.search(/\s+[-+]?\d|\s+(?:positive|negative|reactive|nonreactive|non-reactive|detected|not\s+detected)\b/i);
-  const candidate = (resultStart > 0 ? body.slice(0, resultStart) : body).trim().replace(/^[\s:|•-]+|[\s:|•-]+$/g, "");
+  const resultMatch = /\s+[-+]?\d|\s+(?:positive|negative|reactive|nonreactive|non-reactive|detected|not\s+detected)\b/i.exec(body);
+  const candidate = (resultMatch && resultMatch.index > 0 ? body.slice(0, resultMatch.index) : body).trim().replace(/^[\s:|•-]+|[\s:|•-]+$/g, "");
   return candidate.length > 1 && candidate.length <= 80 ? candidate : "";
 }
 
