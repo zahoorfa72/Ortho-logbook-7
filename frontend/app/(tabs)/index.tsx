@@ -558,7 +558,7 @@ export default function Logbook() {
         // Keep website fallback summaries compact too; do not pad missing evidence with invented claims.
         summary: (fetchedRaw.summary.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [fetchedRaw.summary])
           .map(line => line.trim()).filter(Boolean).slice(0, 7)
-          .map(line => line.length > 180 ? line.slice(0, 177).trimEnd() + "…" : line).join("\\n"),
+          .map(line => line.length > 180 ? line.slice(0, 177).trimEnd() + "…" : line).join("\n"),
       } : null;
       if (!fetched) {
         setMedicalInfoError("No relevant explanation was found in the trusted medical sources checked. The app will not show an unrelated result.");
