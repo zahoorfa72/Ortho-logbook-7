@@ -580,7 +580,7 @@ export default function Logbook() {
         const results = await Promise.all(batch.map(async uri => {
           const key = labPhotoCacheKey(uri);
           const cached = photoCache[key];
-          if (!forceRetry && cached && cached.checkedAt && Date.now() - cached.checkedAt < 10 * 60 * 1000) {
+          if (!forceRetry && cached && typeof cached.needsReview === "boolean" && cached.checkedAt && Date.now() - cached.checkedAt < 10 * 60 * 1000) {
             return { uri, ...cached };
           }
           try {
