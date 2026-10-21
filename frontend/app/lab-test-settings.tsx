@@ -10,7 +10,7 @@ import { useAuth } from "@/src/auth/AuthContext";
 import { useToast } from "@/src/components/toast";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 import { triggerAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-backup";
-import { LAB_VISION_CLIENT_TOKEN_KEY, LAB_VISION_CONSENT_KEY, LAB_VISION_ENDPOINT_KEY, validateLabVisionEndpoint } from "@/src/utils/lab-vision";
+import { LAB_VISION_CONSENT_KEY, LAB_VISION_OPENAI_API_KEY_KEY } from "@/src/utils/lab-vision";
 
 export type LabTestDefinition = {
   id: string;
@@ -63,8 +63,7 @@ export default function LabTestSettingsScreen() {
   const [onlineOcrKey, setOnlineOcrKey] = useState("");
   const [onlineOcrConsent, setOnlineOcrConsent] = useState(false);
   const [onlineOcrBusy, setOnlineOcrBusy] = useState(false);
-  const [aiVisionEndpoint, setAiVisionEndpoint] = useState("");
-  const [aiVisionClientToken, setAiVisionClientToken] = useState("");
+  const [aiVisionApiKey, setAiVisionApiKey] = useState("");
   const [aiVisionConsent, setAiVisionConsent] = useState(false);
   const [aiVisionBusy, setAiVisionBusy] = useState(false);
   const [customScreeningBoxes, setCustomScreeningBoxes] = useState<CustomScreeningBox[]>([]);
@@ -89,9 +88,8 @@ export default function LabTestSettingsScreen() {
     AsyncStorage.getItem(WARNING_THRESHOLD_KEY).then(raw => { if (raw && Number.isFinite(Number(raw))) setWarningPercent(String(Math.max(1, Math.min(100, Math.round(Number(raw)))))); }).catch(() => {});
     AsyncStorage.getItem(OLD_RESULT_DAYS_KEY).then(raw => { if (raw && Number.isFinite(Number(raw))) setOldResultDays(String(Math.max(1, Math.min(3650, Math.round(Number(raw)))))); }).catch(() => {});
     AsyncStorage.getItem(ONLINE_OCR_CONSENT_KEY).then(raw => setOnlineOcrConsent(raw === "true")).catch(() => {});
-    AsyncStorage.getItem(LAB_VISION_ENDPOINT_KEY).then(raw => setAiVisionEndpoint(raw || "")).catch(() => {});
     AsyncStorage.getItem(LAB_VISION_CONSENT_KEY).then(raw => setAiVisionConsent(raw === "true")).catch(() => {});
-    SecureStore.getItemAsync(LAB_VISION_CLIENT_TOKEN_KEY).then(raw => setAiVisionClientToken(raw || "")).catch(() => {});
+    SecureStore.getItemAsync(LAB_VISION_OPENAI_API_KEY_KEY).then(raw => setAiVisionApiKey(raw || "")).catch(() => {});
     (async () => {
       try {
         let key = await SecureStore.getItemAsync(ONLINE_OCR_KEY);
@@ -200,25 +198,23 @@ export default function LabTestSettingsScreen() {
   const saveAiVisionSettings = async () => {
     setAiVisionBusy(true);
     try {
-      const endpoint = aiVisionEndpoint.trim() ? validateLabVisionEndpoint(aiVisionEndpoint.trim()) : "";
-      const token = aiVisionClientToken.trim();
-      if (aiVisionConsent && (!endpoint || !token)) {
-        toast("Enter the secure HTTPS lab-vision endpoint and its client token before enabling AI scanning.", "error");
+      const key = aiVisionApiKey.trim();
+      if (aiVisionConsent && !key) {
+        toast("Paste your OpenAI API key before enabling direct AI lab scanning.", "error");
         return;
       }
-      if (endpoint) await AsyncStorage.setItem(LAB_VISION_ENDPOINT_KEY, endpoint);
-      else await AsyncStorage.removeItem(LAB_VISION_ENDPOINT_KEY);
-      if (token) await SecureStore.setItemAsync(LAB_VISION_CLIENT_TOKEN_KEY, token);
-      else await SecureStore.deleteItemAsync(LAB_VISION_CLIENT_TOKEN_KEY);
-      const enabled = aiVisionConsent && !!endpoint && !!token;
+      if (key) await SecureStore.setItemAsync(LAB_VISION_OPENAI_API_KEY_KEY, key);
+      else await SecureStore.deleteItemAsync(LAB_VISION_OPENAI_API_KEY_KEY);
+      const enabled = aiVisionConsent && !!key;
       await AsyncStorage.setItem(LAB_VISION_CONSENT_KEY, enabled ? "true" : "false");
-      setAiVisionEndpoint(endpoint);
+      setAiVisionApiKey(key);
       setAiVisionConsent(enabled);
       toast(enabled
-        ? "OpenAI lab-image scanning enabled. Only locally recognized lab reports may be sent; all results still require admin review."
-        : "OpenAI lab-image scanning settings saved and external image processing disabled.", "success");
+        ? "Direct OpenAI lab scanning enabled on this device. Images are sent only after local OCR detects a likely lab report; all AI rows still require admin review."
+        : "Direct OpenAI lab scanning is disabled. Local OCR remains available.",
+        "success");
     } catch (error: any) {
-      toast(error?.message || "Could not save AI lab-scanning settings securely.", "error");
+      toast(error?.message || "Could not save the OpenAI API key securely on this device.", "error");
     } finally { setAiVisionBusy(false); }
   };
 
@@ -287,14 +283,13 @@ export default function LabTestSettingsScreen() {
       <Pressable disabled={onlineOcrBusy} onPress={saveOnlineOcrSettings} style={styles.action}><Text style={styles.actionText}>{onlineOcrBusy ? "Saving..." : "Save online OCR settings"}</Text></Pressable>
 
       <Text style={styles.section}>OpenAI AI vision for automatic lab scanning</Text>
-      <Text style={styles.help}>Uses the same OpenAI API key stored privately on your backend (OPENAI_API_KEY); do not paste the OpenAI key into this app. Deploy the Ortho Logbook backend over HTTPS, configure LAB_VISION_CLIENT_TOKEN on the server, then enter its /api/lab-vision URL and the matching client token below. When enabled, AI vision runs only on photos that local OCR already identifies as likely lab reports. Images can still contain patient identifiers, so enable this only after your organization approves sending report images to OpenAI. AI suggestions are never saved automatically; an admin must verify every row against the original report. Local OCR remains the fallback.</Text>
-      <View style={styles.field}><Text style={styles.label}>Backend AI-vision HTTPS endpoint</Text><TextInput value={aiVisionEndpoint} onChangeText={setAiVisionEndpoint} placeholder="https://your-server.example/api/lab-vision" placeholderTextColor={colors.muted} autoCapitalize="none" autoCorrect={false} keyboardType="url" style={styles.input}/></View>
-      <View style={styles.field}><Text style={styles.label}>Backend lab-vision client token (not the OpenAI key)</Text><TextInput value={aiVisionClientToken} onChangeText={setAiVisionClientToken} placeholder="Paste LAB_VISION_CLIENT_TOKEN" placeholderTextColor={colors.muted} autoCapitalize="none" autoCorrect={false} secureTextEntry style={styles.input}/></View>
+      <Text style={styles.help}>No Ortho Logbook backend or database is required for this direct mode. Paste an OpenAI API key created in your OpenAI Platform account. The key is stored in this device's secure storage and is not placed in the source code or app backup. Important: OpenAI advises against putting API keys in mobile apps because an extracted key can be misused and create charges. Use a dedicated restricted API project/key with usage limits, only on your own trusted device, and rotate it if the device is lost or the key may be exposed. When enabled, images are sent directly to OpenAI over HTTPS only after local OCR identifies a likely lab report. The image itself may show patient names or MR numbers; enable only if you have permission for external processing. AI suggestions are never saved automatically; an admin must verify every row against the original report. Local OCR remains the fallback.</Text>
+      <View style={styles.field}><Text style={styles.label}>OpenAI API key (stored securely on this device)</Text><TextInput value={aiVisionApiKey} onChangeText={setAiVisionApiKey} placeholder="Paste your OpenAI API key" placeholderTextColor={colors.muted} autoCapitalize="none" autoCorrect={false} secureTextEntry keyboardType="default" style={styles.input}/></View>
       <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.md, paddingVertical: spacing.sm }}>
-        <Text style={[styles.label, { flex: 1 }]}>Allow AI processing of detected lab-report images</Text>
+        <Text style={[styles.label, { flex: 1 }]}>Allow detected lab-report images to be sent directly to OpenAI</Text>
         <Switch value={aiVisionConsent} onValueChange={setAiVisionConsent} trackColor={{ false: colors.border, true: colors.brandPrimary }} thumbColor={aiVisionConsent ? colors.onBrandPrimary : colors.muted} />
       </View>
-      <Pressable disabled={aiVisionBusy} onPress={saveAiVisionSettings} style={styles.action}><Text style={styles.actionText}>{aiVisionBusy ? "Saving..." : "Save OpenAI lab-scanning settings"}</Text></Pressable>
+      <Pressable disabled={aiVisionBusy} onPress={saveAiVisionSettings} style={styles.action}><Text style={styles.actionText}>{aiVisionBusy ? "Saving..." : "Save direct OpenAI lab-scanning settings"}</Text></Pressable>
 
       <Text style={styles.section}>Patient form checkboxes</Text>
       <Text style={styles.help}>Add or edit extra patient checkboxes here. They appear alongside HCV+, HBsAg, HIV, MP ICT and Dengue. Existing standard checkboxes are unchanged.</Text>
