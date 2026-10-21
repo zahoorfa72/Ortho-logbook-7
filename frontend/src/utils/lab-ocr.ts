@@ -1160,7 +1160,7 @@ export async function recognizeLabText(
   if (String(onlineApiKey || "").trim()) {
     try {
       const online = await recognizeOnlineLabText(uri, onlineApiKey);
-      if (online.text.trim()) {
+      if (online.text.trim() && online.blocks.length > 0) {
         const onlineScore = localScore({ text: online.text });
         const localScoreValue = localScore(best);
         const onlineRows = parseLabReportRows(online.text, configuredTests, gender, 10, true).length;
