@@ -588,8 +588,8 @@ export default function Logbook() {
         definition.possibleEffects, definition.seekCare,
       ].some(value => String(value || "").trim())) {
         const adminSummary = [
-          definition.purpose?.trim() ? "WHAT THIS TEST IS\\n" + definition.purpose.trim() : "",
-          "WHAT THE ABNORMAL RESULT MAY MEAN\\n" +
+          definition.purpose?.trim() ? "WHAT THIS TEST IS\n" + definition.purpose.trim() : "",
+          "WHAT THE ABNORMAL RESULT MAY MEAN\n" +
             (abnormalDirection === "LOW"
               ? definition.lowMeaning?.trim() || "The administrator has not documented a low-result interpretation for this test."
               : abnormalDirection === "HIGH"
@@ -597,16 +597,16 @@ export default function Logbook() {
                 : [
                     definition.lowMeaning?.trim() ? "Low: " + definition.lowMeaning.trim() : "",
                     definition.highMeaning?.trim() ? "High: " + definition.highMeaning.trim() : "",
-                  ].filter(Boolean).join("\\n") || "The administrator has not documented a direction-specific interpretation for this test."),
+                  ].filter(Boolean).join("\n") || "The administrator has not documented a direction-specific interpretation for this test."),
           definition.possibleEffects?.trim() ? "Possible effects: " + definition.possibleEffects.trim() : "",
           definition.seekCare?.trim() ? "When medical review may be needed: " + definition.seekCare.trim() : "",
-        ].filter(Boolean).join("\\n\\n");
+        ].filter(Boolean).join("\n\n");
         if (adminSummary.trim()) {
           trustedFetched = {
             title: testName + " — administrator-configured information",
             summary: adminSummary,
             sourceName: definition.sourceName?.trim() || "Administrator-configured lab notes",
-            sourceUrl: /^https:\\/\\//i.test(String(definition.sourceUrl || "")) ? String(definition.sourceUrl) : "",
+            sourceUrl: /^https:\/\//i.test(String(definition.sourceUrl || "")) ? String(definition.sourceUrl) : "",
             fetchedAt: new Date().toISOString(),
             loincCode: "admin-configured",
           };
