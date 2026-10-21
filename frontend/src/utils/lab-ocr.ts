@@ -3,7 +3,7 @@ import { Image } from "react-native";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as FileSystem from "expo-file-system/legacy";
 
-export type LabTestDefinition = { id: string; name: string; maleMin: string; maleMax: string; femaleMin: string; femaleMax: string; unit: string; aliases?: string; category?: string; purpose?: string; lowMeaning?: string; highMeaning?: string; possibleEffects?: string; seekCare?: string; sourceName?: string; sourceUrl?: string };
+export type LabTestDefinition = { id: string; name: string; maleMin: string; maleMax: string; femaleMin: string; femaleMax: string; unit: string; aliases?: string; category?: string; purpose?: string; lowMeaning?: string; highMeaning?: string; possibleEffects?: string; seekCare?: string; sourceName?: string; sourceUrl?: string; onlineMedicalInfo?: import("@/src/utils/medical-test-info").MedicalTestOnlineInfo };
 
 export type ParsedLabRow = {
   test: string;
