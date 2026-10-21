@@ -1,3 +1,4 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { GoogleSignin, statusCodes } from "@react-native-google-signin/google-signin";
 import { NativeModules, Platform } from "react-native";
 import * as FileSystem from "expo-file-system/legacy";
@@ -35,6 +36,7 @@ function isMasterBackupName(name: string): boolean {
 const BACKUP_FOLDER_NAME = "Ortho Logbook Backups";
 const PATIENT_IMAGE_PDF_FOLDER = "Patient Image PDFs";
 const PENDING_PATIENT_PDF_DELETE_KEY = "ortho_pending_patient_pdf_drive_deletes_v1";
+const PATIENT_PDF_LAYOUT_MIGRATION_KEY = "ortho_patient_pdf_layout_migration_v2";
 const DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder";
 const DRIVE_API = "https://www.googleapis.com/drive/v3/files";
 const DRIVE_UPLOAD = "https://www.googleapis.com/upload/drive/v3/files";
@@ -1189,6 +1191,16 @@ export async function deletePatientImagePdfFromDrive(patientId: string): Promise
 
 export async function uploadPatientImageArchivesToDrive(onProgress?: (stage: string) => void, patientIds?: string[]): Promise<void> {
   await processPendingPatientPdfDeletes(onProgress);
+  // Run the layout migration once per installed app data set. The layout
+  // version is part of each archive's sourceStamp, so local photo archives
+  // regenerate and the normal verified upload path updates their existing
+  // Drive PDF instead of creating a duplicate.
+  const layoutMigration = await AsyncStorage.getItem(PATIENT_PDF_LAYOUT_MIGRATION_KEY);
+  if (layoutMigration !== "compact-patient-header-full-page-image-v2") {
+    onProgress?.("Updating existing patient image PDFs to the compact layout…");
+    await archiveEligiblePatientImages(onProgress);
+    await AsyncStorage.setItem(PATIENT_PDF_LAYOUT_MIGRATION_KEY, "compact-patient-header-full-page-image-v2");
+  }
   const allArchives = await getLocalPatientImageArchives();
   const requestedPatientIds = patientIds === undefined ? null : new Set(patientIds.map(String));
   const selectedArchives = requestedPatientIds
