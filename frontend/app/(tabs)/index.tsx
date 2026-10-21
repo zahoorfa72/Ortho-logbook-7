@@ -594,11 +594,17 @@ export default function Logbook() {
       const fetched = fetchedRaw ? {
         ...fetchedRaw,
         // Keep website fallback summaries compact too; do not pad missing evidence with invented claims.
-        summary: /WHAT THIS TEST IS/i.test(fetchedRaw.summary)
+        summary: /WHAT THIS TEST IS/i.test(fetchedRaw.summary) && /WHAT THE ABNORMAL RESULT MAY MEAN/i.test(fetchedRaw.summary)
           ? fetchedRaw.summary.split("\n").map(line => line.length > 180 ? line.slice(0, 177).trimEnd() + "…" : line).slice(0, 10).join("\n")
-          : (fetchedRaw.summary.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [fetchedRaw.summary])
-              .map(line => line.trim()).filter(Boolean).slice(0, 7)
-              .map(line => line.length > 180 ? line.slice(0, 177).trimEnd() + "…" : line).join("\n"),
+          : (() => {
+              const sentences = (fetchedRaw.summary.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [fetchedRaw.summary])
+                .map(line => line.trim()).filter(Boolean);
+              const testDescription = sentences.slice(0, 2).join(" ").slice(0, 360) || fetchedRaw.title;
+              const abnormalDescription = sentences.slice(2, 6).join(" ").slice(0, 650)
+                || "A high or low result can have different causes. This source did not establish a reliable direction-specific explanation; interpretation depends on the lab's reference interval, symptoms, and medical history.";
+              return "WHAT THIS TEST IS\\n" + testDescription +
+                "\\n\\nWHAT THE ABNORMAL RESULT MAY MEAN\\n" + abnormalDescription;
+            })(),
       } : null;
       if (!fetched) {
         setMedicalInfoError(aiLookupError
