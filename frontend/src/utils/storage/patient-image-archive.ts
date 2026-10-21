@@ -262,14 +262,9 @@ export async function archiveEligiblePatientImages(onProgress?: (stage: string) 
     const name = String(patient.name || "Patient");
     const mrNo = String(patient.mr_no || "");
     const existing = archives[id];
-    // Never rewrite an already registered patient PDF automatically. A patient
-    // image can be removed/changed in the record, but the Drive PDF is changed
-    // only after an administrator explicitly approves it inside that patient.
-    // This also prevents unrelated patient edits from triggering PDF rebuilds.
-    if (existing) {
-      const cached = await FileSystem.getInfoAsync(existing.localUri);
-      if (cached.exists && Number(cached.size || 0) > 8) continue;
-    }
+    // Read current image sources before deciding whether this patient's PDF is
+    // unchanged. The old early-continue skipped every existing PDF forever,
+    // so changed patient images were never rebuilt or uploaded.
     // A single legacy patient can have a multi-megabyte base64 photo row.
     // Android CursorWindow cannot always return that row to JavaScript. Never let
     // this optional background PDF archive block the independent data backup.
