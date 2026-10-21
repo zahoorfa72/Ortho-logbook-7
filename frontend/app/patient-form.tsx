@@ -1957,7 +1957,7 @@ export default function PatientForm() {
           </Pressable>
         </View>
         <View style={styles.photoActions}>
-          <PrimaryButton title={"Add from Gallery" + (p.photos.length ? " (+)" : "")} onPress={addFromLibrary} disabled={!imagePickerReady || photoBusy} testID="add-photo-library-button" />
+          <PrimaryButton title={"Add Multiple Images from Gallery" + (p.photos.length ? " (+)" : "")} onPress={addFromLibrary} disabled={!imagePickerReady || photoBusy} testID="add-photo-library-button" />
           <Pressable style={[styles.secondary, photoBusy && { opacity: 0.5 }]} onPress={() => { void scanWithCameraDocuments(); }} disabled={photoBusy || cameraOpen} testID="scan-patient-document-button">
             <Ionicons name="scan-outline" size={18} color={colors.brandPrimary} />
             <Text style={styles.secondaryText}> {photoBusy ? "Starting scanner…" : (p.photos.length ? "Scan Existing Photo" : "Open Document Scanner")}</Text>
