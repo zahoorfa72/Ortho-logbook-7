@@ -341,7 +341,7 @@ export default function Inventory() {
     <View style={styles.container}>
       <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
         <View style={styles.headerTop}>
-          {selectedCategoryId ? <Pressable testID="inventory-category-back" accessibilityLabel="Back to inventory categories" onPress={() => router.replace("/categories" as any)} style={styles.iconBtn}><Ionicons name="arrow-back" size={20} color={colors.brandPrimary} /></Pressable> : null}
+          {selectedCategoryId ? <Pressable testID="inventory-category-back" accessibilityLabel="Back to inventory categories" onPress={() => router.back()} style={styles.iconBtn}><Ionicons name="arrow-back" size={20} color={colors.brandPrimary} /></Pressable> : null}
           <Text style={styles.title}>{selectedCategoryId ? (selectedCategoryName || "Category Inventory") : "Inventory"}</Text>
           {isAdmin && selectMode ? <View style={{flexDirection:"row",alignItems:"center",gap:spacing.xs,marginLeft:spacing.sm}}><Pressable testID="inventory-select-all" onPress={selectAllInventory} style={styles.iconBtn}><Text style={styles.headerActionText}>{selectedIds.length===list.length && list.length ? "Clear" : "All"}</Text></Pressable>{selectedIds.length ? <Pressable testID="inventory-bulk-delete" onPress={deleteSelectedInventory} style={styles.iconBtn}><Ionicons name="trash-outline" size={20} color={colors.error}/></Pressable>:null}</View>:null}
           <View style={{ flexDirection: "row", gap: spacing.sm }}>
