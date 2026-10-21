@@ -5,6 +5,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
 import { triggerAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-backup";
 import { evaluateLabResultForReview, extractLabReportDate, isLikelyLabReportText, parseLabReportRows, recognizeLabText, type LabTestDefinition } from "@/src/utils/lab-ocr";
+import { fetchTrustedMedicalTestInfo, isMedicalTestInfoFresh, LAB_TEST_DEFINITIONS_KEY, MEDICAL_INFO_CACHE_KEY, medicalInfoCacheKey, type MedicalTestOnlineInfo } from "@/src/utils/medical-test-info";
 import {
   ActivityIndicator,
   Image,
@@ -329,6 +330,27 @@ function abnormalLabLabels(patient: Patient, automaticFlags?: string[], includeW
   }
   return labels.slice(0, 20);
 }
+function labTestNameFromDisplayLabel(label: string, definitions: LabTestDefinition[]): string {
+  const body = String(label || "")
+    .replace(/^(?:WARNING|ALERT|HIGH|LOW|OLD RESULT)\s*:\s*/i, "")
+    .replace(/^\[MANUAL\]\s*/i, "")
+    .replace(/\s·\s*DATE:\s*.+$/i, "")
+    .replace(/\s*\(Ref\s*[^)]*\).*$/i, "")
+    .replace(/\s*\|\s*Ref\s*:.+$/i, "")
+    .trim();
+  const aliases = definitions.flatMap(definition => [
+    { definition, alias: String(definition.name || "").trim() },
+    ...String(definition.aliases || "").split(/[,;\n]+/).map(alias => ({ definition, alias: alias.trim() })),
+  ]).filter(item => item.alias.length > 1).sort((a, b) => b.alias.length - a.alias.length);
+  for (const item of aliases) {
+    const escaped = item.alias.replace(/[.*+?^${}()|[\]\\]/g, "\\function labTestBranch(label: string, definitions: Array<{ name: string; aliases?: string; category?: string }>): string {");
+    if (new RegExp("^" + escaped + "(?=$|[\\s:|•-])", "i").test(body)) return item.definition.name;
+  }
+  const resultStart = body.search(/\s+[-+]?\d|\s+(?:positive|negative|reactive|nonreactive|non-reactive|detected|not\s+detected)\b/i);
+  const candidate = (resultStart > 0 ? body.slice(0, resultStart) : body).trim().replace(/^[\s:|•-]+|[\s:|•-]+$/g, "");
+  return candidate.length > 1 && candidate.length <= 80 ? candidate : "";
+}
+
 function labTestBranch(label: string, definitions: Array<{ name: string; aliases?: string; category?: string }>): string {
   const core = String(label || "").replace(/^(?:WARNING|ALERT|HIGH|LOW)\s*:\s*/i, "").replace(/^\[MANUAL\]\s*/i, "");
   const resultMatch = core.match(/[-+]?\d+(?:[.,]\d+)?/);
@@ -380,7 +402,11 @@ export default function Logbook() {
   const [labWarningThresholdPercent, setLabWarningThresholdPercent] = useState(10);
   const [labResultsHiddenByPatient, setLabResultsHiddenByPatient] = useState<Record<string, boolean>>({});
   const [labBranchesExpandedByPatient, setLabBranchesExpandedByPatient] = useState<Record<string, boolean>>({});
-  const [configuredLabTestDefinitions, setConfiguredLabTestDefinitions] = useState<Array<{ name: string; aliases?: string; category?: string }>>([]);
+  const [configuredLabTestDefinitions, setConfiguredLabTestDefinitions] = useState<LabTestDefinition[]>([]);
+  const [activeMedicalTest, setActiveMedicalTest] = useState<{ testName: string; label: string; definition?: LabTestDefinition } | null>(null);
+  const [medicalInfoCache, setMedicalInfoCache] = useState<Record<string, MedicalTestOnlineInfo>>({});
+  const [medicalInfoBusy, setMedicalInfoBusy] = useState(false);
+  const [medicalInfoError, setMedicalInfoError] = useState("");
   const [oldLabResultDays, setOldLabResultDays] = useState(10);
   const [labDateEditorOpenByPatient, setLabDateEditorOpenByPatient] = useState<Record<string, boolean>>({});
   const [labDateInputsByPatient, setLabDateInputsByPatient] = useState<Record<string, string>>({});
@@ -452,6 +478,7 @@ export default function Logbook() {
     AsyncStorage.getItem("ortho_lab_warning_threshold_percent_v1").then(raw => { const value = Number(raw); if (raw && Number.isInteger(value) && value >= 1 && value <= 100) setLabWarningThresholdPercent(value); }).catch(() => {});
     AsyncStorage.getItem("ortho_lab_results_hidden_by_patient_v1").then(raw => { if (raw) { try { const parsed = JSON.parse(raw); if (parsed && typeof parsed === "object") setLabResultsHiddenByPatient(parsed); } catch {} } }).catch(() => {});
     AsyncStorage.getItem("ortho_lab_old_result_days_v1").then(raw => { const value = Number(raw); if (raw && Number.isInteger(value) && value >= 1 && value <= 3650) setOldLabResultDays(value); }).catch(() => {});
+    AsyncStorage.getItem(MEDICAL_INFO_CACHE_KEY).then(raw => { if (raw) { try { const parsed = JSON.parse(raw); if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) setMedicalInfoCache(parsed); } catch {} } }).catch(() => {});
     AsyncStorage.getItem("ortho_lab_ocr_patient_cache_v7").then(raw => {
       if (!raw) return;
       try {
@@ -485,6 +512,68 @@ export default function Logbook() {
     }).catch(() => {});
     return () => { cancelled = true; };
   }, []));
+
+  const loadMedicalInfoForResult = async (testName: string, definition?: LabTestDefinition) => {
+    const key = medicalInfoCacheKey(testName);
+    const existing = definition?.onlineMedicalInfo || medicalInfoCache[key];
+    if (isMedicalTestInfoFresh(existing)) return;
+    setMedicalInfoBusy(true);
+    setMedicalInfoError("");
+    try {
+      // Only the identified test label/aliases are sent to the public medical
+      // terminology service. Patient details, values, photos and ranges are not.
+      const fetched = await fetchTrustedMedicalTestInfo(testName, definition?.aliases || "");
+      if (!fetched) {
+        setMedicalInfoError("No verified MedlinePlus explanation was found for this test. The app will not show an unrelated result.");
+        return;
+      }
+      let nextCache: Record<string, MedicalTestOnlineInfo> = {};
+      try {
+        const raw = await AsyncStorage.getItem(MEDICAL_INFO_CACHE_KEY);
+        const parsed = raw ? JSON.parse(raw) : {};
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) nextCache = parsed;
+      } catch {}
+      nextCache[key] = fetched;
+      await AsyncStorage.setItem(MEDICAL_INFO_CACHE_KEY, JSON.stringify(nextCache));
+      setMedicalInfoCache(nextCache);
+
+      // Save the fetched summary with the admin's test definition for backup,
+      // while retaining every hand-written explanation field unchanged.
+      if (definition?.id) {
+        let stored: LabTestDefinition[] = [];
+        try {
+          const raw = await AsyncStorage.getItem(LAB_TEST_DEFINITIONS_KEY);
+          const parsed = raw ? JSON.parse(raw) : [];
+          if (Array.isArray(parsed)) stored = parsed;
+        } catch {}
+        if (stored.some(test => test.id === definition.id)) {
+          const updated = stored.map(test => test.id === definition.id ? { ...test, onlineMedicalInfo: fetched } : test);
+          await AsyncStorage.setItem(LAB_TEST_DEFINITIONS_KEY, JSON.stringify(updated));
+          setConfiguredLabTestDefinitions(updated);
+          triggerAutomaticDriveBackup("appSettings");
+          setActiveMedicalTest(current => current?.testName === testName ? { ...current, definition: updated.find(test => test.id === definition.id) } : current);
+        }
+      } else {
+        setActiveMedicalTest(current => current?.testName === testName ? { ...current, definition: current.definition } : current);
+      }
+    } catch {
+      setMedicalInfoError("Could not reach MedlinePlus now. Check the internet and retry. Previously cached information remains available offline.");
+    } finally {
+      setMedicalInfoBusy(false);
+    }
+  };
+
+  const openMedicalInfoForResult = (label: string) => {
+    const testName = labTestNameFromDisplayLabel(label, configuredLabTestDefinitions);
+    const definition = configuredLabTestDefinitions.find(item => item.name.trim().toLowerCase() === testName.trim().toLowerCase());
+    setActiveMedicalTest({ testName, label, definition });
+    setMedicalInfoError("");
+    if (!testName) {
+      setMedicalInfoError("The test name could not be identified confidently from this result. An administrator can add the printed label as an alias in Lab Test Reference Ranges.");
+      return;
+    }
+    void loadMedicalInfoForResult(testName, definition);
+  };
 
   // Re-evaluate the daily backup reminder whenever the Logbook tab regains focus.
   useFocusEffect(
@@ -1821,7 +1910,9 @@ export default function Logbook() {
                         const labelTone = oldResult ? (colors.error || "#B91C1C") : warning ? (colors.warning || "#B7791F") : (colors.error || "#B91C1C");
                         const cleaned = cleanLabDisplayLabel(label);
                         const compactLabel = cleaned.visible.length > 92 ? cleaned.visible.slice(0, 89) + "…" : cleaned.visible;
-                        return <Text key={label + index} numberOfLines={2} style={{ color: labelTone, fontFamily: fontFamily.semibold, fontSize: 10, lineHeight: 13, flexShrink: 1 }}>{compactLabel}{cleaned.date ? " · " + cleaned.date : ""}</Text>;
+                        return <Pressable key={label + index} accessibilityRole="button" accessibilityLabel={"Show medical information for " + (labTestNameFromDisplayLabel(label, configuredLabTestDefinitions) || "this lab test")} onPress={event => { event.stopPropagation(); openMedicalInfoForResult(label); }} style={{ paddingVertical: 2 }}>
+                          <Text numberOfLines={2} style={{ color: labelTone, fontFamily: fontFamily.semibold, fontSize: 10, lineHeight: 13, flexShrink: 1, textDecorationLine: "underline" }}>{compactLabel}{cleaned.date ? " · " + cleaned.date : ""}  ⓘ</Text>
+                        </Pressable>;
                       };
                       return <View style={{ marginTop: 3, gap: 5 }}>
                         {[...groups.entries()].map(([branch, labels]) => {
@@ -1870,6 +1961,54 @@ export default function Logbook() {
       >
         <Ionicons name="add" size={30} color={colors.onBrandPrimary} />
       </Pressable>
+
+      <Modal visible={!!activeMedicalTest} transparent animationType="slide" onRequestClose={() => setActiveMedicalTest(null)}>
+        <View style={{ flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(15,23,42,0.48)" }}>
+          <View style={{ maxHeight: "82%", backgroundColor: colors.surface, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, padding: spacing.lg, paddingBottom: insets.bottom + spacing.lg }}>
+            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.md, marginBottom: spacing.md }}>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: colors.onSurface, fontFamily: fontFamily.bold, fontSize: fontSize.lg }}>Medical information</Text>
+                <Text style={{ color: colors.muted, fontSize: fontSize.sm, marginTop: 3 }}>{activeMedicalTest?.testName || "Lab test"}</Text>
+              </View>
+              <Pressable onPress={() => setActiveMedicalTest(null)} accessibilityLabel="Close medical information" style={{ padding: spacing.xs }}><Ionicons name="close" size={24} color={colors.onSurface}/></Pressable>
+            </View>
+            <ScrollView keyboardShouldPersistTaps="handled">
+              <Text style={{ color: colors.onSurfaceSecondary, fontSize: fontSize.sm }}>{activeMedicalTest?.label ? cleanLabDisplayLabel(activeMedicalTest.label).visible : ""}</Text>
+              {activeMedicalTest?.definition?.purpose?.trim() ? <>
+                <Text style={{ color: colors.onSurface, fontFamily: fontFamily.semibold, marginTop: spacing.md }}>What this test measures</Text>
+                <Text style={{ color: colors.onSurface, lineHeight: 20 }}>{activeMedicalTest.definition.purpose}</Text>
+              </> : null}
+              {(() => {
+                const key = medicalInfoCacheKey(activeMedicalTest?.testName || "");
+                const info = activeMedicalTest?.definition?.onlineMedicalInfo || medicalInfoCache[key];
+                return info?.summary ? <>
+                  <Text style={{ color: colors.onSurface, fontFamily: fontFamily.semibold, marginTop: spacing.md }}>{activeMedicalTest?.definition?.purpose?.trim() ? "Additional trusted-source summary" : info.title}</Text>
+                  <Text style={{ color: colors.onSurface, lineHeight: 20, marginTop: spacing.xs }}>{info.summary}</Text>
+                  <Text style={{ color: colors.muted, fontSize: fontSize.xs, marginTop: spacing.sm }}>Source: {info.sourceName} · Last checked {new Date(info.fetchedAt).toLocaleDateString()} · Cached for offline use</Text>
+                </> : medicalInfoBusy ? <View style={{ paddingVertical: spacing.lg, flexDirection: "row", alignItems: "center", gap: spacing.sm }}><ActivityIndicator size="small" color={colors.brandPrimary}/><Text style={{ color: colors.onSurfaceSecondary, flex: 1 }}>Searching a trusted medical source…</Text></View> : medicalInfoError ? <Text style={{ color: colors.onSurfaceSecondary, marginTop: spacing.md, lineHeight: 20 }}>{medicalInfoError}</Text> : <Text style={{ color: colors.onSurfaceSecondary, marginTop: spacing.md }}>No online information is cached for this test yet.</Text>;
+              })()}
+              {activeMedicalTest?.definition?.lowMeaning?.trim() ? <>
+                <Text style={{ color: colors.onSurface, fontFamily: fontFamily.semibold, marginTop: spacing.md }}>What a low result may mean</Text>
+                <Text style={{ color: colors.onSurface, lineHeight: 20 }}>{activeMedicalTest.definition.lowMeaning}</Text>
+              </> : null}
+              {activeMedicalTest?.definition?.highMeaning?.trim() ? <>
+                <Text style={{ color: colors.onSurface, fontFamily: fontFamily.semibold, marginTop: spacing.md }}>What a high result may mean</Text>
+                <Text style={{ color: colors.onSurface, lineHeight: 20 }}>{activeMedicalTest.definition.highMeaning}</Text>
+              </> : null}
+              {activeMedicalTest?.definition?.possibleEffects?.trim() ? <>
+                <Text style={{ color: colors.onSurface, fontFamily: fontFamily.semibold, marginTop: spacing.md }}>Possible effects on the body</Text>
+                <Text style={{ color: colors.onSurface, lineHeight: 20 }}>{activeMedicalTest.definition.possibleEffects}</Text>
+              </> : null}
+              {activeMedicalTest?.definition?.seekCare?.trim() ? <>
+                <Text style={{ color: colors.onSurface, fontFamily: fontFamily.semibold, marginTop: spacing.md }}>When medical review may be needed</Text>
+                <Text style={{ color: colors.onSurface, lineHeight: 20 }}>{activeMedicalTest.definition.seekCare}</Text>
+              </> : null}
+              {medicalInfoError ? <Pressable onPress={() => activeMedicalTest?.testName && void loadMedicalInfoForResult(activeMedicalTest.testName, activeMedicalTest.definition)} style={{ alignSelf: "flex-start", marginTop: spacing.md, paddingVertical: spacing.sm, paddingHorizontal: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md }}><Text style={{ color: colors.brandPrimary, fontFamily: fontFamily.semibold }}>Retry online lookup</Text></Pressable> : null}
+              <Text style={{ color: colors.muted, fontSize: fontSize.xs, lineHeight: 16, marginTop: spacing.lg }}>Educational information only. A result outside its reference range is not a diagnosis. Interpretation depends on the lab's range, units, symptoms, and clinical context. Test details remain inside Ortho Logbook.</Text>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
 
       <Modal visible={!!activeLabReview} transparent animationType="slide" onRequestClose={() => setActiveLabReviewPatientId(null)}>
         <View style={styles.pdfModalOverlay}>
