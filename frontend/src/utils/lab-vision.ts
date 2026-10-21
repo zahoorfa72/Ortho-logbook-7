@@ -72,7 +72,7 @@ export async function requestLabVisionCandidates(args: {
   const metadata = {
     schema: "ortho-logbook-lab-vision-v1",
     configuredTests: args.configuredTests.map(test => ({
-      name: clean(test.name), aliases: clean(test.aliases).split(/[,;\\n]+/).map(clean).filter(Boolean),
+      name: clean(test.name), aliases: clean(test.aliases).split(/[,;\n]+/).map(clean).filter(Boolean),
       unit: clean(test.unit), branch: clean(test.category),
     })).filter(test => test.name).slice(0, 250),
     matchedTemplate: template ? { name: template.name, markers: template.markers, columnHints: template.columnHints || [] } : null,
@@ -95,7 +95,7 @@ export async function requestLabVisionCandidates(args: {
           : extension.endsWith(".gif") ? "image/gif"
           : "image/jpeg";
         const contentType = clean(file.type).toLowerCase().startsWith("image/") ? clean(file.type).toLowerCase() : inferredType;
-        if (!/^image\\/(jpeg|png|webp|gif)$/.test(contentType)) {
+        if (!/^image\/(jpeg|png|webp|gif)$/.test(contentType)) {
           return { candidates: [], template, error: "This image format is not supported for direct AI scanning. Local OCR remains available." };
         }
         const base64 = await file.base64();
@@ -107,7 +107,7 @@ export async function requestLabVisionCandidates(args: {
           "Confidence is visual certainty from 0 to 1, not clinical certainty. Do not include patient identifiers, dates of birth, names, MR numbers, diagnoses, or other demographics in the output.",
           "Configured test names and aliases for normalization only: " + JSON.stringify(metadata.configuredTests),
           "Matched layout hints (not medical ranges): " + JSON.stringify(metadata.matchedTemplate),
-        ].join("\\n");
+        ].join("\n");
         response = await fetch("https://api.openai.com/v1/chat/completions", {
           method: "POST",
           headers: { Accept: "application/json", "Content-Type": "application/json", Authorization: "Bearer " + apiKey },
