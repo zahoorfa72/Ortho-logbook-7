@@ -1,4 +1,6 @@
 import { Redirect, Tabs } from "expo-router";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@/src/api/client";
 import { NativeTabs } from "expo-router/unstable-native-tabs";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { Platform } from "react-native";
@@ -10,6 +12,12 @@ import { fontFamily, useTheme } from "@/src/theme";
 export default function TabsLayout() {
   const { user, initializing } = useAuth();
   const { colors } = useTheme();
+  const { data: patients = [] } = useQuery<Array<{ procedure?: string }>>({
+    queryKey: ["patients"],
+    queryFn: () => api.get("/patients"),
+  });
+  // A blank first procedure means it needs review; the optional second procedure is not required.
+  const hasMissingProcedure = patients.some((patient) => !String(patient.procedure || "").trim());
 
   if (!initializing && !user) return <Redirect href="/login" />;
 
@@ -35,6 +43,7 @@ export default function TabsLayout() {
         <NativeTabs.Trigger name="procedure-check">
           <NativeTabs.Trigger.Icon sf="checklist" />
           <NativeTabs.Trigger.Label>Procedure Check</NativeTabs.Trigger.Label>
+          {hasMissingProcedure ? <NativeTabs.Trigger.Badge>•</NativeTabs.Trigger.Badge> : null}
         </NativeTabs.Trigger>
         <NativeTabs.Trigger name="stats">
           <NativeTabs.Trigger.Icon sf="chart.bar.fill" />
@@ -103,6 +112,8 @@ export default function TabsLayout() {
         name="procedure-check"
         options={{
           title: "Procedure Check",
+          tabBarBadge: hasMissingProcedure ? " " : undefined,
+          tabBarBadgeStyle: hasMissingProcedure ? { backgroundColor: "#DC2626", color: "#DC2626", minWidth: 8, height: 8, borderRadius: 4, padding: 0, fontSize: 0, lineHeight: 8 } : undefined,
           tabBarIcon: ({ color, size, focused }) => (
             <Ionicons name={focused ? "clipboard" : "clipboard-outline"} size={size} color={color} />
           ),
