@@ -4,6 +4,7 @@ import { useCallback, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Share,
   FlatList,
   Modal,
   Pressable,
@@ -250,6 +251,36 @@ export default function Inventory() {
     else doNewLowExport();
   }, [doNewLowExport]);
 
+  const shareLowStockText = useCallback(async () => {
+    const items = (data || []).filter(item => item.quantity <= item.minimumStock);
+    if (!items.length) {
+      toast("No low-stock items to share.", "info");
+      return;
+    }
+    // Use explicit labeled rows rather than a whitespace-dependent table so
+    // WhatsApp and other messaging apps keep each field paired with its value.
+    const lines = [
+      "LOW STOCK REPORT",
+      "Items at or below minimum stock: " + items.length,
+      "",
+      ...items.map((item, index) => [
+        (index + 1) + ". " + String(item.name || "Unnamed item"),
+        "   Category: " + (item.category || "—"),
+        "   Size: " + (item.size || "—"),
+        "   Current stock: " + String(item.quantity) + (item.unit ? " " + item.unit : ""),
+        "   Minimum stock: " + String(item.minimumStock) + (item.unit ? " " + item.unit : ""),
+        "   Shortage: " + String(Math.max(0, item.minimumStock - item.quantity)) + (item.unit ? " " + item.unit : ""),
+        "   Status: " + (item.quantity <= 0 ? "OUT OF STOCK" : "LOW STOCK"),
+        ""
+      ].join("\\n"))
+    ];
+    try {
+      await Share.share({ title: "Low Stock Report", message: lines.join("\\n") });
+    } catch (e: any) {
+      toast(e?.message || "Could not open the share menu.", "error");
+    }
+  }, [data, toast]);
+
   const doExport = useCallback(async () => {
     const items = data || [];
     if (!items.length) {
@@ -280,6 +311,16 @@ export default function Inventory() {
           <Text style={styles.title}>Inventory</Text>
           {isAdmin && selectMode ? <View style={{flexDirection:"row",alignItems:"center",gap:spacing.xs,marginLeft:spacing.sm}}><Pressable testID="inventory-select-all" onPress={selectAllInventory} style={styles.iconBtn}><Text style={styles.headerActionText}>{selectedIds.length===list.length && list.length ? "Clear" : "All"}</Text></Pressable>{selectedIds.length ? <Pressable testID="inventory-bulk-delete" onPress={deleteSelectedInventory} style={styles.iconBtn}><Ionicons name="trash-outline" size={20} color={colors.error}/></Pressable>:null}</View>:null}
           <View style={{ flexDirection: "row", gap: spacing.sm }}>
+            {isAdmin ? (
+              <Pressable
+                testID="inventory-share-low-stock-text"
+                accessibilityLabel="Share low-stock report as text"
+                onPress={shareLowStockText}
+                style={styles.iconBtn}
+              >
+                <Ionicons name="chatbox-ellipses-outline" size={20} color={colors.brandPrimary} />
+              </Pressable>
+            ) : null}
             {isAdmin ? (
               <Pressable
                 testID="inventory-export-pdf"
