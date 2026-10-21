@@ -962,10 +962,11 @@ export default function Logbook() {
             let aiVisionUsed = false;
             // Send an image to the AI provider only after local OCR has identified a likely lab report,
             // and only when the admin explicitly enabled this feature in Lab Test Reference Ranges.
-            if (isReport && aiVisionSettings?.consent && aiVisionSettings.endpoint && aiVisionSettings.clientToken) {
+            if (isReport && aiVisionSettings?.consent && (aiVisionSettings.apiKey || (aiVisionSettings.endpoint && aiVisionSettings.clientToken))) {
               try {
                 const vision = await requestLabVisionCandidates({
                   uri,
+                  apiKey: aiVisionSettings.apiKey,
                   endpoint: aiVisionSettings.endpoint,
                   clientToken: aiVisionSettings.clientToken,
                   configuredTests,
