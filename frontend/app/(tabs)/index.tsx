@@ -250,7 +250,7 @@ function oldLabResultLabels(patient: Patient, days: number): string[] {
   return [...staleByTestResult.values()].slice(0, 20);
 }
 
-function abnormalLabLabels(patient: Patient, automaticFlags?: string[], includeWarnings = true, warningPercent = 10): string[] {
+function abnormalLabLabels(patient: Patient, automaticFlags?: string[], includeWarnings = true, warningPercent = 10, configuredTests: LabTestDefinition[] = [], gender = ""): string[] {
   const cachedFlags = Array.isArray(automaticFlags) ? automaticFlags : [];
   const persistedFlags = String(patient.customData?.labOcrPossibleFlags || "").split(/\r?\n/).map(value => value.trim()).filter((date): date is string => typeof date === "string" && date.length > 0);
   const canonicalFindingKey = (value: string) => value
@@ -260,6 +260,27 @@ function abnormalLabLabels(patient: Patient, automaticFlags?: string[], includeW
     .replace(/\s+/g, " ").trim().toLowerCase();
   const uniqueAutomatic = new Map<string, string>();
   for (const value of [...cachedFlags, ...persistedFlags]) {
+    const key = canonicalFindingKey(value);
+    if (key && !uniqueAutomatic.has(key)) uniqueAutomatic.set(key, value);
+  }
+  let detectedRows: any[] = [];
+  try {
+    const parsed = patient.customData?.labOcrDetectedResults ? JSON.parse(patient.customData.labOcrDetectedResults) : [];
+    if (Array.isArray(parsed)) detectedRows = parsed;
+  } catch {}
+  // Rebuild missing/stale flag lines from saved extracted rows using the current
+  // administrator ranges (including M/F ranges), so mild warnings survive older
+  // backup formats that stored detected rows but not the separate flag string.
+  for (const row of detectedRows) {
+    if (!row || !String(row.test || "").trim() || !String(row.result ?? "").trim()) continue;
+    const evaluated = evaluateLabResultForReview(String(row.test), String(row.result), configuredTests, gender, warningPercent);
+    const severity = evaluated.severity || (row.severity === "WARNING" || row.severity === "ALERT" ? row.severity : "");
+    if (!severity || (severity === "WARNING" && !includeWarnings)) continue;
+    const ref = evaluated.reference || String(row.reference || "");
+    const date = String(row.date || row.reportDate || "");
+    const value = severity + ": " + String(row.test).trim() + " " + String(row.result).trim()
+      + (row.unit || evaluated.unit ? " " + String(row.unit || evaluated.unit).trim() : "")
+      + (date ? " | Date: " + date : "") + " | Ref: " + ref;
     const key = canonicalFindingKey(value);
     if (key && !uniqueAutomatic.has(key)) uniqueAutomatic.set(key, value);
   }
@@ -320,11 +341,15 @@ function abnormalLabLabels(patient: Patient, automaticFlags?: string[], includeW
       const deviation = Math.abs(value - boundary) / Math.max(Math.abs(boundary), 0.000001) * 100;
       if (deviation > 1) severity = deviation <= Math.max(1, Math.min(100, warningPercent)) ? "WARNING" : "ALERT";
     }
+    // Prefer a fresh calculation against the saved admin range for this patient's
+    // sex. This avoids losing mild warnings when older manual rows lack min/max.
+    const evaluated = evaluateLabResultForReview(String(item.test), String(item.result), configuredTests, gender, warningPercent);
+    if (evaluated.reference) severity = evaluated.severity || "";
     if (!severity || (severity === "WARNING" && !includeWarnings)) continue;
     const resultStatus = severity;
     const label = resultStatus + ": [MANUAL] " + String(item.test).trim() + " " + String(item.result).trim()
-      + (item.unit ? " " + String(item.unit).trim() : "")
-      + (item.reference ? " (Ref " + String(item.reference).trim() + ")" : "")
+      + (item.unit || evaluated.unit ? " " + String(item.unit || evaluated.unit).trim() : "")
+      + ((evaluated.reference || item.reference) ? " (Ref " + String(evaluated.reference || item.reference).trim() + ")" : "")
       + " · DATE: " + String(item.date || item.reportDate || "Date not entered").trim();
     if (!labels.includes(label)) labels.push(label);
   }
@@ -1772,7 +1797,7 @@ export default function Logbook() {
                 </View>
               ) : null}
               {(() => {
-                const labLabels = abnormalLabLabels(item, labFlagsByPatient[item.id]?.flags, labWarningsEnabled, labWarningThresholdPercent);
+                const labLabels = abnormalLabLabels(item, labFlagsByPatient[item.id]?.flags, labWarningsEnabled, labWarningThresholdPercent, configuredLabTestDefinitions, String(item.gender || ""));
                 const oldResultLabels = oldLabResultLabels(item, oldLabResultDays);
                 const persistedReportDate = String(item.customData?.labOcrReportDate || "").trim();
                 const persistedScanAt = String(item.customData?.labOcrDetectedAt || "").trim();
@@ -1918,7 +1943,7 @@ export default function Logbook() {
                       return <View style={{ marginTop: 3, gap: 5 }}>
                         {[...groups.entries()].map(([branch, labels]) => {
                           const branchKey = item.id + "::" + branch;
-                          const branchExpanded = labBranchesExpandedByPatient[branchKey] === true;
+                          const branchExpanded = labBranchesExpandedByPatient[branchKey] ?? labels.some(label => label.startsWith("WARNING:"));
                           return <View key={branch} style={{ borderWidth: 1, borderColor: colors.border, borderRadius: 5, overflow: "hidden" }}>
                             <Pressable onPress={event => { event.stopPropagation(); setLabBranchesExpandedByPatient(previous => ({ ...previous, [branchKey]: !previous[branchKey] })); }} accessibilityRole="button" accessibilityLabel={(branchExpanded ? "Collapse " : "Expand ") + branch + " abnormal lab results"} style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 7, paddingVertical: 5, backgroundColor: colors.surface }}>
                               <Text style={{ color: colors.error || "#B91C1C", fontFamily: fontFamily.semibold, fontSize: 10, flex: 1 }}>{branch} · {labels.length} out of range</Text>
