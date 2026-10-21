@@ -210,7 +210,7 @@ export default function LabTestSettingsScreen() {
       setAiVisionApiKey(key);
       setAiVisionConsent(enabled);
       toast(enabled
-        ? "Direct OpenAI lab scanning enabled on this device. Images are sent only after local OCR detects a likely lab report; all AI rows still require admin review."
+        ? "Shared OpenAI features enabled on this device. Lab images are sent only after local OCR detects a likely lab report; AI scan rows still require admin review. Short abnormal-result explanations use cited trusted medical sources."
         : "Direct OpenAI lab scanning is disabled. Local OCR remains available.",
         "success");
     } catch (error: any) {
@@ -283,13 +283,13 @@ export default function LabTestSettingsScreen() {
       <Pressable disabled={onlineOcrBusy} onPress={saveOnlineOcrSettings} style={styles.action}><Text style={styles.actionText}>{onlineOcrBusy ? "Saving..." : "Save online OCR settings"}</Text></Pressable>
 
       <Text style={styles.section}>OpenAI AI vision for automatic lab scanning</Text>
-      <Text style={styles.help}>No Ortho Logbook backend or database is required for this direct mode. Paste an OpenAI API key created in your OpenAI Platform account. The key is stored in this device's secure storage and is not placed in the source code or app backup. Important: OpenAI advises against putting API keys in mobile apps because an extracted key can be misused and create charges. Use a dedicated restricted API project/key with usage limits, only on your own trusted device, and rotate it if the device is lost or the key may be exposed. When enabled, images are sent directly to OpenAI over HTTPS only after local OCR identifies a likely lab report. The image itself may show patient names or MR numbers; enable only if you have permission for external processing. AI suggestions are never saved automatically; an admin must verify every row against the original report. Local OCR remains the fallback.</Text>
-      <View style={styles.field}><Text style={styles.label}>OpenAI API key (stored securely on this device)</Text><TextInput value={aiVisionApiKey} onChangeText={setAiVisionApiKey} placeholder="Paste your OpenAI API key" placeholderTextColor={colors.muted} autoCapitalize="none" autoCorrect={false} secureTextEntry keyboardType="default" style={styles.input}/></View>
+      <Text style={styles.help}>One OpenAI API key powers both direct AI lab scanning and short AI-assisted explanations for abnormal lab results. No Ortho Logbook backend or database is required for these direct features. Paste an OpenAI API key created in your OpenAI Platform account. The key is stored in this device's secure storage and is not placed in the source code or app backup. Important: OpenAI advises against putting API keys in mobile apps because an extracted key can be misused and create charges. Use a dedicated restricted API project/key with usage limits, only on your own trusted device, and rotate it if the device is lost or the key may be exposed. When enabled, images are sent directly to OpenAI over HTTPS only after local OCR identifies a likely lab report. The image itself may show patient names or MR numbers; enable only if you have permission for external processing. AI suggestions are never saved automatically; an admin must verify every row against the original report. Local OCR remains the fallback.</Text>
+      <View style={styles.field}><Text style={styles.label}>Shared OpenAI API key (lab scanning + abnormal-result information)</Text><TextInput value={aiVisionApiKey} onChangeText={setAiVisionApiKey} placeholder="Paste your OpenAI API key" placeholderTextColor={colors.muted} autoCapitalize="none" autoCorrect={false} secureTextEntry keyboardType="default" style={styles.input}/></View>
       <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.md, paddingVertical: spacing.sm }}>
         <Text style={[styles.label, { flex: 1 }]}>Allow detected lab-report images to be sent directly to OpenAI</Text>
         <Switch value={aiVisionConsent} onValueChange={setAiVisionConsent} trackColor={{ false: colors.border, true: colors.brandPrimary }} thumbColor={aiVisionConsent ? colors.onBrandPrimary : colors.muted} />
       </View>
-      <Pressable disabled={aiVisionBusy} onPress={saveAiVisionSettings} style={styles.action}><Text style={styles.actionText}>{aiVisionBusy ? "Saving..." : "Save direct OpenAI lab-scanning settings"}</Text></Pressable>
+      <Pressable disabled={aiVisionBusy} onPress={saveAiVisionSettings} style={styles.action}><Text style={styles.actionText}>{aiVisionBusy ? "Saving..." : "Save shared OpenAI API settings"}</Text></Pressable>
 
       <Text style={styles.section}>Patient form checkboxes</Text>
       <Text style={styles.help}>Add or edit extra patient checkboxes here. They appear alongside HCV+, HBsAg, HIV, MP ICT and Dengue. Existing standard checkboxes are unchanged.</Text>
