@@ -1456,7 +1456,8 @@ export async function restoreBackup(backup:BackupData){
   for(const i of inventory){
     const categoryName=restoreText(i.category);
     const categoryKey=categoryName.toLowerCase();
-    let cid=categoryIdsBySourceId.get(String(i.category_id||""))||categoryIds.get(categoryKey)||null;
+    // Prefer the portable category name over a source-phone ID that may point to another category after restore.
+    let cid=categoryIds.get(categoryKey)||categoryIdsBySourceId.get(String(i.category_id||""))||null;
     if(!cid && categoryName){
       // Older backups may omit the category table or contain stale IDs. Reuse
       // the existing category by name before creating a new one.
