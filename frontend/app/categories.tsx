@@ -92,7 +92,7 @@ export default function InventoryCategories() {
     <View style={styles.container}>
       <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
         <View style={styles.headerTop}>
-          <Pressable testID="categories-back" onPress={() => router.replace("/(tabs)/inventory" as any)} style={styles.iconBtn}>
+          <Pressable testID="categories-back" onPress={() => router.replace({ pathname: "/(tabs)/inventory", params: { categoryId: "", categoryName: "" } } as any)} style={styles.iconBtn}>
             <Ionicons name="arrow-back" size={21} color={colors.onSurface} />
           </Pressable>
           <View style={{ flex: 1 }}>
