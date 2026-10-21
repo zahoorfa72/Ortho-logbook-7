@@ -365,7 +365,7 @@ async function fetchTrustedWebSearch(testName: string, labels: string[]): Promis
   const response = await fetch(url, { headers: { Accept: "application/rss+xml, application/xml, text/xml" } });
   if (!response.ok) return null;
   const xml = await response.text();
-  const items = xml.match(/<item\\b[^>]*>[\\s\\S]*?<\\/item>/gi) || [];
+  const items = xml.match(/<item\b[^>]*>[\s\S]*?<\/item>/gi) || [];
   const candidates: Array<{ article: Omit<MedicalTestOnlineInfo, "fetchedAt" | "loincCode">; score: number }> = [];
   for (const item of items) {
     const title = xmlTag(item, "title");
@@ -415,7 +415,7 @@ async function fetchPubMedSummary(testName: string, labels: string[]): Promise<O
   const title = cleanText(best.title);
   // Prefer the actual Abstract section so author, journal and PMID metadata are
   // not accidentally presented as clinical content.
-  const abstractSection = /(?:^|\\n)Abstract\\s*\\n([\\s\\S]*?)(?=\\n(?:Publication types|MeSH Terms|Grant Support|Conflict of interest statement|Copyright|PMID:)|$)/i.exec(rawAbstractText)?.[1] || "";
+  const abstractSection = /(?:^|\n)Abstract\s*\n([\s\S]*?)(?=\n(?:Publication types|MeSH Terms|Grant Support|Conflict of interest statement|Copyright|PMID:)|$)/i.exec(rawAbstractText)?.[1] || "";
   let abstract = cleanText(abstractSection);
   if (!abstract) {
     const plain = cleanText(rawAbstractText);
