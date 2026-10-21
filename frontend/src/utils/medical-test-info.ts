@@ -545,11 +545,6 @@ export async function fetchTrustedMedicalTestInfo(testName: string, aliases = ""
   } catch {
     // Continue to the curated fallback before slower secondary search services.
   }
-  // Do not make a user wait on multiple external search providers for common tests.
-  // These short notes link to their corresponding MedlinePlus patient-information page.
-  const curated = getCuratedMedicalInfo(testName, aliases);
-  if (curated) return curated;
-
   try {
     const article = await fetchPubMedSummary(testName, labels);
     if (article) {
