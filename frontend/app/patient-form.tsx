@@ -142,6 +142,7 @@ export default function PatientForm() {
   const [labOcrFindings, setLabOcrFindings] = useState<string[]>([]);
   const [labManualReviews, setLabManualReviews] = useState<Array<{ test: string; unit: string; result: string; reference: string; photoUri: string; reportDate?: string; min?: number; max?: number; source?: string; confidence?: number }>>([]);
   const [labTestTemplates, setLabTestTemplates] = useState<import("@/src/utils/lab-ocr").LabTestDefinition[]>([]);
+  const [expandedMedicalTestId, setExpandedMedicalTestId] = useState("");
   const [labDetailsExpanded, setLabDetailsExpanded] = useState(false);
   const [labFindingsExpanded, setLabFindingsExpanded] = useState(false);
   const pinchScale = useRef(new Animated.Value(1)).current;
@@ -2284,9 +2285,28 @@ export default function PatientForm() {
           </View> : null}
           {savedManualLabResults.length ? <View style={{ marginTop: spacing.md }}>
             <Text style={styles.label}>Saved results</Text>
-            {savedManualLabResults.map((item: any, index: number) => <Text key={String(item.test) + "-" + index} style={{ color: colors.onSurface, fontSize: fontSize.sm, marginTop: spacing.xs }}>
-              {String(item.test || "Test")}: {String(item.result || "")}{item.unit ? " " + String(item.unit) : ""}{item.date ? " · " + String(item.date) : item.reportDate ? " · " + String(item.reportDate) : ""}{item.severity ? " · " + String(item.severity) : ""}
-            </Text>)}
+            {savedManualLabResults.map((item: any, index: number) => {
+              const testName = String(item.test || "Test");
+              const definition = labTestTemplates.find(template => [template.name, ...(template.aliases || "").split(/[,;\\n]+/)].some(label => label.trim().toLocaleLowerCase() === testName.trim().toLocaleLowerCase()));
+              const detailKey = "saved-" + testName + "-" + index;
+              const expanded = expandedMedicalTestId === detailKey;
+              return <View key={detailKey} style={{ marginTop: spacing.xs, borderTopWidth: 1, borderColor: colors.border, paddingTop: spacing.xs }}>
+                <Pressable accessibilityRole="button" onPress={() => setExpandedMedicalTestId(expanded ? "" : detailKey)} style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.sm, paddingVertical: spacing.xs }}>
+                  <Text style={{ color: colors.onSurface, fontSize: fontSize.sm, flex: 1 }}>{testName}: {String(item.result || "")}{item.unit ? " " + String(item.unit) : ""}{item.date ? " · " + String(item.date) : item.reportDate ? " · " + String(item.reportDate) : ""}{item.severity ? " · " + String(item.severity) : ""}</Text>
+                  <Ionicons name={expanded ? "chevron-up" : "information-circle-outline"} size={20} color={colors.brandPrimary}/>
+                </Pressable>
+                {expanded ? <View style={{ marginTop: spacing.xs, padding: spacing.sm, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, backgroundColor: colors.surfaceSecondary }}>
+                  <Text style={[styles.label, { marginTop: 0 }]}>About this test</Text>
+                  <Text style={{ color: colors.onSurface, fontSize: fontSize.sm }}>{definition?.purpose?.trim() || "No medical explanation has been saved for this test yet. An administrator can add one in Settings → Lab Test Reference Ranges."}</Text>
+                  {definition?.lowMeaning?.trim() ? <><Text style={[styles.label, { marginTop: spacing.sm }]}>What a low result may mean</Text><Text style={{ color: colors.onSurface, fontSize: fontSize.sm }}>{definition.lowMeaning}</Text></> : null}
+                  {definition?.highMeaning?.trim() ? <><Text style={[styles.label, { marginTop: spacing.sm }]}>What a high result may mean</Text><Text style={{ color: colors.onSurface, fontSize: fontSize.sm }}>{definition.highMeaning}</Text></> : null}
+                  {definition?.possibleEffects?.trim() ? <><Text style={[styles.label, { marginTop: spacing.sm }]}>Possible effects on the body</Text><Text style={{ color: colors.onSurface, fontSize: fontSize.sm }}>{definition.possibleEffects}</Text></> : null}
+                  {definition?.seekCare?.trim() ? <><Text style={[styles.label, { marginTop: spacing.sm }]}>When to seek medical review</Text><Text style={{ color: colors.onSurface, fontSize: fontSize.sm }}>{definition.seekCare}</Text></> : null}
+                  <Text style={{ color: colors.onSurfaceSecondary, fontSize: fontSize.xs, marginTop: spacing.sm }}>Educational information only. Results must be interpreted with symptoms and clinical context.</Text>
+                  {definition?.sourceUrl?.trim() && /^https:\/\//i.test(definition.sourceUrl.trim()) ? <Pressable onPress={() => Linking.openURL(definition.sourceUrl!.trim()).catch(() => toast("Could not open the medical source link.", "error"))} style={{ marginTop: spacing.sm }}><Text style={{ color: colors.brandPrimary, textDecorationLine: "underline", fontFamily: fontFamily.semibold, fontSize: fontSize.sm }}>Source: {definition.sourceName?.trim() || "Medical reference"} · Open source ↗</Text></Pressable> : <Text style={{ color: colors.onSurfaceSecondary, fontSize: fontSize.xs, marginTop: spacing.sm }}>No trusted source link saved for this test.</Text>}
+                </View> : null}
+              </View>;
+            })}
           </View> : null}
           </View> : null}
         </View>
