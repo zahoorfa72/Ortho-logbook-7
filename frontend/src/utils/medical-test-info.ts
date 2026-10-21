@@ -333,6 +333,58 @@ async function fetchMedlinePlusByLoinc(code: string, label: string): Promise<Omi
 
 type PubMedSummary = { uid?: string; title?: string; fulljournalname?: string; pubdate?: string };
 
+const TRUSTED_MEDICAL_DOMAINS = [
+  "testing.com", "nhs.uk", "mayoclinic.org", "clevelandclinic.org",
+  "cdc.gov", "who.int", "fda.gov", "labcorp.com", "mountsinai.org",
+  "msdmanuals.com", "cancer.gov", "kidney.org", "heart.org",
+  "med.umich.edu", "ucsfhealth.org", "health.harvard.edu",
+];
+
+function isTrustedMedicalUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && TRUSTED_MEDICAL_DOMAINS.some(domain =>
+      url.hostname === domain || url.hostname.endsWith("." + domain)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function xmlTag(value: string, name: string): string {
+  const match = new RegExp("<" + name + "\\b[^>]*>([\\s\\S]*?)</" + name + ">", "i").exec(value);
+  return match ? cleanText(match[1]) : "";
+}
+
+async function fetchTrustedWebSearch(testName: string, labels: string[]): Promise<Omit<MedicalTestOnlineInfo, "fetchedAt" | "loincCode"> | null> {
+  // Search the wider web but accept only a controlled allowlist of health agencies,
+  // major clinical institutions, medical laboratories and professional organizations.
+  const domains = TRUSTED_MEDICAL_DOMAINS.map(domain => "site:" + domain).join(" OR ");
+  const query = `(${domains}) "${testName}" laboratory test`;
+  const url = "https://www.bing.com/search?format=rss&count=12&q=" + encodeURIComponent(query);
+  const response = await fetch(url, { headers: { Accept: "application/rss+xml, application/xml, text/xml" } });
+  if (!response.ok) return null;
+  const xml = await response.text();
+  const items = xml.match(/<item\\b[^>]*>[\\s\\S]*?<\\/item>/gi) || [];
+  const candidates: Array<{ article: Omit<MedicalTestOnlineInfo, "fetchedAt" | "loincCode">; score: number }> = [];
+  for (const item of items) {
+    const title = xmlTag(item, "title");
+    const sourceUrl = decodeEntities(xmlTag(item, "link")).trim();
+    const summary = xmlTag(item, "description");
+    if (!title || !summary || !isTrustedMedicalUrl(sourceUrl)) continue;
+    const score = relevanceScore(labels, title);
+    if (score < 0.42 || summary.length < 45) continue;
+    let sourceName = "Trusted medical institution";
+    try { sourceName = new URL(sourceUrl).hostname.replace(/^www\\./i, ""); } catch {}
+    candidates.push({
+      article: { title, summary: summary.slice(0, 1200), sourceName, sourceUrl },
+      score,
+    });
+  }
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates[0]?.article || null;
+}
+
 async function fetchPubMedSummary(testName: string, labels: string[]): Promise<Omit<MedicalTestOnlineInfo, "fetchedAt" | "loincCode"> | null> {
   // NCBI's public E-utilities search peer-reviewed biomedical literature.
   // It is a second source, not a replacement for a clinically matched patient-facing
@@ -423,7 +475,15 @@ export async function fetchTrustedMedicalTestInfo(testName: string, aliases = ""
       return { ...article, fetchedAt: new Date().toISOString(), loincCode: "pubmed-search" };
     }
   } catch {
-    // Network or service failure: do not fabricate a summary.
+    // Continue to the allowlisted medical-site search.
+  }
+  try {
+    const article = await fetchTrustedWebSearch(testName, labels);
+    if (article) {
+      return { ...article, fetchedAt: new Date().toISOString(), loincCode: "trusted-web-search" };
+    }
+  } catch {
+    // Network, search-provider, or site failure: never invent medical information.
   }
   return null;
 }
