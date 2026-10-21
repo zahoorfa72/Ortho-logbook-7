@@ -550,7 +550,7 @@ export default function Logbook() {
       // terminology service. Patient details, values, photos and ranges are not.
       const fetched = await fetchTrustedMedicalTestInfo(testName, definition?.aliases || "");
       if (!fetched) {
-        setMedicalInfoError("No verified MedlinePlus explanation was found for this test. The app will not show an unrelated result.");
+        setMedicalInfoError("No relevant explanation was found in the trusted medical sources checked (MedlinePlus and PubMed). The app will not show an unrelated result.");
         return;
       }
       let nextCache: Record<string, MedicalTestOnlineInfo> = {};
@@ -583,7 +583,7 @@ export default function Logbook() {
         setActiveMedicalTest(current => current?.testName === testName ? { ...current, definition: current.definition } : current);
       }
     } catch {
-      setMedicalInfoError("Could not reach MedlinePlus now. Check the internet and retry. Previously cached information remains available offline.");
+      setMedicalInfoError("Could not reach the trusted medical information services. Check the internet and retry. Previously cached information remains available offline.");
     } finally {
       setMedicalInfoBusy(false);
     }
@@ -2011,7 +2011,7 @@ export default function Logbook() {
                   <Text style={{ color: colors.onSurface, fontFamily: fontFamily.semibold, marginTop: spacing.md }}>{activeMedicalTest?.definition?.purpose?.trim() ? "Additional trusted-source summary" : info.title}</Text>
                   <Text style={{ color: colors.onSurface, lineHeight: 20, marginTop: spacing.xs }}>{info.summary}</Text>
                   <Text style={{ color: colors.muted, fontSize: fontSize.xs, marginTop: spacing.sm }}>Source: {info.sourceName} · Last checked {new Date(info.fetchedAt).toLocaleDateString()} · Cached for offline use</Text>
-                </> : medicalInfoBusy ? <View style={{ paddingVertical: spacing.lg, flexDirection: "row", alignItems: "center", gap: spacing.sm }}><ActivityIndicator size="small" color={colors.brandPrimary}/><Text style={{ color: colors.onSurfaceSecondary, flex: 1 }}>Searching a trusted medical source…</Text></View> : medicalInfoError ? <Text style={{ color: colors.onSurfaceSecondary, marginTop: spacing.md, lineHeight: 20 }}>{medicalInfoError}</Text> : <Text style={{ color: colors.onSurfaceSecondary, marginTop: spacing.md }}>No online information is cached for this test yet.</Text>;
+                </> : medicalInfoBusy ? <View style={{ paddingVertical: spacing.lg, flexDirection: "row", alignItems: "center", gap: spacing.sm }}><ActivityIndicator size="small" color={colors.brandPrimary}/><Text style={{ color: colors.onSurfaceSecondary, flex: 1 }}>Searching trusted medical sources…</Text></View> : medicalInfoError ? <Text style={{ color: colors.onSurfaceSecondary, marginTop: spacing.md, lineHeight: 20 }}>{medicalInfoError}</Text> : <Text style={{ color: colors.onSurfaceSecondary, marginTop: spacing.md }}>No online information is cached for this test yet.</Text>;
               })()}
               {activeMedicalTest?.definition?.lowMeaning?.trim() ? <>
                 <Text style={{ color: colors.onSurface, fontFamily: fontFamily.semibold, marginTop: spacing.md }}>What a low result may mean</Text>
