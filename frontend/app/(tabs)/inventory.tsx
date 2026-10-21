@@ -56,6 +56,7 @@ export default function Inventory() {
   const isAdmin = user?.role === "admin";
   const params = useLocalSearchParams<{ categoryId?: string; categoryName?: string }>();
   const selectedCategoryId = typeof params.categoryId === "string" ? params.categoryId : "";
+  const selectedCategoryName = typeof params.categoryName === "string" ? params.categoryName.trim() : "";
 
   const [tab, setTab] = useState("All");
   const [editItem, setEditItem] = useState<InventoryItem | null>(null);
@@ -281,6 +282,34 @@ export default function Inventory() {
     }
   }, [data, toast]);
 
+  const shareCategoryText = useCallback(async () => {
+    const items = data || [];
+    if (!selectedCategoryId || !items.length) {
+      toast(items.length ? "Open a category first to share its inventory." : "This category has no inventory items to share.", "info");
+      return;
+    }
+    const title = selectedCategoryName || items[0]?.category || "Category Inventory";
+    const lines = [
+      "INVENTORY CATEGORY: " + title,
+      "Total items / sizes: " + items.length,
+      "",
+      ...items.map((item, index) => [
+        (index + 1) + ". " + String(item.name || "Unnamed item"),
+        "   Category: " + (item.category || title),
+        "   Size / holes: " + (item.size || "—"),
+        "   Available stock: " + String(item.quantity) + (item.unit ? " " + item.unit : ""),
+        "   Minimum stock: " + String(item.minimumStock) + (item.unit ? " " + item.unit : ""),
+        "   Status: " + (item.quantity <= 0 ? "OUT OF STOCK" : item.quantity <= item.minimumStock ? "LOW STOCK" : "IN STOCK"),
+        ""
+      ].join("\n"))
+    ];
+    try {
+      await Share.share({ title: "Inventory — " + title, message: lines.join("\n") });
+    } catch (e: any) {
+      toast(e?.message || "Could not open the share menu.", "error");
+    }
+  }, [data, selectedCategoryId, selectedCategoryName, toast]);
+
   const doExport = useCallback(async () => {
     const items = data || [];
     if (!items.length) {
@@ -289,14 +318,18 @@ export default function Inventory() {
     }
     setExporting(true);
     try {
-      const html = buildInventoryHtml(branding, items, tab === "Low Stock");
-      await generateAndSharePdf(html, tab === "Low Stock" ? "Low Stock Report" : "Inventory");
+      const categoryTitle = selectedCategoryId ? (selectedCategoryName || items[0]?.category || "Category Inventory") : "";
+      const reportTitle = selectedCategoryId
+        ? (tab === "Low Stock" ? "Low Stock — " + categoryTitle : "Inventory — " + categoryTitle)
+        : (tab === "Low Stock" ? "Low Stock Report" : "Inventory");
+      const html = buildInventoryHtml(branding, items, tab === "Low Stock", reportTitle);
+      await generateAndSharePdf(html, reportTitle);
     } catch (e: any) {
       toast(e?.message || "Could not create PDF.", "error");
     } finally {
       setExporting(false);
     }
-  }, [branding, data, tab, toast]);
+  }, [branding, data, tab, toast, selectedCategoryId, selectedCategoryName]);
 
   const requestExport = useCallback(async () => {
     setPinExportMode("inventory");
@@ -319,6 +352,16 @@ export default function Inventory() {
                 style={styles.iconBtn}
               >
                 <Ionicons name="chatbox-ellipses-outline" size={20} color={colors.brandPrimary} />
+              </Pressable>
+            ) : null}
+            {isAdmin && selectedCategoryId ? (
+              <Pressable
+                testID="inventory-share-category-text"
+                accessibilityLabel="Share this category inventory as text"
+                onPress={shareCategoryText}
+                style={styles.iconBtn}
+              >
+                <Ionicons name="share-social-outline" size={20} color={colors.brandPrimary} />
               </Pressable>
             ) : null}
             {isAdmin ? (

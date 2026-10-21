@@ -1436,26 +1436,37 @@ export async function restoreBackup(backup:BackupData){
     db.runSync("INSERT OR REPLACE INTO patient_custom_fields (id,key,label,type,sort_order,enabled,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)",[restoreRowId(f.id,"custom-field",usedCustomFieldIds),key,restoreText(f.label,"Custom field"),type,Math.trunc(restoreReal(f.sort_order,0)),restoreReal(f.enabled,1,0)>0?1:0,createdAt,updatedAt]);
   }
   const categoryIds=new Map<string,string>();
+  const categoryIdsBySourceId=new Map<string,string>();
   const usedCategoryIds=new Set<string>();
-  const usedCategoryNames=new Set<string>();
   for(const c of inventoryCategories){
     const name=restoreText(c.name,"Unnamed category");
     const nameKey=name.toLowerCase();
-    if(usedCategoryNames.has(nameKey)) continue;
-    usedCategoryNames.add(nameKey);
-    const cid=restoreRowId(c.id,"category",usedCategoryIds);
-    db.runSync("INSERT INTO inventory_categories (id,name,created_at) VALUES (?,?,?)",[cid,name,restoreText(c.created_at,new Date().toISOString())]);
-    categoryIds.set(nameKey,cid);
+    // Category IDs may be regenerated during restore. Keep both the original
+    // ID mapping and the case-insensitive name mapping for every source row.
+    let cid=categoryIds.get(nameKey);
+    if(!cid){
+      cid=restoreRowId(c.id,"category",usedCategoryIds);
+      db.runSync("INSERT INTO inventory_categories (id,name,created_at) VALUES (?,?,?)",[cid,name,restoreText(c.created_at,new Date().toISOString())]);
+      categoryIds.set(nameKey,cid);
+    }
+    if(c.id!==undefined && c.id!==null && String(c.id)) categoryIdsBySourceId.set(String(c.id),cid);
   }
   const usedInventoryIds=new Set<string>();
   const inventoryIdMap=new Map<string,string>();
   for(const i of inventory){
-    let cid=i.category_id||categoryIds.get(String(i.category||"").toLowerCase())||null;
-    if(!cid && i.category){
-      cid=Math.random().toString(36).slice(2)+Date.now().toString(36);
-      const autoCategoryName=restoreText(i.category,"Uncategorized");
-      db.runSync("INSERT INTO inventory_categories (id,name,created_at) VALUES (?,?,?)",[cid,autoCategoryName,new Date().toISOString()]);
-      categoryIds.set(autoCategoryName.toLowerCase(),cid);
+    const categoryName=restoreText(i.category);
+    const categoryKey=categoryName.toLowerCase();
+    let cid=categoryIdsBySourceId.get(String(i.category_id||""))||categoryIds.get(categoryKey)||null;
+    if(!cid && categoryName){
+      // Older backups may omit the category table or contain stale IDs. Reuse
+      // the existing category by name before creating a new one.
+      const existingCategory=db.getFirstSync<any>("SELECT id FROM inventory_categories WHERE LOWER(TRIM(name))=LOWER(?) LIMIT 1",[categoryName]);
+      cid=existingCategory?.id||null;
+      if(!cid){
+        cid=Math.random().toString(36).slice(2)+Date.now().toString(36);
+        db.runSync("INSERT INTO inventory_categories (id,name,created_at) VALUES (?,?,?)",[cid,categoryName,new Date().toISOString()]);
+      }
+      categoryIds.set(categoryKey,cid);
     }
     const restoredInventoryId=restoreRowId(i.id,"inventory",usedInventoryIds);
     if(i.id) inventoryIdMap.set(String(i.id),restoredInventoryId);
@@ -1619,13 +1630,17 @@ export async function mergeBackup(backup: BackupData) {
    try { db.runSync("INSERT INTO procedures (id,name) VALUES (?,?)", [p.id, p.name]); stats.procedures++; } catch {}
   }
   const categoryIds = new Map<string,string>();
+  const categoryIdsBySourceId = new Map<string,string>();
   for (const c of backup.inventoryCategories || []) {
-   const existing = db.getFirstSync<any>("SELECT id FROM inventory_categories WHERE LOWER(name)=LOWER(?) LIMIT 1", [c.name]);
-   const cid = existing?.id || String(c.id);
+   const categoryName = restoreText(c.name, "Unnamed category");
+   const nameKey = categoryName.toLowerCase();
+   const existing = db.getFirstSync<any>("SELECT id FROM inventory_categories WHERE LOWER(TRIM(name))=LOWER(?) LIMIT 1", [categoryName]);
+   const cid = existing?.id || String(c.id || (Math.random().toString(36).slice(2)+Date.now().toString(36)));
    if (!existing) {
-    db.runSync("INSERT INTO inventory_categories (id,name,created_at) VALUES (?,?,?)", [cid,c.name,c.created_at||new Date().toISOString()]);
+    db.runSync("INSERT INTO inventory_categories (id,name,created_at) VALUES (?,?,?)", [cid,categoryName,c.created_at||new Date().toISOString()]);
    }
-   categoryIds.set(String(c.name||"").toLowerCase(), cid);
+   categoryIds.set(nameKey, cid);
+   if(c.id!==undefined && c.id!==null && String(c.id)) categoryIdsBySourceId.set(String(c.id), cid);
   }
   // Preserve admin-defined patient fields during merge, using their stable key
   // to avoid creating duplicates when the same backup is imported repeatedly.
@@ -1649,12 +1664,23 @@ export async function mergeBackup(backup: BackupData) {
    // imported from this backup/source and must be skipped.
    if (sourceId && has("inventory", sourceId)) continue;
 
-   const categoryName = String(i.category||"").trim();
-   let categoryId = i.category_id || categoryIds.get(categoryName.toLowerCase()) || null;
+   let categoryName = String(i.category||"").trim();
+   const categoryKey = categoryName.toLowerCase();
+   // Never write a backup's category_id directly: it may belong to another
+   // phone/database. Resolve it through the source-ID map or category name.
+   let categoryId = categoryIds.get(categoryKey) || categoryIdsBySourceId.get(String(i.category_id||"")) || null;
+   if (!categoryId && i.category_id) {
+    const localCategory = db.getFirstSync<any>("SELECT id,name FROM inventory_categories WHERE id=? LIMIT 1", [String(i.category_id)]);
+    if(localCategory){ categoryId=String(localCategory.id); if(!categoryName) categoryName=String(localCategory.name||"").trim(); }
+   }
    if (!categoryId && categoryName) {
-    categoryId = Math.random().toString(36).slice(2)+Date.now().toString(36);
-    db.runSync("INSERT INTO inventory_categories (id,name,created_at) VALUES (?,?,?)",[categoryId,categoryName,new Date().toISOString()]);
-    categoryIds.set(categoryName.toLowerCase(),categoryId);
+    const existingCategory = db.getFirstSync<any>("SELECT id FROM inventory_categories WHERE LOWER(TRIM(name))=LOWER(?) LIMIT 1", [categoryName]);
+    categoryId = existingCategory?.id || null;
+    if (!categoryId) {
+     categoryId = Math.random().toString(36).slice(2)+Date.now().toString(36);
+     db.runSync("INSERT INTO inventory_categories (id,name,created_at) VALUES (?,?,?)",[categoryId,categoryName,new Date().toISOString()]);
+    }
+    categoryIds.set(categoryKey,categoryId);
    }
 
    // A merge restore must never add the same stock quantity a second time.
