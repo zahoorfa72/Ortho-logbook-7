@@ -575,9 +575,11 @@ export default function Logbook() {
       const fetched = fetchedRaw ? {
         ...fetchedRaw,
         // Keep website fallback summaries compact too; do not pad missing evidence with invented claims.
-        summary: (fetchedRaw.summary.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [fetchedRaw.summary])
-          .map(line => line.trim()).filter(Boolean).slice(0, 7)
-          .map(line => line.length > 180 ? line.slice(0, 177).trimEnd() + "…" : line).join("\n"),
+        summary: /WHAT THIS TEST IS/i.test(fetchedRaw.summary)
+          ? fetchedRaw.summary.split("\n").map(line => line.length > 180 ? line.slice(0, 177).trimEnd() + "…" : line).slice(0, 10).join("\n")
+          : (fetchedRaw.summary.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [fetchedRaw.summary])
+              .map(line => line.trim()).filter(Boolean).slice(0, 7)
+              .map(line => line.length > 180 ? line.slice(0, 177).trimEnd() + "…" : line).join("\n"),
       } : null;
       if (!fetched) {
         setMedicalInfoError(aiLookupError
