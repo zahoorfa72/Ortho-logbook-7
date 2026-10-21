@@ -282,6 +282,45 @@ function parseMedlinePlusEntry(xml: string): Omit<MedicalTestOnlineInfo, "fetche
   return null;
 }
 
+
+function contentTag(document: string, contentName: string): string {
+  const expression = new RegExp("<content\\b(?=[^>]*\\bname\\s*=\\s*[\"']" + contentName + "[\"'])[^>]*>([\\s\\S]*?)<\\/content>", "i");
+  const match = expression.exec(document);
+  return match ? cleanText(match[1]) : "";
+}
+
+function parseMedlinePlusSearch(xml: string, requestedLabels: string[]): Omit<MedicalTestOnlineInfo, "fetchedAt" | "loincCode"> | null {
+  const documents = xml.match(/<document\b[^>]*>[\s\S]*?<\/document>/gi) || [];
+  const candidates: Array<{ article: Omit<MedicalTestOnlineInfo, "fetchedAt" | "loincCode">; score: number }> = [];
+  for (const document of documents) {
+    const urlMatch = /\burl\s*=\s*["']([^"']+)["']/i.exec(document);
+    const sourceUrl = urlMatch ? decodeEntities(urlMatch[1]) : "";
+    // Only use a real MedlinePlus lab-test page; reject general pages that merely
+    // happen to mention a similar word, to avoid attaching unrelated information.
+    if (!/^https:\/\/medlineplus\.gov\/lab-tests\/[a-z0-9-]+\/?$/i.test(sourceUrl)) continue;
+    const title = contentTag(document, "title");
+    const summary = contentTag(document, "snippet") || contentTag(document, "full-summary") || contentTag(document, "description");
+    if (!title || summary.length < 35) continue;
+    const score = relevanceScore(requestedLabels, title);
+    if (score < 0.42) continue;
+    candidates.push({
+      article: { title, summary: summary.slice(0, 1100), sourceName: "MedlinePlus", sourceUrl },
+      score,
+    });
+  }
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates[0]?.article || null;
+}
+
+async function fetchMedlinePlusSearch(testName: string, labels: string[]): Promise<Omit<MedicalTestOnlineInfo, "fetchedAt" | "loincCode"> | null> {
+  const query = [testName, "lab test"].filter(Boolean).join(" ");
+  const url = "https://wsearch.nlm.nih.gov/ws/query?db=healthTopics&term=" +
+    encodeURIComponent(query) + "&rettype=brief&retmax=8";
+  const response = await fetch(url, { headers: { Accept: "application/xml, text/xml" } });
+  if (!response.ok) return null;
+  return parseMedlinePlusSearch(await response.text(), labels);
+}
+
 async function fetchMedlinePlusByLoinc(code: string, label: string): Promise<Omit<MedicalTestOnlineInfo, "fetchedAt" | "loincCode"> | null> {
   const url = "https://connect.medlineplus.gov/service?mainSearchCriteria.v.cs=2.16.840.1.113883.6.1" +
     "&mainSearchCriteria.v.c=" + encodeURIComponent(code) +
@@ -313,8 +352,22 @@ export async function fetchTrustedMedicalTestInfo(testName: string, aliases = ""
         loincCode: candidate.code,
       };
     } catch {
-      // A transient failure or missing official match leaves the information unset.
+      // A transient failure or missing official match falls through to search.
     }
+  }
+  // LOINC coverage is not complete for every hospital label. Search MedlinePlus'
+  // own health-topic index as a fallback and only accept matching lab-test pages.
+  try {
+    const article = await fetchMedlinePlusSearch(testName, labels);
+    if (article) {
+      return {
+        ...article,
+        fetchedAt: new Date().toISOString(),
+        loincCode: "search",
+      };
+    }
+  } catch {
+    // Leave the result unavailable rather than inventing an explanation.
   }
   return null;
 }
