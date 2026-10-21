@@ -28,6 +28,7 @@ export type LabTestDefinition = {
   seekCare?: string;
   sourceName?: string;
   sourceUrl?: string;
+  onlineMedicalInfo?: import("@/src/utils/medical-test-info").MedicalTestOnlineInfo;
 };
 
 const STORAGE_KEY = "ortho_lab_test_definitions_v1";
@@ -300,7 +301,7 @@ export default function LabTestSettingsScreen() {
       <View style={styles.two}>{field("From (minimum)", "femaleMin", "11")}{field("To (maximum)", "femaleMax", "15")}</View>
       {field("Unit", "unit", "g/dL")}
       <Text style={styles.section}>Medical information and trusted source</Text>
-      <Text style={styles.help}>Add a short evidence-based explanation of the test, possible meanings of low/high results, possible effects when supported by evidence, and when medical review may be needed. These are educational notes, not a diagnosis. Use a trusted source such as MedlinePlus or NHS.</Text>
+      <Text style={styles.help}>You do not need to enter a website or fill these fields to get information. When a patient lab result is tapped, Ortho Logbook automatically looks up a matching test in the National Library of Medicine's MedlinePlus service and saves it for offline viewing. These optional fields let an administrator correct or add test-specific explanations; administrator-written text is never overwritten by the online lookup.</Text>
       {field("What the test measures", "purpose", "What does this test measure?")}
       {field("What a low result may mean", "lowMeaning", "Possible causes or associations")}
       {field("What a high result may mean", "highMeaning", "Possible causes or associations")}
