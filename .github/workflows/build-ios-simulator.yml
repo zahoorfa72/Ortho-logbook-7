@@ -12,6 +12,10 @@ concurrency:
   group: build-ios-simulator-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  EXPO_PUBLIC_MEDICAL_INFO_API_URL: ${{ secrets.MEDICAL_INFO_API_URL }}
+  EXPO_PUBLIC_MEDICAL_INFO_CLIENT_TOKEN: ${{ secrets.MEDICAL_INFO_CLIENT_TOKEN }}
+
 jobs:
   build:
     name: Build unsigned iOS Simulator app

@@ -14,6 +14,7 @@ export type MedicalTestOnlineInfo = {
   sourceUrl: string;
   fetchedAt: string;
   loincCode: string;
+  sources?: Array<{ title: string; url: string }>;
 };
 
 type KnownLoinc = { code: string; labels: string[] };

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, File, Form, Header, HTTPException, UploadFile
+from fastapi import FastAPI, APIRouter, File, Form, Header, HTTPException, Request, UploadFile
 import asyncio
 import base64
 import hmac
@@ -151,6 +151,124 @@ async def lab_vision(file: UploadFile = File(...), metadata: str = Form("{}"), a
     except Exception:
         logger.warning("Lab vision provider request failed (details intentionally omitted).")
         raise HTTPException(status_code=502, detail="AI-vision provider unavailable; use offline OCR or retry later.")
+
+
+# AI-assisted medical-test information. Only a generic test name and aliases are accepted.
+class MedicalTestInfoRequest(BaseModel):
+    test_name: str = Field(min_length=2, max_length=120)
+    aliases: str = Field(default="", max_length=300)
+
+    class Config:
+        extra = "forbid"
+
+
+MEDICAL_INFO_TRUSTED_DOMAINS = (
+    "pubmed.ncbi.nlm.nih.gov", "medlineplus.gov", "nih.gov", "ncbi.nlm.nih.gov",
+    "nhs.uk", "mayoclinic.org", "clevelandclinic.org", "testing.com",
+    "cdc.gov", "who.int", "fda.gov", "labcorp.com", "msdmanuals.com",
+    "mountsinai.org", "cancer.gov", "kidney.org", "heart.org",
+    "med.umich.edu", "ucsfhealth.org", "health.harvard.edu",
+)
+_medical_info_rate_windows = {}
+
+
+def _trusted_medical_source(url: str) -> bool:
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    return parsed.scheme == "https" and any(
+        host == domain or host.endswith("." + domain)
+        for domain in MEDICAL_INFO_TRUSTED_DOMAINS
+    )
+
+
+def _openai_medical_test_info(test_name: str, aliases: str) -> dict:
+    import requests
+    api_key = (os.environ.get("OPENAI_API_KEY") or os.environ.get("LAB_MEDICAL_INFO_API_KEY") or "").strip()
+    if not api_key:
+        raise RuntimeError("Medical information AI provider is not configured")
+    model = os.environ.get("LAB_MEDICAL_INFO_MODEL", "gpt-4o-mini").strip()
+    prompt = (
+        "Give a concise, evidence-based educational overview of the laboratory test named below. "
+        "Use web search and cite sources. Explain what it measures, common reasons for ordering it, "
+        "what high or low results can generally be associated with, important limitations/confounders, "
+        "and when a clinician should review the result. Do not diagnose any person, recommend treatment, "
+        "invent ranges or thresholds, or claim a result is abnormal without a supplied lab-specific range. "
+        "Distinguish established facts from uncertainty. Prefer official health agencies, major hospital "
+        "clinical references, recognized laboratory references, and PubMed/NCBI literature. If evidence is "
+        "insufficient or the exact test is ambiguous, say so. The only user-supplied data is the generic test "
+        "name and optional aliases; do not ask for or infer patient information. Return plain text with short "
+        "headings, and do not fabricate references.\nTest name: "
+        + test_name.strip()
+        + "\nAliases: "
+        + aliases.strip()
+    )
+    response = requests.post(
+        "https://api.openai.com/v1/responses",
+        headers={"Authorization": "Bearer " + api_key, "Content-Type": "application/json"},
+        json={"model": model, "tools": [{"type": "web_search"}], "input": prompt, "max_output_tokens": 1200},
+        timeout=45,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    output_parts = []
+    sources = []
+    seen_urls = set()
+    for output in payload.get("output", []):
+        if not isinstance(output, dict):
+            continue
+        for item in output.get("content", []) or []:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") in ("output_text", "text") and isinstance(item.get("text"), str):
+                output_parts.append(item["text"])
+            for annotation in item.get("annotations", []) or []:
+                if not isinstance(annotation, dict) or annotation.get("type") != "url_citation":
+                    continue
+                url = str(annotation.get("url") or "").strip()
+                title = str(annotation.get("title") or "").strip()[:180]
+                if url and url not in seen_urls and _trusted_medical_source(url):
+                    seen_urls.add(url)
+                    sources.append({"title": title or url, "url": url})
+    summary = "\n".join(output_parts).strip()
+    if len(summary) < 80 or not sources:
+        raise RuntimeError("AI response lacked a sufficiently supported summary and trusted citations")
+    return {
+        "title": test_name.strip() + " — medical overview",
+        "summary": summary[:5000],
+        "sourceName": "OpenAI-assisted summary with web citations",
+        "sourceUrl": sources[0]["url"],
+        "sources": sources[:8],
+        "fetchedAt": datetime.utcnow().isoformat() + "Z",
+        "loincCode": "openai-web-search",
+    }
+
+
+@api_router.post("/medical-test-info")
+async def medical_test_info(
+    input: MedicalTestInfoRequest,
+    request: Request,
+    authorization: str | None = Header(default=None),
+):
+    if os.environ.get("LAB_MEDICAL_INFO_ENABLE_EXTERNAL_PROCESSING", "").strip().lower() != "true":
+        raise HTTPException(status_code=503, detail="Medical AI lookup is disabled by the server administrator.")
+    expected_token = os.environ.get("LAB_MEDICAL_INFO_CLIENT_TOKEN", "").strip()
+    supplied_token = (authorization or "").removeprefix("Bearer ").strip()
+    if not expected_token or not supplied_token or not hmac.compare_digest(expected_token, supplied_token):
+        raise HTTPException(status_code=401, detail="Invalid medical-information client token.")
+    now = datetime.utcnow().timestamp()
+    client_ip = request.client.host if request.client else "unknown"
+    recent = [stamp for stamp in _medical_info_rate_windows.get(client_ip, []) if now - stamp < 60]
+    if len(recent) >= 12:
+        _medical_info_rate_windows[client_ip] = recent
+        raise HTTPException(status_code=429, detail="Medical information lookup rate limit reached. Try again later.")
+    recent.append(now)
+    _medical_info_rate_windows[client_ip] = recent
+    try:
+        return await asyncio.to_thread(_openai_medical_test_info, input.test_name, input.aliases)
+    except Exception:
+        logger.warning("Medical information provider request failed; details intentionally omitted.")
+        raise HTTPException(status_code=502, detail="AI medical information is temporarily unavailable.")
 
 
 # Include the router in the main app

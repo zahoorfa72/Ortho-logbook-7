@@ -6,6 +6,7 @@ import * as SecureStore from "expo-secure-store";
 import { triggerAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-backup";
 import { evaluateLabResultForReview, extractLabReportDate, isLikelyLabReportText, parseLabReportRows, recognizeLabText, type LabTestDefinition } from "@/src/utils/lab-ocr";
 import { fetchTrustedMedicalTestInfo, isMedicalTestInfoFresh, LAB_TEST_DEFINITIONS_KEY, MEDICAL_INFO_CACHE_KEY, medicalInfoCacheKey, type MedicalTestOnlineInfo } from "@/src/utils/medical-test-info";
+import { fetchAiMedicalTestInfo } from "@/src/utils/medical-test-ai";
 import {
   ActivityIndicator,
   Image,
@@ -548,7 +549,9 @@ export default function Logbook() {
     try {
       // Only the identified test label/aliases are sent to the public medical
       // terminology service. Patient details, values, photos and ranges are not.
-      const fetched = await fetchTrustedMedicalTestInfo(testName, definition?.aliases || "");
+      // Prefer the AI-assisted, web-cited summary when configured; fall back to existing trusted sources if unavailable.
+      const fetched = (await fetchAiMedicalTestInfo(testName, definition?.aliases || "").catch(() => null))
+        || await fetchTrustedMedicalTestInfo(testName, definition?.aliases || "");
       if (!fetched) {
         setMedicalInfoError("No relevant explanation was found in the trusted medical sources checked. The app will not show an unrelated result.");
         return;
@@ -2011,6 +2014,11 @@ export default function Logbook() {
                   <Text style={{ color: colors.onSurface, fontFamily: fontFamily.semibold, marginTop: spacing.md }}>{activeMedicalTest?.definition?.purpose?.trim() ? "Additional trusted-source summary" : info.title}</Text>
                   <Text style={{ color: colors.onSurface, lineHeight: 20, marginTop: spacing.xs }}>{info.summary}</Text>
                   <Text style={{ color: colors.muted, fontSize: fontSize.xs, marginTop: spacing.sm }}>Source: {info.sourceName} · Last checked {new Date(info.fetchedAt).toLocaleDateString()} · Cached for offline use</Text>
+                  {(info.sources?.length ? info.sources : [{ title: info.sourceName, url: info.sourceUrl }]).map((source, sourceIndex) => (
+                    <Pressable key={source.url + "-" + sourceIndex} onPress={() => void Linking.openURL(source.url)} style={{ alignSelf: "flex-start", marginTop: spacing.xs, paddingVertical: 3 }}>
+                      <Text style={{ color: colors.brandPrimary, fontSize: fontSize.sm, textDecorationLine: "underline" }}>{source.title || source.url}</Text>
+                    </Pressable>
+                  ))}
                 </> : medicalInfoBusy ? <View style={{ paddingVertical: spacing.lg, flexDirection: "row", alignItems: "center", gap: spacing.sm }}><ActivityIndicator size="small" color={colors.brandPrimary}/><Text style={{ color: colors.onSurfaceSecondary, flex: 1 }}>Searching trusted medical sources…</Text></View> : medicalInfoError ? <Text style={{ color: colors.onSurfaceSecondary, marginTop: spacing.md, lineHeight: 20 }}>{medicalInfoError}</Text> : <Text style={{ color: colors.onSurfaceSecondary, marginTop: spacing.md }}>No online information is cached for this test yet.</Text>;
               })()}
               {activeMedicalTest?.definition?.lowMeaning?.trim() ? <>

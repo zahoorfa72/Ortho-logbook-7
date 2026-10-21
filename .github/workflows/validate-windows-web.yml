@@ -12,6 +12,10 @@ concurrency:
   group: validate-windows-web-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  EXPO_PUBLIC_MEDICAL_INFO_API_URL: ${{ secrets.MEDICAL_INFO_API_URL }}
+  EXPO_PUBLIC_MEDICAL_INFO_CLIENT_TOKEN: ${{ secrets.MEDICAL_INFO_CLIENT_TOKEN }}
+
 jobs:
   build:
     name: Export web-compatible app for Windows testing
