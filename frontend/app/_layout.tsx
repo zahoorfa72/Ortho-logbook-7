@@ -138,6 +138,8 @@ export default function RootLayout() {
                     <Stack.Screen name="forgot-password" />
                     <Stack.Screen name="user-management" />
                     <Stack.Screen name="patient-history" />
+                    <Stack.Screen name="patient-import" />
+                    <Stack.Screen name="patient-import" />
                     <Stack.Screen name="(tabs)" />
 
                     <Stack.Screen

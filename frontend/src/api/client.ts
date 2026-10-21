@@ -820,14 +820,33 @@ export const api = {
       const params = new URLSearchParams(path.split("?")[1] || "");
       const year = Number(params.get("year"));
       const month = Number(params.get("month"));
+      const fromDate = String(params.get("from") || params.get("fromDate") || "").trim();
+      const toDate = String(params.get("to") || params.get("toDate") || "").trim();
+      const isoDate = (value: string) => {
+        if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(value)) return false;
+        const parts = value.split("-").map(Number);
+        const parsed = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+        return parsed.getUTCFullYear() === parts[0] && parsed.getUTCMonth() === parts[1] - 1 && parsed.getUTCDate() === parts[2];
+      };
+      if ((fromDate && !isoDate(fromDate)) || (toDate && !isoDate(toDate))) throw new Error("Invalid statistics date. Use ISO dates in the request.");
+      if (fromDate && toDate && fromDate > toDate) throw new Error("From date must not be after To date.");
       const me = await currentUserRow();
       const scope = me?.role === "admin" ? "" : " AND created_by=?";
       const scopeArgs = me?.role === "admin" ? [] : [me?.id];
-      const rows = month
-        ? db.getAllSync<any>(`SELECT * FROM patients WHERE date LIKE ?${scope}`, [`${year}-${String(month).padStart(2, "0")}-%`, ...scopeArgs])
-        : year
-        ? db.getAllSync<any>(`SELECT * FROM patients WHERE date LIKE ?${scope}`, [`${year}-%`, ...scopeArgs])
-        : await listPatients();
+      let rows: any[];
+      if (fromDate || toDate) {
+        const dateConditions: string[] = [];
+        const dateArgs: any[] = [];
+        if (fromDate) { dateConditions.push("date >= ?"); dateArgs.push(fromDate); }
+        if (toDate) { dateConditions.push("date <= ?"); dateArgs.push(toDate); }
+        rows = db.getAllSync<any>(`SELECT * FROM patients WHERE ${dateConditions.join(" AND ")}${scope}`, [...dateArgs, ...scopeArgs]);
+      } else if (month) {
+        rows = db.getAllSync<any>(`SELECT * FROM patients WHERE date LIKE ?${scope}`, [`${year}-${String(month).padStart(2, "0")}-%`, ...scopeArgs]);
+      } else if (year) {
+        rows = db.getAllSync<any>(`SELECT * FROM patients WHERE date LIKE ?${scope}`, [`${year}-%`, ...scopeArgs]);
+      } else {
+        rows = await listPatients();
+      }
       const counts: Record<string, number> = {};
       const countsII: Record<string, number> = {};
       let totalSurgeries = 0;
@@ -1040,6 +1059,78 @@ export const api = {
       const deleted = deleteInventoryRows(ids);
       return { success: true, deleted } as any;
     }
+    if (normalizedPath === "/patients/import-bulk") {
+      const admin = await requireAdmin();
+      const items = Array.isArray(body?.patients) ? body.patients : [];
+      if (!items.length) throw new Error("The import file contains no patient records.");
+      if (items.length > 10000) throw new Error("This import has too many rows. Split it into smaller JSON files.");
+      const uid = admin.id || await currentUser();
+      const now = nowIso();
+      const asText = (value: any) => String(value ?? "").trim();
+      const importDate = (raw: any): string => {
+        const value = asText(raw);
+        if (/^\\d{4}-\\d{2}-\\d{2}$/.test(value)) {
+          const [y, m, d] = value.split("-").map(Number);
+          const parsed = new Date(Date.UTC(y, m - 1, d));
+          return parsed.getUTCFullYear() === y && parsed.getUTCMonth() === m - 1 && parsed.getUTCDate() === d ? value : "";
+        }
+        const match = value.match(/^(\\d{1,2})\\/(\\d{1,2})\\/(\\d{4})$/);
+        if (!match) return "";
+        const d = Number(match[1]), m = Number(match[2]), y = Number(match[3]);
+        const parsed = new Date(Date.UTC(y, m - 1, d));
+        if (parsed.getUTCFullYear() !== y || parsed.getUTCMonth() !== m - 1 || parsed.getUTCDate() !== d) return "";
+        return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+      };
+      let imported = 0, skippedDuplicates = 0, skippedInvalid = 0;
+      const seenInFile = new Set<string>();
+      db.withTransactionSync(() => {
+        for (const item of items) {
+          const mrNo = asText(item?.mrNo ?? item?.mr_no);
+          const name = asText(item?.name ?? item?.patientName);
+          const gender = asText(item?.gender);
+          const age = asText(item?.age);
+          const diagnosis = asText(item?.diagnosis);
+          const procedureName = asText(item?.procedure ?? item?.procedures);
+          const procedureII = asText(item?.procedureII ?? item?.procedure_ii ?? item?.implantIIProcedure);
+          const implant = asText(item?.implant);
+          const implantII = asText(item?.implantII ?? item?.implant_ii);
+          const address = asText(item?.address);
+          const fileName = asText(item?.fileName ?? item?.file_name) || name;
+          const date = importDate(item?.date ?? item?.entryDate);
+          if (!mrNo || !name || !date || !procedureName) { skippedInvalid++; continue; }
+
+          const signature = [mrNo, name.toLocaleLowerCase(), date, diagnosis.toLocaleLowerCase(), procedureName.toLocaleLowerCase(), procedureII.toLocaleLowerCase()].join("|");
+          if (seenInFile.has(signature)) { skippedDuplicates++; continue; }
+          seenInFile.add(signature);
+          const exists = db.getFirstSync<any>(
+            "SELECT id FROM patients WHERE mr_no=? AND date=? AND LOWER(TRIM(name))=LOWER(TRIM(?)) AND LOWER(TRIM(diagnosis))=LOWER(TRIM(?)) AND LOWER(TRIM(procedure))=LOWER(TRIM(?)) AND LOWER(TRIM(procedure_ii))=LOWER(TRIM(?)) LIMIT 1",
+            [mrNo, date, name, diagnosis, procedureName, procedureII],
+          );
+          if (exists) { skippedDuplicates++; continue; }
+
+          const patientId = id();
+          const customData: Record<string, string> = {};
+          const sourceSerial = asText(item?.sourceSerialNumber ?? item?.sNo ?? item?.serialNumber);
+          if (sourceSerial) customData.sourceSerialNumber = sourceSerial;
+          db.runSync(
+            "INSERT INTO patients (id,mr_no,name,gender,age,diagnosis,procedure,procedure_ii,implant,implant_ii,implant_id,implant_ii_id,address,file_name,photo_uri,photos_json,custom_data_json,date,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            [patientId, mrNo, name, gender, age, diagnosis, procedureName, procedureII, implant, implantII, null, null, address, fileName, "", "[]", JSON.stringify(customData), date, now, uid],
+          );
+          db.runSync(
+            "INSERT INTO patient_history (id,patient_id,user_id,action,snapshot_json,created_at) VALUES (?,?,?,?,?,?)",
+            [id(), patientId, uid, "import", snapshot({ id: patientId, mrNo, name, gender, age, diagnosis, procedure: procedureName, procedureII, implant, implantII, address, fileName, date, customData }), now],
+          );
+          // Intentionally no validateImplants, deduct(), replacePatientImplants(), or inventory writes.
+          imported++;
+        }
+      });
+      if (imported) {
+        triggerAutomaticDriveBackup("patients");
+        triggerAutomaticDriveBackup("patientHistory");
+      }
+      return { imported, skippedDuplicates, skippedInvalid } as any;
+    }
+
     if (normalizedPath === "/patients") return (await savePatient(body, false)) as any;
     if (normalizedPath === "/patients-bulk-delete") {
       const me = await currentUserRow();

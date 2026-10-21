@@ -55,6 +55,8 @@ export default function SettingsScreen() {
     { icon: "keypad-outline", label: pinSet ? "Change Admin PIN" : "Set Admin PIN", sub: "Protect exports & settings", to: "/admin-pin", testID: "settings-pin" },
     { icon: "trash-outline", label: "Trash", sub: "Restore deleted app data within 30 days", to: "/trash", testID: "settings-trash" },
     { icon: "sync-outline", label: "Sync & Backup", sub: "Share data between phones (offline)", to: "/backup-restore", testID: "settings-sync" },
+    { icon: "cloud-upload-outline", label: "Import historical patients", sub: "Import prepared PDF-to-JSON records once; skip duplicates and never change stock", to: "/patient-import", testID: "settings-import-patients" },
+    { icon: "cloud-upload-outline", label: "Import historical patients", sub: "Import prepared PDF-to-JSON records once; skip duplicates and never change stock", to: "/patient-import", testID: "settings-import-patients" },
     { icon: "flask-outline", label: "Lab Test Reference Ranges", sub: "Add, edit or delete male/female ranges for offline OCR checks", to: "/lab-test-settings", testID: "settings-lab-test-ranges" },
     { icon: "mail-outline", label: "Automatic Low Stock Reports", sub: "Scheduled PDF delivery by email and WhatsApp", to: "/low-stock-reports", testID: "settings-low-stock-reports" },
     { icon: "people-outline", label: "User Management", sub: "Add or restrict doctors & staff", to: "/user-management", testID: "settings-users" },

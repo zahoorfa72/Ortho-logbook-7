@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { useCallback, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -26,6 +26,18 @@ const MONTHS = [
   "July", "August", "September", "October", "November", "December",
 ];
 
+function toIsoDateFromDmy(value: string): string {
+  const match = String(value || "").trim().match(/^(\\d{1,2})[\\/.-](\\d{1,2})[\\/.-](\\d{4})$/);
+  if (!match) return "";
+  const day = Number(match[1]), month = Number(match[2]), year = Number(match[3]);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  if (parsed.getUTCFullYear() !== year || parsed.getUTCMonth() !== month - 1 || parsed.getUTCDate() !== day) return "";
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+function toDmyDate(value: Date): string {
+  return `${String(value.getDate()).padStart(2, "0")}/${String(value.getMonth() + 1).padStart(2, "0")}/${value.getFullYear()}`;
+}
+
 export default function StatsScreen() {
   const styles = useStyles();
   const { colors, branding } = useTheme();
@@ -38,26 +50,42 @@ export default function StatsScreen() {
   const [scope, setScope] = useState("Monthly");
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
+  const [fromDateInput, setFromDateInput] = useState(toDmyDate(new Date(now.getFullYear(), now.getMonth(), 1)));
+  const [toDateInput, setToDateInput] = useState(toDmyDate(now));
   const [pinPromptOpen, setPinPromptOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportSecondProcedure, setExportSecondProcedure] = useState(false);
 
   const isMonthly = scope === "Monthly";
+  const isDateRange = scope === "Date range";
+  const fromIso = toIsoDateFromDmy(fromDateInput);
+  const toIso = toIsoDateFromDmy(toDateInput);
+  const dateRangeValid = !isDateRange || (!!fromIso && !!toIso && fromIso <= toIso);
 
   const { data, isLoading } = useQuery<Stats>({
-    queryKey: ["stats", scope, year, month],
-    queryFn: () =>
-      api.get<Stats>(
+    queryKey: ["stats", scope, year, month, fromIso, toIso],
+    enabled: dateRangeValid,
+    queryFn: () => {
+      if (isDateRange) {
+        return api.get<Stats>(`/stats?from=${encodeURIComponent(fromIso)}&to=${encodeURIComponent(toIso)}`);
+      }
+      return api.get<Stats>(
         `/stats?scope=${isMonthly ? "monthly" : "yearly"}&year=${year}${isMonthly ? `&month=${month}` : ""}`,
-      ),
+      );
+    },
   });
 
   const maxCount = Math.max(1, ...(data?.procedures || []).map((p) => p.count));
   const maxSecondCount = Math.max(1, ...(data?.proceduresII || []).map((p) => p.count));
-  const periodLabel = isMonthly ? `${MONTHS[month - 1]} ${year}` : `Year ${year}`;
+  const periodLabel = isDateRange ? `${fromDateInput} to ${toDateInput}` : isMonthly ? `${MONTHS[month - 1]} ${year}` : `Year ${year}`;
 
   const doExport = useCallback(async (secondProcedure = false) => {
-    if (!data) return;
+    if (!data) {
+      toast(isDateRange && !dateRangeValid
+        ? "Enter valid dates in DD/MM/YYYY format and ensure the From date is not after the To date."
+        : "Statistics are still loading. Please try exporting again.", "error");
+      return;
+    }
     setExporting(true);
     try {
       const html = secondProcedure
@@ -69,13 +97,17 @@ export default function StatsScreen() {
     } finally {
       setExporting(false);
     }
-  }, [branding, data, periodLabel, toast]);
+  }, [branding, data, periodLabel, toast, isDateRange, dateRangeValid]);
 
   const requestExport = useCallback(async (secondProcedure = false) => {
+    if (isDateRange && !dateRangeValid) {
+      toast("Enter valid dates in DD/MM/YYYY format and ensure the From date is not after the To date.", "error");
+      return;
+    }
     setExportSecondProcedure(secondProcedure);
     if (await hasAdminPin()) setPinPromptOpen(true);
     else doExport(secondProcedure);
-  }, [doExport]);
+  }, [doExport, isDateRange, dateRangeValid, toast]);
 
   return (
     <View style={styles.container}>
@@ -139,25 +171,61 @@ export default function StatsScreen() {
         </View>
 
         <View style={styles.body}>
-          <Segmented options={["Monthly", "Yearly"]} value={scope} onChange={setScope} testIDPrefix="stats-scope" />
+          <Segmented options={["Monthly", "Yearly", "Date range"]} value={scope} onChange={setScope} testIDPrefix="stats-scope" />
 
-          <View style={styles.selectors}>
-            {isMonthly && (
+          {isDateRange ? (
+            <View style={{ marginTop: spacing.lg, gap: spacing.sm }}>
+              <View style={{ flexDirection: "row", gap: spacing.sm }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.dateLabel}>From (DD/MM/YYYY)</Text>
+                  <TextInput
+                    testID="stats-from-date"
+                    value={fromDateInput}
+                    onChangeText={setFromDateInput}
+                    placeholder="01/01/2026"
+                    keyboardType="numbers-and-punctuation"
+                    autoCapitalize="none"
+                    style={styles.dateInput}
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.dateLabel}>To (DD/MM/YYYY)</Text>
+                  <TextInput
+                    testID="stats-to-date"
+                    value={toDateInput}
+                    onChangeText={setToDateInput}
+                    placeholder="31/12/2026"
+                    keyboardType="numbers-and-punctuation"
+                    autoCapitalize="none"
+                    style={styles.dateInput}
+                  />
+                </View>
+              </View>
+              {!dateRangeValid ? (
+                <Text style={styles.dateError}>Use real dates in DD/MM/YYYY format; the From date must be on or before the To date.</Text>
+              ) : (
+                <Text style={styles.dateHelp}>Showing statistics for records entered from {fromDateInput} through {toDateInput}, inclusive.</Text>
+              )}
+            </View>
+          ) : (
+            <View style={styles.selectors}>
+              {isMonthly && (
+                <Stepper
+                  testID="stats-month"
+                  label={MONTHS[month - 1]}
+                  onPrev={() => setMonth((m) => (m === 1 ? 12 : m - 1))}
+                  onNext={() => setMonth((m) => (m === 12 ? 1 : m + 1))}
+                />
+              )}
               <Stepper
-                testID="stats-month"
-                label={MONTHS[month - 1]}
-                onPrev={() => setMonth((m) => (m === 1 ? 12 : m - 1))}
-                onNext={() => setMonth((m) => (m === 12 ? 1 : m + 1))}
+                testID="stats-year"
+                label={String(year)}
+                mono
+                onPrev={() => setYear((y) => y - 1)}
+                onNext={() => setYear((y) => y + 1)}
               />
-            )}
-            <Stepper
-              testID="stats-year"
-              label={String(year)}
-              mono
-              onPrev={() => setYear((y) => y - 1)}
-              onNext={() => setYear((y) => y + 1)}
-            />
-          </View>
+            </View>
+          )}
 
           <Text style={styles.section}>Procedure Breakdown</Text>
           {isLoading ? (
@@ -304,6 +372,10 @@ const useStyles = makeStyles((colors) => ({
   },
   stepLabel: { flex: 1, textAlign: "center", fontFamily: fontFamily.semibold, fontSize: fontSize.base, color: colors.onSurface },
   stepLabelMono: { fontFamily: fontFamily.monoMedium },
+  dateLabel: { fontFamily: fontFamily.medium, fontSize: fontSize.xs, color: colors.onSurface, marginBottom: spacing.xs },
+  dateInput: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, backgroundColor: colors.surface, color: colors.onSurface, fontFamily: fontFamily.medium, fontSize: fontSize.base },
+  dateHelp: { color: colors.muted, fontFamily: fontFamily.regular, fontSize: fontSize.xs },
+  dateError: { color: colors.error, fontFamily: fontFamily.medium, fontSize: fontSize.xs },
   section: {
     fontFamily: fontFamily.bold,
     fontSize: fontSize.sm,
