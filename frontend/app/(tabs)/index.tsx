@@ -249,7 +249,7 @@ function oldLabResultLabels(patient: Patient, days: number): string[] {
   return [...staleByTestResult.values()].slice(0, 20);
 }
 
-function abnormalLabLabels(patient: Patient, automaticFlags?: string[], includeWarnings = true): string[] {
+function abnormalLabLabels(patient: Patient, automaticFlags?: string[], includeWarnings = true, warningPercent = 10): string[] {
   const cachedFlags = Array.isArray(automaticFlags) ? automaticFlags : [];
   const persistedFlags = String(patient.customData?.labOcrPossibleFlags || "").split(/\r?\n/).map(value => value.trim()).filter((date): date is string => typeof date === "string" && date.length > 0);
   const canonicalFindingKey = (value: string) => value
@@ -317,7 +317,7 @@ function abnormalLabLabels(patient: Patient, automaticFlags?: string[], includeW
     if (outside) {
       const boundary = value < min ? min : max;
       const deviation = Math.abs(value - boundary) / Math.max(Math.abs(boundary), 0.000001) * 100;
-      if (deviation > 1) severity = deviation <= 10 ? "WARNING" : "ALERT";
+      if (deviation > 1) severity = deviation <= Math.max(1, Math.min(100, warningPercent)) ? "WARNING" : "ALERT";
     }
     if (!severity || (severity === "WARNING" && !includeWarnings)) continue;
     const resultStatus = severity;
@@ -377,6 +377,7 @@ export default function Logbook() {
   const [labOcrEnabled, setLabOcrEnabled] = useState(false);
   const labOcrEnabledRef = useRef(false);
   const [labWarningsEnabled, setLabWarningsEnabled] = useState(true);
+  const [labWarningThresholdPercent, setLabWarningThresholdPercent] = useState(10);
   const [labResultsHiddenByPatient, setLabResultsHiddenByPatient] = useState<Record<string, boolean>>({});
   const [labBranchesExpandedByPatient, setLabBranchesExpandedByPatient] = useState<Record<string, boolean>>({});
   const [configuredLabTestDefinitions, setConfiguredLabTestDefinitions] = useState<Array<{ name: string; aliases?: string; category?: string }>>([]);
@@ -448,6 +449,7 @@ export default function Logbook() {
       setLabOcrEnabled(false);
     });
     AsyncStorage.getItem("ortho_lab_warnings_enabled").then(value => setLabWarningsEnabled(value !== "false")).catch(() => setLabWarningsEnabled(true));
+    AsyncStorage.getItem("ortho_lab_warning_threshold_percent_v1").then(raw => { const value = Number(raw); if (raw && Number.isInteger(value) && value >= 1 && value <= 100) setLabWarningThresholdPercent(value); }).catch(() => {});
     AsyncStorage.getItem("ortho_lab_results_hidden_by_patient_v1").then(raw => { if (raw) { try { const parsed = JSON.parse(raw); if (parsed && typeof parsed === "object") setLabResultsHiddenByPatient(parsed); } catch {} } }).catch(() => {});
     AsyncStorage.getItem("ortho_lab_old_result_days_v1").then(raw => { const value = Number(raw); if (raw && Number.isInteger(value) && value >= 1 && value <= 3650) setOldLabResultDays(value); }).catch(() => {});
     AsyncStorage.getItem("ortho_lab_ocr_patient_cache_v7").then(raw => {
@@ -476,6 +478,7 @@ export default function Logbook() {
       }
     });
     AsyncStorage.getItem("ortho_lab_test_definitions_v1").then(raw => { if (!cancelled && raw) { try { const parsed = JSON.parse(raw); if (Array.isArray(parsed)) setConfiguredLabTestDefinitions(parsed); } catch {} } }).catch(() => {});
+    AsyncStorage.getItem("ortho_lab_warning_threshold_percent_v1").then(raw => { const value = Number(raw); if (!cancelled && raw && Number.isInteger(value) && value >= 1 && value <= 100) setLabWarningThresholdPercent(value); }).catch(() => {});
     AsyncStorage.getItem(LAB_OLD_RESULT_DAYS_KEY).then(raw => {
       const value = Number(raw);
       if (!cancelled && raw && Number.isInteger(value) && value >= 1 && value <= 3650) setOldLabResultDays(value);
@@ -1679,7 +1682,7 @@ export default function Logbook() {
                 </View>
               ) : null}
               {(() => {
-                const labLabels = abnormalLabLabels(item, labFlagsByPatient[item.id]?.flags, labWarningsEnabled);
+                const labLabels = abnormalLabLabels(item, labFlagsByPatient[item.id]?.flags, labWarningsEnabled, labWarningThresholdPercent);
                 const oldResultLabels = oldLabResultLabels(item, oldLabResultDays);
                 const persistedReportDate = String(item.customData?.labOcrReportDate || "").trim();
                 const persistedScanAt = String(item.customData?.labOcrDetectedAt || "").trim();
