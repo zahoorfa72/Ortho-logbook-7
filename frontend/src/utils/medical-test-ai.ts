@@ -30,20 +30,38 @@ function trustedUrl(value: unknown): value is string {
 function responseText(payload: any): { text: string; citations: Array<{ title: string; url: string }> } {
   const chunks: string[] = [];
   const citations: Array<{ title: string; url: string }> = [];
+  const addCitation = (urlValue: unknown, titleValue?: unknown) => {
+    if (!trustedUrl(urlValue) || citations.some(source => source.url === urlValue)) return;
+    citations.push({
+      title: String(titleValue || urlValue).slice(0, 160),
+      url: urlValue,
+    });
+  };
   for (const item of Array.isArray(payload?.output) ? payload.output : []) {
+    // Responses API web search also returns sources on the search-call action,
+    // not only URL annotations on the final text. Read both response shapes.
+    const actionSources = item?.action?.sources;
+    if (Array.isArray(actionSources)) {
+      for (const source of actionSources) addCitation(source?.url, source?.title);
+    }
+    if (Array.isArray(item?.results)) {
+      for (const source of item.results) addCitation(source?.url, source?.title);
+    }
     if (item?.type !== "message" || !Array.isArray(item.content)) continue;
     for (const part of item.content) {
-      if (part?.type === "output_text" && typeof part.text === "string") chunks.push(part.text);
+      if ((part?.type === "output_text" || part?.type === "text") && typeof part.text === "string") chunks.push(part.text);
       for (const annotation of Array.isArray(part?.annotations) ? part.annotations : []) {
-        const url = annotation?.url || annotation?.url_citation?.url;
-        const title = annotation?.title || annotation?.url_citation?.title || url;
-        if (trustedUrl(url) && !citations.some(source => source.url === url)) {
-          citations.push({ title: String(title || "Trusted medical source").slice(0, 160), url });
-        }
+        const nested = annotation?.url_citation;
+        addCitation(annotation?.url || nested?.url, annotation?.title || nested?.title);
       }
     }
   }
   const text = String(payload?.output_text || chunks.join("\n")).trim();
+  // Some compatible Responses API payloads return cited URLs inline in the text
+  // but omit annotation objects. Accept only URLs from the strict medical allowlist.
+  for (const match of text.matchAll(/https:\/\/[^\s)\]}>]+/gi)) {
+    addCitation(match[0].replace(/[.,;]+$/, ""));
+  }
   return { text, citations: citations.slice(0, 3) };
 }
 
@@ -79,9 +97,9 @@ async function fetchDirectOpenAiMedicalInfo(
     },
     body: JSON.stringify({
       model: "gpt-4o-mini",
-      tools: [{ type: "web_search" }],
-      tool_choice: "auto",
-      max_output_tokens: 420,
+      tools: [{ type: "web_search", filters: { allowed_domains: TRUSTED_MEDICAL_DOMAINS }, search_context_size: "medium" }],
+      tool_choice: "required",
+      max_output_tokens: 650,
       instructions: [
         "You provide cautious patient-facing medical education about laboratory tests.",
         "Use web search and rely only on trusted medical authorities such as MedlinePlus, NHS, NIH, CDC, WHO, Mayo Clinic, Cleveland Clinic, or major accredited medical laboratories.",
