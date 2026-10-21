@@ -1663,7 +1663,7 @@ export async function mergeBackup(backup: BackupData) {
    // Critical: importing the same backup again must never add its quantity again.
    // If this exact inventory row already exists by primary key, it was already
    // imported from this backup/source and must be skipped.
-   if (sourceId && has("inventory", sourceId)) continue;
+   const alreadyImported = Boolean(sourceId && has("inventory", sourceId));
 
    let categoryName = String(i.category||"").trim();
    const categoryKey = categoryName.toLowerCase();
@@ -1682,6 +1682,20 @@ export async function mergeBackup(backup: BackupData) {
      db.runSync("INSERT INTO inventory_categories (id,name,created_at) VALUES (?,?,?)",[categoryId,categoryName,new Date().toISOString()]);
     }
     categoryIds.set(categoryKey,categoryId);
+   }
+
+   if (alreadyImported) {
+    const existingRow = db.getFirstSync<any>("SELECT id,category_id,category,size,minimum_stock FROM inventory WHERE id=? LIMIT 1", [sourceId]);
+    if (existingRow) {
+     db.runSync("UPDATE inventory SET category_id=?,category=?,size=?,minimum_stock=? WHERE id=?", [
+      categoryId || existingRow.category_id || null,
+      categoryName || existingRow.category || "",
+      i.size || existingRow.size || "",
+      Math.max(Number(existingRow.minimum_stock || 0), Number(i.minimum_stock || 0)),
+      sourceId,
+     ]);
+    }
+    continue;
    }
 
    // A merge restore must never add the same stock quantity a second time.
