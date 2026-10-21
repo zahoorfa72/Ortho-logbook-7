@@ -58,7 +58,7 @@ type LabScanStatus = {
 
 const LAB_SCAN_STATUS_STORAGE_KEY = "ortho_lab_ocr_scan_states_v1";
 const NEW_PATIENT_LAB_SCAN_QUEUE_KEY = "ortho_lab_ocr_new_patient_queue_v1";
-const LAB_OCR_PIPELINE_VERSION = "row-aware-2026-10-17-v4-admin-aliases";
+const LAB_OCR_PIPELINE_VERSION = "row-aware-2026-10-21-v5-confidence-review";
 
 type Patient = {
   id: string;
@@ -539,7 +539,7 @@ export default function Logbook() {
         await removeNewPatientQueueEntry(patientId);
         return;
       }
-      let photoCache: Record<string, { text: string; structuredText: string; isReport: boolean; reportDate: string; checkedAt?: number }> = {};
+      let photoCache: Record<string, { text: string; structuredText: string; isReport: boolean; reportDate: string; checkedAt?: number; needsReview?: boolean; reviewReasons?: string[] }> = {};
       let configuredTests: import("@/src/utils/lab-ocr").LabTestDefinition[] = [];
       let warningPercent = 10;
       try {
@@ -573,6 +573,7 @@ export default function Logbook() {
         }
       } catch {}
       let unreadableImages = 0;
+      let uncertainImages = 0;
       for (let offset = 0; offset < photos.length; offset += 1) {
         if (stopLabScansRef.current.has(patientId) || !labOcrEnabledRef.current) return;
         const batch = photos.slice(offset, offset + 1);
@@ -595,10 +596,11 @@ export default function Logbook() {
               (hasNumbers && hasLabCue)
             );
             if (!text && !structuredText) unreadableImages += 1;
-            return { uri, text, structuredText, isReport, reportDate: extractLabReportDate(text + "\n" + structuredText), checkedAt: Date.now() };
+            if (result?.needsReview) uncertainImages += 1;
+            return { uri, text, structuredText, isReport, reportDate: extractLabReportDate(text + "\n" + structuredText), checkedAt: Date.now(), needsReview: result?.needsReview === true, reviewReasons: Array.isArray(result?.reviewReasons) ? result.reviewReasons : [] };
           } catch {
             unreadableImages += 1;
-            return { uri, text: "", structuredText: "", isReport: false, reportDate: "", checkedAt: Date.now() };
+            return { uri, text: "", structuredText: "", isReport: false, reportDate: "", checkedAt: Date.now(), needsReview: true, reviewReasons: ["OCR failed; manual review required"] };
           }
         }));
         if (stopLabScansRef.current.has(patientId) || !labOcrEnabledRef.current) return;
@@ -607,6 +609,8 @@ export default function Logbook() {
             text: result.text, structuredText: result.structuredText, isReport: result.isReport,
             reportDate: result.reportDate || extractLabReportDate(result.text + "\n" + result.structuredText),
             checkedAt: result.checkedAt || Date.now(),
+            needsReview: result.needsReview === true,
+            reviewReasons: Array.isArray(result.reviewReasons) ? result.reviewReasons : [],
           };
         }
         await AsyncStorage.setItem("ortho_lab_ocr_photo_cache_v6", JSON.stringify(photoCache)).catch(() => {});
@@ -726,6 +730,8 @@ export default function Logbook() {
       await AsyncStorage.setItem("ortho_lab_ocr_patient_cache_v7", JSON.stringify(photoSnapshot)).catch(() => {});
       const message = unreadableImages
         ? "Scan completed with " + unreadableImages + " unreadable photo(s). Verify those photos manually."
+        : uncertainImages
+          ? "Scan completed, but " + uncertainImages + " photo(s) have uncertain OCR or possible row/column alignment errors. Verify every detected result against the original report before relying on it."
         : uniqueFlags.length
           ? "Scan successful — " + uniqueFlags.length + " abnormal result(s) flagged. Verify them against the original report."
           : "Scan successful — no out-of-range result was flagged against the saved reference ranges. This does not prove every result is normal.";
