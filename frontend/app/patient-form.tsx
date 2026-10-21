@@ -765,21 +765,20 @@ export default function PatientForm() {
   const [ready, setReady] = useState(false);
   const lastAutoLabScan = useRef("");
   useEffect(() => {
-    if (!labOcrEnabled || labOcrBusy) return;
-    // Inspect only pictures already saved in this patient's file; the OCR
-    // classifier excludes ordinary clinical photos from lab-result parsing.
+    // Existing patient records must never start OCR just because the user
+    // opened the form or changed tabs. Their scans are explicitly started by
+    // the Scan/Rescan button. New-patient drafts retain automatic scanning.
+    if (isEdit || !labOcrEnabled || labOcrBusy) return;
     const uris = [...new Set(p.photos)].filter(Boolean);
-    if (!uris.length || (isEdit && !ready)) return;
+    if (!uris.length) return;
     const signature = LAB_OCR_PIPELINE_VERSION + "|" + uris.join("|");
     if (lastAutoLabScan.current === signature) return;
     const timer = setTimeout(() => {
-      // Mark the set only when the scan can start; if another scan is busy,
-      // analyzeLabPhotos clears this signature and the effect retries.
       lastAutoLabScan.current = signature;
       void analyzeLabPhotos(uris, true);
     }, 500);
     return () => clearTimeout(timer);
-  }, [labOcrEnabled, labOcrBusy, p.photos, ready, isEdit]);
+  }, [labOcrEnabled, labOcrBusy, p.photos, isEdit]);
   useEffect(() => {
     const source = isEdit ? detailedExisting : existing;
     if (!source) return;
@@ -2301,9 +2300,9 @@ export default function PatientForm() {
               <Ionicons name={labFindingsExpanded ? "chevron-up" : "chevron-down"} size={26} color={colors.error || "#B91C1C"} />
             </Pressable>
             {labFindingsExpanded ? <View>
-            <Text style={styles.hint}>{labOcrBusy ? "Checking saved pictures for lab reports…" : "Saved photos are checked automatically. Unchanged photos use the previous scan to keep the app responsive; use Rescan if a clear test name or result was missed."}</Text>
+            <Text style={styles.hint}>{labOcrBusy ? "Checking pictures for lab reports…" : isEdit ? "Existing patient photos are not scanned when you open this file. Tap Scan lab photos when you want to run OCR; review extracted values against the original report." : "Lab photos in a new patient draft are scanned automatically. Review extracted values against the original report."}</Text>
             <Pressable disabled={labOcrBusy || !p.photos.length} onPress={() => { lastAutoLabScan.current = ""; void analyzeLabPhotos([...new Set(p.photos)], false, true); }} style={{ alignSelf: "flex-start", marginTop: spacing.xs, paddingVertical: spacing.sm, paddingHorizontal: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md }}>
-              <Text style={{ color: colors.brandPrimary, fontFamily: fontFamily.semibold }}>{labOcrBusy ? "Scanning…" : "Rescan lab photos"}</Text>
+              <Text style={{ color: colors.brandPrimary, fontFamily: fontFamily.semibold }}>{labOcrBusy ? "Scanning…" : isEdit ? "Scan lab photos" : "Rescan lab photos"}</Text>
             </Pressable>
             {labOcrText ? <View style={{ marginTop: spacing.sm, padding: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md }}>
               {labOcrFindings.length ? <><Text style={[styles.label, { marginTop: spacing.xs }]}>Lab results to verify</Text>{labOcrFindings.map((finding, i) => { const isWarning = finding.startsWith("WARNING:"); const tone = isWarning ? (colors.warning || "#B7791F") : (colors.error || "#B91C1C"); return <Text key={i} style={{ color: tone, marginTop: spacing.xs, fontFamily: isWarning ? fontFamily.medium : fontFamily.bold }}>{finding}</Text>; })}</> : <Text style={{ color: colors.onSurfaceSecondary, marginTop: spacing.sm }}>{labWarningsEnabled ? "No confirmed out-of-range result was extracted. OCR can miss abnormal values; verify every printed test and date against the original image. If any row is unreadable or missing a saved reference range, ask an administrator to review it." : "No larger alerts were detected. Mild warnings are disabled in Settings; this does not prove that every result is normal."}</Text>}
