@@ -960,6 +960,7 @@ export default function Logbook() {
               (hasNumbers && hasLabCue)
             );
             let aiVisionUsed = false;
+            let aiVisionError = "";
             // Send an image to the AI provider only after local OCR has identified a likely lab report,
             // and only when the admin explicitly enabled this feature in Lab Test Reference Ranges.
             if (isReport && aiVisionSettings?.consent && (aiVisionSettings.apiKey || (aiVisionSettings.endpoint && aiVisionSettings.clientToken))) {
@@ -973,6 +974,7 @@ export default function Logbook() {
                   templates: aiVisionSettings.templates,
                   offlineText: combined,
                 });
+                if (vision.error) aiVisionError = vision.error;
                 const knownRows = parseLabReportRows(structuredText, configuredTests, patient?.gender || "", warningPercent, true);
                 const rowKey = (test: unknown, value: unknown) => String(test || "").toLowerCase().replace(/[^a-z0-9]+/g, "")
                   + "|" + String(value ?? "").replace(/,/g, ".").match(/[-+]?\d+(?:\.\d+)?/)?.[0];
@@ -1003,8 +1005,8 @@ export default function Logbook() {
             return {
               uri, text, structuredText, isReport: isReport || (aiVisionUsed && isLikelyLabReportText(structuredText, configuredTests)),
               reportDate: extractLabReportDate(combined), checkedAt: Date.now(),
-              needsReview: result?.needsReview === true || aiVisionUsed,
-              reviewReasons: [...(Array.isArray(result?.reviewReasons) ? result.reviewReasons : []), ...(aiVisionUsed ? ["AI vision suggested additional rows; verify every value against the original report."] : [])],
+              needsReview: result?.needsReview === true || aiVisionUsed || !!aiVisionError,
+              reviewReasons: [...(Array.isArray(result?.reviewReasons) ? result.reviewReasons : []), ...(aiVisionUsed ? ["AI vision suggested additional rows; verify every value against the original report."] : []), ...(aiVisionError ? ["AI vision was unavailable: " + aiVisionError] : [])],
             };
           } catch {
             unreadableImages += 1;
