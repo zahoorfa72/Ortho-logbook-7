@@ -11,8 +11,10 @@ import { LAB_VISION_OPENAI_API_KEY_KEY } from "@/src/utils/lab-vision";
 const TRUSTED_MEDICAL_DOMAINS = [
   "medlineplus.gov", "nhs.uk", "mayoclinic.org", "clevelandclinic.org",
   "cdc.gov", "who.int", "nih.gov", "niddk.nih.gov", "cancer.gov",
-  "msdmanuals.com", "testing.com", "labcorp.com", "kidney.org",
-  "heart.org", "med.umich.edu", "ucsfhealth.org", "health.harvard.edu",
+  "msdmanuals.com", "merckmanuals.com", "testing.com", "labcorp.com",
+  "kidney.org", "heart.org", "med.umich.edu", "ucsfhealth.org",
+  "health.harvard.edu", "healthdirect.gov.au", "webmd.com", "medscape.com",
+  "patient.info", "mountsinai.org", "fda.gov",
 ];
 
 async function fetchWithTimeout(input: string, init?: RequestInit, timeoutMs = 25000): Promise<Response> {
