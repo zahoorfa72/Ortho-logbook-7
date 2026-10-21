@@ -426,8 +426,8 @@ function xmlTag(value: string, name: string): string {
 async function fetchTrustedWebSearch(testName: string, labels: string[]): Promise<Omit<MedicalTestOnlineInfo, "fetchedAt" | "loincCode"> | null> {
   // Search the wider web but accept only a controlled allowlist of health agencies,
   // major clinical institutions, medical laboratories and professional organizations.
-  const domains = TRUSTED_MEDICAL_DOMAINS.map(domain => "site:" + domain).join(" OR ");
-  const query = `(${domains}) "${testName}" laboratory test`;
+  // Search the public web broadly, then only display results from the trusted-domain allowlist below.
+  const query = `"${testName}" laboratory test what does it mean`;
   const url = "https://www.bing.com/search?format=rss&count=12&q=" + encodeURIComponent(query);
   const response = await fetchWithTimeout(url, { headers: { Accept: "application/rss+xml, application/xml, text/xml" } });
   if (!response.ok) return null;
