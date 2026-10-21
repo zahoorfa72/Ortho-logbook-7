@@ -31,7 +31,7 @@ const baseFields:Field[] = [
   {key:"gender",label:"Gender"}, {key:"age",label:"Age"}, {key:"address",label:"Address"},
   {key:"diagnosis",label:"Diagnosis"}, {key:"procedure",label:"Procedure"}, {key:"procedureII",label:"Procedure 2"},
   {key:"implants",label:"Implants"}, {key:"fileName",label:"File Name"},
-  {key:"hcvPlus",label:"HCV+"}, {key:"hbaSg",label:"HbAsg"}, {key:"hiv",label:"HIV"},
+  {key:"hcvPlus",label:"HCV+"}, {key:"hbaSg",label:"HBsAg"}, {key:"hiv",label:"HIV"}, {key:"mp",label:"MP ICT"}, {key:"dengue",label:"Dengue"},
   {key:"labOcrManualResults",label:"Manually Verified Lab Results"},
 ];
 

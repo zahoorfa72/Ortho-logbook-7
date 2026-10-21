@@ -254,6 +254,8 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
     if(key === "hcvPlus") return (p as any).hcvPlus || String((p.customData||{}).hcvPlus||"").toLowerCase()==="true" ? "Yes" : "No";
     if(key === "hbaSg") return (p as any).hbaSg || String((p.customData||{}).hbaSg||"").toLowerCase()==="true" ? "Yes" : "No";
     if(key === "hiv") return (p as any).hiv || String((p.customData||{}).hiv||"").toLowerCase()==="true" ? "Yes" : "No";
+    if(key === "mp") return (p as any).mp || String((p.customData||{}).mp||"").toLowerCase()==="true" ? "Yes" : "No";
+    if(key === "dengue") return (p as any).dengue || String((p.customData||{}).dengue||"").toLowerCase()==="true" ? "Yes" : "No";
     if(key === "implants") {
       const items = Array.isArray(p.implants) && p.implants.length
         ? p.implants.map((x:any)=>formatInventoryLabel(x.category,x.name,x.size)+(Number(x.quantity)>1?" × "+x.quantity:""))
@@ -278,7 +280,7 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
         ? '<span class="occurrence occurrence-'+occurrence+'">'+escapeHtml(ordinalSuffix(occurrence))+' time</span>'
         : "";
       const infectionLines = [
-        ["hcvPlus","HCV+"], ["hbaSg","HbAsg"], ["hiv","HIV"]
+        ["hcvPlus","HCV+"], ["hbaSg","HBsAg"], ["hiv","HIV"], ["mp","MP ICT"], ["dengue","Dengue"]
       ].filter(([key]) => value(p,key) === "Yes").map(([key,label]) =>
         "<div class='infectionLine'><b>"+escapeHtml(label)+"</b></div>"
       ).join("");
