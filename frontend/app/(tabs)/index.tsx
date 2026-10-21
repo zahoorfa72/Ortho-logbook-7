@@ -596,7 +596,6 @@ export default function Logbook() {
               (hasNumbers && hasLabCue)
             );
             if (!text && !structuredText) unreadableImages += 1;
-            if (result?.needsReview) uncertainImages += 1;
             return { uri, text, structuredText, isReport, reportDate: extractLabReportDate(text + "\n" + structuredText), checkedAt: Date.now(), needsReview: result?.needsReview === true, reviewReasons: Array.isArray(result?.reviewReasons) ? result.reviewReasons : [] };
           } catch {
             unreadableImages += 1;
@@ -605,6 +604,7 @@ export default function Logbook() {
         }));
         if (stopLabScansRef.current.has(patientId) || !labOcrEnabledRef.current) return;
         for (const result of results) {
+          if (result.needsReview) uncertainImages += 1;
           photoCache[labPhotoCacheKey(result.uri)] = {
             text: result.text, structuredText: result.structuredText, isReport: result.isReport,
             reportDate: result.reportDate || extractLabReportDate(result.text + "\n" + result.structuredText),
