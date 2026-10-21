@@ -272,10 +272,10 @@ export default function Inventory() {
         "   Shortage: " + String(Math.max(0, item.minimumStock - item.quantity)) + (item.unit ? " " + item.unit : ""),
         "   Status: " + (item.quantity <= 0 ? "OUT OF STOCK" : "LOW STOCK"),
         ""
-      ].join("\\n"))
+      ].join("\n"))
     ];
     try {
-      await Share.share({ title: "Low Stock Report", message: lines.join("\\n") });
+      await Share.share({ title: "Low Stock Report", message: lines.join("\n") });
     } catch (e: any) {
       toast(e?.message || "Could not open the share menu.", "error");
     }
