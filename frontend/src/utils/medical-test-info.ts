@@ -19,6 +19,18 @@ export type MedicalTestOnlineInfo = {
 
 type KnownLoinc = { code: string; labels: string[] };
 
+async function fetchWithTimeout(input: string, init?: RequestInit, timeoutMs = 8000): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+
+
 export const MEDICAL_INFO_CACHE_KEY = "ortho_lab_medical_info_cache_v1";
 export const LAB_TEST_DEFINITIONS_KEY = "ortho_lab_test_definitions_v1";
 const CACHE_FRESH_MS = 24 * 60 * 60 * 1000;
@@ -371,7 +383,7 @@ async function fetchMedlinePlusSearch(testName: string, labels: string[]): Promi
   const query = [testName, "lab test"].filter(Boolean).join(" ");
   const url = "https://wsearch.nlm.nih.gov/ws/query?db=healthTopics&term=" +
     encodeURIComponent(query) + "&rettype=brief&retmax=8";
-  const response = await fetch(url, { headers: { Accept: "application/xml, text/xml" } });
+  const response = await fetchWithTimeout(url, { headers: { Accept: "application/xml, text/xml" } });
   if (!response.ok) return null;
   return parseMedlinePlusSearch(await response.text(), labels);
 }
@@ -381,7 +393,7 @@ async function fetchMedlinePlusByLoinc(code: string, label: string): Promise<Omi
     "&mainSearchCriteria.v.c=" + encodeURIComponent(code) +
     "&mainSearchCriteria.v.dn=" + encodeURIComponent(label) +
     "&informationRecipient.languageCode.c=en";
-  const response = await fetch(url, { headers: { Accept: "application/atom+xml, application/xml, text/xml" } });
+  const response = await fetchWithTimeout(url, { headers: { Accept: "application/atom+xml, application/xml, text/xml" } });
   if (!response.ok) return null;
   return parseMedlinePlusEntry(await response.text());
 }
@@ -417,7 +429,7 @@ async function fetchTrustedWebSearch(testName: string, labels: string[]): Promis
   const domains = TRUSTED_MEDICAL_DOMAINS.map(domain => "site:" + domain).join(" OR ");
   const query = `(${domains}) "${testName}" laboratory test`;
   const url = "https://www.bing.com/search?format=rss&count=12&q=" + encodeURIComponent(query);
-  const response = await fetch(url, { headers: { Accept: "application/rss+xml, application/xml, text/xml" } });
+  const response = await fetchWithTimeout(url, { headers: { Accept: "application/rss+xml, application/xml, text/xml" } });
   if (!response.ok) return null;
   const xml = await response.text();
   const items = xml.match(/<item\b[^>]*>[\s\S]*?<\/item>/gi) || [];
@@ -446,14 +458,14 @@ async function fetchPubMedSummary(testName: string, labels: string[]): Promise<O
   // explanation. Require a strong title match and a usable abstract before showing it.
   const query = `(${testName}[Title/Abstract]) AND (laboratory OR blood OR serum OR urine OR diagnostic)`;
   const searchUrl = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&retmode=json&retmax=8&sort=relevance&term=" + encodeURIComponent(query);
-  const searchResponse = await fetch(searchUrl, { headers: { Accept: "application/json" } });
+  const searchResponse = await fetchWithTimeout(searchUrl, { headers: { Accept: "application/json" } });
   if (!searchResponse.ok) return null;
   const searchJson = await searchResponse.json();
   const ids: string[] = Array.isArray(searchJson?.esearchresult?.idlist) ? searchJson.esearchresult.idlist.slice(0, 8) : [];
   if (!ids.length) return null;
 
   const summaryUrl = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&retmode=json&id=" + encodeURIComponent(ids.join(","));
-  const summaryResponse = await fetch(summaryUrl, { headers: { Accept: "application/json" } });
+  const summaryResponse = await fetchWithTimeout(summaryUrl, { headers: { Accept: "application/json" } });
   if (!summaryResponse.ok) return null;
   const summaryJson = await summaryResponse.json();
   const summaries: PubMedSummary[] = ids.map(id => summaryJson?.result?.[id]).filter((item: any) => item && typeof item.title === "string");
@@ -464,7 +476,7 @@ async function fetchPubMedSummary(testName: string, labels: string[]): Promise<O
   if (!best?.uid || !best.title) return null;
 
   const abstractUrl = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&retmode=text&rettype=abstract&id=" + encodeURIComponent(best.uid);
-  const abstractResponse = await fetch(abstractUrl, { headers: { Accept: "text/plain" } });
+  const abstractResponse = await fetchWithTimeout(abstractUrl, { headers: { Accept: "text/plain" } });
   if (!abstractResponse.ok) return null;
   const rawAbstractText = await abstractResponse.text();
   const title = cleanText(best.title);
