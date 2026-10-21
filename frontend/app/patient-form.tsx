@@ -2103,6 +2103,7 @@ export default function PatientForm() {
                       scrollEnabled={false}
                       style={{ flex: 1, backgroundColor: "#141414" }}
                       onMessage={handlePerspectiveMessage}
+                      onLoadEnd={() => perspectiveWebViewRef.current?.injectJavaScript('if(window.__orthoAutoDetectPageCorners){try{window.__orthoAutoDetectPageCorners();}catch(e){window.ReactNativeWebView&&window.ReactNativeWebView.postMessage(JSON.stringify({type:"error",message:String(e&&e.message||e)}));}} true;')}
                     />
                   </View>
                   <Text style={{ color: colors.muted, fontSize: fontSize.xs, marginBottom: spacing.xs }}>Original photo stays unchanged until you tap Save changes.</Text>
