@@ -95,7 +95,6 @@ const COMMON_LABELS: Record<string, string[]> = {
   ca: ["calcium"],
   mg: ["magnesium"],
   phosphate: ["phosphorus"],
-  alp: ["alkaline phosphatase"],
   alb: ["albumin"],
   tp: ["total protein"],
   tropi: ["troponin I"],
