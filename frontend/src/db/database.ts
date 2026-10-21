@@ -293,8 +293,9 @@ export function repairDatabaseData() {
       db.runSync("DELETE FROM inventory_movements WHERE inventory_id NOT IN (SELECT id FROM inventory)");
       db.runSync("DELETE FROM patient_history WHERE patient_id NOT IN (SELECT id FROM patients)");
       db.runSync("UPDATE users SET role='doctor' WHERE role NOT IN ('admin','doctor','staff') OR role IS NULL OR role=''");
-      db.runSync("UPDATE users SET can_edit_patients=CASE WHEN can_edit_patients>0 THEN 1 ELSE 0 END");
-      db.runSync("UPDATE users SET disabled=CASE WHEN disabled>0 THEN 1 ELSE 0 END");
+      // Avoid no-op SQLite writes on every launch, which falsely mark backups dirty.
+      db.runSync("UPDATE users SET can_edit_patients=CASE WHEN can_edit_patients>0 THEN 1 ELSE 0 END WHERE can_edit_patients IS NULL OR can_edit_patients NOT IN (0,1)");
+      db.runSync("UPDATE users SET disabled=CASE WHEN disabled>0 THEN 1 ELSE 0 END WHERE disabled IS NULL OR disabled NOT IN (0,1)");
       ensureInventoryCategoryLinks();
     });
     return true;
@@ -305,6 +306,8 @@ export function repairDatabaseData() {
 }
 
 function ensureInventoryCategoryLinks() {
+  // Category IDs in backups can belong to another database. The saved category
+  // name is portable, so always re-link by name rather than only filling blank IDs.
   const legacyCategories = db.getAllSync<any>(
     "SELECT DISTINCT TRIM(category) AS name FROM inventory WHERE TRIM(COALESCE(category,'')) <> ''",
   );
@@ -312,17 +315,23 @@ function ensureInventoryCategoryLinks() {
     const categoryName = String(row.name || "").trim();
     if (!categoryName) continue;
     let categoryRow = db.getFirstSync<any>(
-      "SELECT id FROM inventory_categories WHERE LOWER(name)=LOWER(?) LIMIT 1",
+      "SELECT id,name FROM inventory_categories WHERE LOWER(TRIM(name))=LOWER(?) LIMIT 1",
       [categoryName],
     );
     if (!categoryRow) {
       const categoryId = Math.random().toString(36).slice(2) + Date.now().toString(36);
       db.runSync("INSERT INTO inventory_categories (id,name,created_at) VALUES (?,?,?)", [categoryId, categoryName, new Date().toISOString()]);
-      categoryRow = { id: categoryId };
+      categoryRow = { id: categoryId, name: categoryName };
     }
+    const categoryId = String(categoryRow.id);
+    const canonicalName = String(categoryRow.name || categoryName);
     db.runSync(
-      "UPDATE inventory SET category_id=? WHERE LOWER(TRIM(COALESCE(category,'')))=LOWER(?) AND (category_id IS NULL OR category_id='')",
-      [categoryRow.id, categoryName],
+      "UPDATE inventory SET category_id=?,category=? WHERE LOWER(TRIM(COALESCE(category,'')))=LOWER(?) AND (COALESCE(category_id,'')<>? OR TRIM(COALESCE(category,''))<>?)",
+      [categoryId, canonicalName, categoryName, categoryId, canonicalName],
     );
   }
+  // Recover category text when an older backup retained the ID but omitted the name.
+  db.runSync(
+    "UPDATE inventory SET category=c.name,category_id=c.id FROM inventory_categories c WHERE inventory.category_id=c.id AND TRIM(COALESCE(inventory.category,''))=''",
+  );
 }
