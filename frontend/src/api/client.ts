@@ -833,7 +833,7 @@ export const api = {
       let totalSurgeries = 0;
       (rows as any[]).forEach((r) => {
         const n = String(r.procedure || "").trim();
-        const nII = String(r.procedure_ii || "").trim();
+        const nII = String(r.procedure_ii ?? r.procedureII ?? "").trim();
         // Keep primary and second-procedure breakdowns separate, but count both
         // fields in the total surgeries performed.
         if (n) { counts[n] = (counts[n] || 0) + 1; totalSurgeries++; }
