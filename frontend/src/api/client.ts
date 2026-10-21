@@ -1097,19 +1097,20 @@ export const api = {
           const address = asText(item?.address);
           const fileName = asText(item?.fileName ?? item?.file_name) || name;
           const date = importDate(item?.date ?? item?.entryDate);
-          if (!name || !date || !procedureName) { skippedInvalid++; continue; }
+          if (!name || !date) { skippedInvalid++; continue; }
 
-          const signature = [mrNo, name, gender, age, date, diagnosis, procedureName, procedureII, implant, implantII, address, fileName].map(value => value.toLocaleLowerCase()).join("|");
-          if (seenInFile.has(signature)) { skippedDuplicates++; continue; }
-          seenInFile.add(signature);
-          const exists = db.getFirstSync<any>(
-            "SELECT id FROM patients WHERE mr_no=? AND date=? AND LOWER(TRIM(name))=LOWER(TRIM(?)) AND LOWER(TRIM(gender))=LOWER(TRIM(?)) AND LOWER(TRIM(age))=LOWER(TRIM(?)) AND LOWER(TRIM(diagnosis))=LOWER(TRIM(?)) AND LOWER(TRIM(procedure))=LOWER(TRIM(?)) AND LOWER(TRIM(procedure_ii))=LOWER(TRIM(?)) AND LOWER(TRIM(implant))=LOWER(TRIM(?)) AND LOWER(TRIM(implant_ii))=LOWER(TRIM(?)) AND LOWER(TRIM(address))=LOWER(TRIM(?)) AND LOWER(TRIM(file_name))=LOWER(TRIM(?)) LIMIT 1",
-            [mrNo, date, name, gender, age, diagnosis, procedureName, procedureII, implant, implantII, address, fileName],
-          );
-          if (exists) { skippedDuplicates++; continue; }
-
-          const patientId = id();
+          // Keep patient-specific fields from the prepared PDF conversion. Normalize
+          // nested values to strings because the app's customData contract is string-based.
           const customData: Record<string, string> = {};
+          const incomingCustomData = item?.customData ?? item?.custom_data;
+          if (incomingCustomData && typeof incomingCustomData === "object" && !Array.isArray(incomingCustomData)) {
+            for (const [rawKey, value] of Object.entries(incomingCustomData)) {
+              const key = String(rawKey).trim();
+              if (!key || key === "__proto__") continue;
+              customData[key] = value == null ? "" : typeof value === "string" ? value : JSON.stringify(value) ?? String(value);
+            }
+          }
+
           const sourceSerial = asText(item?.sourceSerialNumber ?? item?.sNo ?? item?.serialNumber);
           const sourceMrNoRaw = asText(item?.sourceMrNoRaw ?? item?.sourceMRNoRaw);
           const sourceDateDmy = asText(item?.sourceDateDmy);
@@ -1122,6 +1123,41 @@ export const api = {
           if (sourceDateDmy) customData.sourceDateDmy = sourceDateDmy;
           if (sourcePage) customData.sourcePdfPage = sourcePage;
           if (sourceReviewFlags.length) customData.sourceReviewFlags = sourceReviewFlags.join("; ");
+
+          const normalizeText = (value: any) => asText(value).toLocaleLowerCase();
+          const canonicalCustomData = (input: any): string => {
+            let parsed = input;
+            if (typeof parsed === "string") {
+              try { parsed = JSON.parse(parsed); } catch { parsed = {}; }
+            }
+            if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return "{}";
+            const normalized: Record<string, string> = {};
+            for (const key of Object.keys(parsed).sort()) {
+              const value = parsed[key];
+              normalized[key] = value == null ? "" : typeof value === "string" ? value : JSON.stringify(value) ?? String(value);
+            }
+            return JSON.stringify(normalized);
+          };
+          const signatureFor = (values: any[], fields: any) =>
+            JSON.stringify([...values, canonicalCustomData(fields)].map(normalizeText));
+          const values = [mrNo, name, gender, age, date, diagnosis, procedureName, procedureII, implant, implantII, address, fileName];
+          const signature = signatureFor(values, customData);
+          if (seenInFile.has(signature)) { skippedDuplicates++; continue; }
+          seenInFile.add(signature);
+
+          // Look up only likely matches, then compare every standard and custom patient
+          // field in JS. This avoids treating records with different custom details as duplicates.
+          const candidates = db.getAllSync<any>(
+            "SELECT mr_no,name,gender,age,date,diagnosis,procedure AS procedure_name,procedure_ii,implant,implant_ii,address,file_name,custom_data_json FROM patients WHERE date=? AND LOWER(TRIM(name))=LOWER(TRIM(?)) AND LOWER(TRIM(COALESCE(mr_no,'')))=LOWER(TRIM(?))",
+            [date, name, mrNo],
+          );
+          const exists = candidates.some((row: any) => {
+            const rowValues = [row.mr_no, row.name, row.gender, row.age, row.date, row.diagnosis, row.procedure_name, row.procedure_ii, row.implant, row.implant_ii, row.address, row.file_name];
+            return signatureFor(rowValues, row.custom_data_json) === signature;
+          });
+          if (exists) { skippedDuplicates++; continue; }
+
+          const patientId = id();
           db.runSync(
             "INSERT INTO patients (id,mr_no,name,gender,age,diagnosis,procedure,procedure_ii,implant,implant_ii,implant_id,implant_ii_id,address,file_name,photo_uri,photos_json,custom_data_json,date,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             [patientId, mrNo, name, gender, age, diagnosis, procedureName, procedureII, implant, implantII, null, null, address, fileName, "", "[]", JSON.stringify(customData), date, now, uid],
