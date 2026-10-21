@@ -1,43 +1,31 @@
 # Ortho Logbook AI vision + lab templates
 
-## Implemented behavior
+## Direct phone-to-OpenAI mode (no Ortho Logbook backend)
 
-- Existing on-device OCR and conservative row parser remain the fallback.
-- Admins can save recurring report templates with distinctive phrases and column headings. The app chooses a template only when its marker phrases match OCR text; a template never supplies medical reference ranges.
-- AI vision is off by default. It requires an HTTPS endpoint, a client token stored in phone secure storage, and a separate explicit permission switch.
-- The automatic scanner sends an image to AI vision only when local OCR detects likely lab-report evidence and the administrator has explicitly enabled AI vision. Ordinary patient photos are not sent just because they are attached to a patient.
-- AI candidates prefill the administrator review form and are labeled with visual confidence. They do not change screening flags or become saved results until an administrator checks the original image and applies manual review.
+- AI vision is off by default. An administrator must add an OpenAI API key in Lab Test Reference Ranges and explicitly enable direct AI lab scanning.
+- The key is stored with Expo SecureStore on that device. It is not written to source code or included in the app's backup data by this feature.
+- The image is sent from the phone directly to `https://api.openai.com/v1/chat/completions` over HTTPS. No Ortho Logbook backend or MongoDB is needed for this path.
+- The automatic scanner sends an image only when local OCR already identifies likely lab-report content and the administrator has explicitly enabled direct vision. Ordinary patient photos are not sent just because they are attached to a patient.
+- The request includes configured lab-test names/aliases and report-layout hints but does not add patient name/MR number fields as request metadata. The image may itself visibly contain identifiers.
+- Images over 12 MB or unsupported image formats are skipped; the scanner keeps its local OCR results.
+- AI candidates prefill the administrator review form and are labeled as AI vision results. They do not change screening flags or become saved results until an administrator verifies them.
 - Test names must match an admin-configured test or alias unambiguously. Alerts use only the saved sex-specific reference range and saved unit.
+- If the key is missing, invalid, quota-limited, or the network is unavailable, local OCR remains the fallback.
 
-## Server configuration
+## API-key security warning
 
-Deploy the repository FastAPI backend behind HTTPS. Set these environment variables on the server:
+OpenAI advises against using an API key directly in a mobile app because device inspection or a modified APK can expose it and cause unauthorized usage/charges. SecureStore provides at-rest device protection, but does not make a client-side key equivalent to a server-side secret. This direct mode is for a personally controlled device and should not be used to distribute a shared key in public or multi-user APKs. Use a dedicated restricted OpenAI project/key, configure usage limits, monitor usage and rotate/revoke the key if compromise is suspected.
 
-- LAB_VISION_ENABLE_EXTERNAL_PROCESSING=true only after your organization approves external processing.
-- LAB_VISION_CLIENT_TOKEN to a long random secret; enter the same token in the app's Lab Test Reference Ranges settings.
-- OPENAI_API_KEY to the OpenAI API key used for both medical explanations and lab-image scanning. The lab-vision route also accepts LAB_VISION_API_KEY as an optional dedicated override. The provider key remains on the server and must never be entered into the mobile app.
-- Optional LAB_VISION_API_URL (defaults to an OpenAI-compatible chat-completions endpoint) and LAB_VISION_MODEL (defaults to gpt-4o-mini).
+For hospital or multi-user use, prefer a secured backend proxy that holds the key server-side, with authentication and appropriate privacy controls. No patient records are moved to that proxy by this direct lab-vision path.
 
-Set the mobile endpoint to the deployed backend URL ending in /api/lab-vision. The route requires bearer authentication, accepts image uploads up to 12 MB, does not write uploads to MongoDB, and intentionally avoids logging provider response content.
+## Optional hosted-backend compatibility
 
-## Privacy review is required
+The request utility still supports the prior HTTPS `/api/lab-vision` endpoint with a client token when no direct OpenAI key is configured. Users without a backend can leave those legacy settings empty and use direct mode.
 
-HTTPS and bearer authentication protect transport and access; they do not themselves guarantee healthcare regulatory compliance or no retention. Before enabling external processing, the hospital must approve the AI provider, data-processing terms, permitted data location, retention/deletion behavior, and no-training setting. Configure the provider account to the strongest suitable privacy controls. The image may itself contain patient identifiers even though the app does not send patient name, MR number, or OCR text as metadata. Do not enable this feature until that review is complete. Disabling the app switch stops new uploads; it cannot recall an image already sent.
+## Medical privacy
 
-## Request/response contract
+Before enabling external processing, ensure the organization or responsible clinician has approved sending lab-report images to the selected provider. Do not enable this feature until privacy requirements, provider data terms, retention/deletion behavior and applicable healthcare obligations have been reviewed. Disabling the app switch stops new uploads; it cannot recall an image already sent.
 
-The app sends multipart fields file and metadata. The server returns JSON containing a rows array, for example:
+## Vision request/response behavior
 
-    {
-      "rows": [
-        {
-          "test": "Hemoglobin",
-          "result": "9.2",
-          "unit": "g/dL",
-          "confidence": 0.91,
-          "reason": ""
-        }
-      ]
-    }
-
-The endpoint should abstain from unclear rows. Results are suggestions, not diagnoses. No AI candidate is automatically saved.
+The direct OpenAI request asks for JSON rows containing a test label, measured result, optional unit, confidence and reason. The scanner abstains from uncertain rows, and never auto-saves results. This is transcription assistance, not diagnosis.
