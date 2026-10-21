@@ -550,7 +550,7 @@ export default function Logbook() {
       // terminology service. Patient details, values, photos and ranges are not.
       const fetched = await fetchTrustedMedicalTestInfo(testName, definition?.aliases || "");
       if (!fetched) {
-        setMedicalInfoError("No relevant explanation was found in the trusted medical sources checked (MedlinePlus and PubMed). The app will not show an unrelated result.");
+        setMedicalInfoError("No relevant explanation was found in the trusted medical sources checked. The app will not show an unrelated result.");
         return;
       }
       let nextCache: Record<string, MedicalTestOnlineInfo> = {};
