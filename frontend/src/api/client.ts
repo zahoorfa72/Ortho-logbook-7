@@ -823,7 +823,7 @@ export const api = {
       const fromDate = String(params.get("from") || params.get("fromDate") || "").trim();
       const toDate = String(params.get("to") || params.get("toDate") || "").trim();
       const isoDate = (value: string) => {
-        if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(value)) return false;
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
         const parts = value.split("-").map(Number);
         const parsed = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
         return parsed.getUTCFullYear() === parts[0] && parsed.getUTCMonth() === parts[1] - 1 && parsed.getUTCDate() === parts[2];
@@ -1069,12 +1069,12 @@ export const api = {
       const asText = (value: any) => String(value ?? "").trim();
       const importDate = (raw: any): string => {
         const value = asText(raw);
-        if (/^\\d{4}-\\d{2}-\\d{2}$/.test(value)) {
+        if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
           const [y, m, d] = value.split("-").map(Number);
           const parsed = new Date(Date.UTC(y, m - 1, d));
           return parsed.getUTCFullYear() === y && parsed.getUTCMonth() === m - 1 && parsed.getUTCDate() === d ? value : "";
         }
-        const match = value.match(/^(\\d{1,2})\\/(\\d{1,2})\\/(\\d{4})$/);
+        const match = value.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
         if (!match) return "";
         const d = Number(match[1]), m = Number(match[2]), y = Number(match[3]);
         const parsed = new Date(Date.UTC(y, m - 1, d));
@@ -1097,7 +1097,7 @@ export const api = {
           const address = asText(item?.address);
           const fileName = asText(item?.fileName ?? item?.file_name) || name;
           const date = importDate(item?.date ?? item?.entryDate);
-          if (!mrNo || !name || !date || !procedureName) { skippedInvalid++; continue; }
+          if (!name || !date || !procedureName) { skippedInvalid++; continue; }
 
           const signature = [mrNo, name.toLocaleLowerCase(), date, diagnosis.toLocaleLowerCase(), procedureName.toLocaleLowerCase(), procedureII.toLocaleLowerCase()].join("|");
           if (seenInFile.has(signature)) { skippedDuplicates++; continue; }
@@ -1111,7 +1111,9 @@ export const api = {
           const patientId = id();
           const customData: Record<string, string> = {};
           const sourceSerial = asText(item?.sourceSerialNumber ?? item?.sNo ?? item?.serialNumber);
+          const sourceMrNoRaw = asText(item?.sourceMrNoRaw ?? item?.sourceMRNoRaw);
           if (sourceSerial) customData.sourceSerialNumber = sourceSerial;
+          if (sourceMrNoRaw) customData.sourceMrNoRaw = sourceMrNoRaw;
           db.runSync(
             "INSERT INTO patients (id,mr_no,name,gender,age,diagnosis,procedure,procedure_ii,implant,implant_ii,implant_id,implant_ii_id,address,file_name,photo_uri,photos_json,custom_data_json,date,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             [patientId, mrNo, name, gender, age, diagnosis, procedureName, procedureII, implant, implantII, null, null, address, fileName, "", "[]", JSON.stringify(customData), date, now, uid],

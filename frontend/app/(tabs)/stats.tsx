@@ -27,7 +27,7 @@ const MONTHS = [
 ];
 
 function toIsoDateFromDmy(value: string): string {
-  const match = String(value || "").trim().match(/^(\\d{1,2})[\\/.-](\\d{1,2})[\\/.-](\\d{4})$/);
+  const match = String(value || "").trim().match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/);
   if (!match) return "";
   const day = Number(match[1]), month = Number(match[2]), year = Number(match[3]);
   const parsed = new Date(Date.UTC(year, month - 1, day));

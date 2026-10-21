@@ -41,7 +41,7 @@ export default function PatientImportScreen() {
       });
       if (picked.canceled || !picked.assets?.[0]) return;
       const asset = picked.assets[0];
-      if (!/\\.(json|txt)$/i.test(asset.name || "")) {
+      if (!/\.(json|txt)$/i.test(asset.name || "")) {
         toast("Choose the prepared .json patient-import file. Do not select the source PDF here.", "error");
         return;
       }
