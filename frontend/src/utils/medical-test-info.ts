@@ -1,9 +1,11 @@
 /**
- * Online medical-test information lookup.
+ * Trusted online medical-test information lookup.
  *
- * Queries the US National Library of Medicine's public LOINC search service
- * and then MedlinePlus Connect. Only the test label is sent; patient identity,
- * report images, measured value, and reference ranges are never sent.
+ * MedlinePlus Connect accepts a LOINC code for lab-test queries and returns an
+ * attributed title, source URL and snippet. The app matches common local test
+ * names to standard codes internally; no test setup or website entry is required.
+ * Only the test name/aliases are used for matching. Patient identity, lab values,
+ * reference ranges, report text and photos are never sent to online services.
  */
 export type MedicalTestOnlineInfo = {
   title: string;
@@ -14,11 +16,12 @@ export type MedicalTestOnlineInfo = {
   loincCode: string;
 };
 
-type LoincCandidate = { code: string; label: string; score: number };
+type KnownLoinc = { code: string; labels: string[] };
 
 export const MEDICAL_INFO_CACHE_KEY = "ortho_lab_medical_info_cache_v1";
 export const LAB_TEST_DEFINITIONS_KEY = "ortho_lab_test_definitions_v1";
 const CACHE_FRESH_MS = 24 * 60 * 60 * 1000;
+
 const GENERIC_TERMS = new Set([
   "test", "level", "blood", "serum", "plasma", "whole", "in", "of", "the",
   "and", "for", "by", "with", "from", "mass", "volume", "number", "count",
@@ -26,6 +29,7 @@ const GENERIC_TERMS = new Set([
   "calculated", "fraction", "presence", "amount", "concentration", "activity",
 ]);
 
+// Common hospital-report labels and abbreviations used to find standard test codes.
 const COMMON_LABELS: Record<string, string[]> = {
   hb: ["hemoglobin", "haemoglobin"],
   hgb: ["hemoglobin", "haemoglobin"],
@@ -34,10 +38,22 @@ const COMMON_LABELS: Record<string, string[]> = {
   wbc: ["white blood cell count", "leukocyte count", "leucocyte count"],
   tlc: ["total leukocyte count", "white blood cell count", "leukocyte count"],
   leukocytes: ["leukocyte count", "white blood cell count"],
-  leukocytescount: ["white blood cell count"],
   rbc: ["red blood cell count", "erythrocyte count"],
   plt: ["platelet count", "platelets"],
   platelets: ["platelet count"],
+  pcv: ["hematocrit", "haematocrit"],
+  hct: ["hematocrit", "haematocrit"],
+  mcv: ["mean corpuscular volume"],
+  mch: ["mean corpuscular hemoglobin"],
+  mchc: ["mean corpuscular hemoglobin concentration"],
+  rdw: ["red cell distribution width"],
+  fbs: ["fasting blood glucose", "fasting plasma glucose", "fasting blood sugar"],
+  fbg: ["fasting blood glucose", "fasting plasma glucose"],
+  fastingbloodsugar: ["fasting blood glucose", "fasting plasma glucose"],
+  rbs: ["random blood glucose", "random blood sugar"],
+  randombloodsugar: ["random blood glucose"],
+  ppbs: ["postprandial blood glucose", "postprandial blood sugar"],
+  hba1c: ["hemoglobin A1c", "glycated hemoglobin"],
   sgpt: ["alanine aminotransferase", "ALT"],
   alt: ["alanine aminotransferase", "SGPT"],
   sgot: ["aspartate aminotransferase", "AST"],
@@ -49,25 +65,94 @@ const COMMON_LABELS: Record<string, string[]> = {
   t3: ["triiodothyronine"],
   esr: ["erythrocyte sedimentation rate"],
   crp: ["C reactive protein"],
-  hba1c: ["hemoglobin A1c", "glycated hemoglobin"],
   bun: ["blood urea nitrogen"],
   urea: ["urea nitrogen"],
   creatinine: ["serum creatinine"],
   glucose: ["blood glucose", "blood sugar"],
   sodium: ["sodium measurement"],
   potassium: ["potassium measurement"],
-  bilirubin: ["bilirubin total"],
+  bilirubin: ["total bilirubin"],
   ggt: ["gamma glutamyl transferase"],
   ggtp: ["gamma glutamyl transferase"],
-  amylase: ["amylase activity"],
-  lipase: ["lipase activity"],
+  cholesterol: ["total cholesterol"],
+  ldl: ["LDL cholesterol", "low density lipoprotein cholesterol"],
+  hdl: ["HDL cholesterol", "high density lipoprotein cholesterol"],
+  tg: ["triglycerides"],
+  chol: ["total cholesterol"],
   pt: ["prothrombin time"],
   inr: ["international normalized ratio"],
   aptt: ["activated partial thromboplastin time"],
+  ptt: ["partial thromboplastin time"],
   hbsag: ["hepatitis B surface antigen"],
   hcv: ["hepatitis C antibody"],
   hiv: ["HIV antigen antibody test"],
+  vitd: ["25 hydroxy vitamin D", "vitamin D"],
+  vitaminb12: ["vitamin B12", "cobalamin"],
+  b12: ["vitamin B12", "cobalamin"],
+  ferritin: ["serum ferritin"],
+  uricacid: ["uric acid"],
+  cal: ["calcium"],
+  ca: ["calcium"],
+  mg: ["magnesium"],
+  phosphate: ["phosphorus"],
+  alp: ["alkaline phosphatase"],
+  alb: ["albumin"],
+  tp: ["total protein"],
+  tropi: ["troponin I"],
 };
+
+// Standard LOINC codes commonly supported by MedlinePlus Connect for lab-test lookups.
+// These codes are used only to query MedlinePlus; the returned explanation is always
+// required to come from a matching MedlinePlus response.
+const KNOWN_LAB_CODES: KnownLoinc[] = [
+  { code: "718-7", labels: ["hemoglobin", "haemoglobin", "hb", "hgb"] },
+  { code: "4544-3", labels: ["hematocrit", "haematocrit", "pcv", "hct"] },
+  { code: "6690-2", labels: ["white blood cell count", "leukocyte count", "leucocyte count", "wbc", "tlc"] },
+  { code: "789-8", labels: ["red blood cell count", "erythrocyte count", "rbc"] },
+  { code: "777-3", labels: ["platelet count", "platelets", "plt"] },
+  { code: "787-2", labels: ["mcv", "mean corpuscular volume"] },
+  { code: "785-6", labels: ["mch", "mean corpuscular hemoglobin"] },
+  { code: "786-4", labels: ["mchc", "mean corpuscular hemoglobin concentration"] },
+  { code: "788-0", labels: ["rdw", "red cell distribution width"] },
+  { code: "2345-7", labels: ["glucose", "blood glucose", "blood sugar", "random blood glucose", "random blood sugar", "rbs"] },
+  { code: "1558-6", labels: ["fasting blood glucose", "fasting plasma glucose", "fasting blood sugar", "fbs", "fbg"] },
+  { code: "2160-0", labels: ["creatinine", "serum creatinine"] },
+  { code: "3094-0", labels: ["urea nitrogen", "blood urea nitrogen", "bun", "urea"] },
+  { code: "2951-2", labels: ["sodium"] },
+  { code: "2823-3", labels: ["potassium"] },
+  { code: "2075-0", labels: ["chloride"] },
+  { code: "2028-9", labels: ["bicarbonate", "carbon dioxide", "co2"] },
+  { code: "1742-6", labels: ["alt", "sgpt", "alanine aminotransferase"] },
+  { code: "1920-8", labels: ["ast", "sgot", "aspartate aminotransferase"] },
+  { code: "6768-6", labels: ["alkaline phosphatase", "alp"] },
+  { code: "1975-2", labels: ["total bilirubin", "bilirubin"] },
+  { code: "1968-7", labels: ["direct bilirubin"] },
+  { code: "1751-7", labels: ["albumin", "alb"] },
+  { code: "2885-2", labels: ["total protein", "tp"] },
+  { code: "17861-6", labels: ["calcium"] },
+  { code: "2601-3", labels: ["magnesium", "mg"] },
+  { code: "1988-5", labels: ["c reactive protein", "crp"] },
+  { code: "4537-7", labels: ["erythrocyte sedimentation rate", "esr"] },
+  { code: "3016-3", labels: ["tsh", "thyroid stimulating hormone"] },
+  { code: "3024-7", labels: ["free thyroxine", "free t4", "ft4"] },
+  { code: "4548-4", labels: ["hba1c", "hemoglobin a1c", "glycated hemoglobin"] },
+  { code: "2093-3", labels: ["total cholesterol", "cholesterol", "chol"] },
+  { code: "2085-9", labels: ["hdl cholesterol", "high density lipoprotein cholesterol", "hdl"] },
+  { code: "18262-6", labels: ["ldl cholesterol", "low density lipoprotein cholesterol", "ldl"] },
+  { code: "2571-8", labels: ["triglycerides", "tg"] },
+  { code: "5902-2", labels: ["prothrombin time", "pt"] },
+  { code: "6301-6", labels: ["international normalized ratio", "inr"] },
+  { code: "14979-9", labels: ["activated partial thromboplastin time", "aptt"] },
+  { code: "2498-4", labels: ["iron", "serum iron"] },
+  { code: "2276-4", labels: ["ferritin", "serum ferritin"] },
+  { code: "2132-9", labels: ["vitamin b12", "cobalamin", "b12"] },
+  { code: "2284-8", labels: ["folate", "folic acid"] },
+  { code: "1989-3", labels: ["vitamin d", "25 hydroxy vitamin d", "25 oh vitamin d"] },
+  { code: "3084-1", labels: ["uric acid"] },
+  { code: "1798-8", labels: ["amylase"] },
+  { code: "3040-3", labels: ["lipase"] },
+  { code: "10839-9", labels: ["troponin i", "tropi"] },
+];
 
 export function medicalInfoCacheKey(testName: string): string {
   return String(testName || "").toLocaleLowerCase().trim().replace(/[^a-z0-9]+/g, " ").trim();
@@ -76,17 +161,8 @@ export function medicalInfoCacheKey(testName: string): string {
 export function isMedicalTestInfoFresh(info?: MedicalTestOnlineInfo | null): boolean {
   if (!info?.summary || !info.fetchedAt) return false;
   const fetched = new Date(info.fetchedAt).getTime();
-  return Number.isFinite(fetched) && Date.now() - fetched >= 0 && Date.now() - fetched < CACHE_FRESH_MS;
-}
-
-function cleanText(value: string): string {
-  return decodeEntities(String(value || ""))
-    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  const age = Date.now() - fetched;
+  return Number.isFinite(fetched) && age >= 0 && age < CACHE_FRESH_MS;
 }
 
 function decodeEntities(value: string): string {
@@ -103,6 +179,20 @@ function decodeEntities(value: string): string {
       .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCharCode(parseInt(n, 16)));
   }
   return text;
+}
+
+function cleanText(value: string): string {
+  return decodeEntities(String(value || ""))
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function simpleKey(value: string): string {
+  return String(value || "").toLocaleLowerCase().replace(/[^a-z0-9]+/g, "");
 }
 
 function normalizeTokens(value: string): string[] {
@@ -137,40 +227,36 @@ function lookupLabels(testName: string, aliases: string): string[] {
   const inputs = [testName, ...String(aliases || "").split(/[,;\n]+/)]
     .map(value => value.trim())
     .filter(value => value.length >= 2 && value.length <= 80);
-  const all = [...inputs];
+  const all: string[] = [];
   for (const label of inputs) {
-    const key = label.toLocaleLowerCase().replace(/[^a-z0-9]/g, "");
-    all.push(...(COMMON_LABELS[key] || []));
+    all.push(label);
+    const synonyms = COMMON_LABELS[simpleKey(label)] || [];
+    all.push(...synonyms);
   }
   const seen = new Set<string>();
   return all.filter(label => {
-    const key = label.toLocaleLowerCase().replace(/[^a-z0-9]/g, "");
+    const key = simpleKey(label);
     if (!key || seen.has(key)) return false;
     seen.add(key);
     return true;
-  }).slice(0, 8);
+  }).slice(0, 24);
 }
 
-async function fetchLoincCandidates(label: string): Promise<LoincCandidate[]> {
-  const url = "https://clinicaltables.nlm.nih.gov/api/loinc_items/v3/search?type=question&terms=" +
-    encodeURIComponent(label) + "&df=text&maxList=12";
-  const response = await fetch(url, { headers: { Accept: "application/json" } });
-  if (!response.ok) return [];
-  const data: any = await response.json();
-  if (!Array.isArray(data) || !Array.isArray(data[1])) return [];
-  const codes: string[] = data[1].map((code: unknown) => String(code || "")).filter(Boolean);
-  const displayRows: any[] = Array.isArray(data[3]) ? data[3] : [];
-  return codes.map((code, index) => {
-    const row = displayRows[index];
-    const display = Array.isArray(row) ? row.join(" ") : String(row || "");
-    const candidateLabel = cleanText(display) || label;
-    return { code, label: candidateLabel, score: relevanceScore([label], candidateLabel) };
-  });
+function findKnownLoincCandidates(labels: string[]): KnownLoinc[] {
+  const scored = KNOWN_LAB_CODES.map(item => ({
+    item,
+    score: Math.max(...item.labels.map(alias => relevanceScore(labels, alias))),
+  }));
+  // Require a strong match to an abbreviation/name, so a generic shared word
+  // such as "blood" can never select the wrong laboratory test.
+  return scored.filter(item => item.score >= 0.94)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 5)
+    .map(item => item.item);
 }
 
 function firstTag(body: string, name: string): string {
-  const escaped = name.replace(/[.*+?^\${}()|[\]\\]/g, "\\$&");
-  const match = new RegExp("<(?:[\\w.-]+:)?" + escaped + "\\b[^>]*>([\\s\\S]*?)</(?:[\\w.-]+:)?" + escaped + "\\s*>", "i").exec(body);
+  const match = new RegExp("<(?:[\\w.-]+:)?" + name + "\\b[^>]*>([\\s\\S]*?)</(?:[\\w.-]+:)?" + name + "\\s*>", "i").exec(body);
   return match ? cleanText(match[1]) : "";
 }
 
@@ -204,43 +290,23 @@ async function fetchMedlinePlusByLoinc(code: string, label: string): Promise<Omi
     "&informationRecipient.languageCode.c=en";
   const response = await fetch(url, { headers: { Accept: "application/atom+xml, application/xml, text/xml" } });
   if (!response.ok) return null;
-  const xml = await response.text();
-  return parseMedlinePlusEntry(xml);
+  return parseMedlinePlusEntry(await response.text());
 }
 
 /**
- * Searches official US National Library of Medicine LOINC terminology, then
- * asks MedlinePlus Connect for content matched to the returned test code.
- * It never fabricates explanations when the source has no matching entry.
+ * Finds a high-confidence standard code from built-in common lab aliases, then
+ * retrieves the matched explanation from MedlinePlus Connect. When no exact
+ * supported match exists it returns null rather than inventing medical details.
  */
 export async function fetchTrustedMedicalTestInfo(testName: string, aliases = ""): Promise<MedicalTestOnlineInfo | null> {
   const labels = lookupLabels(testName, aliases);
   if (!labels.length) return null;
-
-  const candidateMap = new Map<string, LoincCandidate>();
-  // A few name variants improve recall for common local laboratory abbreviations
-  // without uploading any patient data.
-  const searchLabels = labels.slice(0, 4);
-  const searchResults = await Promise.all(searchLabels.map(async label => {
-    try { return await fetchLoincCandidates(label); } catch { return []; }
-  }));
-  searchResults.flat().forEach(candidate => {
-    const score = Math.max(candidate.score, relevanceScore(labels, candidate.label));
-    const prior = candidateMap.get(candidate.code);
-    if (!prior || score > prior.score) candidateMap.set(candidate.code, { ...candidate, score });
-  });
-
-  const candidates = [...candidateMap.values()]
-    .filter(candidate => candidate.score >= 0.25)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 6);
-
+  const candidates = findKnownLoincCandidates(labels);
   for (const candidate of candidates) {
     try {
-      const article = await fetchMedlinePlusByLoinc(candidate.code, candidate.label);
+      const article = await fetchMedlinePlusByLoinc(candidate.code, candidate.labels[0] || testName);
       if (!article) continue;
-      // Reject a broad or mismatched result rather than attach an unrelated page.
-      const titleScore = relevanceScore([...labels, candidate.label], article.title);
+      const titleScore = relevanceScore([...labels, ...candidate.labels], article.title);
       if (titleScore < 0.2) continue;
       return {
         ...article,
@@ -248,7 +314,7 @@ export async function fetchTrustedMedicalTestInfo(testName: string, aliases = ""
         loincCode: candidate.code,
       };
     } catch {
-      // Try the next relevant code if one official lookup fails.
+      // A transient failure or missing official match leaves the information unset.
     }
   }
   return null;
