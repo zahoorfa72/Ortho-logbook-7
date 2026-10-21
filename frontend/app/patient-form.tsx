@@ -380,9 +380,20 @@ export default function PatientForm() {
           const max = Number(String(genderForRange === "male" ? saved.maleMax : saved.femaleMax).replace(",", "."));
           const value = Number(String(row.result || "").replace(",", ".").replace(/[<>≤≥\s]/g, ""));
           if (!Number.isFinite(value)) return [];
-          const excursion = value < min ? (min === 0 ? 100 : Math.abs(min - value) / Math.abs(min) * 100)
-            : value > max ? Math.abs(value - max) / Math.max(Math.abs(max), 0.000001) * 100 : 0;
-          const severity = excursion > 1 ? (excursion <= labWarningThreshold ? "WARNING" : "ALERT") : "";
+          // Reclassify against the saved sex-specific range here rather than
+          // trusting OCR parser severity, which may have used a printed or
+          // differently matched range. Mild deviations (>1% through the
+          // configured threshold) remain visible as WARNING; larger deviations
+          // are ALERT. Never classify when the saved range is invalid.
+          const validRange = Number.isFinite(min) && Number.isFinite(max) && max > min;
+          const outside = validRange && (value < min || value > max);
+          const boundary = value < min ? min : max;
+          const excursion = outside
+            ? (boundary === 0 ? 100 : Math.abs(value - boundary) / Math.abs(boundary) * 100)
+            : 0;
+          const severity = outside && excursion > 1
+            ? (excursion <= Math.max(1, Math.min(100, labWarningThreshold)) ? "WARNING" : "ALERT")
+            : "";
           return [{
             ...row, test: String(saved.name), unit: String(saved.unit || ""),
             reference: String(saved[genderForRange === "male" ? "maleMin" : "femaleMin"]) + "–" + String(saved[genderForRange === "male" ? "maleMax" : "femaleMax"]),
