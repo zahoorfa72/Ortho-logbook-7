@@ -102,7 +102,7 @@ export async function generateLocalLabMedicalInfo(
           "Return exactly these two headings in this order:",
           "WHAT THIS TEST IS",
           "WHAT THE ABNORMAL RESULT MAY MEAN",
-          "Explain only the supplied direction if it is HIGH or LOW. If direction is unknown, describe high/low only where the source itself supports them. If the source lacks a direction-specific explanation, clearly say that the source does not establish one.",
+          "In the second section, cover BOTH HIGH and LOW results whenever the source text supports both, putting the provided direction first. This makes the cached explanation safe to reuse for later patients whose results move in the opposite direction. If a direction is not supported by the source, say so briefly instead of inventing it.",
           "Use short plain-language paragraphs. Make no claim that one abnormal test alone proves a disease. No patient-specific diagnosis.",
         ].join("\n"),
       }],
