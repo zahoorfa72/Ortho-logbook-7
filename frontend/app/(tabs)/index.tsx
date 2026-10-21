@@ -1973,7 +1973,7 @@ export default function Logbook() {
                       requestLabScan(patientId, false);
                     } },
                   ]);
-                }} disabled={labReviewSaving} style={{ flex: 1, padding: spacing.md, borderWidth: 1, borderColor: colors.warning || "#B7791F", borderRadius: radius.md, alignItems: "center" }}>
+                }} disabled={labReviewSaving || !labOcrEnabled} style={{ flex: 1, padding: spacing.md, borderWidth: 1, borderColor: colors.warning || "#B7791F", borderRadius: radius.md, alignItems: "center", opacity: labReviewSaving || !labOcrEnabled ? 0.55 : 1 }}>
                   <Text style={{ color: colors.warning || "#B7791F", fontFamily: fontFamily.semibold }}>Rescan photos</Text>
                 </Pressable>
                 <Pressable onPress={() => void confirmPendingLabReview()} disabled={labReviewSaving || !activeLabReview.rows.length} style={{ flex: 1, padding: spacing.md, backgroundColor: colors.brandPrimary, borderRadius: radius.md, alignItems: "center", opacity: labReviewSaving || !activeLabReview.rows.length ? 0.6 : 1 }}>
