@@ -1,7 +1,7 @@
 import type { MedicalTestOnlineInfo } from "@/src/utils/medical-test-info";
 
 export const LOCAL_LAB_AI_READY_KEY = "ortho_local_lab_ai_model_ready_v1";
-export const LOCAL_LAB_AI_MODEL_NAME = "Gemma 4 E2B (8-bit dynamic quantization, CPU optimized)";
+export const LOCAL_LAB_AI_MODEL_NAME = "Gemma 4 E2B (CPU-optimized)";
 export const LOCAL_LAB_AI_MODEL_SIZE = "approximately 2.5–2.7 GB";
 
 // Web builds deliberately avoid importing the native C++ runtime.

@@ -574,12 +574,21 @@ export default function Logbook() {
           }
         }
       }
-      let trustedFetched: MedicalTestOnlineInfo | null = null;
-      try {
-        trustedFetched = await fetchTrustedMedicalTestInfo(testName, definition?.aliases || "");
-      } catch {
-        trustedFetched = null;
+      // When a source summary is already cached, use it directly for local
+      // generation instead of requiring a network round-trip. This makes first-time
+      // local generation from previously viewed tests work while offline.
+      let trustedFetched: MedicalTestOnlineInfo | null =
+        localModelReady && existing?.summary ? existing : null;
+      if (!trustedFetched) {
+        try {
+          trustedFetched = await fetchTrustedMedicalTestInfo(testName, definition?.aliases || "");
+        } catch {
+          trustedFetched = null;
+        }
       }
+      // Previously cached source text remains a final offline fallback, even if stale;
+      // its original source timestamp is displayed separately from generation time.
+      if (!trustedFetched && existing?.summary) trustedFetched = existing;
       // If online sources are unavailable, allow the administrator's saved medical
       // notes to act as the reference for this configured test. Do not generate new
       // factual claims if neither a trusted source nor admin notes exist.
@@ -2146,7 +2155,7 @@ export default function Logbook() {
                 return info?.summary ? <>
                   <Text style={{ color: colors.onSurface, fontFamily: fontFamily.semibold, marginTop: spacing.md }}>{activeMedicalTest?.definition?.purpose?.trim() ? "Additional trusted-source summary" : info.title}</Text>
                   <Text style={{ color: colors.onSurface, lineHeight: 20, marginTop: spacing.xs }}>{info.summary}</Text>
-                  <Text style={{ color: colors.muted, fontSize: fontSize.xs, marginTop: spacing.sm }}>Source: {info.sourceName} · Last checked {new Date(info.fetchedAt).toLocaleDateString()} · Cached for offline use</Text>
+                  <Text style={{ color: colors.muted, fontSize: fontSize.xs, marginTop: spacing.sm }}>Source: {info.sourceName} · Source checked {new Date(info.sourceFetchedAt || info.fetchedAt).toLocaleDateString()} · Cached for offline use</Text>
                   {(info.sources?.length ? info.sources : [{ title: info.sourceName, url: info.sourceUrl }]).map((source, sourceIndex) => (
                     <Pressable key={source.url + "-" + sourceIndex} onPress={() => void Linking.openURL(source.url)} style={{ alignSelf: "flex-start", marginTop: spacing.xs, paddingVertical: 3 }}>
                       <Text style={{ color: colors.brandPrimary, fontSize: fontSize.sm, textDecorationLine: "underline" }}>{source.title || source.url}</Text>

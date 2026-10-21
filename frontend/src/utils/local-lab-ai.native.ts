@@ -3,7 +3,7 @@ import { createLLMChatSession, download, models, setTelemetryEnabled } from "rea
 import type { MedicalTestOnlineInfo } from "@/src/utils/medical-test-info";
 
 export const LOCAL_LAB_AI_READY_KEY = "ortho_local_lab_ai_model_ready_v1";
-export const LOCAL_LAB_AI_MODEL_NAME = "Gemma 4 E2B (8-bit dynamic quantization, CPU optimized)";
+export const LOCAL_LAB_AI_MODEL_NAME = "Gemma 4 E2B (CPU-optimized)";
 export const LOCAL_LAB_AI_MODEL_SIZE = "approximately 2.5–2.7 GB";
 
 const MODEL_CONFIG = models.llm.GEMMA4_E2B.XNNPACK_8DA4W;
@@ -132,6 +132,7 @@ export async function generateLocalLabMedicalInfo(
           .replace(/\s*```\s*$/i, "")
           .trim()
           .slice(0, 1800),
+        sourceFetchedAt: sourceInfo.sourceFetchedAt || sourceInfo.fetchedAt,
         fetchedAt: new Date().toISOString(),
         modelProvider: "local-gemma4-e2b",
       };
