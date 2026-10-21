@@ -551,8 +551,15 @@ export default function Logbook() {
       // Only the identified test label/aliases are sent to the public medical
       // terminology service. Patient details, values, photos and ranges are not.
       // Prefer the AI-assisted, web-cited summary when configured; fall back to existing trusted sources if unavailable.
-      const fetched = (await fetchAiMedicalTestInfo(testName, definition?.aliases || "", "low or high (outside the configured reference range)").catch(() => null))
+      const fetchedRaw = (await fetchAiMedicalTestInfo(testName, definition?.aliases || "", "low or high (outside the configured reference range)").catch(() => null))
         || await fetchTrustedMedicalTestInfo(testName, definition?.aliases || "");
+      const fetched = fetchedRaw ? {
+        ...fetchedRaw,
+        // Keep website fallback summaries compact too; do not pad missing evidence with invented claims.
+        summary: (fetchedRaw.summary.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [fetchedRaw.summary])
+          .map(line => line.trim()).filter(Boolean).slice(0, 7)
+          .map(line => line.length > 180 ? line.slice(0, 177).trimEnd() + "…" : line).join("\\n"),
+      } : null;
       if (!fetched) {
         setMedicalInfoError("No relevant explanation was found in the trusted medical sources checked. The app will not show an unrelated result.");
         return;
