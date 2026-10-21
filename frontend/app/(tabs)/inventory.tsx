@@ -253,7 +253,7 @@ export default function Inventory() {
   }, [doNewLowExport]);
 
   const shareLowStockText = useCallback(async () => {
-    const items = (data || []).filter(item => item.quantity <= item.minimumStock);
+    const items = (list || []).filter(item => item.quantity <= item.minimumStock);
     if (!items.length) {
       toast("No low-stock items to share.", "info");
       return;
@@ -280,10 +280,10 @@ export default function Inventory() {
     } catch (e: any) {
       toast(e?.message || "Could not open the share menu.", "error");
     }
-  }, [data, toast]);
+  }, [list, toast]);
 
   const shareCategoryText = useCallback(async () => {
-    const items = data || [];
+    const items = list || [];
     if (!selectedCategoryId || !items.length) {
       toast(items.length ? "Open a category first to share its inventory." : "This category has no inventory items to share.", "info");
       return;
@@ -308,7 +308,7 @@ export default function Inventory() {
     } catch (e: any) {
       toast(e?.message || "Could not open the share menu.", "error");
     }
-  }, [data, selectedCategoryId, selectedCategoryName, toast]);
+  }, [list, selectedCategoryId, selectedCategoryName, toast]);
 
   const doExport = useCallback(async () => {
     const items = list || [];
