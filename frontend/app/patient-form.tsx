@@ -11,7 +11,6 @@ import { convert as convertPdfPagesToImages } from "@uzimandias/react-native-pdf
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { extractLabReportDate, hasKnownLabTestName, isLabMetadataLine, isLikelyLabReportText, parseLabReportRows, recognizeLabText } from "@/src/utils/lab-ocr";
 import { detectScreeningStatuses } from "@/src/utils/screening-status";
-import { scanPatientDocuments } from "@/src/utils/document-scanner";
 import { buildPerspectiveWarpHtml } from "@/src/utils/perspective-warp";
 import { recordDiagnosticError } from "@/src/utils/problem-report";
 import { Dimensions } from "react-native";
@@ -188,6 +187,10 @@ export default function PatientForm() {
   const [cameraOpen, setCameraOpen] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
   const [cameraTaking, setCameraTaking] = useState(false);
+  const [documentScannerMode, setDocumentScannerMode] = useState(false);
+  const [documentScannerTorch, setDocumentScannerTorch] = useState(false);
+  const [documentScannerZoom, setDocumentScannerZoom] = useState(0.12);
+  const [documentScannerPageCount, setDocumentScannerPageCount] = useState(0);
   const cameraRef = useRef<any>(null);
   const [cameraPermission, requestCameraPermission] = CameraPermissions.useCameraPermissions();
   const imagePickerOpening = useRef(false);
@@ -1183,22 +1186,20 @@ export default function PatientForm() {
     imagePickerOpening.current = true;
     setPhotoBusy(true);
     try {
-      const scannedUris = await scanPatientDocuments();
-      if (!scannedUris.length) return;
-      const permanentUris: string[] = [];
-      for (const uri of scannedUris) permanentUris.push(await persistPhoto(uri));
-      setP(previous => ({ ...previous, photos: [...previous.photos, ...permanentUris] }));
-      toast(permanentUris.length === 1 ? "Document scanned, edge-corrected and saved." : permanentUris.length + " document pages scanned, edge-corrected and saved.", "success");
+      let permission = cameraPermission;
+      if (!permission?.granted) permission = await requestCameraPermission();
+      if (!permission?.granted) {
+        const fallback = await ImagePicker.requestCameraPermissionsAsync();
+        if (!fallback.granted) throw new Error("Camera permission is required. Enable it in Android Settings and try again.");
+      }
+      setDocumentScannerMode(true);
+      setDocumentScannerTorch(false);
+      setDocumentScannerZoom(0.12);
+      setDocumentScannerPageCount(0);
+      setCameraReady(false);
+      setCameraOpen(true);
     } catch (e: any) {
-      const detail = String(e?.message || e || "Please try again.");
-      Alert.alert(
-        "Document scanner unavailable",
-        "The automatic document scanner failed to open. You can capture the page with the regular camera and then correct its edges in the perspective editor." + String.fromCharCode(10,10) + detail,
-        [
-          { text: "Cancel", style: "cancel" },
-          { text: "Use camera fallback", onPress: () => { void captureFallbackDocument(); } },
-        ],
-      );
+      toast("Could not start the Ortho Logbook document scanner. " + String(e?.message || e || "Please try again."), "error");
     } finally {
       setPhotoBusy(false);
       imagePickerOpening.current = false;
@@ -1212,38 +1213,27 @@ export default function PatientForm() {
     setExistingScanPickerVisible(true);
   };
 
-  const addFromCamera = async () => {
-    // Capture patient-file documents through the native edge-detection scanner
-    // so page borders and perspective are corrected automatically at capture.
-    if (photoBusy || cameraOpen || imagePickerOpening.current) return;
-    imagePickerOpening.current = true;
-    setPhotoBusy(true);
-    try {
-      const scannedUris = await scanPatientDocuments();
-      if (!scannedUris.length) return;
-      const permanentUris: string[] = [];
-      for (const uri of scannedUris) permanentUris.push(await persistPhoto(uri));
-      setP(previous => ({ ...previous, photos: [...previous.photos, ...permanentUris] }));
-      toast(permanentUris.length === 1
-        ? "Photo captured, document edges corrected and saved."
-        : permanentUris.length + " scanned pages captured, corrected and saved.", "success");
-    } catch (e: any) {
-      toast("Camera document scan failed. " + String(e?.message || e || "Please try again."), "error");
-    } finally {
-      setPhotoBusy(false);
-      imagePickerOpening.current = false;
-    }
+  const addFromCamera = () => {
+    void scanWithCameraDocuments();
   };
 
   const capturePatientPhoto = async () => {
     if (!cameraRef.current || !cameraReady || cameraTaking) return;
     setCameraTaking(true);
     try {
-      const result = await cameraRef.current.takePictureAsync({ quality: 1 });
+      const result = await cameraRef.current.takePictureAsync({
+        quality: 1,
+        skipProcessing: false,
+      });
       if (!result?.uri) throw new Error("The camera did not return a photo.");
       const permanentUri = await persistPhoto(result.uri);
-      setP((x) => ({ ...x, photos: [...x.photos, permanentUri] }));
-      toast("Photo added. Take another photo or tap Done.", "success");
+      setP(previous => ({ ...previous, photos: [...previous.photos, permanentUri] }));
+      if (documentScannerMode) {
+        setDocumentScannerPageCount(count => count + 1);
+        toast("Page captured at full quality. Continue with another page or tap Done to review and crop.", "success");
+      } else {
+        toast("Photo added. Take another photo or tap Done.", "success");
+      }
     } catch (e: any) {
       toast(e?.message || "Could not save the camera photo.", "error");
     } finally {
@@ -1970,7 +1960,7 @@ export default function PatientForm() {
           <PrimaryButton title={"Add from Gallery" + (p.photos.length ? " (+)" : "")} onPress={addFromLibrary} disabled={!imagePickerReady || photoBusy} testID="add-photo-library-button" />
           <Pressable style={[styles.secondary, photoBusy && { opacity: 0.5 }]} onPress={scanDocumentsToPatientPhotos} disabled={photoBusy || cameraOpen} testID="scan-patient-document-button">
             <Ionicons name="scan-outline" size={18} color={colors.brandPrimary} />
-            <Text style={styles.secondaryText}> {photoBusy ? "Processing…" : (p.photos.length ? "Scan Existing Photo" : "Scan Document")}</Text>
+            <Text style={styles.secondaryText}> {photoBusy ? "Starting scanner…" : (p.photos.length ? "Scan Existing Photo" : "Open Document Scanner")}</Text>
           </Pressable>
           <Pressable style={[styles.secondary, photoBusy && { opacity: 0.5 }]} onPress={addFromCamera} disabled={photoBusy || cameraOpen} testID="add-photo-camera-button">
             <Ionicons name="camera" size={18} color={colors.onSurface} />
@@ -2549,48 +2539,79 @@ export default function PatientForm() {
         visible={cameraOpen}
         animationType="slide"
         presentationStyle="fullScreen"
-        onRequestClose={() => { setCameraOpen(false); setCameraReady(false); }}
+        onRequestClose={() => { setCameraOpen(false); setCameraReady(false); setDocumentScannerMode(false); }}
       >
         <View style={styles.cameraScreen}>
-          <View style={[styles.cameraHeader, { paddingTop: insets.top + spacing.sm }]}>
+          <View style={[styles.cameraHeader, { paddingTop: insets.top + spacing.sm, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }]}>
             <Pressable
-              onPress={() => { setCameraOpen(false); setCameraReady(false); }}
+              onPress={() => { setCameraOpen(false); setCameraReady(false); setDocumentScannerMode(false); }}
               style={styles.photoEditIconButton}
               disabled={cameraTaking}
-              accessibilityLabel="Close camera"
+              accessibilityLabel="Close scanner"
             >
               <Ionicons name="close" size={24} color="#FFFFFF" />
             </Pressable>
-            <Text style={styles.cameraTitle}>Take Patient Photo</Text>
-            <Pressable onPress={() => { setCameraOpen(false); setCameraReady(false); }} style={styles.photoEditIconButton} disabled={cameraTaking}><Text style={{ color: "#FFFFFF", fontWeight: "700" }}>Done</Text></Pressable>
+            <View style={{ flex: 1, alignItems: "center" }}>
+              <Text style={styles.cameraTitle}>{documentScannerMode ? "ORTHO DOCUMENT SCANNER" : "Take Patient Photo"}</Text>
+              {documentScannerMode ? <Text style={{ color: "#D1D5DB", fontSize: 11, marginTop: 3 }}>Page {documentScannerPageCount + 1} · High-quality capture</Text> : null}
+            </View>
+            <Pressable onPress={() => { setCameraOpen(false); setCameraReady(false); setDocumentScannerMode(false); }} style={styles.photoEditIconButton} disabled={cameraTaking}><Text style={{ color: "#FFFFFF", fontWeight: "700" }}>Done</Text></Pressable>
           </View>
-          <View style={styles.cameraPreviewWrap}>
+          <View style={[styles.cameraPreviewWrap, { flex: 1, position: "relative" }]}>
             {cameraOpen ? (
               <CameraView
                 ref={cameraRef}
                 style={styles.cameraPreview}
                 facing="back"
                 mode="picture"
+                enableTorch={documentScannerMode && documentScannerTorch}
+                zoom={documentScannerMode ? documentScannerZoom : 0}
                 onCameraReady={() => setCameraReady(true)}
               />
             ) : null}
+            {documentScannerMode ? <View pointerEvents="none" style={{ position: "absolute", left: "7%", right: "7%", top: "10%", bottom: "10%", borderWidth: 2, borderColor: "#F8FAFC", borderRadius: 14, backgroundColor: "transparent" }}>
+              <View style={{ position: "absolute", left: 0, right: 0, top: "50%", borderTopWidth: 1, borderColor: "rgba(255,255,255,0.4)" }} />
+              <View style={{ position: "absolute", top: 0, bottom: 0, left: "50%", borderLeftWidth: 1, borderColor: "rgba(255,255,255,0.4)" }} />
+              {["top-left", "top-right", "bottom-left", "bottom-right"].map(corner => <View key={corner} style={{ position: "absolute", width: 24, height: 24, borderColor: "#22C55E", borderTopWidth: corner.startsWith("top") ? 4 : 0, borderBottomWidth: corner.startsWith("bottom") ? 4 : 0, borderLeftWidth: corner.endsWith("left") ? 4 : 0, borderRightWidth: corner.endsWith("right") ? 4 : 0, top: corner.startsWith("top") ? -2 : undefined, bottom: corner.startsWith("bottom") ? -2 : undefined, left: corner.endsWith("left") ? -2 : undefined, right: corner.endsWith("right") ? -2 : undefined }} />)}
+            </View> : null}
             {!cameraReady ? (
               <View style={styles.cameraLoading}>
                 <Text style={styles.cameraLoadingText}>Starting camera…</Text>
               </View>
             ) : null}
           </View>
-          <View style={[styles.cameraControls, { paddingBottom: insets.bottom + spacing.lg }]}>
-            <Text style={styles.cameraHint}>Photos are saved privately inside Ortho Logbook.</Text>
+          <View style={[styles.cameraControls, { paddingBottom: insets.bottom + spacing.md, gap: spacing.sm }]}>
+            {documentScannerMode ? <>
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", width: "100%", gap: spacing.sm }}>
+                <Pressable onPress={() => setDocumentScannerTorch(value => !value)} disabled={!cameraReady} style={{ minWidth: 90, paddingVertical: 9, paddingHorizontal: 12, borderRadius: 20, borderWidth: 1, borderColor: documentScannerTorch ? "#FACC15" : "#6B7280", alignItems: "center" }}>
+                  <Ionicons name={documentScannerTorch ? "flash" : "flash-off"} size={18} color={documentScannerTorch ? "#FACC15" : "#FFFFFF"} />
+                  <Text style={{ color: "#FFFFFF", fontSize: 11 }}>{documentScannerTorch ? "Flash on" : "Flash off"}</Text>
+                </Pressable>
+                <View style={{ flex: 1, alignItems: "center" }}>
+                  <Text style={styles.cameraHint}>Keep all four page corners inside the frame</Text>
+                  <Text style={{ color: "#D1D5DB", fontSize: 11 }}>{documentScannerPageCount} page(s) captured</Text>
+                </View>
+                <View style={{ minWidth: 90, alignItems: "center" }}>
+                  <Text style={{ color: "#FFFFFF", fontSize: 11 }}>Zoom</Text>
+                  <View style={{ flexDirection: "row", gap: 5 }}>
+                    <Pressable onPress={() => setDocumentScannerZoom(value => Math.max(0, Number((value - 0.1).toFixed(2))))} disabled={!cameraReady} style={{ padding: 5 }}><Ionicons name="remove-circle-outline" size={23} color="#FFFFFF" /></Pressable>
+                    <Pressable onPress={() => setDocumentScannerZoom(value => Math.min(1, Number((value + 0.1).toFixed(2))))} disabled={!cameraReady} style={{ padding: 5 }}><Ionicons name="add-circle-outline" size={23} color="#FFFFFF" /></Pressable>
+                  </View>
+                </View>
+              </View>
+            </> : <Text style={styles.cameraHint}>Photos are saved privately inside Ortho Logbook.</Text>}
             <Pressable
               style={[styles.cameraShutter, (!cameraReady || cameraTaking) && { opacity: 0.5 }]}
               onPress={capturePatientPhoto}
               disabled={!cameraReady || cameraTaking}
-              accessibilityLabel="Capture patient photo"
+              accessibilityLabel={documentScannerMode ? "Capture document page" : "Capture patient photo"}
             >
               <View style={styles.cameraShutterInner} />
             </Pressable>
-            <Text style={styles.cameraLoadingText}>{cameraTaking ? "Saving photo…" : cameraReady ? "Tap to capture" : "Please wait"}</Text>
+            <Text style={styles.cameraLoadingText}>{cameraTaking ? "Saving full-quality page…" : cameraReady ? (documentScannerMode ? "Capture page · repeat for multi-page reports" : "Tap to capture") : "Please wait"}</Text>
+            {documentScannerMode ? <Pressable onPress={() => { setCameraOpen(false); setCameraReady(false); setDocumentScannerMode(false); if (documentScannerPageCount > 0) toast("Captured pages are saved. Select each page and use Auto-Scan Page or perspective correction to straighten the report.", "success"); }} disabled={cameraTaking} style={{ paddingVertical: 9, paddingHorizontal: 20, borderRadius: radius.md, borderWidth: 1, borderColor: "#9CA3AF" }}>
+              <Text style={{ color: "#FFFFFF", fontFamily: fontFamily.semibold }}>Finish scan ({documentScannerPageCount} pages)</Text>
+            </Pressable> : null}
           </View>
         </View>
       </Modal>
