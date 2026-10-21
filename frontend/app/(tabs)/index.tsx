@@ -554,16 +554,16 @@ export default function Logbook() {
       let aiLookupError = "";
       // Prefer the explicit HIGH/LOW label, otherwise compare the displayed result
       // with its printed reference interval without sending the numeric value to AI.
-      let abnormalDirection = /^(?:HIGH)\\s*:/i.test(label) ? "HIGH"
-        : /^LOW\\s*:/i.test(label) ? "LOW"
+      let abnormalDirection = /^(?:HIGH)\s*:/i.test(label) ? "HIGH"
+        : /^LOW\s*:/i.test(label) ? "LOW"
         : "direction unknown";
       if (abnormalDirection === "direction unknown") {
-        const body = label.replace(/^(?:WARNING|ALERT)\\s*:\\s*/i, "");
-        const refText = /(?:\\(Ref\\s*([^)]*)\\)|\\|\\s*Ref\\s*:\\s*([^|]+))/i.exec(body);
-        const interval = String(refText?.[1] || refText?.[2] || "").match(/([-+]?\\d+(?:[.,]\\d+)?)\\s*(?:-|–|—|\\bto\\b)\\s*([-+]?\\d+(?:[.,]\\d+)?)/i);
+        const body = label.replace(/^(?:WARNING|ALERT)\s*:\s*/i, "");
+        const refText = /(?:\(Ref\s*([^)]*)\)|\|\s*Ref\s*:\s*([^|]+))/i.exec(body);
+        const interval = String(refText?.[1] || refText?.[2] || "").match(/([-+]?\d+(?:[.,]\d+)?)\s*(?:-|–|—|\bto\b)\s*([-+]?\d+(?:[.,]\d+)?)/i);
         const testAt = body.toLocaleLowerCase().indexOf(testName.toLocaleLowerCase());
-        const resultArea = testAt >= 0 ? body.slice(testAt + testName.length).split(/\\(Ref|\\|\\s*Ref|DATE\\s*:/i)[0] : "";
-        const resultMatch = resultArea.match(/[-+]?\\d+(?:[.,]\\d+)?/);
+        const resultArea = testAt >= 0 ? body.slice(testAt + testName.length).split(/\(Ref|\|\s*Ref|DATE\s*:/i)[0] : "";
+        const resultMatch = resultArea.match(/[-+]?\d+(?:[.,]\d+)?/);
         if (interval && resultMatch) {
           const resultValue = Number(resultMatch[0].replace(",", "."));
           const lower = Number(interval[1].replace(",", "."));
