@@ -178,19 +178,18 @@ export function detectCustomScreeningStatus(text: string, configuredLabel: strin
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index];
     if (line.includes("|")) continue;
-    const escapedLabel = String(configuredLabel || "").trim().split(/\s+/).map(part => part.replace(/[.*+?^${}()|[\]\\]/g, "\\    const match = line.match(/^\s*(.*?)\s*(?::|=|—|-)\s*(.*?)\s*$/);
-    if (match && normalize(match[1]) === target) {
-      const status = statusInText(beforeReference(match[2]));
-      if (status) values.push(status);
-      continue;
-    }")).join("\\s*");
-    const labelMatch = line.match(new RegExp("^\\s*" + escapedLabel + "(?=$|[\\s:|,;=+—-])\\s*(?::|=|—|-|,)?\\s*(.*?)\\s*$", "i"));
-    if (labelMatch) {
-      const status = statusInText(beforeReference(labelMatch[1]));
+    const delimited = line.match(/^\s*(.*?)\s*(?::|=|—|-)\s*(.*?)\s*$/);
+    if (delimited && normalize(delimited[1]) === target) {
+      const status = statusInText(beforeReference(delimited[2]));
       if (status) values.push(status);
       continue;
     }
-    if (normalize(line) === target) {
+    const normalizedLine = normalize(line);
+    if (normalizedLine.startsWith(target) && normalizedLine.length > target.length) {
+      const status = statusInText(beforeReference(line.slice(Math.min(line.length, configuredLabel.length))));
+      if (status) { values.push(status); continue; }
+    }
+    if (normalizedLine === target) {
       for (let offset = 1; offset <= 2 && index + offset < lines.length; offset++) {
         const next = lines[index + offset];
         if (next.includes("|") || normalize(next) === target) break;
