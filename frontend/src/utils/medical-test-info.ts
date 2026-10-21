@@ -359,12 +359,19 @@ async function fetchPubMedSummary(testName: string, labels: string[]): Promise<O
   const abstractUrl = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&retmode=text&rettype=abstract&id=" + encodeURIComponent(best.uid);
   const abstractResponse = await fetch(abstractUrl, { headers: { Accept: "text/plain" } });
   if (!abstractResponse.ok) return null;
-  const abstractText = cleanText(await abstractResponse.text());
+  const rawAbstractText = await abstractResponse.text();
   const title = cleanText(best.title);
-  // EFetch may include metadata and a very short abstract. Reject those rather than
-  // presenting a citation as if it explained the test.
-  const titleIndex = abstractText.toLowerCase().indexOf(title.toLowerCase());
-  const abstract = titleIndex >= 0 ? abstractText.slice(titleIndex + title.length).trim() : abstractText;
+  // Prefer the actual Abstract section so author, journal and PMID metadata are
+  // not accidentally presented as clinical content.
+  const abstractSection = /(?:^|\\n)Abstract\\s*\\n([\\s\\S]*?)(?=\\n(?:Publication types|MeSH Terms|Grant Support|Conflict of interest statement|Copyright|PMID:)|$)/i.exec(rawAbstractText)?.[1] || "";
+  let abstract = cleanText(abstractSection);
+  if (!abstract) {
+    const plain = cleanText(rawAbstractText);
+    const titleIndex = plain.toLowerCase().indexOf(title.toLowerCase());
+    abstract = titleIndex >= 0 ? plain.slice(titleIndex + title.length).replace(/^(?:authors?|abstract|pmid|doi)\\s*:?\\s*/i, "").trim() : plain;
+  }
+  // Reject a citation without a meaningful abstract rather than presenting it
+  // as if it explained the test.
   if (abstract.length < 100) return null;
   return {
     title,
