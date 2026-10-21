@@ -10,7 +10,7 @@
 export type MedicalTestOnlineInfo = {
   title: string;
   summary: string;
-  sourceName: "MedlinePlus";
+  sourceName: string;
   sourceUrl: string;
   fetchedAt: string;
   loincCode: string;
@@ -331,6 +331,49 @@ async function fetchMedlinePlusByLoinc(code: string, label: string): Promise<Omi
   return parseMedlinePlusEntry(await response.text());
 }
 
+type PubMedSummary = { uid?: string; title?: string; fulljournalname?: string; pubdate?: string };
+
+async function fetchPubMedSummary(testName: string, labels: string[]): Promise<Omit<MedicalTestOnlineInfo, "fetchedAt" | "loincCode"> | null> {
+  // NCBI's public E-utilities search peer-reviewed biomedical literature.
+  // It is a second source, not a replacement for a clinically matched patient-facing
+  // explanation. Require a strong title match and a usable abstract before showing it.
+  const query = `(${testName}[Title/Abstract]) AND (laboratory OR blood OR serum OR urine OR diagnostic)`;
+  const searchUrl = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&retmode=json&retmax=8&sort=relevance&term=" + encodeURIComponent(query);
+  const searchResponse = await fetch(searchUrl, { headers: { Accept: "application/json" } });
+  if (!searchResponse.ok) return null;
+  const searchJson = await searchResponse.json();
+  const ids: string[] = Array.isArray(searchJson?.esearchresult?.idlist) ? searchJson.esearchresult.idlist.slice(0, 8) : [];
+  if (!ids.length) return null;
+
+  const summaryUrl = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&retmode=json&id=" + encodeURIComponent(ids.join(","));
+  const summaryResponse = await fetch(summaryUrl, { headers: { Accept: "application/json" } });
+  if (!summaryResponse.ok) return null;
+  const summaryJson = await summaryResponse.json();
+  const summaries: PubMedSummary[] = ids.map(id => summaryJson?.result?.[id]).filter((item: any) => item && typeof item.title === "string");
+  const best = summaries
+    .map(item => ({ item, score: relevanceScore(labels, cleanText(item.title || "")) }))
+    .filter(item => item.score >= 0.48)
+    .sort((a, b) => b.score - a.score)[0]?.item;
+  if (!best?.uid || !best.title) return null;
+
+  const abstractUrl = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&retmode=text&rettype=abstract&id=" + encodeURIComponent(best.uid);
+  const abstractResponse = await fetch(abstractUrl, { headers: { Accept: "text/plain" } });
+  if (!abstractResponse.ok) return null;
+  const abstractText = cleanText(await abstractResponse.text());
+  const title = cleanText(best.title);
+  // EFetch may include metadata and a very short abstract. Reject those rather than
+  // presenting a citation as if it explained the test.
+  const titleIndex = abstractText.toLowerCase().indexOf(title.toLowerCase());
+  const abstract = titleIndex >= 0 ? abstractText.slice(titleIndex + title.length).trim() : abstractText;
+  if (abstract.length < 100) return null;
+  return {
+    title,
+    summary: abstract.slice(0, 1500),
+    sourceName: "PubMed / U.S. National Library of Medicine (peer-reviewed literature)",
+    sourceUrl: "https://pubmed.ncbi.nlm.nih.gov/" + best.uid + "/",
+  };
+}
+
 /**
  * Finds a high-confidence standard code from built-in common lab aliases, then
  * retrieves the matched explanation from MedlinePlus Connect. When no exact
@@ -355,19 +398,25 @@ export async function fetchTrustedMedicalTestInfo(testName: string, aliases = ""
       // A transient failure or missing official match falls through to search.
     }
   }
-  // LOINC coverage is not complete for every hospital label. Search MedlinePlus'
-  // own health-topic index as a fallback and only accept matching lab-test pages.
+  // LOINC coverage is not complete for every hospital label. Search multiple
+  // trusted sources: first MedlinePlus patient-facing lab-test pages, then NCBI
+  // PubMed peer-reviewed literature. Each candidate must match the test label;
+  // never send patient identity, result values, photos or reference ranges.
   try {
     const article = await fetchMedlinePlusSearch(testName, labels);
     if (article) {
-      return {
-        ...article,
-        fetchedAt: new Date().toISOString(),
-        loincCode: "search",
-      };
+      return { ...article, fetchedAt: new Date().toISOString(), loincCode: "medlineplus-search" };
     }
   } catch {
-    // Leave the result unavailable rather than inventing an explanation.
+    // Continue to the second trusted source.
+  }
+  try {
+    const article = await fetchPubMedSummary(testName, labels);
+    if (article) {
+      return { ...article, fetchedAt: new Date().toISOString(), loincCode: "pubmed-search" };
+    }
+  } catch {
+    // Network or service failure: do not fabricate a summary.
   }
   return null;
 }
