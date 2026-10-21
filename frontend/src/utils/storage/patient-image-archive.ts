@@ -7,6 +7,9 @@ import { db, initializeDatabase } from "@/src/db/database";
 
 const ARCHIVE_KEY = "ortho_patient_image_archives_v1";
 const ARCHIVE_DIR = (FileSystem.documentDirectory || "") + "patient-image-archives/";
+// Bump this whenever the PDF layout changes. Including it in sourceStamp makes
+// existing local archives regenerate and re-upload in the new format.
+const PDF_LAYOUT_VERSION = "compact-patient-header-full-page-image-v2";
 
 export type PatientImageArchive = {
   patientId: string;
@@ -124,23 +127,24 @@ async function stampFor(id: string, name: string, mrNo: string, createdAt: strin
   const signatures: string[] = [];
   for (const source of sources) signatures.push(await imageContentKey(source));
   return Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256,
-    JSON.stringify([id, name, mrNo, createdAt, signatures]));
+    JSON.stringify([PDF_LAYOUT_VERSION, id, name, mrNo, createdAt, signatures]));
 }
 function makeHtml(name: string, mrNo: string, images: string[]): string {
   const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   return "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><style>" +
-    "@page{size:A4;margin:12mm}*{box-sizing:border-box}body{font-family:Arial,sans-serif;color:#111;margin:0}" +
-    ".head{font-size:16px;font-weight:700;margin:0 0 5px}.meta{font-size:10px;color:#555;margin-bottom:12px}" +
-    ".photo{height:255mm;display:flex;align-items:center;justify-content:center;page-break-after:always;break-after:page;overflow:hidden}" +
-    ".photo:last-child{page-break-after:auto;break-after:auto}img{max-width:100%;max-height:100%;object-fit:contain;image-orientation:from-image}" +
-    "</style></head><body>" + images.map((src, index) =>
-      "<section class='photo'><div style='width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center'>" +
-      "<div style='align-self:flex-start;width:100%'><div class='head'>" + esc(name || "Patient") + "</div><div class='meta'>MR No: " + esc(mrNo || "—") +
-      " · Image " + (index + 1) + " of " + images.length + "</div></div><img src='" + src.replace(/'/g, "%27") + "' /></div></section>"
+    "@page{size:A4 portrait;margin:4mm}*{box-sizing:border-box}html,body{margin:0;padding:0;font-family:Arial,sans-serif;color:#111}" +
+    ".photo{height:289mm;width:100%;display:flex;flex-direction:column;align-items:stretch;justify-content:flex-start;gap:2mm;page-break-after:always;break-after:page;overflow:hidden}" +
+    ".photo:last-child{page-break-after:auto;break-after:auto}.patient-head{flex:0 0 auto;width:100%;padding:0 1mm 1mm;border-bottom:0.2mm solid #ddd}" +
+    ".head{font-size:13px;line-height:1.15;font-weight:700;margin:0 0 1mm;overflow-wrap:anywhere}.meta{font-size:9px;line-height:1.1;color:#333;margin:0}" +
+    ".image-wrap{flex:1 1 auto;min-height:0;width:100%;display:flex;align-items:center;justify-content:center;overflow:hidden}" +
+    "img{display:block;width:100%;height:100%;max-width:100%;max-height:100%;object-fit:contain;object-position:center;image-orientation:from-image}" +
+    "</style></head><body>" + images.map((src) =>
+      "<section class='photo'><header class='patient-head'><div class='head'>" + esc(name || "Patient") + "</div><div class='meta'>MR No: " + esc(mrNo || "—") +
+      "</div></header><div class='image-wrap'><img src='" + src.replace(/'/g, "%27") + "' /></div></section>"
     ).join("") + (images.length ? "" :
-      "<section class='photo'><div style='width:100%'><div class='head'>" + esc(name || "Patient") +
+      "<section class='photo'><header class='patient-head'><div class='head'>" + esc(name || "Patient") +
       "</div><div class='meta'>MR No: " + esc(mrNo || "—") +
-      "</div><p>No images are currently attached to this patient.</p></div></section>") + "</body></html>";
+      "</div></header><p>No images are currently attached to this patient.</p></section>") + "</body></html>";
 }
 
 export async function getLocalPatientImageArchives(): Promise<PatientImageArchive[]> {
