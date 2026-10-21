@@ -78,6 +78,7 @@ type PendingLabReview = {
   gender: string;
   rows: PendingLabReviewRow[];
   photoUris: string[];
+  photoSignature: string;
   signature: string;
   flags: string[];
   reportDate: string;
@@ -608,6 +609,21 @@ export default function Logbook() {
       Alert.alert("Patient not available", "The patient record is not currently loaded. Close this review, refresh the patient list, and retry.");
       return;
     }
+    let latestPatient = patient;
+    try {
+      const fullPatient = await api.get<Patient>("/patients/" + patientId);
+      if (!fullPatient?.id) throw new Error("Full patient record was not returned.");
+      latestPatient = { ...patient, ...fullPatient };
+    } catch {
+      Alert.alert("Could not verify patient photos", "The latest patient record could not be loaded. No review results were saved. Retry when the patient record is available.");
+      return;
+    }
+    const currentPhotoUris = [...new Set([...(latestPatient.photos || []), ...((latestPatient as any).photoUri ? [(latestPatient as any).photoUri] : [])])]
+      .filter((value): value is string => typeof value === "string" && value.length > 0);
+    if (currentPhotoUris.join("|") !== draft.photoSignature) {
+      Alert.alert("Patient photos changed", "This OCR draft belongs to an older photo set and cannot be saved against the current patient images. Keep it pending or choose Rescan photos to read the current images.");
+      return;
+    }
     const reviewedRows = draft.rows.map(row => {
       const rawDate = String(row.date || "").trim() || String(draft.reportDate || "").trim();
       const normalizedDate = rawDate ? normalizeLabDateInput(rawDate) : "";
@@ -649,7 +665,7 @@ export default function Logbook() {
       } catch {}
 
       const confirmedRows = reviewedRows.map(row => {
-        const evaluated = evaluateLabResultForReview(row.test, row.result, configuredTests, String(patient.gender || draft.gender || ""), warningPercent);
+        const evaluated = evaluateLabResultForReview(row.test, row.result, configuredTests, String(latestPatient.gender || draft.gender || ""), warningPercent);
         return {
           test: row.test,
           result: row.result,
@@ -676,13 +692,13 @@ export default function Logbook() {
         : distinctDates.length > 1 ? "Multiple report dates — see each result" : distinctDates[0];
       const now = new Date().toISOString();
       await api.put("/patients/" + patientId, {
-        ...patient,
+        ...latestPatient,
         customData: {
-          ...(patient.customData || {}),
+          ...(latestPatient.customData || {}),
           labOcrPossibleFlags: uniqueFlags.join("\n"),
           labOcrDetectedResults: JSON.stringify(confirmedRows),
           labOcrPipelineVersion: LAB_OCR_PIPELINE_VERSION,
-          labOcrPhotoSignature: draft.photoUris.join("|"),
+          labOcrPhotoSignature: draft.photoSignature,
           labOcrDetectedAt: now,
           labOcrReportDate: reportDateSummary,
           labOcrDateNeedsAdmin: reportDateNeedsAdmin ? "true" : "false",
@@ -929,7 +945,9 @@ export default function Logbook() {
         return cached?.needsReview ? (cached.reviewReasons?.length ? cached.reviewReasons : ["OCR confidence or row alignment needs manual checking"]) : [];
       }))];
       if (reportDateNeedsAdmin) reviewReasons.push("Report date could not be read confidently; confirm it or explicitly mark it unreadable.");
-      const requiresManualReview = reportPhotoUris.some(uri => photoCache[labPhotoCacheKey(uri)]?.needsReview === true) || reportDateNeedsAdmin;
+      if (unreadableImages > 0 && reportPages.length > 0) reviewReasons.push(unreadableImages + " photo(s) could not be read; check every page of the original report.");
+      const requiresManualReview = reportPhotoUris.some(uri => photoCache[labPhotoCacheKey(uri)]?.needsReview === true)
+        || reportDateNeedsAdmin || (unreadableImages > 0 && reportPages.length > 0);
       if (requiresManualReview) {
         const pendingDraft: PendingLabReview = {
           patientId,
@@ -939,7 +957,8 @@ export default function Logbook() {
             test: row.test, result: row.result, unit: row.unit, reference: row.reference,
             severity: row.severity, date: row.date,
           })),
-          photoUris: reportPhotoUris.length ? reportPhotoUris : photos,
+          photoUris: photos,
+          photoSignature: photos.join("|"),
           signature,
           flags: uniqueFlags,
           reportDate: !reportDateNeedsAdmin && distinctReportDates.length === 1 ? distinctReportDates[0] : "",
@@ -985,6 +1004,13 @@ export default function Logbook() {
         saveLabScanState(patientId, { status: "failed", message: "OCR read the report, but results could not be saved automatically. Retry or save the results from Patient Form.", reportDate: reportDateSummary, resultCount: uniqueFlags.length, updatedAt: new Date().toISOString() });
         await removeNewPatientQueueEntry(patientId);
         return;
+      }
+      if (pendingLabReviewsRef.current[patientId]) {
+        const pendingNext = { ...pendingLabReviewsRef.current };
+        delete pendingNext[patientId];
+        pendingLabReviewsRef.current = pendingNext;
+        setPendingLabReviews(pendingNext);
+        AsyncStorage.setItem(PENDING_LAB_REVIEWS_STORAGE_KEY, JSON.stringify(pendingNext)).catch(() => {});
       }
       let photoSnapshot: Record<string, any> = {};
       try {
@@ -1897,14 +1923,12 @@ export default function Logbook() {
               <Text style={styles.pdfModalLabel}>Detected test rows — correct test, result, unit and date</Text>
               <ScrollView style={{ maxHeight: 300 }} keyboardShouldPersistTaps="handled">
                 {activeLabReview.rows.map((row, index) => {
-                  const configuredRange = (() => {
-                    const sexFields = activeLabReview.gender.toLowerCase().startsWith("f")
-                      ? ["femaleMin", "femaleMax"] : activeLabReview.gender.toLowerCase().startsWith("m") ? ["maleMin", "maleMax"] : [];
-                    const definitions = configuredLabTestDefinitions as Array<any>;
-                    const definition = definitions.find(item => String(item.name || "").trim().toLowerCase() === row.test.trim().toLowerCase()
-                      || String(item.aliases || "").split(/[,;\n]+/).some((alias: string) => alias.trim().toLowerCase() === row.test.trim().toLowerCase()));
-                    return definition && sexFields.length ? String(definition[sexFields[0]] || "") + "–" + String(definition[sexFields[1]] || "") + (definition.unit ? " " + definition.unit : "") : "No saved admin range";
-                  })();
+                  const configuredRange = evaluateLabResultForReview(
+                    row.test,
+                    row.result,
+                    configuredLabTestDefinitions as LabTestDefinition[],
+                    activeLabReview.gender,
+                  ).reference || "No saved admin range";
                   return <View key={"pending-lab-row-" + index} style={{ borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, padding: spacing.sm, marginTop: spacing.sm, gap: spacing.xs }}>
                     <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
                       <Text style={{ color: colors.onSurfaceSecondary, fontSize: fontSize.xs, fontFamily: fontFamily.semibold }}>Result {index + 1}</Text>
@@ -1934,6 +1958,23 @@ export default function Logbook() {
               <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.md }}>
                 <Pressable onPress={() => setActiveLabReviewPatientId(null)} disabled={labReviewSaving} style={{ flex: 1, padding: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, alignItems: "center" }}>
                   <Text style={{ color: colors.onSurface, fontFamily: fontFamily.semibold }}>Keep pending</Text>
+                </Pressable>
+                <Pressable onPress={() => {
+                  const patientId = activeLabReview.patientId;
+                  Alert.alert("Rescan patient photos?", "This will discard the current unconfirmed OCR draft and scan the latest saved photos. Nothing from the current draft will be added to the patient record.", [
+                    { text: "Keep pending", style: "cancel" },
+                    { text: "Rescan photos", style: "destructive", onPress: () => {
+                      const next = { ...pendingLabReviewsRef.current };
+                      delete next[patientId];
+                      pendingLabReviewsRef.current = next;
+                      setPendingLabReviews(next);
+                      AsyncStorage.setItem(PENDING_LAB_REVIEWS_STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+                      setActiveLabReviewPatientId(null);
+                      requestLabScan(patientId, false);
+                    } },
+                  ]);
+                }} disabled={labReviewSaving} style={{ flex: 1, padding: spacing.md, borderWidth: 1, borderColor: colors.warning || "#B7791F", borderRadius: radius.md, alignItems: "center" }}>
+                  <Text style={{ color: colors.warning || "#B7791F", fontFamily: fontFamily.semibold }}>Rescan photos</Text>
                 </Pressable>
                 <Pressable onPress={() => void confirmPendingLabReview()} disabled={labReviewSaving || !activeLabReview.rows.length} style={{ flex: 1, padding: spacing.md, backgroundColor: colors.brandPrimary, borderRadius: radius.md, alignItems: "center", opacity: labReviewSaving || !activeLabReview.rows.length ? 0.6 : 1 }}>
                   {labReviewSaving ? <ActivityIndicator color={colors.onBrandPrimary} /> : <Text style={{ color: colors.onBrandPrimary, fontFamily: fontFamily.semibold }}>Confirm and save</Text>}
