@@ -205,13 +205,22 @@ function getCuratedMedicalInfo(testName: string, aliases: string): MedicalTestOn
   const labels = lookupLabels(testName, aliases).map(simpleKey);
   const inputKeys = new Set(labels);
   const candidate = CURATED_MEDICAL_INFO.find(item =>
-    item.labels.some(label => inputKeys.has(simpleKey(label))) ||
-    item.labels.some(label => labels.some(key => key.length > 3 && simpleKey(label).includes(key)))
+    item.labels.some(label => {
+      const candidateKey = simpleKey(label);
+      return inputKeys.has(candidateKey) ||
+        labels.some(key => key.length >= 2 && (candidateKey.includes(key) || key.includes(candidateKey)));
+    })
   );
   if (!candidate) return null;
   return {
     title: candidate.title,
-    summary: candidate.summary,
+    summary: (() => {
+      const lines = candidate.summary.split("\\n").map(line => line.trim()).filter(Boolean);
+      const first = lines[0] || "This test measures a specific component or function in the body.";
+      const abnormal = lines.slice(1).filter(line => !/^Source page:/i.test(line));
+      return "WHAT THIS TEST IS\\n" + first +
+        "\\n\\nWHAT THE ABNORMAL RESULT MAY MEAN\\n" + abnormal.slice(0, 6).join("\\n");
+    })(),
     sourceName: "MedlinePlus (curated fallback information; verify current guidance online)",
     sourceUrl: candidate.url,
     sources: [{ title: candidate.title + " — MedlinePlus", url: candidate.url }],
