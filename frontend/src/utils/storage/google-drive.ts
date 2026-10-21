@@ -991,6 +991,24 @@ async function findPatientPdfInFolder(fileName: string, folderId: string): Promi
   const data = await response.json();
   return Array.isArray(data.files) ? data.files.find((x: any) => x?.id && x.mimeType !== DRIVE_FOLDER_MIME) || null : null;
 }
+async function findPatientPdfsByPatientId(patientId: string, folderId: string): Promise<any[]> {
+  const q = encodeURIComponent("'" + escapeDriveQuery(folderId) + "' in parents and appProperties has { key='orthoPatientId' and value='" + escapeDriveQuery(patientId.slice(0, 100)) + "' } and trashed = false");
+  const response = await driveRequest(DRIVE_API + "?q=" + q + "&spaces=drive&pageSize=100&orderBy=modifiedTime%20desc&includeItemsFromAllDrives=true&supportsAllDrives=true&fields=files(id,name,mimeType,size,modifiedTime,parents,appProperties)");
+  const data = await response.json();
+  return Array.isArray(data.files) ? data.files.filter((x: any) => x?.id && x.mimeType === "application/pdf" && String(x.appProperties?.orthoPatientId || "") === patientId) : [];
+}
+async function moveDuplicatePatientPdfsToTrash(patientId: string, folderId: string, keepFileId: string): Promise<void> {
+  const files = await findPatientPdfsByPatientId(patientId, folderId);
+  for (const file of files) {
+    if (String(file.id) === String(keepFileId)) continue;
+    // Keep the newest verified PDF and move only same-patient duplicates to Drive trash.
+    await driveRequest(DRIVE_API + "/" + encodeURIComponent(String(file.id)) + "?supportsAllDrives=true", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ trashed: true }),
+    });
+  }
+}
 async function verifyPatientPdf(fileId: string): Promise<any> {
   const response = await driveRequest(DRIVE_API + "/" + encodeURIComponent(fileId) + "?supportsAllDrives=true&fields=id,name,mimeType,size,modifiedTime,parents,appProperties,trashed");
   const item = await response.json();
@@ -1092,6 +1110,7 @@ export async function ensurePatientImagePdfOnDrive(patientId: string, onProgress
     onProgress?.("Uploading this patient's PDF to Google Drive…");
     const verified = await uploadPatientPdf(archive, folderId, remote);
     await setPatientImageArchiveDriveState(archive.fileName, archive.sourceStamp, String(verified.id));
+    await moveDuplicatePatientPdfsToTrash(archive.patientId, folderId, String(verified.id));
     return { fileId: String(verified.id), fileName: archive.fileName, url: "https://drive.google.com/file/d/" + encodeURIComponent(String(verified.id)) + "/view" };
   }, onProgress);
 }
@@ -1198,7 +1217,14 @@ export async function uploadPatientImageArchivesToDrive(onProgress?: (stage: str
             (Array.isArray(verified.parents) ? verified.parents : []).includes(folderId)) remote = verified;
       } catch { remote = null; }
     }
+    if (!remote) {
+      const samePatientFiles = await findPatientPdfsByPatientId(archive.patientId, folderId);
+      remote = samePatientFiles.find((item: any) => item.id && item.mimeType === "application/pdf") || null;
+    }
     if (!remote) remote = await findPatientPdfInFolder(archive.fileName, folderId);
+    // Never patch a PDF belonging to another patient, even if its name matches.
+    if (remote && String(remote.appProperties?.orthoPatientId || "") &&
+        String(remote.appProperties?.orthoPatientId || "") !== archive.patientId) remote = null;
     const local = await FileSystem.getInfoAsync(archive.localUri);
     const localExists = local.exists && Number(local.size || 0) >= 8;
     const remoteMatchesArchive = !!remote &&
@@ -1208,6 +1234,7 @@ export async function uploadPatientImageArchivesToDrive(onProgress?: (stage: str
       (Array.isArray(remote.parents) ? remote.parents : []).includes(folderId);
     if (remoteMatchesArchive && (!localExists || Number(remote.size || 0) === Number(local.size || 0))) {
       await setPatientImageArchiveDriveState(archive.fileName, archive.sourceStamp, String(remote.id));
+      await moveDuplicatePatientPdfsToTrash(archive.patientId, folderId, String(remote.id));
       continue;
     }
     if (!localExists) {
