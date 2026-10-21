@@ -484,7 +484,7 @@ async function savePatient(p: Patient, editing: boolean) {
       validateImplants(p);
       db.runSync(
         "UPDATE patients SET mr_no=?,name=?,gender=?,age=?,diagnosis=?,procedure=?,procedure_ii=?,implant=?,implant_ii=?,implant_id=?,implant_ii_id=?,address=?,file_name=?,photo_uri=?,photos_json=?,custom_data_json=?,date=?,updated_at=?,updated_by=? WHERE id=?",
-        [p.mrNo, p.name, p.gender, p.age, p.diagnosis, p.procedure, p.procedureII || "", p.implant, p.implantII, p.implantId || null, p.implantIIId || null, p.address, p.fileName, primaryPhoto, photosJson, JSON.stringify((p as any).customData || {}), p.date, now, uid, patientId],
+        [p.mrNo, p.name, p.gender, p.age, p.diagnosis, p.procedure, String(p.procedureII ?? (p as any).procedure_ii ?? "").trim(), p.implant, p.implantII, p.implantId || null, p.implantIIId || null, p.address, p.fileName, primaryPhoto, photosJson, JSON.stringify((p as any).customData || {}), p.date, now, uid, patientId],
       );
       db.runSync(
         "INSERT INTO patient_history (id,patient_id,user_id,action,snapshot_json,created_at) VALUES (?,?,?,?,?,?)",
@@ -499,7 +499,7 @@ async function savePatient(p: Patient, editing: boolean) {
   validateImplants(p);
   db.runSync(
     "INSERT INTO patients (id,mr_no,name,gender,age,diagnosis,procedure,procedure_ii,implant,implant_ii,implant_id,implant_ii_id,address,file_name,photo_uri,photos_json,custom_data_json,date,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-    [patientId, p.mrNo, p.name, p.gender, p.age, p.diagnosis, p.procedure, p.procedureII || "", p.implant, p.implantII, p.implantId || null, p.implantIIId || null, p.address, p.fileName, primaryPhoto, photosJson, JSON.stringify((p as any).customData || {}), p.date, now, uid],
+    [patientId, p.mrNo, p.name, p.gender, p.age, p.diagnosis, p.procedure, String(p.procedureII ?? (p as any).procedure_ii ?? "").trim(), p.implant, p.implantII, p.implantId || null, p.implantIIId || null, p.address, p.fileName, primaryPhoto, photosJson, JSON.stringify((p as any).customData || {}), p.date, now, uid],
   );
   db.runSync(
     "INSERT INTO patient_history (id,patient_id,user_id,action,snapshot_json,created_at) VALUES (?,?,?,?,?,?)",
