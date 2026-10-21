@@ -113,15 +113,16 @@ async function fetchDirectOpenAiMedicalInfo(
       instructions: [
         "You provide cautious patient-facing medical education about laboratory tests.",
         "Use web search and rely only on trusted medical authorities such as MedlinePlus, NHS, NIH, CDC, WHO, Mayo Clinic, Cleveland Clinic, or major accredited medical laboratories.",
-        "Give exactly 6 or 7 short lines, no long paragraphs. Explain what the test measures, what an out-of-range result in the stated direction may mean, common possible causes, why one result cannot diagnose a disease, and a sensible next step.",
-        "Do not invent facts, normal ranges, diagnoses, treatments, urgency, or sources. Do not state that an abnormal result definitely means a disease. If trustworthy evidence cannot be found, say so briefly.",
-        "Do not give a reference range or interpret a patient-specific value. The app has not sent any patient result, identity, image, or reference range.",
-        "Return plain text only, one concise sentence per line. Use citations from the web search in the response.",
+        "Search the wider public web for the exact test name and aliases, then prefer authoritative medical sources (national health services, government health agencies, academic hospitals, medical laboratories and peer-reviewed publications). Do not restrict discovery to one website. Do not treat search snippets or forums as definitive medical evidence.",
+        "Return exactly two labeled sections: WHAT THIS TEST IS (2-3 short lines explaining what it measures and why it is used) and WHAT THE ABNORMAL RESULT MAY MEAN (3-4 short lines specific to the supplied HIGH or LOW direction, common possible causes, important context and a sensible next step).",
+        "If direction is unknown, explain that high and low results can have different causes and do not guess which applies. A result outside range is not itself a diagnosis.",
+        "Do not invent facts, normal ranges, diagnoses, treatments, urgency, or sources. Cite at least one relevant source URL from your search. Prefer official medical sources; if only weak/unreliable sources appear, say reliable evidence could not be verified.",
+        "Do not interpret a patient-specific value. The app has not sent any patient result, identity, image, or reference range. Return plain text only, one concise sentence per line, preserving the two section labels.",
       ].join(" "),
       input: "Lab test: " + testName.slice(0, 120) +
         "\nOther labels: " + aliases.slice(0, 250) +
-        "\nAbnormal direction to explain: " + abnormalDirection.slice(0, 24) +
-        "\nProvide a concise, medically reliable explanation of this test and what this direction may indicate.",
+        "\nAbnormal direction: " + abnormalDirection.slice(0, 24) +
+        "\nSearch across the public web and return the two requested sections with source citations.",
     }),
   });
   if (!response.ok) {
@@ -139,7 +140,9 @@ async function fetchDirectOpenAiMedicalInfo(
   const parsed = responseText(payload);
   const summary = compactSummary(parsed.text);
   // Do not present an AI answer as trustworthy without a matching source citation.
-  if (summary.split("\n").filter(Boolean).length < 4 || !parsed.citations.length) return null;
+  const hasTestSection = /WHAT THIS TEST IS/i.test(summary);
+  const hasAbnormalSection = /WHAT THE ABNORMAL RESULT MAY MEAN/i.test(summary);
+  if (summary.split("\n").filter(Boolean).length < 4 || !hasTestSection || !hasAbnormalSection || !parsed.citations.length) return null;
   return {
     title: testName + " — abnormal result information",
     summary,
