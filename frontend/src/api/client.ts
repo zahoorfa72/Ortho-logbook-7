@@ -837,7 +837,12 @@ export const api = {
         // Keep primary and second-procedure breakdowns separate, but count both
         // fields in the total surgeries performed.
         if (n) { counts[n] = (counts[n] || 0) + 1; totalSurgeries++; }
-        if (nII) { countsII[nII] = (countsII[nII] || 0) + 1; totalSurgeries++; }
+        if (nII) {
+          // Count every secondary procedure in the main breakdown and in its own breakdown.
+          counts[nII] = (counts[nII] || 0) + 1;
+          countsII[nII] = (countsII[nII] || 0) + 1;
+          totalSurgeries++;
+        }
       });
       return {
         total_patients: totalSurgeries,
