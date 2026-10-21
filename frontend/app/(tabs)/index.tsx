@@ -606,12 +606,12 @@ export default function Logbook() {
               definition.lowMeaning?.trim() ? "LOW result: " + definition.lowMeaning.trim() : "",
             ];
         const adminSummary = [
-          definition.purpose?.trim() ? "WHAT THIS TEST IS\\n" + definition.purpose.trim() : "",
-          "WHAT THE ABNORMAL RESULT MAY MEAN\\n" +
-            (directionNotes.filter(Boolean).join("\\n") || "The administrator has not documented a direction-specific interpretation for this test."),
+          definition.purpose?.trim() ? "WHAT THIS TEST IS\n" + definition.purpose.trim() : "",
+          "WHAT THE ABNORMAL RESULT MAY MEAN\n" +
+            (directionNotes.filter(Boolean).join("\n") || "The administrator has not documented a direction-specific interpretation for this test."),
           definition.possibleEffects?.trim() ? "Possible effects: " + definition.possibleEffects.trim() : "",
           definition.seekCare?.trim() ? "When medical review may be needed: " + definition.seekCare.trim() : "",
-        ].filter(Boolean).join("\\n\\n");
+        ].filter(Boolean).join("\n\n");
         if (adminSummary.trim()) {
           trustedFetched = {
             title: testName + " — administrator-configured information",
