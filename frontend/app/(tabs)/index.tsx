@@ -552,9 +552,28 @@ export default function Logbook() {
       // terminology service. Patient details, values, photos and ranges are not.
       // Prefer the AI-assisted, web-cited summary when configured; fall back to existing trusted sources if unavailable.
       let aiLookupError = "";
-      const abnormalDirection = /^(?:WARNING|ALERT|HIGH)\\s*:/i.test(label) ? "HIGH"
+      // Prefer the explicit HIGH/LOW label, otherwise compare the displayed result
+      // with its printed reference interval without sending the numeric value to AI.
+      let abnormalDirection = /^(?:HIGH)\\s*:/i.test(label) ? "HIGH"
         : /^LOW\\s*:/i.test(label) ? "LOW"
         : "direction unknown";
+      if (abnormalDirection === "direction unknown") {
+        const body = label.replace(/^(?:WARNING|ALERT)\\s*:\\s*/i, "");
+        const refText = /(?:\\(Ref\\s*([^)]*)\\)|\\|\\s*Ref\\s*:\\s*([^|]+))/i.exec(body);
+        const interval = String(refText?.[1] || refText?.[2] || "").match(/([-+]?\\d+(?:[.,]\\d+)?)\\s*(?:-|–|—|\\bto\\b)\\s*([-+]?\\d+(?:[.,]\\d+)?)/i);
+        const testAt = body.toLocaleLowerCase().indexOf(testName.toLocaleLowerCase());
+        const resultArea = testAt >= 0 ? body.slice(testAt + testName.length).split(/\\(Ref|\\|\\s*Ref|DATE\\s*:/i)[0] : "";
+        const resultMatch = resultArea.match(/[-+]?\\d+(?:[.,]\\d+)?/);
+        if (interval && resultMatch) {
+          const resultValue = Number(resultMatch[0].replace(",", "."));
+          const lower = Number(interval[1].replace(",", "."));
+          const upper = Number(interval[2].replace(",", "."));
+          if (Number.isFinite(resultValue) && Number.isFinite(lower) && Number.isFinite(upper)) {
+            if (resultValue < lower) abnormalDirection = "LOW";
+            else if (resultValue > upper) abnormalDirection = "HIGH";
+          }
+        }
+      }
       const aiFetched = await fetchAiMedicalTestInfo(
         testName,
         definition?.aliases || "",
