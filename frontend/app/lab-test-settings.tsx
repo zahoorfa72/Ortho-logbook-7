@@ -4,7 +4,7 @@ import { router } from "expo-router";
 import { useEffect, useState } from "react";
 import { Switch } from "react-native";
 import * as SecureStore from "expo-secure-store";
-import { Alert, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { Alert, Linking, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "@/src/auth/AuthContext";
 import { useToast } from "@/src/components/toast";
@@ -21,6 +21,13 @@ export type LabTestDefinition = {
   unit: string;
   aliases?: string;
   category?: string;
+  purpose?: string;
+  lowMeaning?: string;
+  highMeaning?: string;
+  possibleEffects?: string;
+  seekCare?: string;
+  sourceName?: string;
+  sourceUrl?: string;
 };
 
 const STORAGE_KEY = "ortho_lab_test_definitions_v1";
@@ -31,7 +38,7 @@ const ONLINE_OCR_KEY = "ortho_lab_online_ocr_api_key_v1";
 const ONLINE_OCR_CONSENT_KEY = "ortho_lab_online_ocr_consent_v1";
 const CUSTOM_SCREENING_BOXES_KEY = "ortho_custom_screening_boxes_v1";
 type CustomScreeningBox = { id: string; label: string };
-const blank = (): LabTestDefinition => ({ id: "", name: "", maleMin: "", maleMax: "", femaleMin: "", femaleMax: "", unit: "", aliases: "", category: "" });
+const blank = (): LabTestDefinition => ({ id: "", name: "", maleMin: "", maleMax: "", femaleMin: "", femaleMax: "", unit: "", aliases: "", category: "", purpose: "", lowMeaning: "", highMeaning: "", possibleEffects: "", seekCare: "", sourceName: "MedlinePlus", sourceUrl: "" });
 
 export default function LabTestSettingsScreen() {
   const { user } = useAuth();
@@ -43,6 +50,8 @@ export default function LabTestSettingsScreen() {
   const [branches, setBranches] = useState<string[]>([]);
   const [newBranch, setNewBranch] = useState("");
   const [form, setForm] = useState<LabTestDefinition>(blank());
+  const [savedBranchFilter, setSavedBranchFilter] = useState("All branches");
+  const [expandedTestId, setExpandedTestId] = useState("");
   const [editingId, setEditingId] = useState("");
   const [busy, setBusy] = useState(false);
   const [warningPercent, setWarningPercent] = useState("10");
@@ -223,6 +232,8 @@ export default function LabTestSettingsScreen() {
     } },
   ]);
   const field = (label: string, key: keyof LabTestDefinition, placeholder: string) => <View style={styles.field}><Text style={styles.label}>{label}</Text><TextInput value={String(form[key] || "")} onChangeText={value => update({ [key]: value } as Partial<LabTestDefinition>)} placeholder={placeholder} placeholderTextColor={colors.muted} autoCapitalize={key === "name" || key === "unit" ? "words" : "none"} keyboardType={["maleMin","maleMax","femaleMin","femaleMax"].includes(key) ? "decimal-pad" : "default"} style={styles.input}/></View>;
+  const openSource = async (url?: string) => { const value = String(url || "").trim(); if (!/^https:\/\//i.test(value)) { toast("Enter a valid HTTPS source link first.", "error"); return; } try { await Linking.openURL(value); } catch { toast("Could not open the source link.", "error"); } };
+  const savedTestsForBranch = tests.filter(item => savedBranchFilter === "All branches" || (savedBranchFilter === "Unassigned" ? !item.category?.trim() : (item.category || "").toLocaleLowerCase() === savedBranchFilter.toLocaleLowerCase()));
   if (user?.role !== "admin") return <View style={styles.container}><Text style={styles.title}>Administrator only</Text></View>;
   return <View style={styles.container}>
     <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
@@ -288,9 +299,43 @@ export default function LabTestSettingsScreen() {
       <Text style={styles.section}>Female reference range</Text>
       <View style={styles.two}>{field("From (minimum)", "femaleMin", "11")}{field("To (maximum)", "femaleMax", "15")}</View>
       {field("Unit", "unit", "g/dL")}
+      <Text style={styles.section}>Medical information and trusted source</Text>
+      <Text style={styles.help}>Add a short evidence-based explanation of the test, possible meanings of low/high results, possible effects when supported by evidence, and when medical review may be needed. These are educational notes, not a diagnosis. Use a trusted source such as MedlinePlus or NHS.</Text>
+      {field("What the test measures", "purpose", "What does this test measure?")}
+      {field("What a low result may mean", "lowMeaning", "Possible causes or associations")}
+      {field("What a high result may mean", "highMeaning", "Possible causes or associations")}
+      {field("Possible effects on the body", "possibleEffects", "Only evidence-supported effects")}
+      {field("When medical review may be needed", "seekCare", "When should a clinician review it?")}
+      {field("Source name", "sourceName", "e.g. MedlinePlus")}
+      {field("Source HTTPS link", "sourceUrl", "https://medlineplus.gov/...")}
+      <Pressable onPress={() => openSource(form.sourceUrl)} style={styles.action}><Text style={styles.actionText}>Test source link</Text></Pressable>
       <Pressable disabled={busy} onPress={save} style={styles.primary}><Text style={styles.primaryText}>{busy ? "Saving…" : editingId ? "Save changes" : "Add test"}</Text></Pressable>
       {editingId ? <Pressable onPress={() => { setEditingId(""); setForm(blank()); }} style={styles.action}><Text style={styles.actionText}>Cancel editing</Text></Pressable> : null}
-      <Text style={styles.section}>Saved tests ({tests.length})</Text>
+      <Text style={styles.section}>Saved tests (${tests.length})</Text>
+      <Text style={styles.help}>Choose a branch to filter saved tests. Tap a test name to read its medical explanation and source link.</Text>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.branchList}>
+        {["All branches", ...branches, "Unassigned"].map(branch => <Pressable key={branch} onPress={() => setSavedBranchFilter(branch)} style={[styles.branchChip, savedBranchFilter === branch ? styles.branchChipSelected : null]}><Text style={[styles.branchChipText, savedBranchFilter === branch ? styles.branchChipTextSelected : null]}>{branch}</Text></Pressable>)}
+      </ScrollView>
+      {savedTestsForBranch.map(item => <View key={item.id} style={styles.item}>
+        <View style={{ flex: 1 }}>
+          <Pressable onPress={() => setExpandedTestId(current => current === item.id ? "" : item.id)}><Text style={styles.itemTitle}>{item.name} {expandedTestId === item.id ? "▴" : "▾"}</Text></Pressable>
+          {item.category?.trim() ? <Text style={styles.branchLabel}>Branch: {item.category}</Text> : <Text style={styles.branchLabel}>Branch: Not assigned</Text>}
+          <Text style={styles.help}>Male: {item.maleMin}–{item.maleMax} {item.unit} · Female: {item.femaleMin}–{item.femaleMax} {item.unit}</Text>
+          {item.aliases?.trim() ? <Text style={styles.help}>Recognized labels: {item.aliases}</Text> : null}
+          {expandedTestId === item.id ? <View style={styles.medicalDetails}>
+            <Text style={styles.detailHeading}>What it measures</Text><Text style={styles.detailText}>{item.purpose?.trim() || "Not documented yet. An administrator can add this using Edit."}</Text>
+            <Text style={styles.detailHeading}>Low result may mean</Text><Text style={styles.detailText}>{item.lowMeaning?.trim() || "Not documented yet."}</Text>
+            <Text style={styles.detailHeading}>High result may mean</Text><Text style={styles.detailText}>{item.highMeaning?.trim() || "Not documented yet."}</Text>
+            {item.possibleEffects?.trim() ? <><Text style={styles.detailHeading}>Possible effects</Text><Text style={styles.detailText}>{item.possibleEffects}</Text></> : null}
+            {item.seekCare?.trim() ? <><Text style={styles.detailHeading}>When to seek medical review</Text><Text style={styles.detailText}>{item.seekCare}</Text></> : null}
+            <Text style={styles.help}>General educational information only. A result outside a reference range does not by itself diagnose a condition; interpretation depends on symptoms and clinical context.</Text>
+            {item.sourceUrl?.trim() ? <Pressable onPress={() => openSource(item.sourceUrl)}><Text style={styles.sourceLink}>Source: {item.sourceName?.trim() || "Medical reference"} · Open source ↗</Text></Pressable> : <Text style={styles.help}>No source link added. Edit this test to add a trusted source.</Text>}
+          </View> : null}
+        </View>
+        <Pressable onPress={() => edit(item)} style={styles.iconBtn}><Ionicons name="create-outline" size={21} color={colors.brandPrimary}/></Pressable>
+        <Pressable onPress={() => remove(item)} style={styles.iconBtn}><Ionicons name="trash-outline" size={21} color={colors.error}/></Pressable>
+      </View>)}
+      {savedTestsForBranch.length === 0 ? <Text style={styles.help}>No saved tests in this branch yet.</Text> : null}
       {tests.map(item => <View key={item.id} style={styles.item}>
         <View style={{ flex: 1 }}>
           <Text style={styles.itemTitle}>{item.name}</Text>
@@ -324,6 +369,10 @@ const useStyles = makeStyles(colors => ({
   branchChipText: { color: colors.onSurface, fontFamily: fontFamily.medium, fontSize: fontSize.sm },
   branchChipTextSelected: { color: colors.onBrandPrimary },
   branchLabel: { color: colors.brandPrimary, fontFamily: fontFamily.semibold, fontSize: fontSize.sm, marginTop: spacing.xs },
+  medicalDetails: { marginTop: spacing.md, padding: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, backgroundColor: colors.surfaceSecondary },
+  detailHeading: { color: colors.onSurface, fontFamily: fontFamily.semibold, fontSize: fontSize.sm, marginTop: spacing.sm, marginBottom: spacing.xs },
+  detailText: { color: colors.onSurface, fontFamily: fontFamily.regular, fontSize: fontSize.sm, marginBottom: spacing.sm },
+  sourceLink: { color: colors.brandPrimary, fontFamily: fontFamily.semibold, fontSize: fontSize.sm, textDecorationLine: "underline", marginTop: spacing.xs },
   primary: { backgroundColor: colors.brandPrimary, padding: spacing.md, borderRadius: radius.md, alignItems: "center", marginTop: spacing.sm },
   primaryText: { color: colors.onBrandPrimary, fontFamily: fontFamily.semibold, fontSize: fontSize.base },
   action: { borderWidth: 1, borderColor: colors.border, padding: spacing.md, borderRadius: radius.md, alignItems: "center", marginTop: spacing.sm },
