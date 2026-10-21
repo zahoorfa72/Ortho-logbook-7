@@ -1030,7 +1030,7 @@ export async function recognizeLabText(
   gender = "",
   fastMode = false,
   onlineApiKey = "",
-): Promise<{ text: string; structuredText: string; mode: "online" | "offline" }> {
+): Promise<{ text: string; structuredText: string; mode: "online" | "offline"; needsReview: boolean; reviewReasons: string[] }> {
   // Run on-device OCR on the original and, for small/blurry-looking captures,
   // an enlarged high-quality copy. Upscaling cannot restore lost detail, but
   // often helps OCR read small printed digits without sending data online.
@@ -1095,6 +1095,26 @@ export async function recognizeLabText(
       if (rotatedUri) { try { await FileSystem.deleteAsync(rotatedUri, { idempotent: true }); } catch {} }
     }
   }
+  // Low-resolution captures often lose decimal points and small CBC values.
+  // For weak/small images, try one enlarged full-page pass before crop retries.
+  // This is a recognition variant only; the source photo is never modified.
+  if (!fastMode && originalDimensions && Math.max(originalDimensions.width, originalDimensions.height) < 1800 &&
+      (localScore(best) < 420 || initialRows.length === 0)) {
+    let enlargedUri = "";
+    try {
+      const resized = await ImageManipulator.manipulateAsync(uri, [
+        { resize: { width: 2600 } },
+      ], { compress: 1, format: ImageManipulator.SaveFormat.PNG });
+      enlargedUri = resized.uri;
+      const candidate = await recognizeText(enlargedUri);
+      if (localScore(candidate) > localScore(best)) {
+        best = candidate;
+        bestSize = { width: resized.width, height: resized.height };
+      }
+    } catch {}
+    if (enlargedUri) { try { await FileSystem.deleteAsync(enlargedUri, { idempotent: true }); } catch {} }
+  }
+
   // Re-read the page in overlapping enlarged bands. This helps reports photographed
   // from farther away, where the full-page OCR often loses small test values.
   // Keep the original full-page OCR blocks for table geometry and append crop text
@@ -1157,10 +1177,13 @@ export async function recognizeLabText(
   // Prefer table-aware online OCR only when enabled and when it matches or
   // improves on local OCR. Word bounding boxes feed the same row/column parser.
   let selectedMode: "online" | "offline" = "offline";
+  const localCandidate = { text: String(best?.text || ""), blocks: best?.blocks || [] };
+  let onlineCandidate: OnlineOcrResult | null = null;
   if (String(onlineApiKey || "").trim()) {
     try {
       const online = await recognizeOnlineLabText(uri, onlineApiKey);
       if (online.text.trim() && online.blocks.length > 0) {
+        onlineCandidate = online;
         const onlineScore = localScore({ text: online.text });
         const localScoreValue = localScore(best);
         const onlineRows = parseLabReportRows(online.text, configuredTests, gender, 10, true).length;
@@ -1209,5 +1232,36 @@ export async function recognizeLabText(
   }).filter(Boolean);
   const dateLine = reportDate ? "REPORT DATE: " + reportDate : "";
   const reviewText = [dateLine, ...filteredRows].filter(Boolean).join("\n");
-  return { text: reviewText, structuredText: filteredRows.join("\n"), mode };
+
+  // Compare independent local/online interpretations. A disagreement is not
+  // resolved by guessing: keep the selected pass, but explicitly request review.
+  const resultMap = (value: string) => {
+    const map = new Map<string, string>();
+    for (const row of parseLabReportRows(value, configuredTests, gender, 10, true)) {
+      map.set(canonicalTestName(row.test), normaliseName(row.result).replace(/,/g, "."));
+    }
+    return map;
+  };
+  const reviewReasons: string[] = [];
+  const selectedMap = resultMap(rawOcrText);
+  const alternateText = selectedMode === "online" ? localCandidate.text : String(onlineCandidate?.text || "");
+  const alternateMap = resultMap(alternateText);
+  if (alternateMap.size) {
+    for (const [test, result] of selectedMap) {
+      if (alternateMap.has(test) && alternateMap.get(test) !== result) {
+        reviewReasons.push("OCR engines disagree on " + test);
+      }
+    }
+    for (const [test, result] of alternateMap) {
+      if (selectedMap.has(test) && selectedMap.get(test) !== result) {
+        if (!reviewReasons.some(reason => reason.endsWith(test))) reviewReasons.push("OCR engines disagree on " + test);
+      }
+    }
+  }
+  const parsedSelected = parseLabReportRows(rawOcrText, configuredTests, gender, 10, true);
+  const structuredRows = filteredRows.length;
+  if (!structuredRows) reviewReasons.push("No table rows could be reliably aligned");
+  if (parsedSelected.some(row => !String(row.result || "").trim())) reviewReasons.push("One or more detected tests have no reliable result");
+  if (parsedSelected.length > 0 && structuredRows < parsedSelected.length) reviewReasons.push("Some detected test results could not be aligned to table rows");
+  return { text: reviewText, structuredText: filteredRows.join("\n"), mode, needsReview: reviewReasons.length > 0, reviewReasons: [...new Set(reviewReasons)] };
 }
