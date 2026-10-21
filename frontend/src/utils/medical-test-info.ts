@@ -410,10 +410,11 @@ async function fetchMedlinePlusByLoinc(code: string, label: string): Promise<Omi
 type PubMedSummary = { uid?: string; title?: string; fulljournalname?: string; pubdate?: string };
 
 const TRUSTED_MEDICAL_DOMAINS = [
-  "testing.com", "nhs.uk", "mayoclinic.org", "clevelandclinic.org",
+  "medlineplus.gov", "nih.gov", "nhs.uk", "mayoclinic.org", "clevelandclinic.org",
   "cdc.gov", "who.int", "fda.gov", "labcorp.com", "mountsinai.org",
-  "msdmanuals.com", "cancer.gov", "kidney.org", "heart.org",
-  "med.umich.edu", "ucsfhealth.org", "health.harvard.edu",
+  "msdmanuals.com", "merckmanuals.com", "cancer.gov", "kidney.org", "heart.org",
+  "med.umich.edu", "ucsfhealth.org", "health.harvard.edu", "healthdirect.gov.au",
+  "webmd.com", "medscape.com", "patient.info", "testing.com", "medlineplus.gov",
 ];
 
 function isTrustedMedicalUrl(value: string): boolean {
@@ -546,22 +547,24 @@ export async function fetchTrustedMedicalTestInfo(testName: string, aliases = ""
     // Continue to the curated fallback before slower secondary search services.
   }
   try {
-    const article = await fetchPubMedSummary(testName, labels);
-    if (article) {
-      return { ...article, fetchedAt: new Date().toISOString(), loincCode: "pubmed-search" };
-    }
-  } catch {
-    // Continue to the allowlisted medical-site search.
-  }
-  try {
     const article = await fetchTrustedWebSearch(testName, labels);
     if (article) {
       return { ...article, fetchedAt: new Date().toISOString(), loincCode: "trusted-web-search" };
     }
   } catch {
-    // Network, search-provider, or site failure: try curated notes with a real source page.
+    // Search-provider or network failure: use the offline curated medical notes.
   }
-  // Reliable fallback for common tests when external APIs are blocked/unavailable.
-  // Unknown tests still return null instead of receiving an unrelated explanation.
-  return getCuratedMedicalInfo(testName, aliases);
+  // Reliable fallback for common tests when online services are blocked or quota-limited.
+  const curated = getCuratedMedicalInfo(testName, aliases);
+  if (curated) return curated;
+
+  try {
+    const article = await fetchPubMedSummary(testName, labels);
+    if (article) {
+      return { ...article, fetchedAt: new Date().toISOString(), loincCode: "pubmed-search" };
+    }
+  } catch {
+    // A peer-reviewed result is optional; never block the basic explanation.
+  }
+  return null;
 }
