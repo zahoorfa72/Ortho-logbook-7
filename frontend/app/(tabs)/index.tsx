@@ -872,25 +872,10 @@ export default function Logbook() {
         });
       }
       if (!reportPages.length) {
-        const emptyFlags: string[] = [];
-        setLabFlagsByPatient(previous => ({ ...previous, [patientId]: { signature: photos.join("|"), flags: emptyFlags } }));
-        try {
-          await api.put("/patients/" + patientId, {
-            ...patient,
-            customData: { ...(patient.customData || {}), labOcrPossibleFlags: "", labOcrDetectedResults: "[]", labOcrDetectedAt: new Date().toISOString(), labOcrReportDate: "", labOcrPhotoSignature: photos.join("|"), labOcrPipelineVersion: LAB_OCR_PIPELINE_VERSION, labOcrDateNeedsAdmin: "false", labOcrDateManuallyConfirmed: "false" },
-          });
-          queryClient.invalidateQueries({ queryKey: ["patients"] });
-        } catch {}
-        try {
-          let snapshot: Record<string, any> = {};
-          const raw = await AsyncStorage.getItem("ortho_lab_ocr_patient_cache_v7");
-          if (raw) snapshot = JSON.parse(raw);
-          snapshot[patientId] = { signature: photos.join("|"), flags: [], reportDate: "" };
-          await AsyncStorage.setItem("ortho_lab_ocr_patient_cache_v7", JSON.stringify(snapshot));
-        } catch {}
+        // A failed/unrecognized scan must never clear a patient's previously saved results.
         saveLabScanState(patientId, { status: "failed", message: unreadableImages === photos.length
-          ? "The photos could not be read. Check that the report is clear, then Retry."
-          : "No lab report was recognized in these photos. Check the photo, then Retry.", updatedAt: new Date().toISOString() });
+          ? "The photos could not be read. Existing saved lab results were left unchanged. Check that the report is clear, then Retry."
+          : "No lab report was recognized in these photos. Existing saved lab results were left unchanged. Check the photo, then Retry.", updatedAt: new Date().toISOString() });
         await removeNewPatientQueueEntry(patientId);
         return;
       }
@@ -945,9 +930,10 @@ export default function Logbook() {
         return cached?.needsReview ? (cached.reviewReasons?.length ? cached.reviewReasons : ["OCR confidence or row alignment needs manual checking"]) : [];
       }))];
       if (reportDateNeedsAdmin) reviewReasons.push("Report date could not be read confidently; confirm it or explicitly mark it unreadable.");
+      if (!uniqueDetectedResults.length) reviewReasons.push("No test/result rows were extracted. Check the original report and add the missing rows manually.");
       if (unreadableImages > 0 && reportPages.length > 0) reviewReasons.push(unreadableImages + " photo(s) could not be read; check every page of the original report.");
       const requiresManualReview = reportPhotoUris.some(uri => photoCache[labPhotoCacheKey(uri)]?.needsReview === true)
-        || reportDateNeedsAdmin || (unreadableImages > 0 && reportPages.length > 0);
+        || reportDateNeedsAdmin || uniqueDetectedResults.length === 0 || (unreadableImages > 0 && reportPages.length > 0);
       if (requiresManualReview) {
         const pendingDraft: PendingLabReview = {
           patientId,
