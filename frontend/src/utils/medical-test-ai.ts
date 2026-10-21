@@ -97,8 +97,8 @@ async function fetchDirectOpenAiMedicalInfo(
     },
     body: JSON.stringify({
       model: "gpt-4o-mini",
-      tools: [{ type: "web_search", filters: { allowed_domains: TRUSTED_MEDICAL_DOMAINS }, search_context_size: "medium" }],
-      tool_choice: "required",
+      tools: [{ type: "web_search", search_context_size: "high" }],
+      tool_choice: "auto",
       max_output_tokens: 650,
       instructions: [
         "You provide cautious patient-facing medical education about laboratory tests.",
