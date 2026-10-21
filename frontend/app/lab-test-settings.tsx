@@ -298,7 +298,7 @@ export default function LabTestSettingsScreen() {
             <Text style={[styles.help, { flex: 1, marginBottom: 0 }]}>Downloading model: {localModelProgress}%</Text>
           </View>
           <View style={{ height: 8, borderRadius: 5, overflow: "hidden", backgroundColor: colors.border, marginBottom: spacing.sm }}>
-            <View style={{ height: 8, width: Math.max(2, localModelProgress) + "%", borderRadius: 5, backgroundColor: colors.brandPrimary }} />
+            <View style={{ height: 8, width: (Math.max(2, localModelProgress) + "%") as `${number}%`, borderRadius: 5, backgroundColor: colors.brandPrimary }} />
           </View>
           <Pressable onPress={() => localModelAbortRef.current?.abort()} style={styles.action}><Text style={styles.actionText}>Cancel model download</Text></Pressable>
         </> : <Pressable disabled={localModelStatusLoading || localModelDownloaded} onPress={async () => {
