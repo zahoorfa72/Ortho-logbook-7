@@ -211,7 +211,7 @@ export default function LabTestSettingsScreen() {
       setAiVisionConsent(enabled);
       toast(enabled
         ? "Shared OpenAI features enabled on this device. Lab images are sent only after local OCR detects a likely lab report; AI scan rows still require admin review. Short abnormal-result explanations use cited trusted medical sources."
-        : "Direct OpenAI lab scanning is disabled. Local OCR remains available.",
+        : "Direct AI lab-image scanning is disabled. If a key remains saved, it can still power short abnormal-result explanations; local OCR remains available.",
         "success");
     } catch (error: any) {
       toast(error?.message || "Could not save the OpenAI API key securely on this device.", "error");
