@@ -2301,6 +2301,15 @@ export default function PatientForm() {
             </Pressable>
             {labFindingsExpanded ? <View>
             <Text style={styles.hint}>{labOcrBusy ? "Checking pictures for lab reports…" : isEdit ? "Existing patient photos are not scanned when you open this file. Tap Scan lab photos when you want to run OCR; review extracted values against the original report." : "Lab photos in a new patient draft are scanned automatically. Review extracted values against the original report."}</Text>
+            {p.photos.length ? <View style={{ marginTop: spacing.sm }}>
+              <Text style={[styles.label, { marginBottom: spacing.xs }]}>Review Lab OCR images - Tap any image to open full screen</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.sm }}>
+                {[...new Set(p.photos)].map((uri, index) => <Pressable key={uri + "-" + index} accessibilityRole="button" accessibilityLabel={"Open lab report image " + (index + 1) + " full screen"} onPress={() => { resetPhotoZoom(); setSelectedPhoto(uri); }} style={{ width: 94, height: 120, borderRadius: radius.sm, overflow: "hidden", borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surfaceSecondary }}>
+                  <Image source={{ uri }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
+                  <View style={{ position: "absolute", right: 4, bottom: 4, borderRadius: radius.pill, paddingHorizontal: 5, paddingVertical: 2, backgroundColor: "rgba(0,0,0,0.7)" }}><Text style={{ color: "#FFFFFF", fontSize: 10 }}>{index + 1}</Text></View>
+                </Pressable>)}
+              </ScrollView>
+            </View> : null}
             <Pressable disabled={labOcrBusy || !p.photos.length} onPress={() => { lastAutoLabScan.current = ""; void analyzeLabPhotos([...new Set(p.photos)], false, true); }} style={{ alignSelf: "flex-start", marginTop: spacing.xs, paddingVertical: spacing.sm, paddingHorizontal: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md }}>
               <Text style={{ color: colors.brandPrimary, fontFamily: fontFamily.semibold }}>{labOcrBusy ? "Scanning…" : isEdit ? "Scan lab photos" : "Rescan lab photos"}</Text>
             </Pressable>
