@@ -294,7 +294,7 @@ function parseMedlinePlusSearch(xml: string, requestedLabels: string[]): Omit<Me
   const candidates: Array<{ article: Omit<MedicalTestOnlineInfo, "fetchedAt" | "loincCode">; score: number }> = [];
   for (const document of documents) {
     const urlMatch = /\burl\s*=\s*["']([^"']+)["']/i.exec(document);
-    const sourceUrl = urlMatch ? decodeEntities(urlMatch[1]) : "";
+    const sourceUrl = urlMatch ? decodeEntities(urlMatch[1]).split(/[?#]/)[0] : "";
     // Only use a real MedlinePlus lab-test page; reject general pages that merely
     // happen to mention a similar word, to avoid attaching unrelated information.
     if (!/^https:\/\/medlineplus\.gov\/lab-tests\/[a-z0-9-]+\/?$/i.test(sourceUrl)) continue;
