@@ -1112,8 +1112,16 @@ export const api = {
           const customData: Record<string, string> = {};
           const sourceSerial = asText(item?.sourceSerialNumber ?? item?.sNo ?? item?.serialNumber);
           const sourceMrNoRaw = asText(item?.sourceMrNoRaw ?? item?.sourceMRNoRaw);
+          const sourceDateDmy = asText(item?.sourceDateDmy);
+          const sourcePage = asText(item?.sourcePage);
+          const sourceReviewFlags = Array.isArray(item?.sourceReviewFlags)
+            ? item.sourceReviewFlags.map((flag: any) => asText(flag)).filter(Boolean)
+            : [];
           if (sourceSerial) customData.sourceSerialNumber = sourceSerial;
           if (sourceMrNoRaw) customData.sourceMrNoRaw = sourceMrNoRaw;
+          if (sourceDateDmy) customData.sourceDateDmy = sourceDateDmy;
+          if (sourcePage) customData.sourcePdfPage = sourcePage;
+          if (sourceReviewFlags.length) customData.sourceReviewFlags = sourceReviewFlags.join("; ");
           db.runSync(
             "INSERT INTO patients (id,mr_no,name,gender,age,diagnosis,procedure,procedure_ii,implant,implant_ii,implant_id,implant_ii_id,address,file_name,photo_uri,photos_json,custom_data_json,date,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             [patientId, mrNo, name, gender, age, diagnosis, procedureName, procedureII, implant, implantII, null, null, address, fileName, "", "[]", JSON.stringify(customData), date, now, uid],

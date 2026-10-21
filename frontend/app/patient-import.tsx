@@ -17,6 +17,7 @@ type ImportedPatient = {
   procedureII?: string; procedure_ii?: string; implant?: string; implantII?: string; implant_ii?: string;
   address?: string; fileName?: string; file_name?: string; date?: string; entryDate?: string;
   sourceSerialNumber?: string; sNo?: string; serialNumber?: string;
+  sourceDateDmy?: string; sourcePage?: number | string; sourceReviewFlags?: string[];
 };
 type ImportResult = { imported: number; skippedDuplicates: number; skippedInvalid: number };
 
@@ -31,6 +32,8 @@ export default function PatientImportScreen() {
   const [patients, setPatients] = useState<ImportedPatient[]>([]);
   const [importing, setImporting] = useState(false);
   const [summary, setSummary] = useState<ImportResult | null>(null);
+  const reviewFlaggedRows = patients.filter(item => Array.isArray(item.sourceReviewFlags) && item.sourceReviewFlags.length > 0).length;
+  const missingMrNoRows = patients.filter(item => !String(item.mrNo || item.mr_no || "").trim()).length;
 
   const chooseFile = async () => {
     try {
@@ -118,6 +121,7 @@ export default function PatientImportScreen() {
         {patients.length ? <>
           <Text style={styles.section}>Before importing</Text>
           <Text style={styles.help}>The prepared file contains {patients.length} rows. Historical procedure, implant text, address, file name, age, gender and entry date are kept in the patient record. No photos, patient identities outside the file, or inventory records are added.</Text>
+          {reviewFlaggedRows > 0 || missingMrNoRows > 0 ? <View style={styles.warningCard}><Ionicons name="alert-circle-outline" size={21} color={colors.warning || colors.error} /><Text style={styles.warningText}>{reviewFlaggedRows} source rows are flagged for review; {missingMrNoRows} rows have no reliable MR number and will keep it blank. Printed source values are preserved in import metadata instead of being guessed.</Text></View> : null}
           <Pressable onPress={importPatients} disabled={importing} style={[styles.primary, importing && { opacity: 0.65 }]}>
             {importing ? <ActivityIndicator color={colors.onBrandPrimary} /> : <Ionicons name="cloud-download-outline" size={21} color={colors.onBrandPrimary} />}
             <Text style={styles.primaryText}>{importing ? "Importing safely…" : `Import ${patients.length} patient rows`}</Text>
@@ -149,6 +153,8 @@ const useStyles = makeStyles(colors => ({
   button: { flexDirection: "row", justifyContent: "center", alignItems: "center", gap: spacing.sm, padding: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, backgroundColor: colors.surface },
   buttonText: { color: colors.brandPrimary, fontFamily: fontFamily.semibold, fontSize: fontSize.base },
   fileCard: { flexDirection: "row", alignItems: "center", gap: spacing.md, padding: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, backgroundColor: colors.surface, marginTop: spacing.md },
+  warningCard: { flexDirection: "row", alignItems: "flex-start", gap: spacing.sm, padding: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, backgroundColor: colors.surface, marginBottom: spacing.md },
+  warningText: { flex: 1, color: colors.onSurface, fontFamily: fontFamily.medium, fontSize: fontSize.sm, lineHeight: 20 },
   fileName: { color: colors.onSurface, fontFamily: fontFamily.semibold, fontSize: fontSize.base },
   primary: { flexDirection: "row", justifyContent: "center", alignItems: "center", gap: spacing.sm, padding: spacing.md, backgroundColor: colors.brandPrimary, borderRadius: radius.md, marginTop: spacing.sm },
   primaryText: { color: colors.onBrandPrimary, fontFamily: fontFamily.semibold, fontSize: fontSize.base },
