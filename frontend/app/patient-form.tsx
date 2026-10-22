@@ -1303,7 +1303,7 @@ export default function PatientForm() {
     setCameraTaking(true);
     try {
       const result = await cameraRef.current.takePictureAsync({
-        quality: 1,
+        quality: 0.92,
         skipProcessing: false,
       });
       if (!result?.uri) throw new Error("The camera did not return a photo.");
@@ -1573,11 +1573,13 @@ export default function PatientForm() {
       const dimensions = await new Promise<{ width: number; height: number }>((resolve, reject) =>
         Image.getSize(usableUri, (width, height) => resolve({ width, height }), reject));
       const actions: any[] = [];
-      if (Math.max(dimensions.width, dimensions.height) > 4096) {
-        actions.push(dimensions.width >= dimensions.height ? { resize: { width: 4096 } } : { resize: { height: 4096 } });
+      if (Math.max(dimensions.width, dimensions.height) > 2400) {
+        actions.push(dimensions.width >= dimensions.height ? { resize: { width: 2400 } } : { resize: { height: 2400 } });
       }
+      // Keep perspective correction responsive on Android: sending a 4K+ base64
+      // image through WebView can duplicate tens of MB in JS/native memory.
       const prepared = await ImageManipulator.manipulateAsync(usableUri, actions, {
-        compress: 0.95, format: ImageManipulator.SaveFormat.JPEG, base64: true,
+        compress: 0.88, format: ImageManipulator.SaveFormat.JPEG, base64: true,
       });
       if (!prepared.base64) throw new Error("Could not prepare this photo for perspective correction.");
       setEditingPhotoUri(usableUri);
