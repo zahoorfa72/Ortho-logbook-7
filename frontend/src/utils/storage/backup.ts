@@ -1337,39 +1337,38 @@ function restorePatientPhotos(p:any){
   return {photoUri,photosJson:photos.length?JSON.stringify(photos):null};
 }
 
+// Phone backups are intentionally data-only: patient images belong in the
+// separate patient-image PDFs. Older .orbackup files may still contain a large
+// photoAssets map. Do not expand those assets into every patient/history row
+// during restore; that multiplies memory use and can crash Android on next launch.
 function materializeBackupPhotoReferences(backup: BackupData): BackupData {
- const assets = backup?.photoAssets;
- if (!assets || typeof assets !== "object") return backup;
- const expand = (value: any, key = ""): any => {
-  if (typeof value === "string") {
-   if (value.startsWith(BACKUP_PHOTO_REF_PREFIX)) {
-    const image = assets[value];
-    if (typeof image !== "string" || !image.startsWith("data:image/")) {
-     throw new Error("This backup is missing a referenced medical image. Keep the original file and create a new backup before restoring.");
-    }
-    return image;
+ const stripPhotoFields = (value: any): any => {
+  if (Array.isArray(value)) return value.map(stripPhotoFields);
+  if (!value || typeof value !== "object") return value;
+  for (const key of Object.keys(value)) {
+   const normalized = key.toLowerCase();
+   if (["photo_uri", "photouri", "photos_json", "photos", "photoassets"].includes(normalized)) {
+    if (normalized === "photos" && Array.isArray(value[key])) value[key] = [];
+    else value[key] = normalized === "photos_json" ? "" : "";
+    continue;
    }
-   if (key.toLowerCase().endsWith("_json") && /^[\s]*[\[{]/.test(value)) {
-    let parsed: any;
-    try { parsed = JSON.parse(value); } catch { return value; }
-    return JSON.stringify(expand(parsed));
+   if (normalized === "snapshot_json" || normalized === "payload_json" || normalized === "custom_data_json") {
+    const raw = value[key];
+    if (typeof raw === "string" && raw.length) {
+     try { value[key] = JSON.stringify(stripPhotoFields(JSON.parse(raw))); } catch {}
+    } else if (raw && typeof raw === "object") value[key] = stripPhotoFields(raw);
+    continue;
    }
-   return value;
-  }
-  if (Array.isArray(value)) return value.map((item) => expand(item));
-  if (value && typeof value === "object") {
-   for (const [childKey, child] of Object.entries(value)) {
-    if (childKey === "photoAssets") continue;
-    (value as any)[childKey] = expand(child, childKey);
-   }
+   value[key] = stripPhotoFields(value[key]);
   }
   return value;
  };
- const expanded = expand(backup) as BackupData;
- delete expanded.photoAssets;
- return expanded;
+ // Remove photo payloads before database insertion. Keep patient image archive
+ // metadata so the separately stored PDF workflow continues to work.
+ const sanitized = stripPhotoFields(backup) as BackupData;
+ delete sanitized.photoAssets;
+ return sanitized;
 }
-
 function restoreRowId(value:any, prefix:string, used:Set<string>){
   const raw=String(value||"").trim();
   if(raw && !used.has(raw)){ used.add(raw); return raw; }
