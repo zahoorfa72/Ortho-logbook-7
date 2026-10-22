@@ -316,10 +316,12 @@ export async function listGoogleDriveBackups(): Promise<Array<{id:string;name:st
   }));
   return backups.sort((a, b) => {
     // Prefer the rolling master, then show the newest dated snapshots first.
-    const rank = (name: string) => name === sixMonthMasterName() ? 0 :
-      isSixMonthMasterName(name) ? 1 :
-      name === BACKUP_NAME ? 2 :
-      name === "Ortho Logbook Backup - All Time.orbackup" ? 3 : 4;
+    const rank = (name: string) =>
+      isHalfYearPeriodName(name) ? 0 :
+      name === sixMonthMasterName() ? 1 :
+      isSixMonthMasterName(name) ? 2 :
+      name === BACKUP_NAME ? 3 :
+      name === "Ortho Logbook Backup - All Time.orbackup" ? 4 : 5;
     return rank(a.name) - rank(b.name) ||
       Date.parse(b.modifiedTime || "") - Date.parse(a.modifiedTime || "");
   });
