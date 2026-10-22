@@ -1456,8 +1456,8 @@ export async function downloadPatientImageArchiveForPatient(
   const archives = await getLocalPatientImageArchives();
   const local = archives.find(item => item.patientId === patientId);
   const safePartForLookup = (value: string) => String(value || "").normalize("NFKD")
-    .replace(/[\\u0300-\\u036f]/g, "").replace(/[^a-zA-Z0-9 -]/g, "")
-    .trim().replace(/\\s+/g, " ").replace(/ /g, "-").slice(0, 64) || "Patient";
+    .replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9 -]/g, "")
+    .trim().replace(/\s+/g, " ").replace(/ /g, "-").slice(0, 64) || "Patient";
   // A deterministic ID suffix allows an exact legacy filename lookup even on
   // a newly installed phone where the local PDF manifest has not been restored.
   const expectedName = local?.fileName || [
