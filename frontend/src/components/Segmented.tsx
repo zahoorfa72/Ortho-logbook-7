@@ -15,7 +15,7 @@ export function Segmented({ options, value, onChange, testIDPrefix = "seg" }: Pr
   return (
     <View style={styles.wrap}>
       {options.map((opt) => {
-        const active = opt === value;
+        const active = opt.trim().toLowerCase() === String(value || "").trim().toLowerCase();
         return (
           <Pressable
             key={opt}

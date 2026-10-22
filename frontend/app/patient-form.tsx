@@ -851,8 +851,13 @@ export default function PatientForm() {
       primary === undefined || primary === null || primary === ""
         ? asBooleanFlag(fallback)
         : asBooleanFlag(primary);
+    const rawGender = String(source.gender || "").trim().toLowerCase();
+    const normalizedGender = /^(m|male|man|men)$/.test(rawGender) ? "Male"
+      : /^(f|female|woman|women)$/.test(rawGender) ? "Female"
+      : /^(other|non-binary|nonbinary)$/.test(rawGender) ? "Other" : "";
     setP({
       ...source,
+      gender: normalizedGender,
       photos,
       customData,
       hcvPlus: readFlag((source as any).hcvPlus, customData.hcvPlus),
@@ -1044,14 +1049,14 @@ export default function PatientForm() {
     // multi-megapixel scan dozens of times before saving it, making the scanner
     // appear frozen and increasing memory pressure. Keep a few full-detail quality
     // attempts, then use a small number of progressively smaller document images.
-    const candidateEdges = [3200, 2800, 2400, 2100, 1800].filter(edge => edge < longest);
+    // Limit each captured image to at most three native encodes. Repeated full-size
+    // ImageManipulator passes were allocating multiple large bitmaps on Android and
+    // could freeze or kill the app before the patient form finished saving.
     const attempts: Array<{ edge: number; quality: number }> = [
-      ...[0.92, 0.88, 0.84].map(quality => ({ edge: longest, quality })),
-      ...candidateEdges.map((edge, index) => ({
-        edge,
-        quality: [0.92, 0.90, 0.88, 0.86, 0.84][index],
-      })),
-    ];
+      { edge: longest, quality: 0.88 },
+      { edge: Math.min(longest, 2400), quality: 0.88 },
+      { edge: Math.min(longest, 1800), quality: 0.84 },
+    ].filter((attempt, index, all) => all.findIndex(other => other.edge === attempt.edge && other.quality === attempt.quality) === index);
     let normalizedUri = "";
     let fallbackUri = "";
     let fallbackSize = Number.POSITIVE_INFINITY;
