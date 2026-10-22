@@ -2082,8 +2082,14 @@ export function backupToGoogleDrive(
   filter: BackupFilter = { type: "all" },
   options: DriveBackupOptions = {},
 ): Promise<any> {
-  // Drive stores one rolling all-time master; period filters are for restore/export, not separate Drive snapshots.
-  return queueDriveOperation(() => backupToGoogleDriveUnlocked(password, { type: "all" }, options), options.onProgress);
+  // Keep the rolling master for incremental recovery, and also refresh the separate
+  // current half-year snapshot. The previous half-year snapshot is created once if missing.
+  return queueDriveOperation(async () => {
+    const result = await backupToGoogleDriveUnlocked(password, { type: "all" }, options);
+    const snapshotFailures = await syncHalfYearSnapshots(options.onProgress, true);
+    if (snapshotFailures.length) return { ...result, snapshotFailures };
+    return { ...result, snapshotFailures: [] };
+  }, options.onProgress);
 }
 
 async function listIncrementalFiles() {
@@ -2562,7 +2568,8 @@ async function ensureGoogleDriveBaselineUnlocked(onProgress?: (stage: string) =>
   if (existing?.id && localSnapshotVersion === "1") {
     const cursor = String((await storage.secureGet(MONTH_ARCHIVE_CURSOR_KEY, "")) || "");
     if (!/^\d{4}-\d{2}$/.test(cursor)) await storage.secureSet(MONTH_ARCHIVE_CURSOR_KEY, monthKeyFromDate(new Date()));
-    return { skipped: true, name: currentMonthName };
+    const snapshotFailures = await syncHalfYearSnapshots(onProgress, false);
+    return { skipped: true, name: currentMonthName, snapshotFailures };
   }
   // Replace any old active master with a complete snapshot of this phone. Legacy
   // backups are not merged; old files are left untouched as inactive recovery copies.
@@ -2574,7 +2581,8 @@ async function ensureGoogleDriveBaselineUnlocked(onProgress?: (stage: string) =>
   await storage.secureSet(MASTER_LOCAL_SNAPSHOT_VERSION_KEY, "1");
   const cursor = String((await storage.secureGet(MONTH_ARCHIVE_CURSOR_KEY, "")) || "");
   if (!/^\d{4}-\d{2}$/.test(cursor)) await storage.secureSet(MONTH_ARCHIVE_CURSOR_KEY, monthKeyFromDate(new Date()));
-  return { ...result, baselineCreated: true, snapshotFailures: [] };
+  const snapshotFailures = await syncHalfYearSnapshots(onProgress, true);
+  return { ...result, baselineCreated: true, snapshotFailures };
 }
 
 export function ensureGoogleDriveBaseline(onProgress?: (stage: string) => void): Promise<any> {
@@ -2834,10 +2842,8 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
       }
     }
     await commitIncrementalSnapshotCache(String(migratedBase.id) + ":" + String(migratedBase.modifiedTime || ""));
-    // backupToGoogleDrive already created and verified the current month archive.
-    // Do not reset its cursor here: doing so made the next automatic sync upload
-    // the same large monthly file again immediately after reaching 100%.
-    return { ...migrated, skipped: false, baselineCreated: true, completedAt: new Date().toISOString(), name: currentMonthName, accountEmail: getConnectedGoogleAccount(), snapshotFailures: [] };
+    const snapshotFailures = await syncHalfYearSnapshots(onProgress, true);
+    return { ...migrated, skipped: false, baselineCreated: true, completedAt: new Date().toISOString(), name: currentMonthName, accountEmail: getConnectedGoogleAccount(), snapshotFailures };
   }
 
   // Apply every change directly to the SAME six-month master file. Do not
@@ -2917,16 +2923,18 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
     // merged Drive-only historical rows, or later delta comparisons can omit data.
     await prepareIncrementalSnapshotCacheFromBackupData("", completeLocal);
     await commitIncrementalSnapshotCache(String(confirmedMaster.id) + ":" + String(confirmedMaster.modifiedTime || ""));
+    const snapshotFailures = await syncHalfYearSnapshots(onProgress, true);
     onProgress?.("Incomplete master repaired and verified; all local table IDs are now represented.");
     return { baselineCreated: true, repaired: true, completedAt: new Date().toISOString(),
-      name: currentMonthName, accountEmail: getConnectedGoogleAccount() };
+      name: currentMonthName, accountEmail: getConnectedGoogleAccount(), snapshotFailures };
   }
   // Only report "up to date" after the master has passed the completeness audit.
   // This repairs older partial uploads even when the local delta cache says no
   // rows changed, while healthy no-op checks still avoid an upload.
   if (!hasActualChanges && !migrationNeeded) {
     await commitIncrementalSnapshotCache(baselineKey);
-    return { skipped: true, completedAt: new Date().toISOString(), name: "No changes", accountEmail: getConnectedGoogleAccount() };
+    const snapshotFailures = await syncHalfYearSnapshots(onProgress, false);
+    return { skipped: true, completedAt: new Date().toISOString(), name: "No changes", accountEmail: getConnectedGoogleAccount(), snapshotFailures };
   }
   const JOURNAL_NAME = "Ortho Logbook Backup Changes.orbackup";
   const journalFile = await findBackupByName(JOURNAL_NAME);
@@ -2992,9 +3000,10 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
       console.warn("[drive-backup] old journal cleanup deferred after verified master update", error);
     }
   }
+  const snapshotFailures = await syncHalfYearSnapshots(onProgress, true);
   return {
     ...masterResult, skipped: false, completedAt, name: String(base.name || currentMonthName),
-    accountEmail: getConnectedGoogleAccount(), consolidatedIntoMaster: true, snapshotFailures: [],
+    accountEmail: getConnectedGoogleAccount(), consolidatedIntoMaster: true, snapshotFailures,
   };
 }
 
