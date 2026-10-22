@@ -33,7 +33,7 @@ export default function SettingsScreen() {
     return (
       <View style={[styles.container, { paddingTop: insets.top }]}>
         <View style={styles.header}>
-          <Pressable onPress={() => router.replace("/(tabs)/index" as any)} style={styles.headerBtn} testID="settings-back">
+          <Pressable onPress={() => { if (router.canGoBack()) router.back(); else router.replace("/(tabs)/index" as any); }} style={styles.headerBtn} testID="settings-back">
             <Ionicons name="arrow-back" size={24} color={colors.onSurface} />
           </Pressable>
           <Text style={styles.headerTitle}>Settings</Text>
@@ -66,7 +66,7 @@ export default function SettingsScreen() {
   return (
     <View style={styles.container}>
       <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
-        <Pressable onPress={() => router.replace("/(tabs)/index" as any)} style={styles.headerBtn} testID="settings-back">
+        <Pressable onPress={() => { if (router.canGoBack()) router.back(); else router.replace("/(tabs)/index" as any); }} style={styles.headerBtn} testID="settings-back">
           <Ionicons name="arrow-back" size={24} color={colors.onSurface} />
         </Pressable>
         <Text style={styles.headerTitle}>Settings</Text>
