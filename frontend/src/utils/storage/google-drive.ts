@@ -33,6 +33,21 @@ function isSixMonthMasterName(name: string): boolean {
 function isMasterBackupName(name: string): boolean {
   return name === BACKUP_NAME || isSixMonthMasterName(name);
 }
+function halfYearPeriodName(value: string): string {
+  if (!/^\d{4}-H[12]$/.test(String(value || ""))) throw new Error("Choose a half-year as YYYY-H1 or YYYY-H2.");
+  return "Ortho Logbook Backup - Period " + value + ".orbackup";
+}
+function isHalfYearPeriodName(name: string): boolean {
+  return /^Ortho Logbook Backup - Period \d{4}-H[12]\.orbackup$/i.test(name);
+}
+function halfYearKey(date: Date = new Date()): string {
+  return String(date.getFullYear()) + (date.getMonth() < 6 ? "-H1" : "-H2");
+}
+function previousHalfYearKey(key: string): string {
+  const match = /^(\d{4})-H([12])$/.exec(key);
+  if (!match) throw new Error("Invalid half-year key: " + key);
+  return match[2] === "2" ? match[1] + "-H1" : String(Number(match[1]) - 1) + "-H2";
+}
 const BACKUP_FOLDER_NAME = "Ortho Logbook Backups";
 const PATIENT_IMAGE_PDF_FOLDER = "Patient Image PDFs";
 const PENDING_PATIENT_PDF_DELETE_KEY = "ortho_pending_patient_pdf_drive_deletes_v1";
@@ -251,6 +266,7 @@ async function findLatestBackupCandidates() {
 }
 
 function driveBackupName(filter: BackupFilter): string {
+  if (filter.type === "halfYear") return halfYearPeriodName(String(filter.value || ""));
   if (filter.type === "month") {
     const month = String(filter.value || "").trim();
     if (!/^\d{4}-\d{2}$/.test(month)) throw new Error("Enter the month as YYYY-MM before backing up.");
@@ -288,9 +304,9 @@ export async function listGoogleDriveBackups(): Promise<Array<{id:string;name:st
   const backups = files.filter((file: any) => {
     if (!file?.id) return false;
     const name = String(file.name || "");
-    // New UI lists six-month masters, not separate monthly archive files.
-    // Keep legacy all-time backups selectable for recovery.
-    return isMasterBackupName(name) ||
+    // Keep complete rolling masters and independently restorable half-year snapshots visible.
+    // Monthly implementation journals stay hidden; legacy full backups remain selectable.
+    return isMasterBackupName(name) || isHalfYearPeriodName(name) ||
       name === "Ortho Logbook Backup - All Time.orbackup";
   }).map((file: any) => ({
     id: String(file.id),
@@ -2292,7 +2308,9 @@ function stripEmbeddedRestoreImages(value: any): any {
   for (const key of Object.keys(value)) {
     const normalized = key.toLowerCase();
     if (normalized === "photoassets") { delete value[key]; continue; }
-    if (["photo_uri", "photouri", "photos_json", "photos", "bill_image", "billimage", "bill_files_json"].includes(normalized)) {
+    // Patient photos are stored as separate Drive PDFs, but inventory and implant
+    // bill attachments are application data and must remain restorable.
+    if (["photo_uri", "photouri", "photos_json", "photos"].includes(normalized)) {
       value[key] = normalized === "photos" ? [] : "";
       continue;
     }
@@ -2922,6 +2940,7 @@ export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) 
   onProgress?.("Finding the rolling master backup…");
   const candidates = (await findLatestBackupCandidates()).filter((item: any) =>
     isMasterBackupName(String(item.name || "")) ||
+    isHalfYearPeriodName(String(item.name || "")) ||
     String(item.name || "") === "Ortho Logbook Backup - All Time.orbackup" ||
     /^Ortho Logbook Backup - Month \d{4}-\d{2}\.orbackup$/.test(String(item.name || ""))
   );
