@@ -2681,7 +2681,7 @@ async function archiveHalfYearSnapshot(key: string, onProgress?: (stage: string)
         throw new Error("The half-year snapshot file is missing or empty.");
       }
       onProgress?.("Uploading half-year backup " + key + "…");
-      uploaded = await uploadStagedJsonFile(stageUri, info.size, existing?.id, onProgress, name);
+      uploaded = await uploadStagedJsonFile(stageUri, info.size, undefined, onProgress, name);
     } finally {
       try { await FileSystem.deleteAsync(stageUri, { idempotent: true }); } catch {}
     }
