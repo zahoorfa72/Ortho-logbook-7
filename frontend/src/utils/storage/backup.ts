@@ -488,8 +488,11 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
      const patientFilter = whereForFilter(filter, "date");
      const historyFilter = whereForFilter(filter, "created_at");
      patients = db.getAllSync<any>(
-       "SELECT id,mr_no,name,gender,age,diagnosis,procedure,procedure_ii,implant,implant_ii,implant_id,implant_ii_id,address,file_name,custom_data_json,date,created_at,created_by,updated_at,updated_by FROM patients WHERE (" + patientFilter.sql.replace(/^\s*WHERE\s+/i, "") + ") OR id IN (SELECT DISTINCT patient_id FROM patient_history" + historyFilter.sql + ") ORDER BY date DESC, created_at DESC",
-       [...patientFilter.args, ...historyFilter.args],
+       // A half-year snapshot contains only patients whose own admission/entry
+       // date belongs to that half-year. A later edit/history event must not
+       // pull an older patient into H2 and make the H2 backup look all-time.
+       "SELECT id,mr_no,name,gender,age,diagnosis,procedure,procedure_ii,implant,implant_ii,implant_id,implant_ii_id,address,file_name,custom_data_json,date,created_at,created_by,updated_at,updated_by FROM patients" + patientFilter.sql + " ORDER BY date DESC, created_at DESC",
+       patientFilter.args,
      );
    } else {
      patients = db.getAllSync<any>(`SELECT id,mr_no,name,gender,age,diagnosis,procedure,procedure_ii,implant,implant_ii,implant_id,implant_ii_id,address,file_name,custom_data_json,date,created_at,created_by,updated_at,updated_by FROM patients${pf.sql} ORDER BY date DESC, created_at DESC`, pf.args);
