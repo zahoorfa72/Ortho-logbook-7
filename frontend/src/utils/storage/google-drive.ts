@@ -362,6 +362,7 @@ export async function restoreGoogleDriveBackupById(fileId: string, onProgress?: 
     void downloadPatientImageArchivesFromDrive(parsed, onProgress).catch((error: any) => {
       onProgress?.("Recent patient PDF download had a problem; the main backup is ready. You can download any patient's PDF from their record. " + String(error?.message || error));
     });
+    stripEmbeddedRestoreImages(parsed);
     return { name: String(metadata.name), modifiedTime: effectiveModifiedTime,
       backupText: JSON.stringify(parsed), appliedIncrementals: applied, recoveryWarnings: warnings };
   }
@@ -506,6 +507,7 @@ export async function restoreGoogleDriveBackupById(fileId: string, onProgress?: 
     }
   }
 
+  stripEmbeddedRestoreImages(composed);
   composed.incremental = false;
   delete composed.changedTables;
   delete composed._rowDelta;
@@ -2279,6 +2281,31 @@ function decodeBackupBase64(value: string): string {
     const decoded = globalThis.atob(value.replace(/\s/g, ""));
     return decodeURIComponent(Array.from(decoded, ch => "%" + ch.charCodeAt(0).toString(16).padStart(2, "0")).join(""));
   } catch { throw new Error("Google Drive backup base64 content could not be decoded."); }
+}
+
+// Strip embedded image bytes before serializing a Drive restore payload. Older
+// master files can contain photoAssets plus references repeated throughout patient
+// history; stringify/rehydration of that expanded payload can exhaust Android RAM.
+function stripEmbeddedRestoreImages(value: any): any {
+  if (Array.isArray(value)) return value.map(stripEmbeddedRestoreImages);
+  if (!value || typeof value !== "object") return value;
+  for (const key of Object.keys(value)) {
+    const normalized = key.toLowerCase();
+    if (normalized === "photoassets") { delete value[key]; continue; }
+    if (["photo_uri", "photouri", "photos_json", "photos", "bill_image", "billimage", "bill_files_json"].includes(normalized)) {
+      value[key] = normalized === "photos" ? [] : "";
+      continue;
+    }
+    if (["snapshot_json", "payload_json", "custom_data_json"].includes(normalized)) {
+      const raw = value[key];
+      if (typeof raw === "string" && raw.length) {
+        try { value[key] = JSON.stringify(stripEmbeddedRestoreImages(JSON.parse(raw))); } catch {}
+      } else if (raw && typeof raw === "object") value[key] = stripEmbeddedRestoreImages(raw);
+      continue;
+    }
+    value[key] = stripEmbeddedRestoreImages(value[key]);
+  }
+  return value;
 }
 
 async function downloadDriveJsonValidated(fileId: string, onProgress?: (message: string) => void): Promise<any> {
