@@ -1450,29 +1450,53 @@ export async function downloadPatientImageArchiveForPatient(
 ): Promise<{ localUri: string; sourceStamp: string; driveFileId: string; imageCount: number }> {
   const patientId = String(patient?.id || "").trim();
   if (!patientId) throw new Error("Save the patient record before downloading its archived images.");
+  onProgress?.("Connecting to Google Drive…");
   const folder = await findPatientImagePdfFolder();
-  if (!folder?.id) throw new Error("The Patient Image PDFs folder was not found in the connected Google Drive.");
+  if (!folder?.id) throw new Error("The Patient Image PDFs folder was not found in the connected Google Drive. Reconnect the Google account used for patient image backups and try again.");
   const archives = await getLocalPatientImageArchives();
   const local = archives.find(item => item.patientId === patientId);
-  const fileName = local?.fileName;
+  const safePartForLookup = (value: string) => String(value || "").normalize("NFKD")
+    .replace(/[\\u0300-\\u036f]/g, "").replace(/[^a-zA-Z0-9 -]/g, "")
+    .trim().replace(/\\s+/g, " ").replace(/ /g, "-").slice(0, 64) || "Patient";
+  // A deterministic ID suffix allows an exact legacy filename lookup even on
+  // a newly installed phone where the local PDF manifest has not been restored.
+  const expectedName = local?.fileName || [
+    safePartForLookup(String(patient.name || "Patient")),
+    patient.mrNo ? "MR-" + safePartForLookup(String(patient.mrNo)) : "",
+    safePartForLookup(patientId).slice(-10),
+  ].filter(Boolean).join(" - ") + ".pdf";
   const token = await accessToken();
-  const q = encodeURIComponent("'" + escapeDriveQuery(String(folder.id)) + "' in parents and appProperties has { key='orthoPatientId' and value='" + escapeDriveQuery(patientId.slice(0,100)) + "' } and trashed = false");
   onProgress?.("Finding this patient's archived PDF…");
+  const q = encodeURIComponent("'" + escapeDriveQuery(String(folder.id)) + "' in parents and appProperties has { key='orthoPatientId' and value='" + escapeDriveQuery(patientId.slice(0,100)) + "' } and trashed = false");
   const response = await driveRequest(DRIVE_API + "?q=" + q + "&spaces=drive&pageSize=100&orderBy=modifiedTime%20desc&includeItemsFromAllDrives=true&supportsAllDrives=true&fields=files(id,name,mimeType,size,modifiedTime,parents,appProperties)");
   const data = await response.json();
   const files = Array.isArray(data.files) ? data.files : [];
   let remote = files.find((item:any) => item?.id && item.mimeType === "application/pdf" &&
     String(item.appProperties?.orthoPatientId || "") === patientId.slice(0,100) &&
-    (!fileName || String(item.name || "") === fileName));
-  if (!remote && fileName) {
-    const byName = await findPatientPdfInFolder(fileName, String(folder.id));
-    if (byName?.id && byName.mimeType === "application/pdf" &&
-        String(byName.appProperties?.orthoPatientId || "") === patientId.slice(0,100)) remote = byName;
+    String(item.name || "") === expectedName);
+
+  // Older app versions uploaded PDFs without Drive appProperties. Fall back to
+  // the exact deterministic patient filename, never to a name-only fuzzy match.
+  if (!remote) {
+    onProgress?.("Checking this patient's exact legacy PDF filename…");
+    const legacy = await findPatientPdfInFolder(expectedName, String(folder.id));
+    const parents = Array.isArray(legacy?.parents) ? legacy.parents.map(String) : [];
+    const legacyIdSuffix = " - " + safePartForLookup(patientId).slice(-10) + ".pdf";
+    const isExactPatientFilename = String(legacy?.name || "") === expectedName &&
+      String(legacy?.name || "").endsWith(legacyIdSuffix);
+    if (legacy?.id && legacy.mimeType === "application/pdf" &&
+        Number(legacy.size || 0) >= 8 && parents.includes(String(folder.id)) &&
+        isExactPatientFilename &&
+        (!legacy.appProperties?.orthoPatientId || String(legacy.appProperties.orthoPatientId) === patientId.slice(0,100))) {
+      remote = legacy;
+    }
   }
   if (!remote?.id || remote.mimeType !== "application/pdf" || Number(remote.size || 0) < 8 ||
-      String(remote.appProperties?.orthoPatientId || "") !== patientId.slice(0,100) ||
-      !(Array.isArray(remote.parents) ? remote.parents : []).includes(String(folder.id))) {
-    throw new Error("No verified image PDF for this exact patient ID was found. No other patient's images were downloaded.");
+      (remote.appProperties?.orthoPatientId &&
+        String(remote.appProperties.orthoPatientId) !== patientId.slice(0,100)) ||
+      !(Array.isArray(remote.parents) ? remote.parents.map(String) : []).includes(String(folder.id)) ||
+      String(remote.name || "") !== expectedName) {
+    throw new Error("No verified image PDF was found for this patient in the Patient Image PDFs folder. The app checked this patient's ID and exact PDF filename; no other patient's images were downloaded.");
   }
   if (!FileSystem.cacheDirectory) throw new Error("Temporary phone storage is unavailable.");
   onProgress?.("Downloading archived images for " + String(patient.name || "this patient") + "…");
