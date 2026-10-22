@@ -64,7 +64,6 @@ export async function downloadLocalLabModel(
 export async function deleteLocalLabModel(): Promise<void> {
   if (pendingDownload) throw new Error("Cancel the model download before deleting the model.");
   resolvedModelConfig = null;
-  await SecureStore.deleteItemAsync(LOCAL_LAB_AI_READY_KEY).catch(() => {});
   // ExecuTorch's Expo resource fetcher stores downloaded resources in RNEDirectory.
   // Delete only that dedicated cache folder, never patient documents or database files.
   const directories = [
@@ -83,7 +82,8 @@ export async function deleteLocalLabModel(): Promise<void> {
       // Try the other known Expo storage location.
     }
   }
-  if (!removed) throw new Error("The model flag was cleared, but its cached model folder was not found. Reopen the app and check storage before downloading again.");
+  if (!removed) throw new Error("The cached model folder was not found, so the model was not marked as deleted. Reopen the app and check storage before trying again.");
+  await SecureStore.deleteItemAsync(LOCAL_LAB_AI_READY_KEY).catch(() => {});
 }
 
 function validTwoPartSummary(value: string): boolean {

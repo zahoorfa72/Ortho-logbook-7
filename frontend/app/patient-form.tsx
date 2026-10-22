@@ -244,7 +244,7 @@ export default function PatientForm() {
       // reference range, report text, and images are never sent to online services.
       const fetched = await fetchTrustedMedicalTestInfo(testName, definition?.aliases || "");
       if (!fetched) {
-        setMedicalInfoErrors(current => ({ ...current, [cacheKey]: "No verified MedlinePlus match was found for this test. The app will not display an unrelated explanation." }));
+        setMedicalInfoErrors(current => ({ ...current, [cacheKey]: "No matching explanation was found in the trusted medical sources. The app will not display unrelated information." }));
         return;
       }
 
@@ -2372,6 +2372,7 @@ export default function PatientForm() {
                         <Text style={{ color: colors.brandPrimary, fontSize: fontSize.xs, textDecorationLine: "underline" }}>{source.title || source.url}</Text>
                       </Pressable>
                     ))}
+                    {medicalInfoErrors[infoKey] ? <Text style={{ color: colors.onSurfaceSecondary, fontSize: fontSize.xs, marginTop: spacing.xs }}>{medicalInfoErrors[infoKey]}</Text> : null}
                     <Pressable disabled={medicalInfoBusyKey === infoKey} onPress={() => void loadMedicalTestInfo(testName, definition, true)} style={{ alignSelf: "flex-start", paddingVertical: spacing.sm }}>
                       <Text style={{ color: colors.brandPrimary, fontFamily: fontFamily.semibold }}>{medicalInfoBusyKey === infoKey ? "Refreshing…" : "Refresh test details"}</Text>
                     </Pressable>

@@ -316,8 +316,8 @@ function seedHistoricalPatientsOnFirstInstall() {
         // Match by identity/date only; never overwrite a pre-existing patient.
         // A blank source MR number can match a row whose MR was manually corrected.
         const existing = db.getFirstSync<any>(
-          "SELECT id FROM patients WHERE date=? AND LOWER(TRIM(name))=LOWER(TRIM(?)) AND (LOWER(TRIM(COALESCE(mr_no,'')))=LOWER(TRIM(?)) OR ?='' OR TRIM(COALESCE(mr_no,''))='') LIMIT 1",
-          [row.date, row.name, row.mrNo, row.mrNo],
+          "SELECT id FROM patients WHERE date=? AND LOWER(TRIM(name))=LOWER(TRIM(?)) AND (LOWER(TRIM(COALESCE(mr_no,'')))=LOWER(TRIM(?)) OR ?='' OR TRIM(COALESCE(mr_no,''))='') AND LOWER(TRIM(COALESCE(diagnosis,'')))=LOWER(TRIM(?)) AND LOWER(TRIM(COALESCE(procedure,'')))=LOWER(TRIM(?)) AND LOWER(TRIM(COALESCE(procedure_ii,'')))=LOWER(TRIM(?)) LIMIT 1",
+          [row.date, row.name, row.mrNo, row.mrNo, row.diagnosis, row.procedureName, row.procedureII],
         );
         if (existing?.id) {
           skippedExistingCount++;
