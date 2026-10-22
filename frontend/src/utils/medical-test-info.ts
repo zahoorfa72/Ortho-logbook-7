@@ -525,6 +525,24 @@ async function fetchPubMedSummary(testName: string, labels: string[]): Promise<O
 export async function fetchTrustedMedicalTestInfo(testName: string, aliases = ""): Promise<MedicalTestOnlineInfo | null> {
   const labels = lookupLabels(testName, aliases);
   if (!labels.length) return null;
+
+  const addSources = (primary: MedicalTestOnlineInfo, extras: Array<Omit<MedicalTestOnlineInfo, "fetchedAt" | "loincCode"> | null>) => {
+    const candidates = [
+      { title: primary.title, url: primary.sourceUrl },
+      ...(primary.sources || []),
+      ...extras.filter(Boolean).map(item => ({ title: item!.title, url: item!.sourceUrl })),
+    ];
+    const seen = new Set<string>();
+    const sources = candidates.filter(item => {
+      const url = String(item.url || "").trim();
+      if (!url || !/^https:\/\//i.test(url) || seen.has(url)) return false;
+      seen.add(url);
+      return true;
+    }).slice(0, 5);
+    return { ...primary, sources };
+  };
+
+  // Prefer an exact standard-code match from MedlinePlus Connect.
   const candidates = findKnownLoincCandidates(labels);
   for (const candidate of candidates) {
     try {
@@ -532,46 +550,46 @@ export async function fetchTrustedMedicalTestInfo(testName: string, aliases = ""
       if (!article) continue;
       const titleScore = relevanceScore([...labels, ...candidate.labels], article.title);
       if (titleScore < 0.2) continue;
-      return {
+      const primary: MedicalTestOnlineInfo = {
         ...article,
         fetchedAt: new Date().toISOString(),
         loincCode: candidate.code,
       };
+      const secondary = await Promise.allSettled([
+        fetchMedlinePlusSearch(testName, labels),
+        fetchTrustedWebSearch(testName, labels),
+        fetchPubMedSummary(testName, labels),
+      ]);
+      const extras = secondary.map(result => result.status === "fulfilled" ? result.value : null);
+      return addSources(primary, extras);
     } catch {
-      // A transient failure or missing official match falls through to search.
+      // A transient failure or missing official match falls through to other sources.
     }
   }
-  // LOINC coverage is not complete for every hospital label. Search multiple
-  // trusted sources: first MedlinePlus patient-facing lab-test pages, then NCBI
-  // PubMed peer-reviewed literature. Each candidate must match the test label;
-  // never send patient identity, result values, photos or reference ranges.
-  try {
-    const article = await fetchMedlinePlusSearch(testName, labels);
-    if (article) {
-      return { ...article, fetchedAt: new Date().toISOString(), loincCode: "medlineplus-search" };
-    }
-  } catch {
-    // Continue to the curated fallback before slower secondary search services.
+
+  // For labels without a standard code, query independent sources in parallel.
+  const results = await Promise.allSettled([
+    fetchMedlinePlusSearch(testName, labels),
+    fetchTrustedWebSearch(testName, labels),
+    fetchPubMedSummary(testName, labels),
+  ]);
+  const articles = results.map(result => result.status === "fulfilled" ? result.value : null);
+  const medline = articles[0];
+  const trustedWeb = articles[1];
+  const pubmed = articles[2];
+
+  if (medline || trustedWeb || pubmed) {
+    const primaryArticle = medline || trustedWeb || pubmed!;
+    const primary: MedicalTestOnlineInfo = {
+      ...primaryArticle,
+      fetchedAt: new Date().toISOString(),
+      loincCode: medline ? "medlineplus-search" : trustedWeb ? "trusted-web-search" : "pubmed-search",
+    };
+    return addSources(primary, articles.filter(item => item !== primaryArticle));
   }
-  try {
-    const article = await fetchTrustedWebSearch(testName, labels);
-    if (article) {
-      return { ...article, fetchedAt: new Date().toISOString(), loincCode: "trusted-web-search" };
-    }
-  } catch {
-    // Search-provider or network failure: use the offline curated medical notes.
-  }
-  // Reliable fallback for common tests when online services are blocked or quota-limited.
+
+  // Curated offline summaries remain the fallback when online sources are down.
   const curated = getCuratedMedicalInfo(testName, aliases);
   if (curated) return curated;
-
-  try {
-    const article = await fetchPubMedSummary(testName, labels);
-    if (article) {
-      return { ...article, fetchedAt: new Date().toISOString(), loincCode: "pubmed-search" };
-    }
-  } catch {
-    // A peer-reviewed result is optional; never block the basic explanation.
-  }
   return null;
 }

@@ -10,7 +10,7 @@ import { useToast } from "@/src/components/toast";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 import { triggerAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-backup";
 import { LAB_VISION_CONSENT_KEY, LAB_VISION_OPENAI_API_KEY_KEY } from "@/src/utils/lab-vision";
-import { downloadLocalLabModel, getLocalLabModelDownloaded, LOCAL_LAB_AI_MODEL_NAME, LOCAL_LAB_AI_MODEL_SIZE } from "@/src/utils/local-lab-ai";
+import { deleteLocalLabModel, downloadLocalLabModel, getLocalLabModelDownloaded, LOCAL_LAB_AI_MODEL_NAME, LOCAL_LAB_AI_MODEL_SIZE } from "@/src/utils/local-lab-ai";
 
 export type LabTestDefinition = {
   id: string;
@@ -318,6 +318,23 @@ export default function LabTestSettingsScreen() {
             setLocalModelBusy(false);
           }
         }} style={styles.action}><Text style={styles.actionText}>{localModelStatusLoading ? "Checking model…" : localModelDownloaded ? "Offline model ready" : "Download offline model (about 2.7 GB)"}</Text></Pressable>}
+        {!localModelBusy && localModelDownloaded ? <Pressable style={[styles.action, { borderColor: colors.error, marginTop: spacing.sm }]} onPress={() => Alert.alert("Delete offline AI model?", "This removes the downloaded local model files (about 2.7 GB) from this device. Medical test details can still use trusted online sources when internet is available.", [
+          { text: "Cancel", style: "cancel" },
+          { text: "Delete model", style: "destructive", onPress: async () => {
+            setLocalModelBusy(true);
+            try {
+              await deleteLocalLabModel();
+              setLocalModelDownloaded(false);
+              setLocalModelProgress(0);
+              toast("Offline AI model deleted from this device.", "success");
+            } catch (error: any) {
+              toast(String(error?.message || "Could not delete the offline model.").slice(0, 220), "error");
+              getLocalLabModelDownloaded().then(setLocalModelDownloaded).catch(() => {});
+            } finally {
+              setLocalModelBusy(false);
+            }
+          } },
+        ])}><Text style={[styles.actionText, { color: colors.error }]}>Delete downloaded AI model</Text></Pressable> : null}
       </>}
       <Text style={styles.help}>A new Android/iOS app build is required to install the native model runtime. The first model download also needs a stable connection and several GB of free storage; after download, test explanations work offline.</Text>
 

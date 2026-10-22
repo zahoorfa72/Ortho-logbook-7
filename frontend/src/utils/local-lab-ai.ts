@@ -16,6 +16,10 @@ export async function downloadLocalLabModel(
   throw new Error("Download the local AI model from the native Android/iOS app build.");
 }
 
+export async function deleteLocalLabModel(): Promise<void> {
+  // The web build never downloads the native model.
+}
+
 export async function generateLocalLabMedicalInfo(
   _testName: string,
   _aliases: string,

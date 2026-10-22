@@ -1,4 +1,5 @@
 import * as SecureStore from "expo-secure-store";
+import * as FileSystem from "expo-file-system/legacy";
 import { createLLMChatSession, download, models, setTelemetryEnabled } from "react-native-executorch";
 import type { MedicalTestOnlineInfo } from "@/src/utils/medical-test-info";
 
@@ -57,6 +58,32 @@ export async function downloadLocalLabModel(
   })();
 
   resolvedModelConfig = await pendingDownload;
+}
+
+/** Remove the local model registration and its dedicated ExecuTorch resource cache. */
+export async function deleteLocalLabModel(): Promise<void> {
+  if (pendingDownload) throw new Error("Cancel the model download before deleting the model.");
+  resolvedModelConfig = null;
+  await SecureStore.deleteItemAsync(LOCAL_LAB_AI_READY_KEY).catch(() => {});
+  // ExecuTorch's Expo resource fetcher stores downloaded resources in RNEDirectory.
+  // Delete only that dedicated cache folder, never patient documents or database files.
+  const directories = [
+    FileSystem.cacheDirectory ? FileSystem.cacheDirectory + "RNEDirectory/" : null,
+    FileSystem.documentDirectory ? FileSystem.documentDirectory + "RNEDirectory/" : null,
+  ].filter((path): path is string => Boolean(path));
+  let removed = false;
+  for (const directory of directories) {
+    try {
+      const details = await FileSystem.getInfoAsync(directory);
+      if (details.exists && details.isDirectory) {
+        await FileSystem.deleteAsync(directory, { idempotent: true });
+        removed = true;
+      }
+    } catch {
+      // Try the other known Expo storage location.
+    }
+  }
+  if (!removed) throw new Error("The model flag was cleared, but its cached model folder was not found. Reopen the app and check storage before downloading again.");
 }
 
 function validTwoPartSummary(value: string): boolean {

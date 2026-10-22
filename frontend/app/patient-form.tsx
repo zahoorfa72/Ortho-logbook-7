@@ -233,10 +233,10 @@ export default function PatientForm() {
     AsyncStorage.getItem("ortho_lab_warning_threshold_percent_v1").then(value => { const n = Number(value); if (value && Number.isInteger(n) && n >= 1 && n <= 100) setLabWarningThreshold(n); }).catch(() => setLabWarningThreshold(10));
   }, []);
 
-  const loadMedicalTestInfo = async (testName: string, definition?: import("@/src/utils/lab-ocr").LabTestDefinition) => {
+  const loadMedicalTestInfo = async (testName: string, definition?: import("@/src/utils/lab-ocr").LabTestDefinition, forceRefresh = false) => {
     const cacheKey = medicalInfoCacheKey(testName);
     const cached = definition?.onlineMedicalInfo || medicalInfoCache[cacheKey];
-    if (isMedicalTestInfoFresh(cached)) return;
+    if (!forceRefresh && isMedicalTestInfoFresh(cached)) return;
     setMedicalInfoBusyKey(cacheKey);
     setMedicalInfoErrors(current => { const next = { ...current }; delete next[cacheKey]; return next; });
     try {
@@ -2367,9 +2367,17 @@ export default function PatientForm() {
                     <Text style={[styles.label, { marginTop: 0 }]}>Trusted online information</Text>
                     <Text style={{ color: colors.onSurface, fontSize: fontSize.sm, lineHeight: 20 }}>{onlineInfo.summary}</Text>
                     <Text style={{ color: colors.onSurfaceSecondary, fontSize: fontSize.xs, marginTop: spacing.sm }}>Source: {onlineInfo.sourceName} · Checked {new Date(onlineInfo.fetchedAt).toLocaleDateString()}</Text>
+                    {(onlineInfo.sources?.length ? onlineInfo.sources : [{ title: onlineInfo.title, url: onlineInfo.sourceUrl }]).map((source, sourceIndex) => (
+                      <Pressable key={source.url + sourceIndex} onPress={() => void Linking.openURL(source.url).catch(() => {})} style={{ alignSelf: "flex-start", paddingVertical: 3 }}>
+                        <Text style={{ color: colors.brandPrimary, fontSize: fontSize.xs, textDecorationLine: "underline" }}>{source.title || source.url}</Text>
+                      </Pressable>
+                    ))}
+                    <Pressable disabled={medicalInfoBusyKey === infoKey} onPress={() => void loadMedicalTestInfo(testName, definition, true)} style={{ alignSelf: "flex-start", paddingVertical: spacing.sm }}>
+                      <Text style={{ color: colors.brandPrimary, fontFamily: fontFamily.semibold }}>{medicalInfoBusyKey === infoKey ? "Refreshing…" : "Refresh test details"}</Text>
+                    </Pressable>
                   </View> : medicalInfoBusyKey === infoKey ? <Text style={{ color: colors.onSurfaceSecondary, fontSize: fontSize.sm, marginTop: spacing.sm }}>Searching the National Library of Medicine for a matching test. No patient details or test result values are sent.</Text> : medicalInfoErrors[infoKey] ? <View style={{ marginTop: spacing.sm }}>
                     <Text style={{ color: colors.onSurfaceSecondary, fontSize: fontSize.sm }}>{medicalInfoErrors[infoKey]}</Text>
-                    <Pressable onPress={() => void loadMedicalTestInfo(testName, definition)} style={{ alignSelf: "flex-start", paddingVertical: spacing.sm }}><Text style={{ color: colors.brandPrimary, fontFamily: fontFamily.semibold }}>Retry online lookup</Text></Pressable>
+                    <Pressable disabled={medicalInfoBusyKey === infoKey} onPress={() => void loadMedicalTestInfo(testName, definition, true)} style={{ alignSelf: "flex-start", paddingVertical: spacing.sm }}><Text style={{ color: colors.brandPrimary, fontFamily: fontFamily.semibold }}>{medicalInfoBusyKey === infoKey ? "Refreshing…" : "Retry online lookup"}</Text></Pressable>
                   </View> : <Text style={{ color: colors.onSurfaceSecondary, fontSize: fontSize.sm, marginTop: spacing.sm }}>Trusted information is not cached yet. The app will look it up when you open this result.</Text>}
                   {definition?.lowMeaning?.trim() ? <><Text style={[styles.label, { marginTop: spacing.sm }]}>What a low result may mean</Text><Text style={{ color: colors.onSurface, fontSize: fontSize.sm }}>{definition.lowMeaning}</Text></> : null}
                   {definition?.highMeaning?.trim() ? <><Text style={[styles.label, { marginTop: spacing.sm }]}>What a high result may mean</Text><Text style={{ color: colors.onSurface, fontSize: fontSize.sm }}>{definition.highMeaning}</Text></> : null}

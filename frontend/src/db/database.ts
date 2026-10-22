@@ -36,11 +36,6 @@ function migrateInventorySchema() {
 }
 
 export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
-  // Detect an existing app database before schema initialization. Historical PDF
-  // patients must seed only on a genuinely brand-new installation, never on upgrade.
-  const existingAppTableCount = Number(db.getFirstSync<any>(
-    "SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-  )?.count || 0);
   db.execSync(`
     PRAGMA journal_mode = WAL;
     CREATE TABLE IF NOT EXISTS patients (
@@ -227,7 +222,7 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
   // Clean sidecar image rows only after their corresponding Trash entry expires.
   db.runSync("DELETE FROM deleted_patient_photos WHERE trash_id NOT IN (SELECT id FROM deleted_records)");
   if (!options?.skipInventoryReset) applyHoldInventoryResetOnce();
-  seedHistoricalPatientsOnFirstInstall(existingAppTableCount === 0);
+  seedHistoricalPatientsOnFirstInstall();
 }
 
 const INVENTORY_RESET_MARKER = "hold-inventory-reset-available-v5";
@@ -240,32 +235,18 @@ const STOCK_PORTAL_FRESH_START_MARKER = "stock-portal-fresh-start-v1";
 const HISTORICAL_PATIENT_SEED_MARKER = "historical-patient-seed-2026-v1";
 
 /**
- * Import PDF-derived historical patients only on a brand-new local database.
- * Existing installations are marked as skipped so app upgrades never import
- * this bundled historical dataset unexpectedly.
+ * Merge PDF-derived historical patients once. This also runs on existing installs
+ * that missed the earlier seed. Existing patient rows are never updated/deleted;
+ * matching rows are skipped and only missing records are inserted.
  */
-function seedHistoricalPatientsOnFirstInstall(isFreshDatabaseAtStartup: boolean) {
+function seedHistoricalPatientsOnFirstInstall() {
   const marker = db.getFirstSync<any>(
     "SELECT value FROM app_meta WHERE key=? LIMIT 1",
     [HISTORICAL_PATIENT_SEED_MARKER],
   );
-  if (marker?.value === "done" || marker?.value === "skipped-existing-install" || marker?.value === "skipped-existing-data") return;
-
-  if (!marker && !isFreshDatabaseAtStartup) {
-    db.runSync("INSERT OR REPLACE INTO app_meta (key,value) VALUES (?,?)", [HISTORICAL_PATIENT_SEED_MARKER, "skipped-existing-install"]);
-    return;
-  }
-  if (!marker) {
-    // A pending marker permits retry if the first-install seed is interrupted.
-    db.runSync("INSERT OR REPLACE INTO app_meta (key,value) VALUES (?,?)", [HISTORICAL_PATIENT_SEED_MARKER, "pending"]);
-  }
-
-  // Do not alter or mix with patient data created before a pending seed retries.
-  const existingPatients = Number(db.getFirstSync<any>("SELECT COUNT(*) AS count FROM patients")?.count || 0);
-  if (existingPatients > 0) {
-    db.runSync("INSERT OR REPLACE INTO app_meta (key,value) VALUES (?,?)", [HISTORICAL_PATIENT_SEED_MARKER, "skipped-existing-data"]);
-    return;
-  }
+  if (marker?.value === "done") return;
+  // Recover the "skipped-*" markers written by the previous seed implementation.
+  db.runSync("INSERT OR REPLACE INTO app_meta (key,value) VALUES (?,?)", [HISTORICAL_PATIENT_SEED_MARKER, "pending"]);
 
   const rows = (historicalPatientSource as any)?.patients;
   if (!Array.isArray(rows) || rows.length !== 437) {
@@ -329,7 +310,19 @@ function seedHistoricalPatientsOnFirstInstall(isFreshDatabaseAtStartup: boolean)
   const newId = () => Math.random().toString(36).slice(2) + Date.now().toString(36) + Math.random().toString(36).slice(2);
   try {
     db.withTransactionSync(() => {
+      let insertedCount = 0;
+      let skippedExistingCount = 0;
       for (const row of prepared) {
+        // Match by identity/date only; never overwrite a pre-existing patient.
+        // A blank source MR number can match a row whose MR was manually corrected.
+        const existing = db.getFirstSync<any>(
+          "SELECT id FROM patients WHERE date=? AND LOWER(TRIM(name))=LOWER(TRIM(?)) AND (LOWER(TRIM(COALESCE(mr_no,'')))=LOWER(TRIM(?)) OR ?='' OR TRIM(COALESCE(mr_no,''))='') LIMIT 1",
+          [row.date, row.name, row.mrNo, row.mrNo],
+        );
+        if (existing?.id) {
+          skippedExistingCount++;
+          continue;
+        }
         const patientId = newId();
         // Implant fields are intentionally blank. This function makes no inventory,
         // stock receipt, movement, or patient-implant relation writes.
@@ -366,8 +359,10 @@ function seedHistoricalPatientsOnFirstInstall(isFreshDatabaseAtStartup: boolean)
           "INSERT INTO patient_history (id,patient_id,user_id,action,snapshot_json,created_at) VALUES (?,?,?,?,?,?)",
           [newId(), patientId, null, "import", JSON.stringify(snapshot), now],
         );
+        insertedCount++;
       }
       db.runSync("INSERT OR REPLACE INTO app_meta (key,value) VALUES (?,?)", [HISTORICAL_PATIENT_SEED_MARKER, "done"]);
+      console.info("[database] Historical PDF patient merge complete:", { inserted: insertedCount, skippedExisting: skippedExistingCount });
     });
   } catch (error) {
     // SQLite rolls back the batch; pending remains so a future launch can retry safely.
