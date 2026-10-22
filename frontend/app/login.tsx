@@ -58,7 +58,8 @@ export default function Login() {
       // listGoogleDriveBackups sorts the current six-month master first, then
       // older six-month masters and legacy full backups. Let the user choose
       // explicitly on a new phone instead of silently restoring an arbitrary file.
-      // Prioritize the explicitly period-scoped Fresh H1/H2 snapshots so they are visible on first install, before rolling masters.\n      const choices = availableBackups.slice(0, 3);
+      // Prioritize the explicitly period-scoped Fresh H1/H2 snapshots so they are visible on first install, before rolling masters.
+      const choices: Array<{id:string;name:string;modifiedTime:string;size?:string}> = availableBackups.slice(0, 3);
       const recommended = choices[0];
       const selectedBackup = await new Promise<typeof recommended | null>((resolve) => {
         let settled = false;
