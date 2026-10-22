@@ -447,7 +447,15 @@ export default function BackupRestoreScreen() {
               setRestorePeriod("all");
             }
           } catch (error) {
-            Alert.alert("Restore failed", error instanceof Error ? error.message : "Unable to restore the backup.");
+            // Once decrypted, the large source text is released to avoid an H2
+            // memory spike. If restore then fails, discard the now-empty selection
+            // so the user can safely select the original file again for a retry.
+            if (!selectedBackup.backupText) setSelectedBackup(null);
+            Alert.alert(
+              "Restore failed",
+              (error instanceof Error ? error.message : "Unable to restore the backup.") +
+                (!selectedBackup.backupText ? "\n\nPlease select the backup file again before retrying." : ""),
+            );
           } finally {
             setLoading(false);
           }
