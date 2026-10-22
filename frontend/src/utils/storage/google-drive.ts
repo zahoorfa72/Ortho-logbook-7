@@ -2645,6 +2645,74 @@ async function archiveMonthSnapshot(month: string, onProgress?: (stage: string) 
   }
 }
 
+async function archiveHalfYearSnapshot(key: string, onProgress?: (stage: string) => void) {
+  const name = halfYearPeriodName(key);
+  const existing = await findBackupByName(name);
+  onProgress?.("Preparing restorable half-year backup " + key + "…");
+  const snapshot = await exportUnencryptedBackupData({ type: "halfYear", value: key }, onProgress);
+  if (!snapshot || snapshot.app !== "Ortho Logbook" || !Array.isArray(snapshot.patients) ||
+      !Array.isArray(snapshot.inventory) || !Array.isArray(snapshot.users) ||
+      !snapshot.appSettings || !Object.prototype.hasOwnProperty.call(snapshot, "branding")) {
+    throw new Error("The half-year snapshot " + key + " is missing patient, inventory, account, branding, or settings data.");
+  }
+  pruneBackupPhotoAssets(snapshot);
+  let uploaded: any;
+  const canStream = Platform.OS === "android" &&
+    !!NativeModules.DriveBackgroundUpload?.writeTextChunk &&
+    !!NativeModules.DriveBackgroundUpload?.startUpload &&
+    !!NativeModules.DriveBackgroundUpload?.getStatus &&
+    !!FileSystem.cacheDirectory;
+  if (canStream) {
+    const stageUri = FileSystem.cacheDirectory + "ortho-drive-half-year-" + key + "-" + Date.now() + ".json";
+    try {
+      await writeBackupObjectToFile(stageUri, snapshot, onProgress);
+      const info = await FileSystem.getInfoAsync(stageUri);
+      if (!info.exists || typeof info.size !== "number" || info.size <= 0) {
+        throw new Error("The half-year snapshot file is missing or empty.");
+      }
+      onProgress?.("Uploading half-year backup " + key + "…");
+      uploaded = await uploadStagedJsonFile(stageUri, info.size, existing?.id, onProgress, name);
+    } finally {
+      try { await FileSystem.deleteAsync(stageUri, { idempotent: true }); } catch {}
+    }
+  } else {
+    onProgress?.("Uploading half-year backup " + key + "…");
+    uploaded = await uploadContent(JSON.stringify(snapshot), existing?.id, onProgress, name);
+  }
+  if (!uploaded?.id) throw new Error("Google Drive did not confirm the half-year backup for " + key + ". Local data remains safe.");
+  const verified = await downloadDriveJsonValidated(String(uploaded.id), onProgress);
+  if (!verified || verified.app !== "Ortho Logbook" || !Array.isArray(verified.patients) ||
+      !Array.isArray(verified.inventory) || !Array.isArray(verified.users) ||
+      !verified.appSettings || !Object.prototype.hasOwnProperty.call(verified, "branding") ||
+      verified.filter?.type !== "halfYear" || String(verified.filter?.value || "") !== key) {
+    throw new Error("The half-year backup " + key + " could not be verified. The previous Drive backup file was kept where possible.");
+  }
+  const folder = await getOrCreateBackupFolder();
+  await ensureDriveFileInFolder(String(uploaded.id), String(folder.id));
+  onProgress?.("Half-year backup " + key + " uploaded and verified.");
+  return { name, id: String(uploaded.id) };
+}
+
+async function syncHalfYearSnapshots(onProgress?: (stage: string) => void, refreshCurrent = true): Promise<string[]> {
+  const current = halfYearKey();
+  const previous = previousHalfYearKey(current);
+  const failures: string[] = [];
+  for (const key of [previous, current]) {
+    try {
+      const name = halfYearPeriodName(key);
+      const existing = await findBackupByName(name);
+      if (key !== current && existing?.id) continue; // closed half-year archive is immutable once verified
+      if (key === current && existing?.id && !refreshCurrent) continue;
+      await archiveHalfYearSnapshot(key, onProgress);
+    } catch (error: any) {
+      const message = "Half-year backup " + key + " failed: " + String(error?.message || error);
+      failures.push(message);
+      onProgress?.(message);
+    }
+  }
+  return failures;
+}
+
 async function archiveCompletedMonths(onProgress?: (stage: string) => void) {
   // Monthly files are intentionally disabled. Each six-month master contains
   // the complete snapshot and the restore screen filters a month on demand.
