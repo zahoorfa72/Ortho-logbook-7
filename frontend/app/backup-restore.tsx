@@ -367,8 +367,12 @@ export default function BackupRestoreScreen() {
         onPress: async () => {
           try {
             setLoading(true);
-            const completeBackup = await decryptBackup(selectedBackup.backupText, restorePassword);
-            const backup = isPeriodRestore
+            // H2 snapshots can contain far more history and stock rows than H1.
+            // Keep the raw encrypted/plain backup string only until decryption finishes;
+            // retaining it in screen state while the parsed copy is restored can OOM Android.
+            let completeBackup: any = await decryptBackup(selectedBackup.backupText, restorePassword);
+            selectedBackup.backupText = "";
+            let backup: any = isPeriodRestore
               ? filterBackupForPeriod(completeBackup, restorePeriod as "month" | "year", restorePeriodValue)
               : completeBackup;
             // Drive restore already manages separate PDFs through the Drive folder.
@@ -399,6 +403,13 @@ export default function BackupRestoreScreen() {
               if (backup.branding && typeof backup.branding === "object") await setBranding(backup.branding);
               else if (backup.version >= 6 && backup.branding === null) await resetBranding();
               await storage.secureRemove("ortho_current_user");
+              // Release the large H2 payload before the success dialog/login navigation.
+              // Otherwise the screen's selectedBackup state and this async frame can
+              // keep both the backup text and decoded rows alive until the dialog closes.
+              backup = null;
+              completeBackup = null;
+              setSelectedBackup(null);
+              setRestorePassword("");
               queryClient.clear();
               Alert.alert(
                 "Restore complete",
@@ -418,6 +429,12 @@ export default function BackupRestoreScreen() {
                 if (backup.branding && typeof backup.branding === "object") await setBranding(backup.branding);
                 else if (backup.version >= 6 && backup.branding === null) await resetBranding();
               }
+              // Release the full backup before showing the success dialog; H2 is
+              // often much larger than H1 and can otherwise exceed Android's JS heap.
+              backup = null;
+              completeBackup = null;
+              setSelectedBackup(null);
+              setRestorePassword("");
               queryClient.clear();
               Alert.alert(
                 isPeriodRestore ? "Period restore complete" : "Merge complete",
