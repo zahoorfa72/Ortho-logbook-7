@@ -355,12 +355,26 @@ async function embedPatientPhotos(row:any, cache?: Map<string,string>, onProgres
   };
 }
 
-export type BackupFilter = { type: "all" | "date" | "month" | "year"; value?: string };
+export type BackupFilter = { type: "all" | "date" | "month" | "year" | "halfYear"; value?: string };
+
+function halfYearBounds(value: string | undefined): { start: string; end: string } | null {
+  const match = /^(\\d{4})-H([12])$/.exec(String(value || ""));
+  if (!match) return null;
+  const year = Number(match[1]);
+  return match[2] === "1"
+    ? { start: `${match[1]}-01-01`, end: `${match[1]}-07-01` }
+    : { start: `${match[1]}-07-01`, end: `${year + 1}-01-01` };
+}
 
 function whereForFilter(filter: BackupFilter, column: string) {
   if (filter.type === "date") return { sql: ` WHERE ${column}=?`, args: [filter.value || ""] };
   if (filter.type === "month") return { sql: ` WHERE ${column} LIKE ?`, args: [`${filter.value || ""}-%`] };
   if (filter.type === "year") return { sql: ` WHERE ${column} LIKE ?`, args: [`${filter.value || ""}-%`] };
+  if (filter.type === "halfYear") {
+    const bounds = halfYearBounds(filter.value);
+    if (!bounds) throw new Error("Choose a half-year as YYYY-H1 or YYYY-H2.");
+    return { sql: ` WHERE ${column} >= ? AND ${column} < ?`, args: [bounds.start, bounds.end] };
+  }
   return { sql: "", args: [] };
 }
 
@@ -415,6 +429,7 @@ function stripDriveOcrText(value: any, parentKey = ""): any {
 }
 
 async function createBackupData(filter: BackupFilter = { type: "all" }, onProgress?: (stage: string) => void, changedTables?: string[], previousPatientRows?: any[], previousPhotoSources?: Record<string, string>, includePatientImages = true, includeAttachedImages = true):Promise<BackupData>{
+ if (filter.type === "halfYear" && !halfYearBounds(filter.value)) throw new Error("Choose a half-year as YYYY-H1 or YYYY-H2.");
  initializeDatabase();
  if (includePatientImages && filter.type === "all" && (!changedTables || changedTables.includes("patients"))) await archiveEligiblePatientImages(onProgress);
  const localPatientArchives = await getLocalPatientImageArchives(); // metadata only; image PDFs are separate
@@ -468,6 +483,13 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
      patients = db.getAllSync<any>(
        "SELECT id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,implant_id,implant_ii_id,address,file_name,date,created_at,created_by,updated_at,updated_by FROM patients WHERE date LIKE ? OR id IN (SELECT DISTINCT patient_id FROM patient_history WHERE created_at LIKE ?) ORDER BY date DESC, created_at DESC",
        [pattern, pattern],
+     );
+   } else if (filter.type === "halfYear") {
+     const patientFilter = whereForFilter(filter, "date");
+     const historyFilter = whereForFilter(filter, "created_at");
+     patients = db.getAllSync<any>(
+       "SELECT id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,implant_id,implant_ii_id,address,file_name,date,created_at,created_by,updated_at,updated_by FROM patients WHERE (" + patientFilter.sql.replace(/^\\s*WHERE\\s+/i, "") + ") OR id IN (SELECT DISTINCT patient_id FROM patient_history" + historyFilter.sql + ") ORDER BY date DESC, created_at DESC",
+       [...patientFilter.args, ...historyFilter.args],
      );
    } else {
      patients = db.getAllSync<any>(`SELECT id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,implant_id,implant_ii_id,address,file_name,date,created_at,created_by,updated_at,updated_by FROM patients${pf.sql} ORDER BY date DESC, created_at DESC`, pf.args);
@@ -554,7 +576,9 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
  const historyAll=include("patientHistory") ? db.getAllSync<any>("SELECT id,patient_id,user_id,action,created_at FROM patient_history ORDER BY created_at ASC") : [];
  const history=filter.type==="all" ? historyAll : filter.type === "month" || filter.type === "year"
    ? historyAll.filter((h:any)=>String(h.created_at || "").startsWith(String(filter.value || "") + "-"))
-   : historyAll.filter((h:any)=>selectedPatientIds.has(String(h.patient_id)) && String(h.created_at || "").startsWith(String(filter.value || "")));
+   : filter.type === "halfYear"
+     ? (() => { const bounds = halfYearBounds(filter.value)!; return historyAll.filter((h:any) => String(h.created_at || "") >= bounds.start && String(h.created_at || "") < bounds.end); })()
+     : historyAll.filter((h:any)=>selectedPatientIds.has(String(h.patient_id)) && String(h.created_at || "").startsWith(String(filter.value || "")));
  const embeddedHistory:any[]=[];
  onProgress?.("Processing patient history images… 0/" + history.length);
  for (let historyIndex = 0; historyIndex < history.length; historyIndex++) {
@@ -630,6 +654,10 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
  const trashSourceRows = include("trash") ? (() => {
    const all = db.getAllSync<any>("SELECT id,kind,title,deleted_at,expires_at,deleted_by FROM deleted_records ORDER BY deleted_at DESC");
    if (filter.type === "all") return all;
+   if (filter.type === "halfYear") {
+     const bounds = halfYearBounds(filter.value)!;
+     return all.filter((row:any) => String(row.deleted_at || "") >= bounds.start && String(row.deleted_at || "") < bounds.end);
+   }
    const prefix = String(filter.value || "");
    return all.filter((row:any) => String(row.deleted_at || "").startsWith(prefix));
  })() : [];
@@ -735,9 +763,9 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
   patients:embeddedPatients,
   procedures:include("procedures") ? db.getAllSync<any>("SELECT * FROM procedures ORDER BY name COLLATE NOCASE") : [],
   inventoryCategories:include("inventoryCategories") ? db.getAllSync<any>("SELECT * FROM inventory_categories ORDER BY name COLLATE NOCASE") : [],
-  // Period archives are for dated activity, not a duplicate snapshot of the
-  // entire current stock and all its bill photos. The all-time master retains it.
-  inventory:include("inventory") && filter.type==="all" ? await mapWithConcurrency(db.getAllSync<any>("SELECT id,name,category_id,category,size,quantity,unit,minimum_stock,added_date,low_stock_triggered_at,low_stock_since FROM inventory ORDER BY COALESCE(category,''),name COLLATE NOCASE,COALESCE(size,'')"), 2, async (row:any) => {
+  // Half-year snapshots must be independently restorable, so they include the
+  // complete current stock and bill attachments plus period-specific dated activity.
+  inventory:include("inventory") && (filter.type==="all" || filter.type==="halfYear") ? await mapWithConcurrency(db.getAllSync<any>("SELECT id,name,category_id,category,size,quantity,unit,minimum_stock,added_date,low_stock_triggered_at,low_stock_since FROM inventory ORDER BY COALESCE(category,''),name COLLATE NOCASE,COALESCE(size,'')"), 2, async (row:any) => {
     const billRow = db.getFirstSync<any>("SELECT bill_image FROM inventory WHERE id=?", [row.id]);
     const sourceBillImage = billRow?.bill_image;
     const billImage = !includeAttachedImages ? "" : typeof sourceBillImage === "string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(sourceBillImage)
@@ -748,7 +776,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
   }) : [],
   patientImplants:include("patientImplants") ? db.getAllSync<any>("SELECT * FROM patient_implants ORDER BY created_at ASC").filter((row:any)=>filter.type==="all" || selectedPatientIds.has(String(row.patient_id))) : [],
   patientCustomFields:include("patientCustomFields") ? db.getAllSync<any>("SELECT * FROM patient_custom_fields ORDER BY sort_order ASC,label COLLATE NOCASE") : [],
-  implantRecords:include("implantRecords") ? await mapWithConcurrency(db.getAllSync<any>(`SELECT id,name,category,size,manufacturer,model,lot_number,serial_number,expiry_date,supplier,quantity,unit,purchase_price,notes,created_at,updated_at,created_by,updated_by FROM implant_records${whereForFilter(filter,"created_at").sql} ORDER BY created_at ASC`, whereForFilter(filter,"created_at").args), 2, async (row:any) => {
+  implantRecords:include("implantRecords") ? await mapWithConcurrency((() => { const f = filter.type === "halfYear" ? { sql: "", args: [] as any[] } : whereForFilter(filter, "created_at"); return db.getAllSync<any>(`SELECT id,name,category,size,manufacturer,model,lot_number,serial_number,expiry_date,supplier,quantity,unit,purchase_price,notes,created_at,updated_at,created_by,updated_by FROM implant_records${f.sql} ORDER BY created_at ASC`, f.args); })(), 2, async (row:any) => {
     const billRow = db.getFirstSync<any>("SELECT bill_files_json FROM implant_records WHERE id=?", [row.id]);
     if (!includeAttachedImages) {
       const portableRow = { ...row, bill_files_json: "[]" };
@@ -781,7 +809,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
   // Live access/session tokens are deliberately excluded from settings backups.
   users:include("users") ? db.getAllSync<any>("SELECT * FROM users ORDER BY created_at ASC") : [],
   patientHistory:embeddedHistory,
-  inventoryMovements:include("inventoryMovements") ? (()=>{if(filter.type==="all") return db.getAllSync<any>("SELECT * FROM inventory_movements ORDER BY created_at ASC"); const f=filter.type==="date" ? {sql:" WHERE date(created_at)=?",args:[filter.value||""]} : filter.type==="month" ? {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]} : {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]}; return db.getAllSync<any>(`SELECT * FROM inventory_movements${f.sql} ORDER BY created_at ASC`,f.args);})() : [],
+  inventoryMovements:include("inventoryMovements") ? (()=>{if(filter.type==="all") return db.getAllSync<any>("SELECT * FROM inventory_movements ORDER BY created_at ASC"); const f=filter.type==="date" ? {sql:" WHERE date(created_at)=?",args:[filter.value||""]} : whereForFilter(filter,"created_at"); return db.getAllSync<any>(`SELECT * FROM inventory_movements${f.sql} ORDER BY created_at ASC`,f.args);})() : [],
   inventoryPurchaseReceipts:include("inventoryPurchaseReceipts") ? await (async()=>{const f=whereForFilter(filter,"created_at");const rows=db.getAllSync<any>(`SELECT id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,description,created_at,created_by FROM inventory_purchase_receipts${f.sql} ORDER BY created_at ASC`,f.args);return await mapWithConcurrency(rows, 2, async (row:any)=>{const billRow=db.getFirstSync<any>("SELECT bill_image FROM inventory_purchase_receipts WHERE id=?",[row.id]);const source=billRow?.bill_image;const billImage=!includeAttachedImages ? "" : typeof source==="string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(source) ? await embedOptionalPhoto(source,compressedPhotoCache) : source; if(billRow)billRow.bill_image=""; return {...row,bill_image:billImage};});})() : [],
   stockReceipts:include("stockReceipts") ? await (async()=>{const f=whereForFilter(filter,"created_at");const rows=db.getAllSync<any>(`SELECT id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,description,created_at,created_by FROM stock_receipts${f.sql} ORDER BY created_at ASC`,f.args);return await mapWithConcurrency(rows, 2, async (row:any)=>{const billRow=db.getFirstSync<any>("SELECT bill_image FROM stock_receipts WHERE id=?",[row.id]);const source=billRow?.bill_image;const billImage=!includeAttachedImages ? "" : typeof source==="string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(source) ? await embedOptionalPhoto(source,compressedPhotoCache) : source; if(billRow)billRow.bill_image=""; return {...row,bill_image:billImage};});})() : [],
   trash:trashRows,
