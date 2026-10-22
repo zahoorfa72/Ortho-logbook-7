@@ -358,7 +358,7 @@ async function embedPatientPhotos(row:any, cache?: Map<string,string>, onProgres
 export type BackupFilter = { type: "all" | "date" | "month" | "year" | "halfYear"; value?: string };
 
 function halfYearBounds(value: string | undefined): { start: string; end: string } | null {
-  const match = /^(\\d{4})-H([12])$/.exec(String(value || ""));
+  const match = /^(\d{4})-H([12])$/.exec(String(value || ""));
   if (!match) return null;
   const year = Number(match[1]);
   return match[2] === "1"
@@ -488,7 +488,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
      const patientFilter = whereForFilter(filter, "date");
      const historyFilter = whereForFilter(filter, "created_at");
      patients = db.getAllSync<any>(
-       "SELECT id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,implant_id,implant_ii_id,address,file_name,date,created_at,created_by,updated_at,updated_by FROM patients WHERE (" + patientFilter.sql.replace(/^\\s*WHERE\\s+/i, "") + ") OR id IN (SELECT DISTINCT patient_id FROM patient_history" + historyFilter.sql + ") ORDER BY date DESC, created_at DESC",
+       "SELECT id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,implant_id,implant_ii_id,address,file_name,date,created_at,created_by,updated_at,updated_by FROM patients WHERE (" + patientFilter.sql.replace(/^\s*WHERE\s+/i, "") + ") OR id IN (SELECT DISTINCT patient_id FROM patient_history" + historyFilter.sql + ") ORDER BY date DESC, created_at DESC",
        [...patientFilter.args, ...historyFilter.args],
      );
    } else {
