@@ -1,5 +1,6 @@
 import * as SQLite from "expo-sqlite";
 import { HOLD_INVENTORY_RESET } from "@/src/data/hold-inventory-reset";
+import historicalPatientSource from "@/src/data/historical-patients-2026.json";
 
 export const db = SQLite.openDatabaseSync("ortho-logbook.db", { enableChangeListener: true });
 
@@ -35,6 +36,11 @@ function migrateInventorySchema() {
 }
 
 export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
+  // Detect an existing app database before schema initialization. Historical PDF
+  // patients must seed only on a genuinely brand-new installation, never on upgrade.
+  const existingAppTableCount = Number(db.getFirstSync<any>(
+    "SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+  )?.count || 0);
   db.execSync(`
     PRAGMA journal_mode = WAL;
     CREATE TABLE IF NOT EXISTS patients (
@@ -221,6 +227,7 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
   // Clean sidecar image rows only after their corresponding Trash entry expires.
   db.runSync("DELETE FROM deleted_patient_photos WHERE trash_id NOT IN (SELECT id FROM deleted_records)");
   if (!options?.skipInventoryReset) applyHoldInventoryResetOnce();
+  seedHistoricalPatientsOnFirstInstall(existingAppTableCount === 0);
 }
 
 const INVENTORY_RESET_MARKER = "hold-inventory-reset-available-v5";
@@ -229,6 +236,145 @@ const IMPLANT_PORTAL_CLEANUP_MARKER = "implant-portal-cleanup-v4";
 const LEGACY_RECEIPT_CLEANUP_MARKER = "legacy-receipt-cleanup-v2";
 const RECEIVE_STOCK_FRESH_START_MARKER = "receive-stock-fresh-start-v1";
 const STOCK_PORTAL_FRESH_START_MARKER = "stock-portal-fresh-start-v1";
+
+const HISTORICAL_PATIENT_SEED_MARKER = "historical-patient-seed-2026-v1";
+
+/**
+ * Import PDF-derived historical patients only on a brand-new local database.
+ * Existing installations are marked as skipped so app upgrades never import
+ * this bundled historical dataset unexpectedly.
+ */
+function seedHistoricalPatientsOnFirstInstall(isFreshDatabaseAtStartup: boolean) {
+  const marker = db.getFirstSync<any>(
+    "SELECT value FROM app_meta WHERE key=? LIMIT 1",
+    [HISTORICAL_PATIENT_SEED_MARKER],
+  );
+  if (marker?.value === "done" || marker?.value === "skipped-existing-install" || marker?.value === "skipped-existing-data") return;
+
+  if (!marker && !isFreshDatabaseAtStartup) {
+    db.runSync("INSERT OR REPLACE INTO app_meta (key,value) VALUES (?,?)", [HISTORICAL_PATIENT_SEED_MARKER, "skipped-existing-install"]);
+    return;
+  }
+  if (!marker) {
+    // A pending marker permits retry if the first-install seed is interrupted.
+    db.runSync("INSERT OR REPLACE INTO app_meta (key,value) VALUES (?,?)", [HISTORICAL_PATIENT_SEED_MARKER, "pending"]);
+  }
+
+  // Do not alter or mix with patient data created before a pending seed retries.
+  const existingPatients = Number(db.getFirstSync<any>("SELECT COUNT(*) AS count FROM patients")?.count || 0);
+  if (existingPatients > 0) {
+    db.runSync("INSERT OR REPLACE INTO app_meta (key,value) VALUES (?,?)", [HISTORICAL_PATIENT_SEED_MARKER, "skipped-existing-data"]);
+    return;
+  }
+
+  const rows = (historicalPatientSource as any)?.patients;
+  if (!Array.isArray(rows) || rows.length !== 437) {
+    console.error("[database] Historical patient seed refused: bundled source count is invalid.");
+    return;
+  }
+
+  const prepared: any[] = [];
+  for (let index = 0; index < rows.length; index++) {
+    const row = rows[index] || {};
+    const name = String(row.name ?? "").trim();
+    const rawDmy = String(row.sourceDateDmy ?? "").trim();
+    const dateMatch = rawDmy.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (!name || !dateMatch) {
+      console.error("[database] Historical patient seed refused: missing name or invalid DD/MM/YYYY date.");
+      return;
+    }
+    const day = Number(dateMatch[1]);
+    const month = Number(dateMatch[2]);
+    const year = Number(dateMatch[3]);
+    const calendarDate = new Date(Date.UTC(year, month - 1, day));
+    if (calendarDate.getUTCFullYear() !== year || calendarDate.getUTCMonth() !== month - 1 || calendarDate.getUTCDate() !== day) {
+      console.error("[database] Historical patient seed refused: impossible calendar date.");
+      return;
+    }
+    const date = String(year) + "-" + String(month).padStart(2, "0") + "-" + String(day).padStart(2, "0");
+    if (date !== String(row.date ?? "").trim()) {
+      console.error("[database] Historical patient seed refused: DD/MM/YYYY and ISO dates do not match.");
+      return;
+    }
+
+    const customData: Record<string, string> = {};
+    const sourceSerial = String(row.sourceSerialNumber ?? "").trim();
+    const sourceMrNoRaw = String(row.sourceMrNoRaw ?? "").trim();
+    const sourcePage = row.sourcePage == null ? "" : String(row.sourcePage).trim();
+    const reviewFlags = Array.isArray(row.sourceReviewFlags)
+      ? row.sourceReviewFlags.map((flag: any) => String(flag ?? "").trim()).filter(Boolean)
+      : [];
+    if (sourceSerial) customData.sourceSerialNumber = sourceSerial;
+    if (sourceMrNoRaw) customData.sourceMrNoRaw = sourceMrNoRaw;
+    if (rawDmy) customData.sourceDateDmy = rawDmy;
+    if (sourcePage) customData.sourcePdfPage = sourcePage;
+    if (reviewFlags.length) customData.sourceReviewFlags = reviewFlags.join("; ");
+
+    prepared.push({
+      mrNo: String(row.mrNo ?? "").trim(),
+      name,
+      gender: String(row.gender ?? "").trim(),
+      age: String(row.age ?? "").trim(),
+      diagnosis: String(row.diagnosis ?? "").trim(),
+      procedureName: String(row.procedure ?? "").trim(),
+      procedureII: String(row.procedureII ?? "").trim(),
+      address: String(row.address ?? "").trim(),
+      fileName: String(row.fileName ?? "").trim() || name,
+      date,
+      customData,
+    });
+  }
+
+  const now = new Date().toISOString();
+  const newId = () => Math.random().toString(36).slice(2) + Date.now().toString(36) + Math.random().toString(36).slice(2);
+  try {
+    db.withTransactionSync(() => {
+      for (const row of prepared) {
+        const patientId = newId();
+        // Implant fields are intentionally blank. This function makes no inventory,
+        // stock receipt, movement, or patient-implant relation writes.
+        const implant = "";
+        const implantII = "";
+        const photoUri = "";
+        const photosJson = "[]";
+        db.runSync(
+          "INSERT INTO patients (id,mr_no,name,gender,age,diagnosis,procedure,procedure_ii,implant,implant_ii,implant_id,implant_ii_id,address,file_name,photo_uri,photos_json,custom_data_json,date,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+          [
+            patientId, row.mrNo, row.name, row.gender, row.age, row.diagnosis,
+            row.procedureName, row.procedureII, implant, implantII, null, null,
+            row.address, row.fileName, photoUri, photosJson,
+            JSON.stringify(row.customData), row.date, now, null,
+          ],
+        );
+        const snapshot = {
+          id: patientId,
+          mrNo: row.mrNo,
+          name: row.name,
+          gender: row.gender,
+          age: row.age,
+          diagnosis: row.diagnosis,
+          procedure: row.procedureName,
+          procedureII: row.procedureII,
+          implant,
+          implantII,
+          address: row.address,
+          fileName: row.fileName,
+          date: row.date,
+          customData: row.customData,
+        };
+        db.runSync(
+          "INSERT INTO patient_history (id,patient_id,user_id,action,snapshot_json,created_at) VALUES (?,?,?,?,?,?)",
+          [newId(), patientId, null, "import", JSON.stringify(snapshot), now],
+        );
+      }
+      db.runSync("INSERT OR REPLACE INTO app_meta (key,value) VALUES (?,?)", [HISTORICAL_PATIENT_SEED_MARKER, "done"]);
+    });
+  } catch (error) {
+    // SQLite rolls back the batch; pending remains so a future launch can retry safely.
+    console.error("[database] Historical patient first-install seed failed:", error);
+  }
+}
+
 
 export function markInventoryResetDone() {
   db.runSync("INSERT OR REPLACE INTO app_meta (key,value) VALUES (?,?)", [INVENTORY_RESET_MARKER, "done"]);
