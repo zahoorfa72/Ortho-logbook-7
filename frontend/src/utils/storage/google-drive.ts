@@ -2628,7 +2628,7 @@ async function archiveMonthSnapshot(month: string, onProgress?: (stage: string) 
         throw new Error("The monthly backup file is missing or empty.");
       }
       onProgress?.("Uploading monthly backup " + month + "…");
-      uploaded = await uploadStagedJsonFile(stageUri, info.size, existing?.id, onProgress, name);
+      uploaded = await uploadStagedJsonFile(stageUri, info.size, undefined, onProgress, name);
     } finally {
       try { await FileSystem.deleteAsync(stageUri, { idempotent: true }); } catch {}
     }
@@ -2655,8 +2655,10 @@ async function archiveMonthSnapshot(month: string, onProgress?: (stage: string) 
 
 async function archiveHalfYearSnapshot(key: string, onProgress?: (stage: string) => void) {
   const name = halfYearPeriodName(key);
+  // Keep the current verified file intact while uploading a replacement. The old
+  // half-year file is deleted only after the newly uploaded snapshot is validated.
   const existing = await findBackupByName(name);
-  onProgress?.("Preparing a new, separate restorable backup for " + key + "…");
+  onProgress?.("Preparing a fresh replacement backup for " + key + "…");
   const snapshot = await exportUnencryptedBackupData({ type: "halfYear", value: key }, onProgress);
   if (!snapshot || snapshot.app !== "Ortho Logbook" || !Array.isArray(snapshot.patients) ||
       !Array.isArray(snapshot.inventory) || !Array.isArray(snapshot.users) ||
@@ -2685,7 +2687,7 @@ async function archiveHalfYearSnapshot(key: string, onProgress?: (stage: string)
     }
   } else {
     onProgress?.("Uploading half-year backup " + key + "…");
-    uploaded = await uploadContent(JSON.stringify(snapshot), existing?.id, onProgress, name);
+    uploaded = await uploadContent(JSON.stringify(snapshot), undefined, onProgress, name);
   }
   if (!uploaded?.id) throw new Error("Google Drive did not confirm the half-year backup for " + key + ". Local data remains safe.");
   const verified = await downloadDriveJsonValidated(String(uploaded.id), onProgress);
@@ -2697,7 +2699,13 @@ async function archiveHalfYearSnapshot(key: string, onProgress?: (stage: string)
   }
   const folder = await getOrCreateBackupFolder();
   await ensureDriveFileInFolder(String(uploaded.id), String(folder.id));
-  onProgress?.("Half-year backup " + key + " uploaded and verified.");
+  // Only after the new file passes validation do we remove the previous file
+  // with the same name. If upload or verification fails, the old backup survives.
+  if (existing?.id && String(existing.id) !== String(uploaded.id)) {
+    onProgress?.("Fresh " + key + " backup verified; removing the superseded backup…");
+    await driveRequest(DRIVE_API + "/" + encodeURIComponent(String(existing.id)) + "?supportsAllDrives=true", { method: "DELETE" });
+  }
+  onProgress?.("Half-year backup " + key + " uploaded, verified, and old copy replaced.");
   return { name, id: String(uploaded.id) };
 }
 
