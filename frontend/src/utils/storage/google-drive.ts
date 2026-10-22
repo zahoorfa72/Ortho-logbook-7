@@ -35,10 +35,10 @@ function isMasterBackupName(name: string): boolean {
 }
 function halfYearPeriodName(value: string): string {
   if (!/^\d{4}-H[12]$/.test(String(value || ""))) throw new Error("Choose a half-year as YYYY-H1 or YYYY-H2.");
-  return "Ortho Logbook Backup - Period " + value + ".orbackup";
+  return "Ortho Logbook Backup - Fresh " + value + ".orbackup";
 }
 function isHalfYearPeriodName(name: string): boolean {
-  return /^Ortho Logbook Backup - Period \d{4}-H[12]\.orbackup$/i.test(name);
+  return /^Ortho Logbook Backup - (?:Fresh|Period) \d{4}-H[12]\.orbackup$/i.test(name);
 }
 function halfYearKey(date: Date = new Date()): string {
   return String(date.getFullYear()) + (date.getMonth() < 6 ? "-H1" : "-H2");
@@ -2656,7 +2656,7 @@ async function archiveMonthSnapshot(month: string, onProgress?: (stage: string) 
 async function archiveHalfYearSnapshot(key: string, onProgress?: (stage: string) => void) {
   const name = halfYearPeriodName(key);
   const existing = await findBackupByName(name);
-  onProgress?.("Preparing restorable half-year backup " + key + "…");
+  onProgress?.("Preparing a new, separate restorable backup for " + key + "…");
   const snapshot = await exportUnencryptedBackupData({ type: "halfYear", value: key }, onProgress);
   if (!snapshot || snapshot.app !== "Ortho Logbook" || !Array.isArray(snapshot.patients) ||
       !Array.isArray(snapshot.inventory) || !Array.isArray(snapshot.users) ||
@@ -2709,7 +2709,7 @@ async function syncHalfYearSnapshots(onProgress?: (stage: string) => void, refre
     try {
       const name = halfYearPeriodName(key);
       const existing = await findBackupByName(name);
-      if (key !== current && existing?.id) continue; // closed half-year archive is immutable once verified
+      if (key !== current && existing?.id) continue; // keep a verified closed half-year file unchanged
       if (key === current && existing?.id && !refreshCurrent) continue;
       await archiveHalfYearSnapshot(key, onProgress);
     } catch (error: any) {
