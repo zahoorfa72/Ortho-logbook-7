@@ -2752,7 +2752,23 @@ export default function PatientForm() {
               <View style={styles.cameraShutterInner} />
             </Pressable>
             <Text style={styles.cameraLoadingText}>{cameraTaking ? "Saving full-quality page…" : cameraReady ? (documentScannerMode ? "Capture page · repeat for multi-page reports" : "Tap to capture") : "Please wait"}</Text>
-            {documentScannerMode ? <Pressable onPress={() => { setCameraOpen(false); setCameraReady(false); setDocumentScannerMode(false); if (documentScannerPageCount > 0) toast("Captured pages are saved. Select each page and use Auto-Scan Page or perspective correction to straighten the report.", "success"); }} disabled={cameraTaking} style={{ paddingVertical: 9, paddingHorizontal: 20, borderRadius: radius.md, borderWidth: 1, borderColor: "#9CA3AF" }}>
+            {documentScannerMode ? <Pressable onPress={() => {
+              const firstNewPhotoIndex = Math.max(0, p.photos.length - documentScannerPageCount);
+              const firstNewPhoto = p.photos[firstNewPhotoIndex];
+              setCameraOpen(false);
+              setCameraReady(false);
+              setDocumentScannerMode(false);
+              if (documentScannerPageCount > 0 && firstNewPhoto) {
+                setEditingPhotoIndex(firstNewPhotoIndex);
+                setEditingPhotoOriginal(firstNewPhoto);
+                setEditingPhotoUri(firstNewPhoto);
+                setCropRect(null);
+                setPhotoPreviewSize({ width: 0, height: 0 });
+                loadEditingPhotoDimensions(firstNewPhoto);
+                setTimeout(() => { void openPerspectiveEditor(firstNewPhoto); }, 350);
+                toast("Review the detected four corners and tap Correct to straighten the page. Repeat for each additional page.", "info");
+              }
+            }} disabled={cameraTaking} style={{ paddingVertical: 9, paddingHorizontal: 20, borderRadius: radius.md, borderWidth: 1, borderColor: "#9CA3AF" }}>
               <Text style={{ color: "#FFFFFF", fontFamily: fontFamily.semibold }}>Finish scan ({documentScannerPageCount} pages)</Text>
             </Pressable> : null}
           </View>
