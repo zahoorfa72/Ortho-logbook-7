@@ -481,18 +481,18 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
      // Include patient records for anyone with history created in this period,
      // even if their original admit date was earlier.
      patients = db.getAllSync<any>(
-       "SELECT id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,implant_id,implant_ii_id,address,file_name,date,created_at,created_by,updated_at,updated_by FROM patients WHERE date LIKE ? OR id IN (SELECT DISTINCT patient_id FROM patient_history WHERE created_at LIKE ?) ORDER BY date DESC, created_at DESC",
+       "SELECT id,mr_no,name,gender,age,diagnosis,procedure,procedure_ii,implant,implant_ii,implant_id,implant_ii_id,address,file_name,custom_data_json,date,created_at,created_by,updated_at,updated_by FROM patients WHERE date LIKE ? OR id IN (SELECT DISTINCT patient_id FROM patient_history WHERE created_at LIKE ?) ORDER BY date DESC, created_at DESC",
        [pattern, pattern],
      );
    } else if (filter.type === "halfYear") {
      const patientFilter = whereForFilter(filter, "date");
      const historyFilter = whereForFilter(filter, "created_at");
      patients = db.getAllSync<any>(
-       "SELECT id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,implant_id,implant_ii_id,address,file_name,date,created_at,created_by,updated_at,updated_by FROM patients WHERE (" + patientFilter.sql.replace(/^\s*WHERE\s+/i, "") + ") OR id IN (SELECT DISTINCT patient_id FROM patient_history" + historyFilter.sql + ") ORDER BY date DESC, created_at DESC",
+       "SELECT id,mr_no,name,gender,age,diagnosis,procedure,procedure_ii,implant,implant_ii,implant_id,implant_ii_id,address,file_name,custom_data_json,date,created_at,created_by,updated_at,updated_by FROM patients WHERE (" + patientFilter.sql.replace(/^\s*WHERE\s+/i, "") + ") OR id IN (SELECT DISTINCT patient_id FROM patient_history" + historyFilter.sql + ") ORDER BY date DESC, created_at DESC",
        [...patientFilter.args, ...historyFilter.args],
      );
    } else {
-     patients = db.getAllSync<any>(`SELECT id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,implant_id,implant_ii_id,address,file_name,date,created_at,created_by,updated_at,updated_by FROM patients${pf.sql} ORDER BY date DESC, created_at DESC`, pf.args);
+     patients = db.getAllSync<any>(`SELECT id,mr_no,name,gender,age,diagnosis,procedure,procedure_ii,implant,implant_ii,implant_id,implant_ii_id,address,file_name,custom_data_json,date,created_at,created_by,updated_at,updated_by FROM patients${pf.sql} ORDER BY date DESC, created_at DESC`, pf.args);
    }
  }
  const selectedPatientIds = new Set(patients.map((p:any)=>String(p.id)));
