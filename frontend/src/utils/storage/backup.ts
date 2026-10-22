@@ -509,8 +509,12 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
      const archivedImage = archiveByPatientId.get(patientId);
      const archiveMatchesRevision = !!archivedImage &&
        String(archivedImage.patientUpdatedAt || "") === String(patient.updated_at || "");
+     let backupCustomData = patient.custom_data_json;
+     if (typeof backupCustomData === "string" && backupCustomData) {
+       try { backupCustomData = JSON.stringify(stripPatientPhotosDeep(JSON.parse(backupCustomData))); } catch {}
+     }
      embeddedPatients.push({
-       ...patient, photo_uri: "", photos_json: "",
+       ...patient, custom_data_json: backupCustomData, photo_uri: "", photos_json: "",
        ...(archiveMatchesRevision ? {
          photo_archive_file_name: archivedImage!.fileName,
          photo_archive_source_stamp: archivedImage!.sourceStamp,
