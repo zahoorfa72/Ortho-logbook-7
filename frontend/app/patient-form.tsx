@@ -2299,6 +2299,7 @@ export default function PatientForm() {
               </View>;
             })}
           </View> : null}
+          </View> : null}
         </View>
         {labOcrEnabled ? (
           <View style={{ marginTop: spacing.md, marginBottom: spacing.md, borderWidth: 1, borderColor: colors.error || "#B91C1C", borderRadius: radius.md, padding: spacing.md }}>
