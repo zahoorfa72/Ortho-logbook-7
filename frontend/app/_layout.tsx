@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useFonts } from "expo-font";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import { KeyboardAvoidingView, LogBox, Platform, Pressable, Text, View } from "react-native";
+import { Image, KeyboardAvoidingView, LogBox, Platform, Pressable, Text, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -20,6 +20,16 @@ import { DriveSyncIndicator } from "@/src/utils/storage/drive-sync-status";
 import { installGlobalErrorCapture } from "@/src/utils/problem-report";
 
 LogBox.ignoreAllLogs(true);
+
+function StartupBranding() {
+  return (
+    <View style={{ flex: 1, backgroundColor: "#000000", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <Image source={require("../assets/images/icon.png")} resizeMode="contain" style={{ width: 220, height: 220 }} />
+      <View style={{ width: 148, height: 2, backgroundColor: "#CCA64D", marginTop: 10, marginBottom: 16 }} />
+      <Text style={{ color: "#CCA64D", fontSize: 18, fontWeight: "800", letterSpacing: 1.5 }}>ORTHO LOGBOOK</Text>
+    </View>
+  );
+}
 
 function LowStockAlertBootstrap() {
   const toast = useToast();
@@ -91,7 +101,7 @@ function DatabaseBootstrap({ children }: { children: React.ReactNode }) {
       </View>
     );
   }
-  if (!ready) return <View style={{ flex: 1, backgroundColor: "#FFFFFF" }} />;
+  if (!ready) return <StartupBranding />;
   return <>{children}</>;
 }
 
@@ -109,7 +119,7 @@ export default function RootLayout() {
   });
 
   if (!loaded) {
-    return <View style={{ flex: 1, backgroundColor: "#FFFFFF" }} />;
+    return <StartupBranding />;
   }
 
   return (
