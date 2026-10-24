@@ -365,8 +365,7 @@ export async function restoreGoogleDriveBackupById(fileId: string, onProgress?: 
   // Monthly files contain full snapshots. Apply only the journal for the same
   // month and exact baseline file; never mix other months into this restore.
   const monthlyMatch = /^Ortho Logbook Backup - Month (\d{4}-\d{2})\.orbackup$/.exec(String(metadata.name || ""));
-  const isRollingMaster = isMasterBackupName(String(metadata.name || ""));
-  if (monthlyMatch || isRollingMaster) {
+  if (monthlyMatch) {
     const warnings: string[] = [];
     let applied = 0;
     // The monthly snapshot's Drive modifiedTime does not change when its
@@ -374,7 +373,7 @@ export async function restoreGoogleDriveBackupById(fileId: string, onProgress?: 
     // successfully applied so the restore picker does not label current data
     // with the old snapshot date.
     let effectiveModifiedTime = String(metadata.modifiedTime || "");
-    const journalFile = await findBackupByName(isRollingMaster ? "Ortho Logbook Backup Changes.orbackup" : "Ortho Logbook Backup - Month " + monthlyMatch![1] + " Changes.orbackup");
+    const journalFile = await findBackupByName("Ortho Logbook Backup - Month " + monthlyMatch![1] + " Changes.orbackup");
     if (journalFile?.id) {
       try {
         const journal = await downloadDriveJsonValidated(String(journalFile.id), onProgress);
