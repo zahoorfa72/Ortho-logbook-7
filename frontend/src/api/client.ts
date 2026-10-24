@@ -523,17 +523,17 @@ async function savePatient(p: Patient, editing: boolean) {
 
   if (editing) {
     return db.withTransactionSync(() => {
-      // Do not select photo_uri/photos_json here: this operation only needs the
-      // patient's metadata and implants. Reading embedded legacy photos into JS
-      // during an edit can exhaust Android memory before the update can finish.
+      // Never return raw embedded photo payloads to JavaScript. Keep ordinary
+      // private-file references and photo-count placeholders for audit history,
+      // filtering large data-URI values inside SQLite before the row is returned.
       const old = db.getFirstSync<any>(
         `SELECT id,mr_no,name,gender,age,diagnosis,procedure,procedure_ii,implant,implant_ii,implant_id,implant_ii_id,address,file_name,custom_data_json,date,created_at,created_by,updated_at,updated_by,
-          CASE WHEN photo_uri LIKE 'data:image/%' THEN '[embedded image omitted]' ELSE photo_uri END AS photo_uri,
-          CASE WHEN json_valid(photos_json) THEN (
+          CASE WHEN patients.photo_uri LIKE 'data:image/%' THEN '[embedded image omitted]' ELSE patients.photo_uri END AS photo_uri,
+          CASE WHEN json_valid(patients.photos_json) THEN (
             SELECT COALESCE(json_group_array(
               CASE WHEN type='text' AND value LIKE 'data:image/%' THEN '[embedded image omitted]' ELSE value END
             ), '[]')
-            FROM json_each(photos_json) WHERE type='text'
+            FROM json_each(patients.photos_json) WHERE type='text'
           ) ELSE '[]' END AS photos_json
          FROM patients WHERE id=?`,
         [patientId],
