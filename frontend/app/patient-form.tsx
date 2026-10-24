@@ -828,7 +828,7 @@ export default function PatientForm() {
       dengue: readFlag((source as any).dengue, customData.dengue),
     });
     setReady(true);
-  }, [isEdit, id, detailedExisting, existing]);
+  }, [isEdit, id, detailedExisting]);
 
   // Duplicate-tracking: for the current draft, how many earlier records share
   // the same trimmed lowercased name + MR number? This is only for the header
