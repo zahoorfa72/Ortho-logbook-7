@@ -2833,13 +2833,14 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
     !!NativeModules.DriveBackgroundUpload?.startUpload &&
     !!NativeModules.DriveBackgroundUpload?.getStatus;
 
-  // Read the existing journal before exporting history. Its last confirmed
-  // timestamp gives the cutoff for newly added audit rows, so a restored
-  // phone does not reprocess hundreds of older image-heavy snapshots on save.
+  // Read the existing journal before exporting history. The full master timestamp
+  // bounds candidate audit rows; IDs already in the journal are excluded before
+  // their snapshot_json is read, which avoids repeatedly parsing old photo copies.
   const latestJournal = await findBackupByName(JOURNAL_NAME);
   let journalId: string | undefined;
   let previousJournal: any = null;
-  let historySince = String(base.modifiedTime || "");
+  const historySince = String(base.modifiedTime || "");
+  let historyExcludedIds: string[] = [];
   if (latestJournal?.id) {
     try {
       const candidate = await downloadDriveJsonValidated(String(latestJournal.id), onProgress);
@@ -2848,18 +2849,20 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
           Array.isArray(candidate.changedTables)) {
         journalId = String(latestJournal.id);
         previousJournal = candidate;
-        historySince = String(latestJournal.modifiedTime || candidate.createdAt || historySince);
+        historyExcludedIds = Array.isArray(candidate.patientHistory)
+          ? Array.from(new Set<string>(candidate.patientHistory.map((row: any) => String(row?.id || "")).filter(Boolean)))
+          : [];
       }
     } catch (error) {
-      console.warn("[drive-backup] existing change journal could not be read; using the full master timestamp for history sync", error);
+      console.warn("[drive-backup] existing change journal could not be read; using the master timestamp for history sync", error);
     }
   }
 
   let delta: any;
   if (canStreamIncremental) {
-    delta = await exportIncrementalBackupData(changedTables, onProgress, baselineKey, historySince);
+    delta = await exportIncrementalBackupData(changedTables, onProgress, baselineKey, historySince, historyExcludedIds);
   } else {
-    delta = JSON.parse(await exportIncrementalBackup(changedTables, onProgress, baselineKey, historySince));
+    delta = JSON.parse(await exportIncrementalBackup(changedTables, onProgress, baselineKey, historySince, historyExcludedIds));
   }
 
   const hasActualChanges = (Array.isArray(delta.changedTables) ? delta.changedTables : []).some((table: string) => {
