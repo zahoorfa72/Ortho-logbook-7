@@ -2786,258 +2786,204 @@ async function archiveCompletedMonths(onProgress?: (stage: string) => void) {
 
 async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], onProgress?: (stage: string) => void) {
   onProgress?.("Checking whether saved records changed…");
-  // Export the row-level delta first. This identifies the exact patient IDs
-  // changed since the last confirmed snapshot, so routine edits do not scan
-  // every patient's photos or verify every PDF in Drive.
-  const effectiveChangedTables = changedTables;
-  const currentMonthName = driveBackupName({ type: "all" });
-  const base = await findBackupByName(currentMonthName);
-  if (!base?.id) return ensureGoogleDriveBaselineUnlocked(onProgress);
-  // Finalize the previous month as its own dated snapshot once that month has
-  // ended. This call was missing from the active sync path, so the archive
-  // helper existed but normal backups did not reliably create monthly files.
-  // Keep one rolling master backup. Do not create per-month Drive snapshot files.
+  const currentMasterName = driveBackupName({ type: "all" });
+
+  // A reinstall can lose SecureStore flags while leaving a valid Drive master.
+  // Reuse the newest full snapshot instead of rebuilding it just because its
+  // six-month name differs or local incremental-cache metadata is missing.
+  let base = await findBackupByName(currentMasterName);
+  if (!base?.id) {
+    const candidates = await findLatestBackupCandidates();
+    const fullBaselines = candidates.filter((item: any) => {
+      const name = String(item?.name || "");
+      return item?.id && (isMasterBackupName(name) || name === "Ortho Logbook Backup - All Time.orbackup");
+    });
+    const rank = (name: string) =>
+      name === currentMasterName ? 0 :
+      isSixMonthMasterName(name) ? 1 :
+      name === BACKUP_NAME ? 2 :
+      name === "Ortho Logbook Backup - All Time.orbackup" ? 3 : 4;
+    fullBaselines.sort((a: any, b: any) =>
+      rank(String(a.name || "")) - rank(String(b.name || "")) ||
+      Date.parse(String(b.modifiedTime || "")) - Date.parse(String(a.modifiedTime || "")));
+    base = fullBaselines[0] || null;
+  }
+  if (!base?.id) {
+    // There is no complete snapshot to attach changes to. A one-time baseline
+    // is appropriate only in this case, never as a side effect of a patient save
+    // when a recoverable master already exists.
+    return ensureGoogleDriveBaselineUnlocked(onProgress);
+  }
+
   const baselineKey = String(base.id) + ":" + String(base.modifiedTime || "");
   const canStreamIncremental = Platform.OS === "android" &&
     !!NativeModules.DriveBackgroundUpload?.writeTextChunk &&
     !!NativeModules.DriveBackgroundUpload?.startUpload &&
     !!NativeModules.DriveBackgroundUpload?.getStatus;
+
   let delta: any;
   if (canStreamIncremental) {
-    // Avoid JSON.stringify on the entire changed-table payload before upload.
-    delta = await exportIncrementalBackupData(effectiveChangedTables, onProgress, baselineKey);
+    delta = await exportIncrementalBackupData(changedTables, onProgress, baselineKey);
   } else {
-    const backupText = await exportIncrementalBackup(effectiveChangedTables, onProgress, baselineKey);
-    delta = JSON.parse(backupText);
+    delta = JSON.parse(await exportIncrementalBackup(changedTables, onProgress, baselineKey));
   }
 
-  // Process only patient rows present in this actual delta. A full-table
-  // snapshot (first baseline/legacy migration) is handled by the full-backup
-  // path, while normal edits pass a bounded list of IDs.
-  const patientTableChanged = effectiveChangedTables.includes("patients");
-  const fullPatientTable = Array.isArray(delta.fullTables) && delta.fullTables.includes("patients");
-  const changedPatientIds: string[] = Array.isArray(delta.patients)
-    ? Array.from(new Set<string>(delta.patients.map((row: any) => String(row?.id || "")).filter((id: string) => Boolean(id))))
-    : [];
-  if (patientTableChanged) {
-    const deletedPatientIds: string[] = Array.isArray(delta.deletedIds?.patients)
-      ? delta.deletedIds.patients.map((id: any) => String(id)).filter((id: string) => Boolean(id))
-      : [];
-    for (const deletedId of deletedPatientIds) await queuePatientPdfDeletion(deletedId);
-    if (fullPatientTable || delta._rowDelta !== true) {
-      await archiveEligiblePatientImages(onProgress);
-      await uploadPatientImageArchivesToDrive(onProgress);
-    } else {
-      if (changedPatientIds.length) {
-        await archiveEligiblePatientImages(onProgress, changedPatientIds);
-        await uploadPatientImageArchivesToDrive(onProgress, changedPatientIds);
-      }
-      // Process queued deletes even when other patients changed in the same
-      // transaction; previously this path could leave deleted PDFs in Drive.
-      if (deletedPatientIds.length) await processPendingPatientPdfDeletes(onProgress);
-    }
-  }
-
-  // This is a potential-change check for the one-time migration path.
-  // Routine sync compares settings to the confirmed master below, because
-  // appSettings may be queued again without any setting actually changing.
-  const hasPotentialChanges = (Array.isArray(delta.changedTables) ? delta.changedTables : []).some((table: string) => {
-    if (table === "branding" || table === "appSettings") return Object.prototype.hasOwnProperty.call(delta, table);
-    if (Array.isArray(delta.fullTables) && delta.fullTables.includes(table)) return true;
-    const rows = Array.isArray(delta[table]) ? delta[table].length : 0;
-    const deleted = Array.isArray(delta.deletedIds?.[table]) ? delta.deletedIds[table].length : 0;
-    return rows > 0 || deleted > 0;
-  });
-
-  const migrationNeeded = String((await storage.secureGet(MASTER_MIGRATION_KEY, "")) || "") !== "1";
-  // The one-time legacy migration is the only normal sync path that needs a
-  // full snapshot immediately. Thereafter, keep the full master stable and
-  // update one compact rolling delta journal instead of re-uploading all photos
-  // and every patient row after each small edit.
-  if (migrationNeeded) {
-    onProgress?.("Completing one-time safe merge of older Drive backups…");
-    const migrated = await backupToGoogleDriveUnlocked(undefined, { type: "all" }, {
-      onProgress,
-      preferDriveOnMigration: true,
-      localChanges: hasPotentialChanges ? delta : undefined,
-    });
-    const migratedBase = await findLatestBackup();
-    if (!migratedBase?.id) throw new Error("The complete backup was uploaded but could not be confirmed. Local data remains safe.");
-    if (canStreamIncremental) {
-      // The complete baseline is named "Month YYYY-MM", not "All Time".
-      // This stale expected name made verification fail after the huge upload and
-      // retried the same full backup instead of finishing sync.
-      await verifyStreamedDriveFile(String(migratedBase.id), currentMonthName,
-        migrated?.size != null ? Number(migrated.size) : undefined);
-    } else {
-      const verified = await downloadDriveJsonValidated(String(migratedBase.id));
-      if (!verified || verified.app !== "Ortho Logbook" || !Array.isArray(verified.patients) || !Array.isArray(verified.inventory)) {
-        throw new Error("The complete backup could not be verified. The local change has not been marked as backed up.");
-      }
-    }
-    await commitIncrementalSnapshotCache(String(migratedBase.id) + ":" + String(migratedBase.modifiedTime || ""));
-    const snapshotFailures = await syncHalfYearSnapshots(onProgress, true);
-    return { ...migrated, skipped: false, baselineCreated: true, completedAt: new Date().toISOString(), name: currentMonthName, accountEmail: getConnectedGoogleAccount(), snapshotFailures };
-  }
-
-  // Apply every change directly to the SAME six-month master file. Do not
-  // create separate change-journal backup files. A legacy journal from an
-  // earlier app version is merged once and removed only after verification.
-  onProgress?.("Updating the existing six-month master with changed records…");
-  const master = await downloadDriveJsonValidated(String(base.id), onProgress);
-  if (!master || master.app !== "Ortho Logbook" || !Array.isArray(master.patients) ||
-      !Array.isArray(master.inventory) || !Array.isArray(master.users)) {
-    throw new Error("The current six-month master is incomplete or unreadable. No change was marked as backed up.");
-  }
-
-  // Compare settings semantically with sorted object keys. Settings are stored
-  // in AsyncStorage, so their key enumeration order can differ between runs;
-  // that must not trigger a redundant Drive upload.
-  const stableSettingsJson = (value: any): string => {
-    if (Array.isArray(value)) return "[" + value.map(stableSettingsJson).join(",") + "]";
-    if (value && typeof value === "object") {
-      return "{" + Object.keys(value).sort().filter(key => value[key] !== undefined)
-        .map(key => JSON.stringify(key) + ":" + stableSettingsJson(value[key])).join(",") + "}";
-    }
-    return JSON.stringify(value);
-  };
   const hasActualChanges = (Array.isArray(delta.changedTables) ? delta.changedTables : []).some((table: string) => {
     if (table === "branding" || table === "appSettings") {
-      return Object.prototype.hasOwnProperty.call(delta, table) &&
-        stableSettingsJson(delta[table]) !== stableSettingsJson(master[table]);
+      // The exporter includes settings here only when their cached value changed.
+      return Object.prototype.hasOwnProperty.call(delta, table);
     }
     if (Array.isArray(delta.fullTables) && delta.fullTables.includes(table)) return true;
-    const rows = Array.isArray(delta[table]) ? delta[table].length : 0;
-    const deleted = Array.isArray(delta.deletedIds?.[table]) ? delta.deletedIds[table].length : 0;
-    return rows > 0 || deleted > 0;
+    return (Array.isArray(delta[table]) && delta[table].length > 0) ||
+      (Array.isArray(delta.deletedIds?.[table]) && delta.deletedIds[table].length > 0);
   });
 
-  // Repair an incomplete master even if the incremental cache incorrectly says
-  // that there are no changes. Compare every local SQLite row ID with the master
-  // before applying deltas; this catches older uploads that stopped after only
-  // part of the patient/table data was serialized.
-  initializeDatabase({ skipInventoryReset: true });
-  const localTableNames: Array<[string, string]> = [
-    ["patients", "patients"], ["procedures", "procedures"],
-    ["inventoryCategories", "inventory_categories"], ["inventory", "inventory"],
-    ["patientImplants", "patient_implants"], ["patientCustomFields", "patient_custom_fields"],
-    ["implantRecords", "implant_records"], ["expenses", "expenses"], ["users", "users"],
-    ["patientHistory", "patient_history"], ["inventoryMovements", "inventory_movements"],
-    ["inventoryPurchaseReceipts", "inventory_purchase_receipts"], ["stockReceipts", "stock_receipts"],
-    ["trash", "deleted_records"],
-  ];
-  const missingLocalRows: string[] = [];
-  for (const [backupTable, sqlTable] of localTableNames) {
-    const localIds = db.getAllSync<any>("SELECT id FROM " + sqlTable).map((row: any) => String(row.id ?? "")).filter(Boolean);
-    const masterIds = new Set<string>((Array.isArray(master[backupTable]) ? master[backupTable] : [])
-      .map((row: any) => String(row?.id ?? "")).filter(Boolean));
-    if (localIds.some((id: string) => !masterIds.has(id))) missingLocalRows.push(backupTable);
-  }
-  const missingSettings = !master.appSettings || typeof master.appSettings !== "object" ||
-    !Object.prototype.hasOwnProperty.call(master, "branding");
-  if (missingLocalRows.length || missingSettings) {
-    onProgress?.("Repairing incomplete master: checking all local records, accounts, inventory and settings…");
-    const completeLocal = await exportUnencryptedBackupData({ type: "all" }, onProgress);
-    if (!Array.isArray(completeLocal.patients) || !Array.isArray(completeLocal.inventory) ||
-        !Array.isArray(completeLocal.users) || !completeLocal.appSettings) {
-      throw new Error("The full local backup failed its completeness check. The existing Drive master was not changed.");
-    }
-    const repairedMaster = mergeFullBackupSnapshots(master, completeLocal);
-    repairedMaster.version = Math.max(Number(repairedMaster.version || 0), 11);
-    repairedMaster.createdAt = new Date().toISOString();
-    repairedMaster.filter = { type: "all" };
-    pruneBackupPhotoAssets(repairedMaster);
-    await backupToGoogleDriveUnlocked(undefined, { type: "all" }, {
-      onProgress,
-      backupDataOverride: repairedMaster,
-    });
-    const confirmedMaster = await findBackupByName(currentMonthName);
-    if (!confirmedMaster?.id) throw new Error("The repaired master upload could not be confirmed. Keep all existing backups and retry.");
-    // The cache must represent this phone's real full local snapshot, not the
-    // merged Drive-only historical rows, or later delta comparisons can omit data.
-    await prepareIncrementalSnapshotCacheFromBackupData("", completeLocal);
-    await commitIncrementalSnapshotCache(String(confirmedMaster.id) + ":" + String(confirmedMaster.modifiedTime || ""));
-    const snapshotFailures = await syncHalfYearSnapshots(onProgress, true);
-    onProgress?.("Incomplete master repaired and verified; all local table IDs are now represented.");
-    return { baselineCreated: true, repaired: true, completedAt: new Date().toISOString(),
-      name: currentMonthName, accountEmail: getConnectedGoogleAccount(), snapshotFailures };
-  }
-  // Only report "up to date" after the master has passed the completeness audit.
-  // This repairs older partial uploads even when the local delta cache says no
-  // rows changed, while healthy no-op checks still avoid an upload.
-  if (!hasActualChanges && !migrationNeeded) {
+  if (!hasActualChanges) {
     await commitIncrementalSnapshotCache(baselineKey);
-    const snapshotFailures = await syncHalfYearSnapshots(onProgress, false);
-    return { skipped: true, completedAt: new Date().toISOString(), name: "No changes", accountEmail: getConnectedGoogleAccount(), snapshotFailures };
+    return {
+      skipped: true,
+      completedAt: new Date().toISOString(),
+      name: String(base.name || currentMasterName),
+      accountEmail: getConnectedGoogleAccount(),
+      storedAsIncrementalJournal: true,
+    };
   }
+
   const JOURNAL_NAME = "Ortho Logbook Backup Changes.orbackup";
-  const journalFile = await findBackupByName(JOURNAL_NAME);
-  let legacyJournal: any = null;
-  if (journalFile?.id) {
+
+  // Without a matching local diff cache, the exporter sends a full local table
+  // view. Convert that safely to upserts, not replacements: a restored phone's
+  // local table view must never erase older rows that exist in the Drive master.
+  // Patient photos are archived separately as per-patient PDFs, so omit their
+  // URI columns from journal rows to preserve the master's existing photo fields.
+  const normalizeForJournal = (payload: any) => {
+    const originalWasRowDelta = payload?._rowDelta === true;
+    const fullTables = new Set<string>(
+      Array.isArray(payload?.fullTables) ? payload.fullTables.map(String) : [],
+    );
+    const deletedIds: Record<string, string[]> =
+      payload?.deletedIds && typeof payload.deletedIds === "object" && !Array.isArray(payload.deletedIds)
+        ? { ...payload.deletedIds }
+        : {};
+
+    if (!originalWasRowDelta) {
+      Object.keys(deletedIds).forEach((table) => delete deletedIds[table]);
+    } else {
+      for (const table of fullTables) delete deletedIds[table];
+    }
+
+    payload._rowDelta = true;
+    payload.fullTables = [];
+    payload.deletedIds = deletedIds;
+    payload.incremental = true;
+    payload.app = "Ortho Logbook";
+    payload.filter = { type: "all" };
+    payload._baselineKey = baselineKey;
+    payload.createdAt = new Date().toISOString();
+
+    for (const table of Array.isArray(payload.changedTables) ? payload.changedTables : []) {
+      if (!Array.isArray(payload[table])) continue;
+      if (table === "patients") {
+        for (const row of payload[table]) {
+          if (!row || typeof row !== "object") continue;
+          delete row.photo_uri;
+          delete row.photos_json;
+        }
+      }
+    }
+    return payload;
+  };
+
+  // Process patient PDF changes only when the delta cache can identify specific
+  // changed patient IDs. On first sync after reinstall, the "patients" table may
+  // represent every local patient; treating all of them as newly edited can
+  // trigger a large image/archive job during an ordinary save.
+  const hasPrecisePatientDelta = delta._rowDelta === true &&
+    !(Array.isArray(delta.fullTables) && delta.fullTables.includes("patients"));
+  let safeDelta = normalizeForJournal(delta);
+
+  if (hasPrecisePatientDelta && safeDelta.changedTables.includes("patients")) {
+    const deletedPatientIds: string[] = Array.isArray(safeDelta.deletedIds?.patients)
+      ? safeDelta.deletedIds.patients.map((value: any) => String(value)).filter(Boolean)
+      : [];
+    for (const deletedId of deletedPatientIds) await queuePatientPdfDeletion(deletedId);
+    const changedPatientIds: string[] = Array.isArray(safeDelta.patients)
+      ? Array.from(new Set<string>(safeDelta.patients.map((row: any) => String(row?.id || "")).filter(Boolean)))
+      : [];
+    if (changedPatientIds.length) {
+      await archiveEligiblePatientImages(onProgress, changedPatientIds);
+      await uploadPatientImageArchivesToDrive(onProgress, changedPatientIds);
+    }
+    if (deletedPatientIds.length) await processPendingPatientPdfDeletes(onProgress);
+  }
+
+  // Merge only a journal tied to this exact baseline. A matching file ID with a
+  // different modified time may have been replaced by a manual full backup, so
+  // its old edits must not be replayed onto the new baseline.
+  const latestJournal = await findBackupByName(JOURNAL_NAME);
+  let journalId: string | undefined;
+  let previousJournal: any = null;
+  if (latestJournal?.id) {
     try {
-      const candidate = await downloadDriveJsonValidated(String(journalFile.id), onProgress);
-      if (candidate?.incremental === true &&
-          String(candidate._baselineKey || "").startsWith(String(base.id) + ":")) legacyJournal = candidate;
+      const candidate = await downloadDriveJsonValidated(String(latestJournal.id), onProgress);
+      if (candidate?.incremental === true && String(candidate._baselineKey || "") === baselineKey &&
+          Array.isArray(candidate.changedTables)) {
+        journalId = String(latestJournal.id);
+        previousJournal = normalizeForJournal(candidate);
+      }
     } catch (error) {
-      console.warn("[drive-backup] legacy journal could not be read; retaining it", error);
+      console.warn("[drive-backup] existing change journal could not be read; retaining it and creating a fresh journal", error);
     }
   }
-  const allChanges = legacyJournal ? mergeIncrementalPayloads(legacyJournal, delta) : delta;
-  applyIncrementalToMaster(master, allChanges, allChanges._rowDelta !== true);
-  pruneBackupPhotoAssets(master);
-  master.version = Math.max(Number(master.version || 0), 8);
-  master.app = "Ortho Logbook";
-  master.createdAt = new Date().toISOString();
-  master.filter = { type: "all" };
-  delete master.incremental; delete master.changedTables; delete master._rowDelta;
-  delete master.deletedIds; delete master.fullTables; delete master._baselineKey; delete master._updateCount;
 
-  let masterResult: any;
+  const allChanges = previousJournal
+    ? mergeIncrementalPayloads(previousJournal, safeDelta)
+    : safeDelta;
+  // Enforce append-only journal semantics after merging older journals as well.
+  normalizeForJournal(allChanges);
+  allChanges.version = Math.max(Number(allChanges.version || 0), 11);
+  pruneBackupPhotoAssets(allChanges);
+
+  let journalResult: any;
   let stagedUri: string | null = null;
   try {
     if (canStreamIncremental) {
-      if (!FileSystem.cacheDirectory) throw new Error("Device cache storage is unavailable for the master update.");
-      stagedUri = FileSystem.cacheDirectory + "ortho-master-update-" + Date.now() + ".json";
-      await writeBackupObjectToFile(stagedUri, master, onProgress);
+      if (!FileSystem.cacheDirectory) throw new Error("Device cache storage is unavailable for the incremental backup.");
+      stagedUri = FileSystem.cacheDirectory + "ortho-incremental-journal-" + Date.now() + ".json";
+      await writeBackupObjectToFile(stagedUri, allChanges, onProgress);
       const info = await FileSystem.getInfoAsync(stagedUri);
       if (!info.exists || typeof info.size !== "number" || info.size <= 0) {
-        throw new Error("The updated master file is missing or empty.");
+        throw new Error("The incremental journal file is missing or empty. Local data remains unchanged.");
       }
-      masterResult = await uploadStagedJsonFile(stagedUri, info.size, String(base.id), onProgress, String(base.name || currentMonthName));
-      await verifyStreamedDriveFile(String(masterResult.id), String(base.name || currentMonthName), info.size);
+      journalResult = await uploadStagedJsonFile(stagedUri, info.size, journalId, onProgress, JOURNAL_NAME);
     } else {
-      const masterText = JSON.stringify(master);
-      masterResult = await uploadContent(masterText, String(base.id), onProgress, String(base.name || currentMonthName));
-      const verified = await downloadDriveJsonValidated(String(base.id), onProgress);
-      if (!verified || verified.app !== "Ortho Logbook" ||
-          !Array.isArray(verified.patients) || !Array.isArray(verified.inventory) ||
-          !Array.isArray(verified.users)) {
-        throw new Error("The updated six-month master could not be verified.");
-      }
+      journalResult = await uploadContent(JSON.stringify(allChanges), journalId, onProgress, JOURNAL_NAME);
     }
   } finally {
     if (stagedUri) { try { await FileSystem.deleteAsync(stagedUri, { idempotent: true }); } catch {} }
   }
-  if (!masterResult?.id || String(masterResult.id) !== String(base.id)) {
-    throw new Error("Google Drive did not confirm updating the same six-month master file.");
+
+  if (!journalResult?.id || (journalId && String(journalResult.id) !== journalId)) {
+    throw new Error("Google Drive did not confirm the incremental journal. Local patient and inventory records remain unchanged.");
   }
-  await commitIncrementalSnapshotCache(String(masterResult.id) + ":" + String(masterResult.modifiedTime || ""));
+
+  // The full master is intentionally left untouched. Restore composes this
+  // baseline-keyed journal after it downloads the master, avoiding a huge
+  // download/parse/re-serialize/upload for every patient change.
+  await commitIncrementalSnapshotCache(baselineKey);
   await markBackupTaken();
   const completedAt = new Date().toISOString();
   await storage.secureSet(LAST_DRIVE_BACKUP_KEY, completedAt);
-  await storage.secureSet(LAST_DRIVE_CONTENT_HASH_KEY + ":" + String(base.name || currentMonthName),
-    "master-updated-" + String(masterResult.modifiedTime || Date.now()));
-  if (journalFile?.id) {
-    try {
-      await driveRequest(DRIVE_API + "/" + encodeURIComponent(String(journalFile.id)) + "?supportsAllDrives=true", { method: "DELETE" });
-    } catch (error) {
-      console.warn("[drive-backup] old journal cleanup deferred after verified master update", error);
-    }
-  }
-  const snapshotFailures = await syncHalfYearSnapshots(onProgress, true);
+  await storage.secureSet(LAST_DRIVE_CONTENT_HASH_KEY + ":" + String(base.name || currentMasterName),
+    "journal-updated-" + String(journalResult.modifiedTime || Date.now()));
+
   return {
-    ...masterResult, skipped: false, completedAt, name: String(base.name || currentMonthName),
-    accountEmail: getConnectedGoogleAccount(), consolidatedIntoMaster: true, snapshotFailures,
+    ...journalResult,
+    skipped: false,
+    completedAt,
+    name: String(base.name || currentMasterName),
+    accountEmail: getConnectedGoogleAccount(),
+    storedAsIncrementalJournal: true,
   };
 }
 
