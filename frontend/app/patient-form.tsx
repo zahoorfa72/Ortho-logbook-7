@@ -768,8 +768,39 @@ export default function PatientForm() {
   // unexpectedly run a CPU/memory-heavy pass while staff are entering data.
   const lastAutoLabScan = useRef("");
   useEffect(() => {
-    const source = isEdit ? detailedExisting : existing;
-    if (!source) return;
+    // Expo Router may reuse this component when the id query parameter changes
+    // from an edited patient to a new-patient route. Explicitly clear the prior
+    // draft so its hidden photos/lab-review data cannot be normalized or saved
+    // into the new record.
+    if (!isEdit) {
+      setP(empty());
+      setReady(true);
+      setLabOcrText("");
+      setLabOcrFindings([]);
+      setLabManualReviews([]);
+      setLabAddedResults([]);
+      setLabDetailsExpanded(false);
+      setLabFindingsExpanded(false);
+      setShowLabRawText(false);
+      setSelectedPhoto(null);
+      setEditingPhotoIndex(null);
+      setEditingPhotoOriginal(null);
+      setEditingPhotoUri(null);
+      setEditingPhotoDimensions(null);
+      setCropRect(null);
+      setPhotoBusy(false);
+      setPerspectiveMode(false);
+      setPerspectiveHtml("");
+      setExistingScanPickerVisible(false);
+      setCameraOpen(false);
+      setDocumentScannerMode(false);
+      return;
+    }
+    const source = detailedExisting;
+    if (!source || String(source.id || "") !== String(id || "")) {
+      setReady(false);
+      return;
+    }
     // Normalise legacy records that only had photoUri.
     const photos = Array.isArray(source.photos) && source.photos.length
       ? source.photos
@@ -797,7 +828,7 @@ export default function PatientForm() {
       dengue: readFlag((source as any).dengue, customData.dengue),
     });
     setReady(true);
-  }, [isEdit, detailedExisting, existing]);
+  }, [isEdit, id, detailedExisting, existing]);
 
   // Duplicate-tracking: for the current draft, how many earlier records share
   // the same trimmed lowercased name + MR number? This is only for the header
