@@ -2872,6 +2872,20 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
       for (const table of fullTables) delete deletedIds[table];
     }
 
+    // A full history-table export strips photos from historical snapshots
+    // because those assets are archived separately. Do not let that metadata-
+    // only export overwrite older master history entries that may still contain
+    // the only copy of legacy embedded photos. Keep recent history events so a
+    // new patient/edit that triggered this sync is still journaled.
+    if ((!originalWasRowDelta || fullTables.has("patientHistory")) &&
+        Array.isArray(payload.patientHistory)) {
+      const recentHistoryCutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+      payload.patientHistory = payload.patientHistory.filter((row: any) => {
+        const createdAt = Date.parse(String(row?.created_at || ""));
+        return Number.isFinite(createdAt) && createdAt >= recentHistoryCutoff;
+      });
+    }
+
     payload._rowDelta = true;
     payload.fullTables = [];
     payload.deletedIds = deletedIds;
