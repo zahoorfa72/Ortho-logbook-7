@@ -2833,36 +2833,18 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
     !!NativeModules.DriveBackgroundUpload?.startUpload &&
     !!NativeModules.DriveBackgroundUpload?.getStatus;
 
-  // Read the existing journal before exporting history. The full master timestamp
-  // bounds candidate audit rows; IDs already in the journal are excluded before
-  // their snapshot_json is read, which avoids repeatedly parsing old photo copies.
-  const latestJournal = await findBackupByName(JOURNAL_NAME);
-  let journalId: string | undefined;
-  let previousJournal: any = null;
+  // Use the full master's timestamp as the history cutoff. Do not download and
+  // parse the prior global change journal on each save: older builds may have
+  // accumulated hundreds of image-heavy audit snapshots in that single file.
+  // Each new compact delta gets its own Drive file; restore composes all deltas
+  // by timestamp and exact baseline key.
   const historySince = String(base.modifiedTime || "");
-  let historyExcludedIds: string[] = [];
-  if (latestJournal?.id) {
-    try {
-      const candidate = await downloadDriveJsonValidated(String(latestJournal.id), onProgress);
-      if (candidate?.incremental === true &&
-          String(candidate._baselineKey || "") === baselineKey &&
-          Array.isArray(candidate.changedTables)) {
-        journalId = String(latestJournal.id);
-        previousJournal = candidate;
-        historyExcludedIds = Array.isArray(candidate.patientHistory)
-          ? Array.from(new Set<string>(candidate.patientHistory.map((row: any) => String(row?.id || "")).filter(Boolean)))
-          : [];
-      }
-    } catch (error) {
-      console.warn("[drive-backup] existing change journal could not be read; using the master timestamp for history sync", error);
-    }
-  }
 
   let delta: any;
   if (canStreamIncremental) {
-    delta = await exportIncrementalBackupData(changedTables, onProgress, baselineKey, historySince, historyExcludedIds);
+    delta = await exportIncrementalBackupData(changedTables, onProgress, baselineKey, historySince);
   } else {
-    delta = JSON.parse(await exportIncrementalBackup(changedTables, onProgress, baselineKey, historySince, historyExcludedIds));
+    delta = JSON.parse(await exportIncrementalBackup(changedTables, onProgress, baselineKey, historySince));
   }
 
   const hasActualChanges = (Array.isArray(delta.changedTables) ? delta.changedTables : []).some((table: string) => {
@@ -2952,17 +2934,12 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
     if (deletedPatientIds.length) await processPendingPatientPdfDeletes(onProgress);
   }
 
-  // The previously loaded journal is accepted only when it matches this exact
-  // baseline. Normalize it here, after the append-only row rules are available.
-  if (previousJournal) previousJournal = normalizeForJournal(previousJournal);
-
-  const allChanges = previousJournal
-    ? mergeIncrementalPayloads(previousJournal, safeDelta)
-    : safeDelta;
-  // Enforce append-only journal semantics after merging older journals as well.
-  normalizeForJournal(allChanges);
+  const allChanges = normalizeForJournal(safeDelta);
   allChanges.version = Math.max(Number(allChanges.version || 0), 11);
   pruneBackupPhotoAssets(allChanges);
+  const journalFileName = "Ortho Logbook Incremental " +
+    new Date().toISOString().replace(/[:.]/g, "-") + "-" +
+    Math.random().toString(36).slice(2, 8) + ".orbackup";
 
   let journalResult: any;
   let stagedUri: string | null = null;
@@ -2975,15 +2952,15 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
       if (!info.exists || typeof info.size !== "number" || info.size <= 0) {
         throw new Error("The incremental journal file is missing or empty. Local data remains unchanged.");
       }
-      journalResult = await uploadStagedJsonFile(stagedUri, info.size, journalId, onProgress, JOURNAL_NAME);
+      journalResult = await uploadStagedJsonFile(stagedUri, info.size, undefined, onProgress, journalFileName);
     } else {
-      journalResult = await uploadContent(JSON.stringify(allChanges), journalId, onProgress, JOURNAL_NAME);
+      journalResult = await uploadContent(JSON.stringify(allChanges), undefined, onProgress, journalFileName);
     }
   } finally {
     if (stagedUri) { try { await FileSystem.deleteAsync(stagedUri, { idempotent: true }); } catch {} }
   }
 
-  if (!journalResult?.id || (journalId && String(journalResult.id) !== journalId)) {
+  if (!journalResult?.id || String(journalResult.name || journalFileName) !== journalFileName) {
     throw new Error("Google Drive did not confirm the incremental journal. Local patient and inventory records remain unchanged.");
   }
 
