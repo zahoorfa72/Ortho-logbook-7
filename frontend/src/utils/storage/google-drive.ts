@@ -3048,6 +3048,7 @@ export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) 
   const deltas = (await listIncrementalFiles())
     .filter((item: any) => item?.id &&
       Date.parse(String(item.modifiedTime || "")) > baseTime && (
+        /^Ortho Logbook Incremental /i.test(String(item.name || "")) ||
         String(item.name || "") === "Ortho Logbook Backup Changes.orbackup" ||
         (isMasterBackupName(String(file.name || "")) && String(file.name || "") !== sixMonthMasterName() &&
           /^Ortho Logbook Backup - Month \d{4}-\d{2} Changes\.orbackup$/i.test(String(item.name || "")))
