@@ -13,7 +13,7 @@ import { extractLabReportDate, hasKnownLabTestName, isLabMetadataLine, isLikelyL
 import { triggerAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-backup";
 import { detectScreeningStatuses, detectCustomScreeningStatus } from "@/src/utils/screening-status";
 import { buildPerspectiveWarpHtml } from "@/src/utils/perspective-warp";
-import { recordDiagnosticError } from "@/src/utils/problem-report";
+import { recordDiagnosticError, recordDiagnosticEvent } from "@/src/utils/problem-report";
 import { Dimensions } from "react-native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Animated, AppState, Image, InteractionManager, Linking, Modal, Pressable, ScrollView, Text, View } from "react-native";
