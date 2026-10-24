@@ -18,10 +18,24 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
-const sqliteAndroid = path.resolve(
-  __dirname,
-  "../node_modules/expo-sqlite/android/src/main/java/expo/modules/sqlite"
+// Yarn Classic may hoist expo-sqlite to the repository-level node_modules
+// when the frontend is installed from a workspace/root lockfile. Check both
+// locations rather than assuming the dependency is nested under frontend.
+const sqliteAndroidCandidates = [
+  path.resolve(__dirname, "../node_modules/expo-sqlite/android/src/main/java/expo/modules/sqlite"),
+  path.resolve(__dirname, "../../node_modules/expo-sqlite/android/src/main/java/expo/modules/sqlite"),
+];
+const sqliteAndroid = sqliteAndroidCandidates.find((candidate) =>
+  fs.existsSync(path.join(candidate, "NativeDatabase.kt"))
 );
+
+if (!sqliteAndroid) {
+  throw new Error(
+    "[patch-expo-sqlite-android] Could not find NativeDatabase.kt. Checked: " +
+    sqliteAndroidCandidates.join(", ") +
+    ". Check the installed expo-sqlite package location/version."
+  );
+}
 
 function patchFile(fileName, marker, original, replacement) {
   const filePath = path.join(sqliteAndroid, fileName);
