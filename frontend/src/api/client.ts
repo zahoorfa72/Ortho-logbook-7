@@ -730,18 +730,27 @@ export const api = {
       if (!row) return null as any;
       // Load only this patient's images, using bounded SQLite reads instead of
       // asking Android's CursorWindow to return a multi-megabyte photo cell.
-      const storedPhotosJson = readPatientPhotoTextInChunks("photos_json", pid);
-      let hasPhotoList = false;
+      let storedPhotosJson = readPatientPhotoTextInChunks("photos_json", pid);
+      let storedPhotos: string[] = [];
       try {
         const parsed = storedPhotosJson ? JSON.parse(storedPhotosJson) : [];
-        hasPhotoList = Array.isArray(parsed) && parsed.some((value) => typeof value === "string" && value.length > 0);
+        if (Array.isArray(parsed)) {
+          storedPhotos = parsed.filter((value): value is string => typeof value === "string" && value.length > 0);
+        }
       } catch {}
-      const legacyPhotoUri = hasPhotoList ? "" : readPatientPhotoTextInChunks("photo_uri", pid);
+      // Release the large serialized JSON string once its photo list is parsed;
+      // do not parse it a second time inside fromPatient().
+      storedPhotosJson = "";
+      const legacyPhotoUri = storedPhotos.length ? "" : readPatientPhotoTextInChunks("photo_uri", pid);
       const patient = fromPatient({
         ...row,
-        photos_json: hasPhotoList ? storedPhotosJson : "",
+        photos_json: "",
         photo_uri: legacyPhotoUri,
       });
+      if (storedPhotos.length) {
+        patient.photos = storedPhotos;
+        patient.photoUri = storedPhotos[0] || "";
+      }
       const implantRows = db.getAllSync<any>(
         "SELECT id,patient_id,inventory_id,name,category,size,quantity FROM patient_implants WHERE patient_id=? ORDER BY created_at ASC",
         [pid],
