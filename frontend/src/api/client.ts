@@ -479,6 +479,28 @@ function serializePhotos(p: Patient): string {
   return JSON.stringify(list);
 }
 
+// Android SQLite may reject a single multi-megabyte TEXT cell with a
+// CursorWindow allocation error. Read legacy embedded-photo JSON in bounded
+// chunks and only read photo_uri separately when photos_json is empty.
+function readPatientPhotoTextInChunks(column: "photo_uri" | "photos_json", patientId: string): string {
+  const lengthRow = db.getFirstSync<any>(
+    `SELECT length(${column}) AS value_length FROM patients WHERE id=?`,
+    [patientId],
+  );
+  const length = Math.max(0, Number(lengthRow?.value_length || 0));
+  if (!length) return "";
+  const chunkSize = 48 * 1024;
+  const chunks: string[] = [];
+  for (let start = 1; start <= length; start += chunkSize) {
+    const part = db.getFirstSync<any>(
+      `SELECT substr(${column}, ?, ?) AS value_chunk FROM patients WHERE id=?`,
+      [start, chunkSize, patientId],
+    );
+    chunks.push(String(part?.value_chunk || ""));
+  }
+  return chunks.join("");
+}
+
 async function savePatient(p: Patient, editing: boolean) {
   const uid = await currentUser();
   if (editing && !(await canEdit())) throw new Error("You do not have permission to edit patient records.");
@@ -689,18 +711,37 @@ export const api = {
     if (normalizedPath === "/patients") return (await listPatients({ includePhotos: false })) as any;
     if (normalizedPath === "/patients-detail") {
       const params = new URLSearchParams(path.split("?")[1] || "");
-      return (await listPatients({ includePhotos: true, date: params.get("date") || "" })) as any;
+      // List/detail grids should never load every patient's full photo payload.
+      // Callers that truly need a photo-inclusive batch must opt in explicitly;
+      // the normal edit/view flow loads images for one patient via /patients/:id.
+      return (await listPatients({
+        includePhotos: params.get("includePhotos") === "true",
+        date: params.get("date") || "",
+      })) as any;
     }
     if (normalizedPath.startsWith("/patients/")) {
       const pid = decodeURIComponent(normalizedPath.slice("/patients/".length));
       const me = await currentUserRow();
       if (!me || !pid) return null as any;
-      const baseColumns = "id,mr_no,name,gender,age,diagnosis,procedure,procedure_ii,implant,implant_ii,implant_id,implant_ii_id,address,file_name,photo_uri,photos_json,date,created_at,created_by,updated_at,updated_by,custom_data_json";
+      const baseColumns = "id,mr_no,name,gender,age,diagnosis,procedure,procedure_ii,implant,implant_ii,implant_id,implant_ii_id,address,file_name,date,created_at,created_by,updated_at,updated_by,custom_data_json";
       const row = me.role === "admin"
         ? db.getFirstSync<any>(`SELECT ${baseColumns} FROM patients WHERE id=? LIMIT 1`, [pid])
         : db.getFirstSync<any>(`SELECT ${baseColumns} FROM patients WHERE id=? AND created_by=? LIMIT 1`, [pid, me.id]);
       if (!row) return null as any;
-      const patient = fromPatient(row);
+      // Load only this patient's images, using bounded SQLite reads instead of
+      // asking Android's CursorWindow to return a multi-megabyte photo cell.
+      const storedPhotosJson = readPatientPhotoTextInChunks("photos_json", pid);
+      let hasPhotoList = false;
+      try {
+        const parsed = storedPhotosJson ? JSON.parse(storedPhotosJson) : [];
+        hasPhotoList = Array.isArray(parsed) && parsed.some((value) => typeof value === "string" && value.length > 0);
+      } catch {}
+      const legacyPhotoUri = hasPhotoList ? "" : readPatientPhotoTextInChunks("photo_uri", pid);
+      const patient = fromPatient({
+        ...row,
+        photos_json: hasPhotoList ? storedPhotosJson : "",
+        photo_uri: legacyPhotoUri,
+      });
       const implantRows = db.getAllSync<any>(
         "SELECT id,patient_id,inventory_id,name,category,size,quantity FROM patient_implants WHERE patient_id=? ORDER BY created_at ASC",
         [pid],
@@ -862,11 +903,11 @@ export const api = {
         const dateArgs: any[] = [];
         if (fromDate) { dateConditions.push("date >= ?"); dateArgs.push(fromDate); }
         if (toDate) { dateConditions.push("date <= ?"); dateArgs.push(toDate); }
-        rows = db.getAllSync<any>(`SELECT * FROM patients WHERE ${dateConditions.join(" AND ")}${scope}`, [...dateArgs, ...scopeArgs]);
+        rows = db.getAllSync<any>(`SELECT procedure,procedure_ii,created_by FROM patients WHERE ${dateConditions.join(" AND ")}${scope}`, [...dateArgs, ...scopeArgs]);
       } else if (month) {
-        rows = db.getAllSync<any>(`SELECT * FROM patients WHERE date LIKE ?${scope}`, [`${year}-${String(month).padStart(2, "0")}-%`, ...scopeArgs]);
+        rows = db.getAllSync<any>(`SELECT procedure,procedure_ii,created_by FROM patients WHERE date LIKE ?${scope}`, [`${year}-${String(month).padStart(2, "0")}-%`, ...scopeArgs]);
       } else if (year) {
-        rows = db.getAllSync<any>(`SELECT * FROM patients WHERE date LIKE ?${scope}`, [`${year}-%`, ...scopeArgs]);
+        rows = db.getAllSync<any>(`SELECT procedure,procedure_ii,created_by FROM patients WHERE date LIKE ?${scope}`, [`${year}-%`, ...scopeArgs]);
       } else {
         rows = await listPatients();
       }
@@ -1502,7 +1543,9 @@ syncLowStockState(targetId, quantity, minimumStock);
     const pm = normalizedPath.match(/^\/patients\/(.+)$/);
     if (pm) {
       if (!(await canEdit())) throw new Error("You do not have permission to delete patient records.");
-      const patient = db.getFirstSync<any>("SELECT * FROM patients WHERE id=?", [pm[1]]);
+      // Deletion only needs the id and owner. Photo blobs stay inside SQLite
+      // and are copied to the Trash sidecar by deletePatientRows().
+      const patient = db.getFirstSync<any>("SELECT id,created_by FROM patients WHERE id=?", [pm[1]]);
       if (patient) {
         await assertRecordAccess(patient.created_by);
         const uid = await currentUser();
