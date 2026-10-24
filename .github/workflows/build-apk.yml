@@ -95,6 +95,12 @@ jobs:
             yarn install --ignore-scripts
           fi
 
+      # Dependencies are installed with --ignore-scripts above, so run the required
+      # Expo SQLite Android crash patch explicitly before native prebuild.
+      - name: Apply Android SQLite crash patch
+        working-directory: frontend
+        run: node ./scripts/patch-expo-sqlite-android.js
+
       - name: Install ExecuTorch native XNNPACK libraries
         working-directory: frontend
         run: node ../node_modules/react-native-executorch/scripts/download-libs.js
