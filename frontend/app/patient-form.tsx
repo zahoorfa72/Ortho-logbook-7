@@ -969,23 +969,15 @@ export default function PatientForm() {
       throw error;
     }
     const longest = Math.max(dimensions.width, dimensions.height);
-    // Start each attempt from the original image. Preserve original pixel dimensions
-    // whenever high-quality JPEG encoding can meet the size target.
-    // Try high-quality, full-resolution encodes first. If the photo is still
-    // above 1.5 MiB, reduce resolution gradually and then lower JPEG quality
-    // in small steps. Every attempt starts from the original source, never from
-    // a previously compressed copy, to avoid cumulative quality loss.
-    // Bound scan processing time: the old implementation could encode the same
-    // multi-megapixel scan dozens of times before saving it, making the scanner
-    // appear frozen and increasing memory pressure. Keep a few full-detail quality
-    // attempts, then use a small number of progressively smaller document images.
-    // Limit each captured image to at most three native encodes. Repeated full-size
-    // ImageManipulator passes were allocating multiple large bitmaps on Android and
-    // could freeze or kill the app before the patient form finished saving.
+    // Never encode a very large original at full dimensions first. Large phone
+    // photos can decode into 100+ MiB bitmaps and terminate the Android process.
+    // Start with a document-readable maximum edge, then reduce only when needed.
+    // Every attempt starts from the original file (not an already compressed copy)
+    // to avoid cumulative quality loss. At most three native encodes are attempted.
     const attempts: Array<{ edge: number; quality: number }> = [
-      { edge: longest, quality: 0.88 },
-      { edge: Math.min(longest, 2400), quality: 0.88 },
-      { edge: Math.min(longest, 1800), quality: 0.84 },
+      { edge: Math.min(longest, 2800), quality: 0.9 },
+      { edge: Math.min(longest, 2200), quality: 0.86 },
+      { edge: Math.min(longest, 1600), quality: 0.82 },
     ].filter((attempt, index, all) => all.findIndex(other => other.edge === attempt.edge && other.quality === attempt.quality) === index);
     let normalizedUri = "";
     let fallbackUri = "";
@@ -1005,8 +997,19 @@ export default function PatientForm() {
             continue;
           }
           if (info.size <= targetBytes) {
-            normalizedUri = normalized.uri;
-            if (fallbackUri) await FileSystem.deleteAsync(fallbackUri, { idempotent: true }).catch(() => {});
+            // Prefer a higher-detail fallback inside the 2.25 MiB cap over a
+            // smaller, lower-resolution image that merely meets the preferred
+            // 1.5 MiB target.
+            const fallbackHasMoreDetail = !!fallbackUri &&
+              (fallbackEdge > attempt.edge ||
+               (fallbackEdge === attempt.edge && fallbackQuality > attempt.quality));
+            if (fallbackHasMoreDetail) {
+              normalizedUri = fallbackUri;
+              await FileSystem.deleteAsync(normalized.uri, { idempotent: true }).catch(() => {});
+            } else {
+              normalizedUri = normalized.uri;
+              if (fallbackUri) await FileSystem.deleteAsync(fallbackUri, { idempotent: true }).catch(() => {});
+            }
             fallbackUri = "";
             break;
           }
