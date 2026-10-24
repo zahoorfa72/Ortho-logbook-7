@@ -2,7 +2,7 @@
   "expo": {
     "name": "Ortho Logbook",
     "slug": "ortho-logbook",
-    "version": "1.0.6",
+    "version": "1.0.7",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "orthologbook",
@@ -18,7 +18,7 @@
       },
       "package": "com.sasims.orthologbook",
       "softwareKeyboardLayoutMode": "resize",
-      "versionCode": 7
+      "versionCode": 8
     },
     "web": {
       "bundler": "metro",
