@@ -898,6 +898,13 @@ async function readDeltaCache(): Promise<DriveDeltaCache | null> {
  } catch { return null; }
 }
 
+/** True only when the compact local comparison cache belongs to this Drive master. */
+export async function hasIncrementalSnapshotCacheForBaseline(baselineKey: string): Promise<boolean> {
+ const cache = await readDeltaCache();
+ return !!cache && !!baselineKey && cache.baselineKey === baselineKey &&
+   !!cache.tables && typeof cache.tables === "object";
+}
+
 export async function commitIncrementalSnapshotCache(baselineKey?: string): Promise<void> {
  if (!DELTA_CACHE_PATH) return;
  let textToSave = pendingDeltaCacheText;
