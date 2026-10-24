@@ -1223,6 +1223,11 @@ export async function exportIncrementalBackupData(changedTables: string[], onPro
     const historyId = rowKey(row);
     if (historyId !== null) knownHistory.set(historyId, row);
    }
+   // On a reinstall, seed the local cache with IDs recovered from daily Drive
+   // journals, even when the corresponding snapshot is not returned to JS.
+   for (const historyId of effectiveHistoryExcludedIds) {
+    if (!knownHistory.has(historyId)) knownHistory.set(historyId, { id: historyId });
+   }
    for (const row of currentRows) {
     const historyId = rowKey(row);
     if (historyId !== null) knownHistory.set(historyId, stripBackupCacheRow(row));
