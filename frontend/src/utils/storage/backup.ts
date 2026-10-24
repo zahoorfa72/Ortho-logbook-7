@@ -580,7 +580,19 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
  }
 
  onProgress?.("Patient photos prepared; reading historical reports…");
- const historyAll=include("patientHistory") ? db.getAllSync<any>("SELECT id,patient_id,user_id,action,created_at FROM patient_history ORDER BY created_at ASC") : [];
+ // Incremental syncs need only newly written audit snapshots. Reading and
+ // JSON-stripping every historical snapshot here can materialize hundreds of
+ // legacy base64 images just to upload one new patient. Audit rows are
+ // append-only, so a rolling window is enough for the incremental journal;
+ // full/manual backups still export the complete history below.
+ const incrementalHistoryWindow = !!changedTables && changedTables.includes("patientHistory");
+ const incrementalHistoryCutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+ const historyAll = !include("patientHistory") ? [] : incrementalHistoryWindow
+   ? db.getAllSync<any>(
+       "SELECT id,patient_id,user_id,action,created_at FROM patient_history WHERE created_at >= ? ORDER BY created_at ASC",
+       [incrementalHistoryCutoff],
+     )
+   : db.getAllSync<any>("SELECT id,patient_id,user_id,action,created_at FROM patient_history ORDER BY created_at ASC");
  const history=filter.type==="all" ? historyAll : filter.type === "month" || filter.type === "year"
    ? historyAll.filter((h:any)=>String(h.created_at || "").startsWith(String(filter.value || "") + "-"))
    : filter.type === "halfYear"
