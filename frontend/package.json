@@ -9,8 +9,7 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "lint": "expo lint",
-    "postinstall": "node ./scripts/patch-expo-sqlite-android.js"
+    "lint": "expo lint"
   },
   "dependencies": {
     "@expo/metro-runtime": "57.0.16",
