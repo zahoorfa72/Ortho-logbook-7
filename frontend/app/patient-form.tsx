@@ -1774,6 +1774,10 @@ export default function PatientForm() {
 
   const save = useMutation({
     mutationFn: async () => {
+      const saveStartedAt = Date.now();
+      const saveContext = isEdit ? "Patient save/edit" : "Patient save/new";
+      await recordDiagnosticEvent("patient-save", "Started " + saveContext);
+      try {
       // Persist the current manual lab-review entries in the same patient save
       // request. Do not rely on a prior asynchronous setP() from the Apply button.
       const reviewedLabResults = [...labManualReviews, ...labAddedResults]
@@ -1832,7 +1836,9 @@ export default function PatientForm() {
       const sourcePhotos = Array.isArray(p.photos) && p.photos.length
         ? p.photos
         : (p.photoUri ? [p.photoUri] : []);
+      await recordDiagnosticEvent("patient-save", "Preparing payload; photos=" + sourcePhotos.length);
       const normalizedPhotos = await normalizePatientPhotoUris(sourcePhotos);
+      await recordDiagnosticEvent("patient-save", "Photo normalization complete; photos=" + normalizedPhotos.length);
       const payload = {
         ...p,
         photos: normalizedPhotos,
@@ -1844,7 +1850,21 @@ export default function PatientForm() {
         // normalization; do not force another base64 conversion on the next save.
         setP(current => ({ ...current, photos: normalizedPhotos, photoUri: normalizedPhotos[0] || "" }));
       }
-      return isEdit ? api.put("/patients/" + id, payload) : api.post("/patients", payload);
+      await recordDiagnosticEvent("patient-save", "Calling local SQLite API");
+      try {
+        const saved = isEdit ? await api.put("/patients/" + id, payload) : await api.post("/patients", payload);
+        await recordDiagnosticEvent("patient-save", "SQLite API returned successfully in " + (Date.now() - saveStartedAt) + "ms");
+        return saved;
+      } catch (error) {
+        await recordDiagnosticError(error, saveContext + " > local SQLite API");
+        await recordDiagnosticEvent("patient-save", "SQLite API rejected: " + String((error as any)?.message || error));
+        throw error;
+      }
+      } catch (error) {
+        await recordDiagnosticError(error, saveContext + " > preparing save");
+        await recordDiagnosticEvent("patient-save", "Save preparation rejected: " + String((error as any)?.message || error));
+        throw error;
+      }
     },
     onSuccess: (savedPatient: Patient) => {
       // The local SQLite transaction has already committed before onSuccess.
@@ -1868,7 +1888,10 @@ export default function PatientForm() {
       toast(isEdit ? "Record updated." : "Patient saved.", "success");
       router.back();
     },
-    onError: (e: any) => toast(e?.message || "Could not save record.", "error"),
+    onError: (e: any) => {
+      void recordDiagnosticError(e, isEdit ? "Patient form > update failed" : "Patient form > create failed");
+      toast(e?.message || "Could not save record. Open Settings → Problem Report for details.", "error");
+    },
   });
 
   const restoreDeletedPatient = useMutation({
