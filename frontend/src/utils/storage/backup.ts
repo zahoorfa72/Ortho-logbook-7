@@ -428,7 +428,7 @@ function stripDriveOcrText(value: any, parentKey = ""): any {
  return result;
 }
 
-async function createBackupData(filter: BackupFilter = { type: "all" }, onProgress?: (stage: string) => void, changedTables?: string[], previousPatientRows?: any[], previousPhotoSources?: Record<string, string>, includePatientImages = true, includeAttachedImages = true, incrementalHistorySince?: string):Promise<BackupData>{
+async function createBackupData(filter: BackupFilter = { type: "all" }, onProgress?: (stage: string) => void, changedTables?: string[], previousPatientRows?: any[], previousPhotoSources?: Record<string, string>, includePatientImages = true, includeAttachedImages = true, incrementalHistorySince?: string, incrementalHistoryExcludedIds: string[] = []):Promise<BackupData>{
  if (filter.type === "halfYear" && !halfYearBounds(filter.value)) throw new Error("Choose a half-year as YYYY-H1 or YYYY-H2.");
  initializeDatabase();
  if (includePatientImages && filter.type === "all" && (!changedTables || changedTables.includes("patients"))) await archiveEligiblePatientImages(onProgress);
@@ -580,9 +580,10 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
  }
 
  onProgress?.("Patient photos prepared; reading historical reports…");
- // Incremental history is bounded by the last confirmed journal/master timestamp.
- // Do not open old snapshot_json blobs (which may embed many base64 images) when
- // syncing one new patient. Full/manual backups still include all audit history.
+ // Incremental exports query only audit rows after the full-master baseline,
+ // excluding rows already represented by the remote journal. This avoids
+ // reopening many historic image-heavy snapshots when a restored phone saves
+ // one new patient, without dropping older unsynced history.
  const incrementalHistoryWindow = !!changedTables && changedTables.includes("patientHistory");
  const parsedHistorySince = Date.parse(String(incrementalHistorySince || ""));
  const incrementalHistoryCutoff = Number.isFinite(parsedHistorySince)
@@ -590,8 +591,8 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
    : new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
  const historyAll = !include("patientHistory") ? [] : incrementalHistoryWindow
    ? db.getAllSync<any>(
-       "SELECT id,patient_id,user_id,action,created_at FROM patient_history WHERE created_at >= ? ORDER BY created_at ASC",
-       [incrementalHistoryCutoff],
+       "SELECT id,patient_id,user_id,action,created_at FROM patient_history WHERE created_at >= ? AND id NOT IN (SELECT value FROM json_each(?)) ORDER BY created_at ASC",
+       [incrementalHistoryCutoff, JSON.stringify(incrementalHistoryExcludedIds)],
      )
    : db.getAllSync<any>("SELECT id,patient_id,user_id,action,created_at FROM patient_history ORDER BY created_at ASC");
  const history=filter.type==="all" ? historyAll : filter.type === "month" || filter.type === "year"
@@ -1123,7 +1124,7 @@ function rowImageSignature(row: any): string {
  return found ? total + ":" + h1.toString(16) + ":" + h2.toString(16) : "";
 }
 
-export async function exportIncrementalBackupData(changedTables: string[], onProgress?: (stage: string) => void, baselineKey = "", incrementalHistorySince = ""): Promise<BackupData> {
+export async function exportIncrementalBackupData(changedTables: string[], onProgress?: (stage: string) => void, baselineKey = "", incrementalHistorySince = "", incrementalHistoryExcludedIds: string[] = []): Promise<BackupData> {
  const allowed = new Set([
   "patients","procedures","inventoryCategories","inventory","patientImplants",
   "patientCustomFields","implantRecords","expenses","users","patientHistory",
@@ -1149,7 +1150,8 @@ export async function exportIncrementalBackupData(changedTables: string[], onPro
   canDiff && previous!.photoSources ? previous!.photoSources : undefined,
   false,
   true,
-  incrementalHistorySince
+  incrementalHistorySince,
+  incrementalHistoryExcludedIds
  );
  // Sanitize before diff/cache generation too, so OCR text is not re-saved in the Drive baseline.
  const sanitizedBackup = stripDriveOcrText(backup) as BackupData;
@@ -1304,8 +1306,8 @@ export async function exportIncrementalBackupData(changedTables: string[], onPro
  return backup;
 }
 
-export async function exportIncrementalBackup(changedTables: string[], onProgress?: (stage: string) => void, baselineKey = ""): Promise<string> {
- return JSON.stringify(await exportIncrementalBackupData(changedTables, onProgress, baselineKey));
+export async function exportIncrementalBackup(changedTables: string[], onProgress?: (stage: string) => void, baselineKey = "", incrementalHistorySince = "", incrementalHistoryExcludedIds: string[] = []): Promise<string> {
+ return JSON.stringify(await exportIncrementalBackupData(changedTables, onProgress, baselineKey, incrementalHistorySince, incrementalHistoryExcludedIds));
 }
 
 export async function prepareIncrementalSnapshotCacheFromBackupData(baselineKey: string, backup: BackupData): Promise<void> {
