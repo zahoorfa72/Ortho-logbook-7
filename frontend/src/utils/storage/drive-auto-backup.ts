@@ -1,7 +1,6 @@
 import * as SQLite from "expo-sqlite";
 import {
   backupIncrementalToGoogleDrive,
-  getLastDriveBackupStatus,
   getConnectedGoogleAccount,
   restoreGoogleAccountSilently,
 } from "@/src/utils/storage/google-drive";
@@ -255,18 +254,13 @@ export function startAutomaticDriveBackup() {
   setDriveSyncRefreshHandler(refreshAutomaticDriveBackup);
   const unregisterRefresh = () => setDriveSyncRefreshHandler(null);
   void loadPendingTables().then(async () => {
-    // Only do a complete initial scan if Drive has never confirmed a backup.
-    // Re-queuing all tables at every app launch re-read all report/history images
-    // and could compete with a user-started upload at 99.5%.
-    const lastSuccessfulBackup = await getLastDriveBackupStatus();
-    if (!pendingTables.size) {
-      if (!lastSuccessfulBackup) {
-        ALL_SYNC_TABLES.forEach((name) => pendingTables.add(name));
-      }
-      // A successful backup plus an empty pending queue means there is nothing
-      // to sync. Do not enqueue appSettings just because the app opened; startup
-      // and navigation are not data changes.
-    }
+    // Do not mark every table dirty just because SecureStore's last-success
+    // marker is missing. Reinstall/restore can clear that marker while a valid
+    // large Drive baseline still exists; a full scan here can re-read every
+    // historic snapshot and trigger a memory spike before the user edits data.
+    // Existing pending work is resumed normally. If no baseline exists, the
+    // first real database change creates it; the Sync button can still request
+    // an explicit all-table check.
     await persistPendingTables();
     scheduleBackup();
   });
