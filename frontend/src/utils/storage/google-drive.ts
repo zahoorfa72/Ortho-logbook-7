@@ -2835,7 +2835,17 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
   // Use a compact daily journal rather than the legacy all-time change file.
   // Only today's journal is read/updated, so even a very long history of prior
   // changes can never make an ordinary patient save deserialize one huge file.
-  const historySince = String(base.modifiedTime || "");
+  let historySince = String(base.modifiedTime || "");
+  // Older app builds updated this single global journal in place. Its Drive
+  // modified time is a safe high-watermark for rows already journaled, and
+  // reading only file metadata avoids downloading its potentially huge payload.
+  const legacyJournalMetadata = await findBackupByName("Ortho Logbook Backup Changes.orbackup");
+  const baseHistoryTime = Date.parse(historySince);
+  const legacyHistoryTime = Date.parse(String(legacyJournalMetadata?.modifiedTime || ""));
+  if (Number.isFinite(legacyHistoryTime) &&
+      (!Number.isFinite(baseHistoryTime) || legacyHistoryTime > baseHistoryTime)) {
+    historySince = String(legacyJournalMetadata.modifiedTime);
+  }
   const journalFileName = "Ortho Logbook Incremental " + new Date().toISOString().slice(0, 10) + "-" + String(base.id).slice(-8) + ".orbackup";
   const dailyJournalFile = await findBackupByName(journalFileName);
   let journalId: string | undefined;
