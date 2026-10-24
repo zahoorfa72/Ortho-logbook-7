@@ -587,7 +587,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
  const incrementalHistoryWindow = !!changedTables && changedTables.includes("patientHistory");
  const parsedHistorySince = Date.parse(String(incrementalHistorySince || ""));
  const incrementalHistoryCutoff = Number.isFinite(parsedHistorySince)
-   ? new Date(Math.max(0, parsedHistorySince - 2000)).toISOString()
+   ? new Date(parsedHistorySince).toISOString()
    : new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
  const historyAll = !include("patientHistory") ? [] : incrementalHistoryWindow
    ? db.getAllSync<any>(
