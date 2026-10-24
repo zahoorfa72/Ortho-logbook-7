@@ -428,7 +428,7 @@ function stripDriveOcrText(value: any, parentKey = ""): any {
  return result;
 }
 
-async function createBackupData(filter: BackupFilter = { type: "all" }, onProgress?: (stage: string) => void, changedTables?: string[], previousPatientRows?: any[], previousPhotoSources?: Record<string, string>, includePatientImages = true, includeAttachedImages = true):Promise<BackupData>{
+async function createBackupData(filter: BackupFilter = { type: "all" }, onProgress?: (stage: string) => void, changedTables?: string[], previousPatientRows?: any[], previousPhotoSources?: Record<string, string>, includePatientImages = true, includeAttachedImages = true, incrementalHistorySince?: string):Promise<BackupData>{
  if (filter.type === "halfYear" && !halfYearBounds(filter.value)) throw new Error("Choose a half-year as YYYY-H1 or YYYY-H2.");
  initializeDatabase();
  if (includePatientImages && filter.type === "all" && (!changedTables || changedTables.includes("patients"))) await archiveEligiblePatientImages(onProgress);
@@ -580,13 +580,14 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
  }
 
  onProgress?.("Patient photos prepared; reading historical reports…");
- // Incremental syncs need only newly written audit snapshots. Reading and
- // JSON-stripping every historical snapshot here can materialize hundreds of
- // legacy base64 images just to upload one new patient. Audit rows are
- // append-only, so a rolling window is enough for the incremental journal;
- // full/manual backups still export the complete history below.
+ // Incremental history is bounded by the last confirmed journal/master timestamp.
+ // Do not open old snapshot_json blobs (which may embed many base64 images) when
+ // syncing one new patient. Full/manual backups still include all audit history.
  const incrementalHistoryWindow = !!changedTables && changedTables.includes("patientHistory");
- const incrementalHistoryCutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+ const parsedHistorySince = Date.parse(String(incrementalHistorySince || ""));
+ const incrementalHistoryCutoff = Number.isFinite(parsedHistorySince)
+   ? new Date(Math.max(0, parsedHistorySince - 2000)).toISOString()
+   : new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
  const historyAll = !include("patientHistory") ? [] : incrementalHistoryWindow
    ? db.getAllSync<any>(
        "SELECT id,patient_id,user_id,action,created_at FROM patient_history WHERE created_at >= ? ORDER BY created_at ASC",
@@ -1122,7 +1123,7 @@ function rowImageSignature(row: any): string {
  return found ? total + ":" + h1.toString(16) + ":" + h2.toString(16) : "";
 }
 
-export async function exportIncrementalBackupData(changedTables: string[], onProgress?: (stage: string) => void, baselineKey = ""): Promise<BackupData> {
+export async function exportIncrementalBackupData(changedTables: string[], onProgress?: (stage: string) => void, baselineKey = "", incrementalHistorySince = ""): Promise<BackupData> {
  const allowed = new Set([
   "patients","procedures","inventoryCategories","inventory","patientImplants",
   "patientCustomFields","implantRecords","expenses","users","patientHistory",
@@ -1146,7 +1147,9 @@ export async function exportIncrementalBackupData(changedTables: string[], onPro
   { type: "all" }, onProgress, tables,
   canDiff ? previous!.tables.patients : undefined,
   canDiff && previous!.photoSources ? previous!.photoSources : undefined,
-  false
+  false,
+  true,
+  incrementalHistorySince
  );
  // Sanitize before diff/cache generation too, so OCR text is not re-saved in the Drive baseline.
  const sanitizedBackup = stripDriveOcrText(backup) as BackupData;
@@ -1189,6 +1192,16 @@ export async function exportIncrementalBackupData(changedTables: string[], onPro
   }
   const currentRows = Array.isArray((backup as any)[table]) ? (backup as any)[table] as any[] : [];
   currentRowsForCache[table] = currentRows;
+
+  // Patient history is append-only and incremental exports query only rows
+  // after the last journal/master baseline. Never compare that bounded set
+  // with an old full-table cache, or older history rows would look deleted.
+  if (table === "patientHistory" && incrementalHistorySince) {
+   (backup as any)[table] = currentRows;
+   deletedIds[table] = [];
+   nextTables[table] = currentRows.map((row) => stripBackupCacheRow(row));
+   continue;
+  }
    const currentImageSignatures = new Map<string, string>();
    if (IMAGE_SIGNATURE_TABLES.has(table)) {
     for (const row of currentRows) {
