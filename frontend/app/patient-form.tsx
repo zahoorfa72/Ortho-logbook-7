@@ -1052,6 +1052,17 @@ export default function PatientForm() {
     }
   };
 
+  // Normalize legacy photo data one image at a time. Patient updates can be triggered
+  // by the photo editor, image removal, Drive import, or the main Save button; all
+  // paths must avoid writing embedded base64 blobs back into SQLite.
+  const normalizePatientPhotoUris = async (uris: string[]) => {
+    const normalized: string[] = [];
+    for (const uri of uris) {
+      normalized.push(/^data:image\//i.test(uri) ? await persistPhoto(uri) : uri);
+    }
+    return normalized;
+  };
+
   // Gallery keeps multi-select. Scan Document detects page edges and straightens paper records.
 
   const addFromLibrary = async () => {
@@ -1331,7 +1342,7 @@ export default function PatientForm() {
       if (!Array.isArray(pages) || !pages.length) throw new Error("No readable image pages were found in this patient's Drive PDF.");
       const importedUris: string[] = [];
       for (const page of pages) importedUris.push(await persistPhoto(page.uri));
-      const preserved = p.photos.filter(uri => !oldImportedUris.includes(uri));
+      const preserved = await normalizePatientPhotoUris(p.photos.filter(uri => !oldImportedUris.includes(uri)));
       const mergedPhotos = [...preserved, ...importedUris];
       const customData = {
         ...(p.customData || {}),
@@ -1416,12 +1427,13 @@ export default function PatientForm() {
     // left the old photos in storage, so they reappeared when the record was
     // fetched again. The separate Drive PDF remains unchanged until the
     // administrator explicitly approves a PDF update.
-    const photos = p.photos.filter((_, i) => i !== idx);
-    if (photos.length === p.photos.length) return;
-    const updatedPatient = { ...p, photos, photoUri: photos[0] || "" };
+    const remainingPhotos = p.photos.filter((_, i) => i !== idx);
+    if (remainingPhotos.length === p.photos.length) return;
     if (isEdit && id) {
       setPhotoBusy(true);
       try {
+        const photos = await normalizePatientPhotoUris(remainingPhotos);
+        const updatedPatient = { ...p, photos, photoUri: photos[0] || "" };
         const saved = await api.put("/patients/" + encodeURIComponent(String(id)), updatedPatient);
         setP((current) => ({ ...current, photos, photoUri: photos[0] || "" }));
         if (saved && typeof saved === "object") {
@@ -1446,7 +1458,7 @@ export default function PatientForm() {
       }
       return;
     }
-    setP(updatedPatient);
+    setP({ ...p, photos: remainingPhotos, photoUri: remainingPhotos[0] || "" });
   };
 
   const approveAndUpdateDrivePatientPdf = async () => {
@@ -1720,25 +1732,27 @@ export default function PatientForm() {
       const updatedPhotos = p.photos.map((value, index) =>
         index === editingPhotoIndex ? permanent : value
       );
-      const updatedPhotoUri = updatedPhotos[0] || p.photoUri || "";
-
       // For an existing patient, persist the photo change immediately. Previously
       // this only called setP(), so leaving the patient screen before tapping the
       // separate patient Save button discarded the enhanced photo on next open.
+      // Normalize old embedded images too before updating the SQLite photo list.
+      const photosToSave = isEdit && id
+        ? await normalizePatientPhotoUris(updatedPhotos)
+        : updatedPhotos;
+      const updatedPhotoUri = photosToSave[0] || p.photoUri || "";
+
       // Keep the editor open if the record update fails so the user can retry.
       if (isEdit && id) {
         await api.put("/patients/" + id, {
           ...p,
-          photos: updatedPhotos,
+          photos: photosToSave,
           photoUri: updatedPhotoUri,
         });
       }
 
       setP((current) => ({
         ...current,
-        photos: current.photos.map((value, index) =>
-          index === editingPhotoIndex ? permanent : value
-        ),
+        photos: photosToSave,
         photoUri: updatedPhotoUri,
       }));
       toast(isEdit && id
@@ -1818,10 +1832,7 @@ export default function PatientForm() {
       const sourcePhotos = Array.isArray(p.photos) && p.photos.length
         ? p.photos
         : (p.photoUri ? [p.photoUri] : []);
-      const normalizedPhotos: string[] = [];
-      for (const photoUri of sourcePhotos) {
-        normalizedPhotos.push(/^data:image\//i.test(photoUri) ? await persistPhoto(photoUri) : photoUri);
-      }
+      const normalizedPhotos = await normalizePatientPhotoUris(sourcePhotos);
       const payload = {
         ...p,
         photos: normalizedPhotos,
