@@ -1756,7 +1756,7 @@ export default function PatientForm() {
   };
 
   const save = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       // Persist the current manual lab-review entries in the same patient save
       // request. Do not rely on a prior asynchronous setP() from the Apply button.
       const reviewedLabResults = [...labManualReviews, ...labAddedResults]
@@ -1808,7 +1808,28 @@ export default function PatientForm() {
           labOcrManualResults: JSON.stringify(allReviewedLabResults),
         } : {}),
       };
-      const payload = { ...p, customData };
+      // Older imports/backups may contain embedded base64 images instead of
+      // private file URIs. Re-materialize them before saving so SQLite stores
+      // compact file paths rather than multi-megabyte data URIs. Process one at
+      // a time to avoid the Android memory spike that can close the app.
+      const sourcePhotos = Array.isArray(p.photos) && p.photos.length
+        ? p.photos
+        : (p.photoUri ? [p.photoUri] : []);
+      const normalizedPhotos: string[] = [];
+      for (const photoUri of sourcePhotos) {
+        normalizedPhotos.push(/^data:image\//i.test(photoUri) ? await persistPhoto(photoUri) : photoUri);
+      }
+      const payload = {
+        ...p,
+        photos: normalizedPhotos,
+        photoUri: normalizedPhotos[0] || "",
+        customData,
+      };
+      if (normalizedPhotos.some((uri, index) => uri !== sourcePhotos[index])) {
+        // Keep the draft retryable if the database operation fails after image
+        // normalization; do not force another base64 conversion on the next save.
+        setP(current => ({ ...current, photos: normalizedPhotos, photoUri: normalizedPhotos[0] || "" }));
+      }
       return isEdit ? api.put("/patients/" + id, payload) : api.post("/patients", payload);
     },
     onSuccess: (savedPatient: Patient) => {
@@ -2305,7 +2326,7 @@ export default function PatientForm() {
               <Ionicons name={labFindingsExpanded ? "chevron-up" : "chevron-down"} size={26} color={colors.error || "#B91C1C"} />
             </Pressable>
             {labFindingsExpanded ? <View>
-            <Text style={styles.hint}>{labOcrBusy ? "Checking pictures for lab reports…" : isEdit ? "Existing patient photos are not scanned when you open this file. Tap Scan lab photos when you want to run OCR; review extracted values against the original report." : "Lab photos in a new patient draft are scanned automatically. Review extracted values against the original report."}</Text>
+            <Text style={styles.hint}>{labOcrBusy ? "Checking pictures for lab reports…" : "Patient photos are not scanned while you enter or edit details. Save the record first, then tap Scan lab photos to run OCR; check any extracted values against the original report."}</Text>
             {p.photos.length ? <View style={{ marginTop: spacing.sm }}>
               <Text style={[styles.label, { marginBottom: spacing.xs }]}>Review Lab OCR images - Tap any image to open full screen</Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.sm }}>
