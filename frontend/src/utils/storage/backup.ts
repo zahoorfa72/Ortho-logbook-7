@@ -1119,7 +1119,10 @@ export async function exportIncrementalBackupData(changedTables: string[], onPro
  const requestedTables = Array.from(new Set(changedTables)).filter((name) => allowed.has(name));
  if (!requestedTables.length) throw new Error("There are no changed data tables to sync.");
  const previous = await readDeltaCache();
- const canDiff = !!previous;
+ // A cache from another Drive file/version cannot safely produce deletion
+ // tombstones. After reinstall or master replacement, fall back to append-only
+ // rows; the journal applies these without deleting master-only records.
+ const canDiff = !!previous && (!baselineKey || previous.baselineKey === baselineKey);
  const cachedPatientPhotos = !!previous && Object.keys(previous.photoSources || {}).some((key) => !key.startsWith("images:"));
  const cachedHistoryPhotos = !!previous && Object.keys(previous.photoSources || {}).some((key) => key.startsWith("images:patientHistory:"));
  const tables = Array.from(new Set([
