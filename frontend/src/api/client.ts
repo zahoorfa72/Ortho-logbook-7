@@ -80,6 +80,18 @@ const fromPatient = (r: any): Patient => {
 
 const snapshot = (p: any) => JSON.stringify(p);
 
+// Patient audit history is metadata-only. Photos are stored on the patient row
+// (or in the app's private photo files), never duplicated into every history row.
+// Large legacy data-URI photos can otherwise exceed Android's JS heap/CursorWindow
+// limits during an ordinary patient save or edit.
+const patientAuditSnapshot = (p: any) => {
+  if (!p || typeof p !== "object" || Array.isArray(p)) return snapshot(p);
+  const safe = { ...p, photoUri: "", photos: [] as string[] };
+  delete (safe as any).photo_uri;
+  delete (safe as any).photos_json;
+  return JSON.stringify(safe);
+};
+
 function movement(inventoryId: string, type: string, amount: number, quantityAfter: number, note: string, userId: string | null) {
   db.runSync(
     "INSERT INTO inventory_movements (id,inventory_id,user_id,type,amount,quantity_after,note,created_at) VALUES (?,?,?,?,?,?,?,?)",
@@ -477,7 +489,13 @@ async function savePatient(p: Patient, editing: boolean) {
 
   if (editing) {
     return db.withTransactionSync(() => {
-      const old = db.getFirstSync<any>("SELECT * FROM patients WHERE id=?", [patientId]);
+      // Do not select photo_uri/photos_json here: this operation only needs the
+      // patient's metadata and implants. Reading embedded legacy photos into JS
+      // during an edit can exhaust Android memory before the update can finish.
+      const old = db.getFirstSync<any>(
+        "SELECT id,mr_no,name,gender,age,diagnosis,procedure,procedure_ii,implant,implant_ii,implant_id,implant_ii_id,address,file_name,custom_data_json,date,created_at,created_by,updated_at,updated_by FROM patients WHERE id=?",
+        [patientId],
+      );
       if (!old) throw new Error("Patient not found.");
       // Ownership check for non-admins (sync inside transaction: we already ran assertRecordAccess above? No -- do it here using a sync fetch of current user role).
       restoreStock(hydratePatientImplants(patientId, fromPatient(old)), uid);
@@ -488,7 +506,7 @@ async function savePatient(p: Patient, editing: boolean) {
       );
       db.runSync(
         "INSERT INTO patient_history (id,patient_id,user_id,action,snapshot_json,created_at) VALUES (?,?,?,?,?,?)",
-        [id(), patientId, uid, "edit", snapshot(fromPatient(old)), now],
+        [id(), patientId, uid, "edit", patientAuditSnapshot(fromPatient(old)), now],
       );
       deduct({ ...p, id: patientId }, uid);
       replacePatientImplants(patientId, p);
@@ -497,17 +515,22 @@ async function savePatient(p: Patient, editing: boolean) {
   }
 
   validateImplants(p);
-  db.runSync(
-    "INSERT INTO patients (id,mr_no,name,gender,age,diagnosis,procedure,procedure_ii,implant,implant_ii,implant_id,implant_ii_id,address,file_name,photo_uri,photos_json,custom_data_json,date,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-    [patientId, p.mrNo, p.name, p.gender, p.age, p.diagnosis, p.procedure, String(p.procedureII ?? (p as any).procedure_ii ?? "").trim(), p.implant, p.implantII, p.implantId || null, p.implantIIId || null, p.address, p.fileName, primaryPhoto, photosJson, JSON.stringify((p as any).customData || {}), p.date, now, uid],
-  );
-  db.runSync(
-    "INSERT INTO patient_history (id,patient_id,user_id,action,snapshot_json,created_at) VALUES (?,?,?,?,?,?)",
-    [id(), patientId, uid, "create", snapshot(p), now],
-  );
-  deduct({ ...p, id: patientId }, uid);
-  replacePatientImplants(patientId, p);
-  return { ...p, id: patientId };
+  // Patient creation, its audit entry and implant stock movements must commit
+  // together. A failure halfway through must not leave a half-created patient or
+  // partially deducted inventory behind.
+  return db.withTransactionSync(() => {
+    db.runSync(
+      "INSERT INTO patients (id,mr_no,name,gender,age,diagnosis,procedure,procedure_ii,implant,implant_ii,implant_id,implant_ii_id,address,file_name,photo_uri,photos_json,custom_data_json,date,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+      [patientId, p.mrNo, p.name, p.gender, p.age, p.diagnosis, p.procedure, String(p.procedureII ?? (p as any).procedure_ii ?? "").trim(), p.implant, p.implantII, p.implantId || null, p.implantIIId || null, p.address, p.fileName, primaryPhoto, photosJson, JSON.stringify((p as any).customData || {}), p.date, now, uid],
+    );
+    db.runSync(
+      "INSERT INTO patient_history (id,patient_id,user_id,action,snapshot_json,created_at) VALUES (?,?,?,?,?,?)",
+      [id(), patientId, uid, "create", patientAuditSnapshot({ ...p, id: patientId }), now],
+    );
+    deduct({ ...p, id: patientId }, uid);
+    replacePatientImplants(patientId, p);
+    return { ...p, id: patientId };
+  });
 }
 
 async function listPatients(options?: { includePhotos?: boolean; date?: string }): Promise<Patient[]> {
