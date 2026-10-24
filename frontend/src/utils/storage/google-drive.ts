@@ -2827,16 +2827,39 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
   }
 
   const baselineKey = String(base.id) + ":" + String(base.modifiedTime || "");
+  const JOURNAL_NAME = "Ortho Logbook Backup Changes.orbackup";
   const canStreamIncremental = Platform.OS === "android" &&
     !!NativeModules.DriveBackgroundUpload?.writeTextChunk &&
     !!NativeModules.DriveBackgroundUpload?.startUpload &&
     !!NativeModules.DriveBackgroundUpload?.getStatus;
 
+  // Read the existing journal before exporting history. Its last confirmed
+  // timestamp gives the cutoff for newly added audit rows, so a restored
+  // phone does not reprocess hundreds of older image-heavy snapshots on save.
+  const latestJournal = await findBackupByName(JOURNAL_NAME);
+  let journalId: string | undefined;
+  let previousJournal: any = null;
+  let historySince = String(base.modifiedTime || "");
+  if (latestJournal?.id) {
+    try {
+      const candidate = await downloadDriveJsonValidated(String(latestJournal.id), onProgress);
+      if (candidate?.incremental === true &&
+          String(candidate._baselineKey || "") === baselineKey &&
+          Array.isArray(candidate.changedTables)) {
+        journalId = String(latestJournal.id);
+        previousJournal = candidate;
+        historySince = String(latestJournal.modifiedTime || candidate.createdAt || historySince);
+      }
+    } catch (error) {
+      console.warn("[drive-backup] existing change journal could not be read; using the full master timestamp for history sync", error);
+    }
+  }
+
   let delta: any;
   if (canStreamIncremental) {
-    delta = await exportIncrementalBackupData(changedTables, onProgress, baselineKey);
+    delta = await exportIncrementalBackupData(changedTables, onProgress, baselineKey, historySince);
   } else {
-    delta = JSON.parse(await exportIncrementalBackup(changedTables, onProgress, baselineKey));
+    delta = JSON.parse(await exportIncrementalBackup(changedTables, onProgress, baselineKey, historySince));
   }
 
   const hasActualChanges = (Array.isArray(delta.changedTables) ? delta.changedTables : []).some((table: string) => {
@@ -2860,8 +2883,6 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
     };
   }
 
-  const JOURNAL_NAME = "Ortho Logbook Backup Changes.orbackup";
-
   // Without a matching local diff cache, the exporter sends a full local table
   // view. Convert that safely to upserts, not replacements: a restored phone's
   // local table view must never erase older rows that exist in the Drive master.
@@ -2881,20 +2902,6 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
       Object.keys(deletedIds).forEach((table) => delete deletedIds[table]);
     } else {
       for (const table of fullTables) delete deletedIds[table];
-    }
-
-    // A full history-table export strips photos from historical snapshots
-    // because those assets are archived separately. Do not let that metadata-
-    // only export overwrite older master history entries that may still contain
-    // the only copy of legacy embedded photos. Keep recent history events so a
-    // new patient/edit that triggered this sync is still journaled.
-    if ((!originalWasRowDelta || fullTables.has("patientHistory")) &&
-        Array.isArray(payload.patientHistory)) {
-      const recentHistoryCutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
-      payload.patientHistory = payload.patientHistory.filter((row: any) => {
-        const createdAt = Date.parse(String(row?.created_at || ""));
-        return Number.isFinite(createdAt) && createdAt >= recentHistoryCutoff;
-      });
     }
 
     payload._rowDelta = true;
@@ -2942,24 +2949,9 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
     if (deletedPatientIds.length) await processPendingPatientPdfDeletes(onProgress);
   }
 
-  // Merge only a journal tied to this exact baseline. A matching file ID with a
-  // different modified time may have been replaced by a manual full backup, so
-  // its old edits must not be replayed onto the new baseline.
-  const latestJournal = await findBackupByName(JOURNAL_NAME);
-  let journalId: string | undefined;
-  let previousJournal: any = null;
-  if (latestJournal?.id) {
-    try {
-      const candidate = await downloadDriveJsonValidated(String(latestJournal.id), onProgress);
-      if (candidate?.incremental === true && String(candidate._baselineKey || "") === baselineKey &&
-          Array.isArray(candidate.changedTables)) {
-        journalId = String(latestJournal.id);
-        previousJournal = normalizeForJournal(candidate);
-      }
-    } catch (error) {
-      console.warn("[drive-backup] existing change journal could not be read; retaining it and creating a fresh journal", error);
-    }
-  }
+  // The previously loaded journal is accepted only when it matches this exact
+  // baseline. Normalize it here, after the append-only row rules are available.
+  if (previousJournal) previousJournal = normalizeForJournal(previousJournal);
 
   const allChanges = previousJournal
     ? mergeIncrementalPayloads(previousJournal, safeDelta)
