@@ -69,7 +69,7 @@ function mergeRestoredBackupRow(table: string, existing: any, incoming: any): an
     const priorSnapshot = existing.snapshot_json;
     const incomingSnapshot = incoming.snapshot_json;
     const hasEmbeddedPhoto = (value: string) =>
-      /data:image\\//i.test(value) || /__ORTHO_PHOTO_REF__:[A-Za-z0-9:_-]+/.test(value);
+      value.toLowerCase().includes("data:image/") || /__ORTHO_PHOTO_REF__:[A-Za-z0-9:_-]+/.test(value);
     // Patient-history rows are immutable audit snapshots. If a newer journal
     // carries only metadata, retain the previous snapshot's embedded images.
     if (hasEmbeddedPhoto(priorSnapshot) && !hasEmbeddedPhoto(incomingSnapshot)) {
