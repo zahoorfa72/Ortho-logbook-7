@@ -762,22 +762,11 @@ export default function PatientForm() {
     implants:(prev.implants || []).map(x => x.id === id ? { ...x, quantity:Math.max(1,x.quantity + delta) } : x),
   }));
   const [ready, setReady] = useState(false);
+  // Patient entry must stay responsive even when a draft contains many
+  // photographs. OCR is deliberately user-triggered (Scan/Rescan lab photos)
+  // for both new and existing patients so it cannot compete with saving or
+  // unexpectedly run a CPU/memory-heavy pass while staff are entering data.
   const lastAutoLabScan = useRef("");
-  useEffect(() => {
-    // Existing patient records must never start OCR just because the user
-    // opened the form or changed tabs. Their scans are explicitly started by
-    // the Scan/Rescan button. New-patient drafts retain automatic scanning.
-    if (isEdit || !labOcrEnabled || labOcrBusy) return;
-    const uris = [...new Set(p.photos)].filter(Boolean);
-    if (!uris.length) return;
-    const signature = LAB_OCR_PIPELINE_VERSION + "|" + uris.join("|");
-    if (lastAutoLabScan.current === signature) return;
-    const timer = setTimeout(() => {
-      lastAutoLabScan.current = signature;
-      void analyzeLabPhotos(uris, true);
-    }, 500);
-    return () => clearTimeout(timer);
-  }, [labOcrEnabled, labOcrBusy, p.photos, isEdit]);
   useEffect(() => {
     const source = isEdit ? detailedExisting : existing;
     if (!source) return;
@@ -1822,21 +1811,25 @@ export default function PatientForm() {
       const payload = { ...p, customData };
       return isEdit ? api.put("/patients/" + id, payload) : api.post("/patients", payload);
     },
-    onSuccess: async (savedPatient: Patient) => {
+    onSuccess: (savedPatient: Patient) => {
+      // The local SQLite transaction has already committed before onSuccess.
+      // Keep navigation responsive by not waiting for optional post-save tasks.
       if (!isEdit && savedPatient?.id) {
-        try {
-          const queueKey = "ortho_lab_ocr_new_patient_queue_v1";
-          const rawQueue = await AsyncStorage.getItem(queueKey);
-          let queued: string[] = [];
-          try { const parsed = rawQueue ? JSON.parse(rawQueue) : []; if (Array.isArray(parsed)) queued = parsed.map(String); } catch {}
-          if (!queued.includes(String(savedPatient.id))) queued.push(String(savedPatient.id));
-          await AsyncStorage.setItem(queueKey, JSON.stringify(queued));
-        } catch {}
+        void (async () => {
+          try {
+            const queueKey = "ortho_lab_ocr_new_patient_queue_v1";
+            const rawQueue = await AsyncStorage.getItem(queueKey);
+            let queued: string[] = [];
+            try { const parsed = rawQueue ? JSON.parse(rawQueue) : []; if (Array.isArray(parsed)) queued = parsed.map(String); } catch {}
+            if (!queued.includes(String(savedPatient.id))) queued.push(String(savedPatient.id));
+            await AsyncStorage.setItem(queueKey, JSON.stringify(queued));
+          } catch {}
+        })();
       }
       void checkAndSendImmediateLowStockAlerts().catch(() => {});
-      qc.invalidateQueries({ queryKey: ["patients"] });
-      qc.invalidateQueries({ queryKey: ["inventory"] });
-      qc.invalidateQueries({ queryKey: ["stats"] });
+      void qc.invalidateQueries({ queryKey: ["patients"] });
+      void qc.invalidateQueries({ queryKey: ["inventory"] });
+      void qc.invalidateQueries({ queryKey: ["stats"] });
       toast(isEdit ? "Record updated." : "Patient saved.", "success");
       router.back();
     },
@@ -1879,6 +1872,7 @@ export default function PatientForm() {
 
   const canEdit = !!user?.canEditPatients || user?.role === "admin";
   const onSave = () => {
+    if (save.isPending) return;
     if (!canEdit && isEdit) { toast("You do not have permission to edit patient records.", "error"); return; }
     if (!p.name.trim() && !p.mrNo.trim()) { toast("Enter at least an MRNo or patient name.", "error"); return; }
     save.mutate();
