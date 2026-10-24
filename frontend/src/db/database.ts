@@ -1,6 +1,5 @@
 import * as SQLite from "expo-sqlite";
 import { HOLD_INVENTORY_RESET } from "@/src/data/hold-inventory-reset";
-import historicalPatientSource from "@/src/data/historical-patients-2026.json";
 
 export const db = SQLite.openDatabaseSync("ortho-logbook.db", { enableChangeListener: true });
 
@@ -222,7 +221,7 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
   // Clean sidecar image rows only after their corresponding Trash entry expires.
   db.runSync("DELETE FROM deleted_patient_photos WHERE trash_id NOT IN (SELECT id FROM deleted_records)");
   if (!options?.skipInventoryReset) applyHoldInventoryResetOnce();
-  seedHistoricalPatientsOnFirstInstall();
+  removeBundledHistoricalPatientsOnce();
 }
 
 const INVENTORY_RESET_MARKER = "hold-inventory-reset-available-v5";
@@ -232,144 +231,42 @@ const LEGACY_RECEIPT_CLEANUP_MARKER = "legacy-receipt-cleanup-v2";
 const RECEIVE_STOCK_FRESH_START_MARKER = "receive-stock-fresh-start-v1";
 const STOCK_PORTAL_FRESH_START_MARKER = "stock-portal-fresh-start-v1";
 
-const HISTORICAL_PATIENT_SEED_MARKER = "historical-patient-seed-2026-v1";
+const BUNDLED_HISTORICAL_PATIENT_CLEANUP_MARKER = "remove-bundled-historical-patients-2026-v1";
 
 /**
- * Merge PDF-derived historical patients once. This also runs on existing installs
- * that missed the earlier seed. Existing patient rows are never updated/deleted;
- * matching rows are skipped and only missing records are inserted.
+ * Remove only the one-time PDF-import seed rows shipped by older app versions.
+ * Every row created by that seed has customData.sourceDateDmy. User-created
+ * patient rows without that explicit source marker are never touched.
  */
-function seedHistoricalPatientsOnFirstInstall() {
+function removeBundledHistoricalPatientsOnce() {
   const marker = db.getFirstSync<any>(
     "SELECT value FROM app_meta WHERE key=? LIMIT 1",
-    [HISTORICAL_PATIENT_SEED_MARKER],
+    [BUNDLED_HISTORICAL_PATIENT_CLEANUP_MARKER],
   );
   if (marker?.value === "done") return;
-  // Recover the "skipped-*" markers written by the previous seed implementation.
-  db.runSync("INSERT OR REPLACE INTO app_meta (key,value) VALUES (?,?)", [HISTORICAL_PATIENT_SEED_MARKER, "pending"]);
 
-  const rows = (historicalPatientSource as any)?.patients;
-  if (!Array.isArray(rows) || rows.length !== 437) {
-    console.error("[database] Historical patient seed refused: bundled source count is invalid.");
-    return;
-  }
-
-  const prepared: any[] = [];
-  for (let index = 0; index < rows.length; index++) {
-    const row = rows[index] || {};
-    const name = String(row.name ?? "").trim();
-    const rawDmy = String(row.sourceDateDmy ?? "").trim();
-    const dateMatch = rawDmy.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-    if (!name || !dateMatch) {
-      console.error("[database] Historical patient seed refused: missing name or invalid DD/MM/YYYY date.");
-      return;
-    }
-    const day = Number(dateMatch[1]);
-    const month = Number(dateMatch[2]);
-    const year = Number(dateMatch[3]);
-    const calendarDate = new Date(Date.UTC(year, month - 1, day));
-    if (calendarDate.getUTCFullYear() !== year || calendarDate.getUTCMonth() !== month - 1 || calendarDate.getUTCDate() !== day) {
-      console.error("[database] Historical patient seed refused: impossible calendar date.");
-      return;
-    }
-    const date = String(year) + "-" + String(month).padStart(2, "0") + "-" + String(day).padStart(2, "0");
-    if (date !== String(row.date ?? "").trim()) {
-      console.error("[database] Historical patient seed refused: DD/MM/YYYY and ISO dates do not match.");
-      return;
-    }
-
-    const customData: Record<string, string> = {};
-    const sourceSerial = String(row.sourceSerialNumber ?? "").trim();
-    const sourceMrNoRaw = String(row.sourceMrNoRaw ?? "").trim();
-    const sourcePage = row.sourcePage == null ? "" : String(row.sourcePage).trim();
-    const reviewFlags = Array.isArray(row.sourceReviewFlags)
-      ? row.sourceReviewFlags.map((flag: any) => String(flag ?? "").trim()).filter(Boolean)
-      : [];
-    if (sourceSerial) customData.sourceSerialNumber = sourceSerial;
-    if (sourceMrNoRaw) customData.sourceMrNoRaw = sourceMrNoRaw;
-    if (rawDmy) customData.sourceDateDmy = rawDmy;
-    if (sourcePage) customData.sourcePdfPage = sourcePage;
-    if (reviewFlags.length) customData.sourceReviewFlags = reviewFlags.join("; ");
-
-    prepared.push({
-      mrNo: String(row.mrNo ?? "").trim(),
-      name,
-      gender: String(row.gender ?? "").trim(),
-      age: String(row.age ?? "").trim(),
-      diagnosis: String(row.diagnosis ?? "").trim(),
-      procedureName: String(row.procedure ?? "").trim(),
-      procedureII: String(row.procedureII ?? "").trim(),
-      address: String(row.address ?? "").trim(),
-      fileName: String(row.fileName ?? "").trim() || name,
-      date,
-      customData,
-    });
-  }
-
-  const now = new Date().toISOString();
-  const newId = () => Math.random().toString(36).slice(2) + Date.now().toString(36) + Math.random().toString(36).slice(2);
   try {
     db.withTransactionSync(() => {
-      let insertedCount = 0;
-      let skippedExistingCount = 0;
-      for (const row of prepared) {
-        // Match by identity/date only; never overwrite a pre-existing patient.
-        // A blank source MR number can match a row whose MR was manually corrected.
-        const existing = db.getFirstSync<any>(
-          "SELECT id FROM patients WHERE date=? AND LOWER(TRIM(name))=LOWER(TRIM(?)) AND (LOWER(TRIM(COALESCE(mr_no,'')))=LOWER(TRIM(?)) OR ?='' OR TRIM(COALESCE(mr_no,''))='') AND LOWER(TRIM(COALESCE(diagnosis,'')))=LOWER(TRIM(?)) AND LOWER(TRIM(COALESCE(procedure,'')))=LOWER(TRIM(?)) AND LOWER(TRIM(COALESCE(procedure_ii,'')))=LOWER(TRIM(?)) LIMIT 1",
-          [row.date, row.name, row.mrNo, row.mrNo, row.diagnosis, row.procedureName, row.procedureII],
-        );
-        if (existing?.id) {
-          skippedExistingCount++;
-          continue;
-        }
-        const patientId = newId();
-        // Implant fields are intentionally blank. This function makes no inventory,
-        // stock receipt, movement, or patient-implant relation writes.
-        const implant = "";
-        const implantII = "";
-        const photoUri = "";
-        const photosJson = "[]";
-        db.runSync(
-          "INSERT INTO patients (id,mr_no,name,gender,age,diagnosis,procedure,procedure_ii,implant,implant_ii,implant_id,implant_ii_id,address,file_name,photo_uri,photos_json,custom_data_json,date,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-          [
-            patientId, row.mrNo, row.name, row.gender, row.age, row.diagnosis,
-            row.procedureName, row.procedureII, implant, implantII, null, null,
-            row.address, row.fileName, photoUri, photosJson,
-            JSON.stringify(row.customData), row.date, now, null,
-          ],
-        );
-        const snapshot = {
-          id: patientId,
-          mrNo: row.mrNo,
-          name: row.name,
-          gender: row.gender,
-          age: row.age,
-          diagnosis: row.diagnosis,
-          procedure: row.procedureName,
-          procedureII: row.procedureII,
-          implant,
-          implantII,
-          address: row.address,
-          fileName: row.fileName,
-          date: row.date,
-          customData: row.customData,
-        };
-        db.runSync(
-          "INSERT INTO patient_history (id,patient_id,user_id,action,snapshot_json,created_at) VALUES (?,?,?,?,?,?)",
-          [newId(), patientId, null, "import", JSON.stringify(snapshot), now],
-        );
-        insertedCount++;
+      const seededRows = db.getAllSync<any>(
+        "SELECT id FROM patients WHERE json_valid(custom_data_json) AND json_type(custom_data_json, '$.sourceDateDmy') = 'text'",
+      );
+      const ids = seededRows.map((row) => String(row.id || "")).filter(Boolean);
+      for (const patientId of ids) {
+        db.runSync("DELETE FROM patient_history WHERE patient_id=?", [patientId]);
+        db.runSync("DELETE FROM patient_implants WHERE patient_id=?", [patientId]);
+        db.runSync("DELETE FROM patients WHERE id=?", [patientId]);
       }
-      db.runSync("INSERT OR REPLACE INTO app_meta (key,value) VALUES (?,?)", [HISTORICAL_PATIENT_SEED_MARKER, "done"]);
-      console.info("[database] Historical PDF patient merge complete:", { inserted: insertedCount, skippedExisting: skippedExistingCount });
+      db.runSync(
+        "INSERT OR REPLACE INTO app_meta (key,value) VALUES (?,?)",
+        [BUNDLED_HISTORICAL_PATIENT_CLEANUP_MARKER, "done"],
+      );
+      console.info("[database] Removed bundled PDF-seeded patient rows:", ids.length);
     });
   } catch (error) {
-    // SQLite rolls back the batch; pending remains so a future launch can retry safely.
-    console.error("[database] Historical patient first-install seed failed:", error);
+    // Leave the marker unset so the narrow cleanup can retry on next startup.
+    console.error("[database] Bundled historical patient cleanup failed:", error);
   }
 }
-
 
 export function markInventoryResetDone() {
   db.runSync("INSERT OR REPLACE INTO app_meta (key,value) VALUES (?,?)", [INVENTORY_RESET_MARKER, "done"]);
