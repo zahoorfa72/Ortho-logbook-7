@@ -2837,7 +2837,7 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
   // Only today's journal is read/updated, so even a very long history of prior
   // changes can never make an ordinary patient save deserialize one huge file.
   const historySince = String(base.modifiedTime || "");
-  const journalFileName = "Ortho Logbook Incremental " + new Date().toISOString().slice(0, 10) + ".orbackup";
+  const journalFileName = "Ortho Logbook Incremental " + new Date().toISOString().slice(0, 10) + "-" + String(base.id).slice(-8) + ".orbackup";
   const dailyJournalFile = await findBackupByName(journalFileName);
   let journalId: string | undefined;
   let previousJournal: any = null;
