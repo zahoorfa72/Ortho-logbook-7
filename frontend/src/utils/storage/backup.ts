@@ -1123,8 +1123,8 @@ export async function exportIncrementalBackupData(changedTables: string[], onPro
  // tombstones. After reinstall or master replacement, fall back to append-only
  // rows; the journal applies these without deleting master-only records.
  const canDiff = !!previous && (!baselineKey || previous.baselineKey === baselineKey);
- const cachedPatientPhotos = !!previous && Object.keys(previous.photoSources || {}).some((key) => !key.startsWith("images:"));
- const cachedHistoryPhotos = !!previous && Object.keys(previous.photoSources || {}).some((key) => key.startsWith("images:patientHistory:"));
+ const cachedPatientPhotos = canDiff && Object.keys(previous?.photoSources || {}).some((key) => !key.startsWith("images:"));
+ const cachedHistoryPhotos = canDiff && Object.keys(previous?.photoSources || {}).some((key) => key.startsWith("images:patientHistory:"));
  const tables = Array.from(new Set([
    ...requestedTables,
    ...(cachedPatientPhotos ? ["patients"] : []),
