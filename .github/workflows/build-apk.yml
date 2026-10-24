@@ -95,12 +95,6 @@ jobs:
             yarn install --ignore-scripts
           fi
 
-      # Dependencies are installed with --ignore-scripts above, so run the required
-      # Expo SQLite Android crash patch explicitly before native prebuild.
-      - name: Apply Android SQLite crash patch
-        working-directory: frontend
-        run: node ./scripts/patch-expo-sqlite-android.js
-
       - name: Install ExecuTorch native XNNPACK libraries
         working-directory: frontend
         run: node ../node_modules/react-native-executorch/scripts/download-libs.js
@@ -192,13 +186,15 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p out
-          shopt -s nullglob
-          APKS=(frontend/android/app/build/outputs/apk/release/*.apk)
-          if [ ${#APKS[@]} -eq 0 ]; then
-            echo "::error::No APK was produced"
+          APK_PATH="$(find frontend/android/app/build/outputs -type f -name '*.apk' -print -quit)"
+          if [ -z "$APK_PATH" ]; then
+            echo "::error::No APK found under frontend/android/app/build/outputs"
+            find frontend/android/app/build/outputs -maxdepth 6 -type f -print || true
             exit 1
           fi
-          cp "${APKS[0]}" out/ortho-logbook.apk
+          cp "$APK_PATH" out/ortho-logbook.apk
+          test -s out/ortho-logbook.apk
+          ls -lh out/ortho-logbook.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
