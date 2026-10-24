@@ -2,7 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { GoogleSignin, statusCodes } from "@react-native-google-signin/google-signin";
 import { NativeModules, Platform } from "react-native";
 import * as FileSystem from "expo-file-system/legacy";
-import { exportUnencryptedBackup, exportUnencryptedBackupData, exportIncrementalBackup, exportIncrementalBackupData, prepareIncrementalSnapshotCacheFromBackupData, commitIncrementalSnapshotCache, pruneBackupPhotoAssets, type BackupFilter } from "@/src/utils/storage/backup";
+import { exportUnencryptedBackup, exportUnencryptedBackupData, exportIncrementalBackup, exportIncrementalBackupData, prepareIncrementalSnapshotCacheFromBackupData, commitIncrementalSnapshotCache, pruneBackupPhotoAssets, hasIncrementalSnapshotCacheForBaseline, type BackupFilter } from "@/src/utils/storage/backup";
 import { markBackupTaken } from "@/src/utils/backup-reminder";
 import { storage } from "@/src/utils/storage";
 import { db, initializeDatabase } from "@/src/db/database";
@@ -2851,13 +2851,43 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
         journalId = String(dailyJournalFile.id);
         previousJournal = candidate;
         historyExcludedIds = Array.isArray(candidate.patientHistory)
-          ? Array.from(new Set<string>(candidate.patientHistory.map((row: any) => String(row?.id || "")).filter(Boolean)))
+          ? candidate.patientHistory.map((row: any) => String(row?.id || "")).filter(Boolean)
           : [];
       }
     } catch (error) {
       console.warn("[drive-backup] today's incremental journal could not be read; preserving it and starting a new baseline-scoped daily file", error);
     }
   }
+
+  // When the phone was reinstalled, the local diff cache may be gone. Rebuild
+  // only the history-ID index from small daily journals belonging to this
+  // exact master, rather than deserializing the legacy all-time journal or
+  // rereading every local photo-heavy history snapshot.
+  if (!(await hasIncrementalSnapshotCacheForBaseline(baselineKey))) {
+    const baseTime = Date.parse(String(base.modifiedTime || ""));
+    const baselineSuffix = "-" + String(base.id).slice(-8) + ".orbackup";
+    const historicalJournals = (await listIncrementalFiles())
+      .filter((item: any) => item?.id &&
+        String(item.name || "").startsWith("Ortho Logbook Incremental ") &&
+        String(item.name || "").endsWith(baselineSuffix) &&
+        String(item.id) !== String(dailyJournalFile?.id || "") &&
+        (!Number.isFinite(baseTime) || Date.parse(String(item.modifiedTime || "")) > baseTime))
+      .sort((a: any, b: any) => Date.parse(String(a.modifiedTime || "")) - Date.parse(String(b.modifiedTime || "")));
+
+    for (let batchStart = 0; batchStart < historicalJournals.length; batchStart += 3) {
+      const batch = historicalJournals.slice(batchStart, batchStart + 3);
+      const rows = await Promise.all(batch.map(async (item: any) => {
+        const saved = await downloadDriveJsonValidated(String(item.id), onProgress);
+        if (!saved || saved.app !== "Ortho Logbook" || saved.incremental !== true ||
+            String(saved._baselineKey || "") !== baselineKey || !Array.isArray(saved.changedTables)) return [];
+        return Array.isArray(saved.patientHistory)
+          ? saved.patientHistory.map((row: any) => String(row?.id || "")).filter(Boolean)
+          : [];
+      }));
+      for (const group of rows) historyExcludedIds.push(...group);
+    }
+  }
+  historyExcludedIds = Array.from(new Set(historyExcludedIds));
 
   let delta: any;
   if (canStreamIncremental) {
