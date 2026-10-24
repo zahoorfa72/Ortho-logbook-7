@@ -13,6 +13,7 @@ import { extractLabReportDate, hasKnownLabTestName, isLabMetadataLine, isLikelyL
 import { triggerAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-backup";
 import { detectScreeningStatuses, detectCustomScreeningStatus } from "@/src/utils/screening-status";
 import { buildPerspectiveWarpHtml } from "@/src/utils/perspective-warp";
+import { scanPatientDocuments } from "@/src/utils/document-scanner";
 import { recordDiagnosticError, recordDiagnosticEvent } from "@/src/utils/problem-report";
 import { Dimensions } from "react-native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -1281,8 +1282,29 @@ export default function PatientForm() {
     setExistingScanPickerVisible(true);
   };
 
-  const addFromCamera = () => {
-    void scanWithCameraDocuments();
+  const addFromCamera = async () => {
+    // Use the native document scanner that was in the stable patient-photo flow.
+    // The newer in-app CameraView path introduced extra full-resolution bitmap
+    // allocations (capture -> persist/compress -> perspective editor) on Android.
+    // Keep patient photos private and normalized, but avoid that custom camera path.
+    if (photoBusy || cameraOpen || imagePickerOpening.current) return;
+    imagePickerOpening.current = true;
+    setPhotoBusy(true);
+    try {
+      const scannedUris = await scanPatientDocuments();
+      if (!scannedUris.length) return;
+      const permanentUris: string[] = [];
+      for (const uri of scannedUris) permanentUris.push(await persistPhoto(uri));
+      setP(previous => ({ ...previous, photos: [...previous.photos, ...permanentUris] }));
+      toast(permanentUris.length === 1
+        ? "Photo captured and saved."
+        : permanentUris.length + " pages captured and saved.", "success");
+    } catch (e: any) {
+      toast("Could not capture patient photo. " + String(e?.message || e || "Please try again."), "error");
+    } finally {
+      setPhotoBusy(false);
+      imagePickerOpening.current = false;
+    }
   };
 
   const capturePatientPhoto = async () => {
