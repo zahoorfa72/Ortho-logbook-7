@@ -56,6 +56,29 @@ const DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder";
 const DRIVE_API = "https://www.googleapis.com/drive/v3/files";
 const DRIVE_UPLOAD = "https://www.googleapis.com/upload/drive/v3/files";
 
+/** Merge metadata-only restore rows without discarding legacy history-photo copies. */
+function mergeRestoredBackupRow(table: string, existing: any, incoming: any): any {
+  if (table === "patients" && existing &&
+      !Object.prototype.hasOwnProperty.call(incoming, "photo_uri") &&
+      !Object.prototype.hasOwnProperty.call(incoming, "photos_json")) {
+    return { ...existing, ...incoming };
+  }
+  if (table === "patientHistory" && existing &&
+      typeof existing.snapshot_json === "string" &&
+      typeof incoming?.snapshot_json === "string") {
+    const priorSnapshot = existing.snapshot_json;
+    const incomingSnapshot = incoming.snapshot_json;
+    const hasEmbeddedPhoto = (value: string) =>
+      /data:image\\//i.test(value) || /__ORTHO_PHOTO_REF__:[A-Za-z0-9:_-]+/.test(value);
+    // Patient-history rows are immutable audit snapshots. If a newer journal
+    // carries only metadata, retain the previous snapshot's embedded images.
+    if (hasEmbeddedPhoto(priorSnapshot) && !hasEmbeddedPhoto(incomingSnapshot)) {
+      return { ...existing, ...incoming, snapshot_json: priorSnapshot };
+    }
+  }
+  return incoming;
+}
+
 let configured = false;
 let accessTokenInFlight: Promise<string> | null = null;
 
@@ -473,13 +496,7 @@ export async function restoreGoogleDriveBackupById(fileId: string, onProgress?: 
         for (const row of delta[table]) {
           const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
           const existing = merged.get(key);
-          if (table === "patients" && existing &&
-              !Object.prototype.hasOwnProperty.call(row, "photo_uri") &&
-              !Object.prototype.hasOwnProperty.call(row, "photos_json")) {
-            merged.set(key, { ...existing, ...row });
-          } else {
-            merged.set(key, row);
-          }
+          merged.set(key, mergeRestoredBackupRow(table, existing, row));
         }
         // Apply only explicitly parsed deletion tombstones from a damaged journal;
         // missing rows in a truncated array alone are not proof of deletion.
@@ -499,13 +516,7 @@ export async function restoreGoogleDriveBackupById(fileId: string, onProgress?: 
         for (const row of delta[table]) {
           const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
           const existing = merged.get(key);
-          if (table === "patients" && existing &&
-              !Object.prototype.hasOwnProperty.call(row, "photo_uri") &&
-              !Object.prototype.hasOwnProperty.call(row, "photos_json")) {
-            merged.set(key, { ...existing, ...row });
-          } else {
-            merged.set(key, row);
-          }
+          merged.set(key, mergeRestoredBackupRow(table, existing, row));
         }
         composed[table] = Array.from(merged.values());
       } else {
@@ -3119,13 +3130,7 @@ export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) 
             for (const row of delta[table]) {
               const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
               const existing = merged.get(key);
-              if (table === "patients" && existing &&
-                  !Object.prototype.hasOwnProperty.call(row, "photo_uri") &&
-                  !Object.prototype.hasOwnProperty.call(row, "photos_json")) {
-                merged.set(key, { ...existing, ...row });
-              } else {
-                merged.set(key, row);
-              }
+              merged.set(key, mergeRestoredBackupRow(table, existing, row));
             }
             composed[table] = Array.from(merged.values());
           } else if (delta._recoveredFromDamage === true && Array.isArray(composed[table])) {
@@ -3139,13 +3144,7 @@ export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) 
             for (const row of delta[table]) {
               const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
               const existing = merged.get(key);
-              if (table === "patients" && existing &&
-                  !Object.prototype.hasOwnProperty.call(row, "photo_uri") &&
-                  !Object.prototype.hasOwnProperty.call(row, "photos_json")) {
-                merged.set(key, { ...existing, ...row });
-              } else {
-                merged.set(key, row);
-              }
+              merged.set(key, mergeRestoredBackupRow(table, existing, row));
             }
             // Apply explicit tombstones recovered as a complete JSON property.
             // A missing row in a damaged/truncated array is not itself a tombstone.
