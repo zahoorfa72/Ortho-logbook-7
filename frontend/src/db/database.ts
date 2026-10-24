@@ -247,20 +247,26 @@ function removeBundledHistoricalPatientsOnce() {
 
   try {
     db.withTransactionSync(() => {
-      const seededRows = db.getAllSync<any>(
-        "SELECT id FROM patients WHERE json_valid(custom_data_json) AND json_type(custom_data_json, '$.sourceDateDmy') = 'text'",
+      // Use a guarded CASE expression rather than json_valid(...) AND json_type(...):
+      // SQL does not guarantee AND evaluation order for malformed legacy JSON.
+      // Bulk deletes also avoid hundreds of change-listener events on startup.
+      const seededPredicate = "CASE WHEN json_valid(custom_data_json) THEN json_type(custom_data_json, '$.sourceDateDmy') ELSE NULL END = 'text'";
+      const countRow = db.getFirstSync<any>(
+        "SELECT COUNT(*) AS count FROM patients WHERE " + seededPredicate,
       );
-      const ids = seededRows.map((row) => String(row.id || "")).filter(Boolean);
-      for (const patientId of ids) {
-        db.runSync("DELETE FROM patient_history WHERE patient_id=?", [patientId]);
-        db.runSync("DELETE FROM patient_implants WHERE patient_id=?", [patientId]);
-        db.runSync("DELETE FROM patients WHERE id=?", [patientId]);
-      }
+      const removedCount = Math.max(0, Number(countRow?.count || 0));
+      db.runSync(
+        "DELETE FROM patient_history WHERE patient_id IN (SELECT id FROM patients WHERE " + seededPredicate + ")",
+      );
+      db.runSync(
+        "DELETE FROM patient_implants WHERE patient_id IN (SELECT id FROM patients WHERE " + seededPredicate + ")",
+      );
+      db.runSync("DELETE FROM patients WHERE " + seededPredicate);
       db.runSync(
         "INSERT OR REPLACE INTO app_meta (key,value) VALUES (?,?)",
         [BUNDLED_HISTORICAL_PATIENT_CLEANUP_MARKER, "done"],
       );
-      console.info("[database] Removed bundled PDF-seeded patient rows:", ids.length);
+      console.info("[database] Removed bundled PDF-seeded patient rows:", removedCount);
     });
   } catch (error) {
     // Leave the marker unset so the narrow cleanup can retry on next startup.
