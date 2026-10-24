@@ -2833,18 +2833,37 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
     !!NativeModules.DriveBackgroundUpload?.startUpload &&
     !!NativeModules.DriveBackgroundUpload?.getStatus;
 
-  // Use the full master's timestamp as the history cutoff. Do not download and
-  // parse the prior global change journal on each save: older builds may have
-  // accumulated hundreds of image-heavy audit snapshots in that single file.
-  // Each new compact delta gets its own Drive file; restore composes all deltas
-  // by timestamp and exact baseline key.
+  // Use a compact daily journal rather than the legacy all-time change file.
+  // Only today's journal is read/updated, so even a very long history of prior
+  // changes can never make an ordinary patient save deserialize one huge file.
   const historySince = String(base.modifiedTime || "");
+  const journalFileName = "Ortho Logbook Incremental " + new Date().toISOString().slice(0, 10) + ".orbackup";
+  const dailyJournalFile = await findBackupByName(journalFileName);
+  let journalId: string | undefined;
+  let previousJournal: any = null;
+  let historyExcludedIds: string[] = [];
+  if (dailyJournalFile?.id) {
+    try {
+      const candidate = await downloadDriveJsonValidated(String(dailyJournalFile.id), onProgress);
+      if (candidate?.incremental === true &&
+          String(candidate._baselineKey || "") === baselineKey &&
+          Array.isArray(candidate.changedTables)) {
+        journalId = String(dailyJournalFile.id);
+        previousJournal = candidate;
+        historyExcludedIds = Array.isArray(candidate.patientHistory)
+          ? Array.from(new Set<string>(candidate.patientHistory.map((row: any) => String(row?.id || "")).filter(Boolean)))
+          : [];
+      }
+    } catch (error) {
+      console.warn("[drive-backup] today's incremental journal could not be read; preserving it and starting a new baseline-scoped daily file", error);
+    }
+  }
 
   let delta: any;
   if (canStreamIncremental) {
-    delta = await exportIncrementalBackupData(changedTables, onProgress, baselineKey, historySince);
+    delta = await exportIncrementalBackupData(changedTables, onProgress, baselineKey, historySince, historyExcludedIds);
   } else {
-    delta = JSON.parse(await exportIncrementalBackup(changedTables, onProgress, baselineKey, historySince));
+    delta = JSON.parse(await exportIncrementalBackup(changedTables, onProgress, baselineKey, historySince, historyExcludedIds));
   }
 
   const hasActualChanges = (Array.isArray(delta.changedTables) ? delta.changedTables : []).some((table: string) => {
@@ -2934,12 +2953,14 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
     if (deletedPatientIds.length) await processPendingPatientPdfDeletes(onProgress);
   }
 
-  const allChanges = normalizeForJournal(safeDelta);
+  const allChanges = previousJournal
+    ? mergeIncrementalPayloads(previousJournal, normalizeForJournal(safeDelta))
+    : normalizeForJournal(safeDelta);
+  // Merging is limited to the compact current-day journal, never the legacy
+  // all-time journal. Apply normal append-only sanitization after merging.
+  normalizeForJournal(allChanges);
   allChanges.version = Math.max(Number(allChanges.version || 0), 11);
   pruneBackupPhotoAssets(allChanges);
-  const journalFileName = "Ortho Logbook Incremental " +
-    new Date().toISOString().replace(/[:.]/g, "-") + "-" +
-    Math.random().toString(36).slice(2, 8) + ".orbackup";
 
   let journalResult: any;
   let stagedUri: string | null = null;
@@ -2952,9 +2973,9 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
       if (!info.exists || typeof info.size !== "number" || info.size <= 0) {
         throw new Error("The incremental journal file is missing or empty. Local data remains unchanged.");
       }
-      journalResult = await uploadStagedJsonFile(stagedUri, info.size, undefined, onProgress, journalFileName);
+      journalResult = await uploadStagedJsonFile(stagedUri, info.size, journalId, onProgress, journalFileName);
     } else {
-      journalResult = await uploadContent(JSON.stringify(allChanges), undefined, onProgress, journalFileName);
+      journalResult = await uploadContent(JSON.stringify(allChanges), journalId, onProgress, journalFileName);
     }
   } finally {
     if (stagedUri) { try { await FileSystem.deleteAsync(stagedUri, { idempotent: true }); } catch {} }
