@@ -86,7 +86,19 @@ const snapshot = (p: any) => JSON.stringify(p);
 // limits during an ordinary patient save or edit.
 const patientAuditSnapshot = (p: any) => {
   if (!p || typeof p !== "object" || Array.isArray(p)) return snapshot(p);
-  const safe = { ...p, photoUri: "", photos: [] as string[] };
+  // Preserve ordinary private-file references and the number of photos in the
+  // human-readable audit snapshot, but never duplicate embedded image payloads.
+  const omitEmbeddedImage = (value: unknown) =>
+    typeof value === "string" && /^data:image\//i.test(value)
+      ? "[embedded image omitted]"
+      : String(value ?? "");
+  const safe = {
+    ...p,
+    photoUri: omitEmbeddedImage(p.photoUri),
+    photos: Array.isArray(p.photos)
+      ? p.photos.map(omitEmbeddedImage).filter(Boolean)
+      : [],
+  };
   delete (safe as any).photo_uri;
   delete (safe as any).photos_json;
   return JSON.stringify(safe);
@@ -515,7 +527,15 @@ async function savePatient(p: Patient, editing: boolean) {
       // patient's metadata and implants. Reading embedded legacy photos into JS
       // during an edit can exhaust Android memory before the update can finish.
       const old = db.getFirstSync<any>(
-        "SELECT id,mr_no,name,gender,age,diagnosis,procedure,procedure_ii,implant,implant_ii,implant_id,implant_ii_id,address,file_name,custom_data_json,date,created_at,created_by,updated_at,updated_by FROM patients WHERE id=?",
+        `SELECT id,mr_no,name,gender,age,diagnosis,procedure,procedure_ii,implant,implant_ii,implant_id,implant_ii_id,address,file_name,custom_data_json,date,created_at,created_by,updated_at,updated_by,
+          CASE WHEN photo_uri LIKE 'data:image/%' THEN '[embedded image omitted]' ELSE photo_uri END AS photo_uri,
+          CASE WHEN json_valid(photos_json) THEN (
+            SELECT COALESCE(json_group_array(
+              CASE WHEN type='text' AND value LIKE 'data:image/%' THEN '[embedded image omitted]' ELSE value END
+            ), '[]')
+            FROM json_each(photos_json) WHERE type='text'
+          ) ELSE '[]' END AS photos_json
+         FROM patients WHERE id=?`,
         [patientId],
       );
       if (!old) throw new Error("Patient not found.");
