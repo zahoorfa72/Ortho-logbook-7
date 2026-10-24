@@ -1,9 +1,7 @@
 import * as SQLite from "expo-sqlite";
 import { HOLD_INVENTORY_RESET } from "@/src/data/hold-inventory-reset";
 
-// Keep one dedicated native handle for the app-wide singleton. This avoids the Android
-// expo-sqlite 57 cached-handle/shared-wrapper lifetime bug when the same file is opened elsewhere.
-export const db = SQLite.openDatabaseSync("ortho-logbook.db", { enableChangeListener: true, useNewConnection: true });
+export const db = SQLite.openDatabaseSync("ortho-logbook.db");
 
 function addColumn(table: string, column: string, definition: string) {
   try { db.execSync(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`); } catch {}
