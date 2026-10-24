@@ -2827,7 +2827,6 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
   }
 
   const baselineKey = String(base.id) + ":" + String(base.modifiedTime || "");
-  const JOURNAL_NAME = "Ortho Logbook Backup Changes.orbackup";
   const canStreamIncremental = Platform.OS === "android" &&
     !!NativeModules.DriveBackgroundUpload?.writeTextChunk &&
     !!NativeModules.DriveBackgroundUpload?.startUpload &&
