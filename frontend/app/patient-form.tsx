@@ -762,6 +762,10 @@ export default function PatientForm() {
     implants:(prev.implants || []).map(x => x.id === id ? { ...x, quantity:Math.max(1,x.quantity + delta) } : x),
   }));
   const [ready, setReady] = useState(false);
+  // Expo Router can reuse this screen instance across edit -> new-patient navigation.
+  // Do not allow Save until the draft belongs to the current route and has been initialized.
+  const initializedFormKey = useRef<string | null>(null);
+  const formRouteKey = isEdit ? "edit:" + String(id || "") : "new";
   // Patient entry must stay responsive even when a draft contains many
   // photographs. OCR is deliberately user-triggered (Scan/Rescan lab photos)
   // for both new and existing patients so it cannot compete with saving or
@@ -773,8 +777,8 @@ export default function PatientForm() {
     // draft so its hidden photos/lab-review data cannot be normalized or saved
     // into the new record.
     if (!isEdit) {
+      setReady(false);
       setP(empty());
-      setReady(true);
       setLabOcrText("");
       setLabOcrFindings([]);
       setLabManualReviews([]);
@@ -794,6 +798,8 @@ export default function PatientForm() {
       setExistingScanPickerVisible(false);
       setCameraOpen(false);
       setDocumentScannerMode(false);
+      initializedFormKey.current = "new";
+      setReady(true);
       return;
     }
     const source = detailedExisting;
@@ -827,6 +833,7 @@ export default function PatientForm() {
       mp: readFlag((source as any).mp, customData.mp),
       dengue: readFlag((source as any).dengue, customData.dengue),
     });
+    initializedFormKey.current = "edit:" + String(id || "");
     setReady(true);
   }, [isEdit, id, detailedExisting]);
 
@@ -1962,6 +1969,12 @@ export default function PatientForm() {
   const canEdit = !!user?.canEditPatients || user?.role === "admin";
   const onSave = () => {
     if (save.isPending) return;
+    // The first render after navigation may still contain the previous patient's
+    // photos or draft. Reject that frame rather than normalizing/saving stale data.
+    if (!ready || initializedFormKey.current !== formRouteKey) {
+      toast("Patient form is still preparing. Please wait a moment and tap Save again.", "error");
+      return;
+    }
     if (!canEdit && isEdit) { toast("You do not have permission to edit patient records.", "error"); return; }
     if (!p.name.trim() && !p.mrNo.trim()) { toast("Enter at least an MRNo or patient name.", "error"); return; }
     save.mutate();
