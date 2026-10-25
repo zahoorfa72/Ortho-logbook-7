@@ -474,6 +474,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
    asyncStorageSettings: await captureAsyncStorageSettings(),
  } : undefined;
  const pf=whereForFilter(filter, "date");
+ const patientMetadataColumns = "id,mr_no,name,gender,age,diagnosis,procedure,procedure_ii,implant,implant_ii,implant_id,implant_ii_id,address,file_name,date,created_at,created_by,updated_at,updated_by" + (includePatientImages ? ",custom_data_json" : "");
  let patients: any[] = [];
  if (include("patients")) {
    if (filter.type === "month" || filter.type === "year") {
@@ -481,7 +482,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
      // Include patient records for anyone with history created in this period,
      // even if their original admit date was earlier.
      patients = db.getAllSync<any>(
-       "SELECT id,mr_no,name,gender,age,diagnosis,procedure,procedure_ii,implant,implant_ii,implant_id,implant_ii_id,address,file_name,custom_data_json,date,created_at,created_by,updated_at,updated_by FROM patients WHERE date LIKE ? OR id IN (SELECT DISTINCT patient_id FROM patient_history WHERE created_at LIKE ?) ORDER BY date DESC, created_at DESC",
+       `SELECT ${patientMetadataColumns} FROM patients WHERE date LIKE ? OR id IN (SELECT DISTINCT patient_id FROM patient_history WHERE created_at LIKE ?) ORDER BY date DESC, created_at DESC`,
        [pattern, pattern],
      );
    } else if (filter.type === "halfYear") {
@@ -491,11 +492,11 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
        // A half-year snapshot contains only patients whose own admission/entry
        // date belongs to that half-year. A later edit/history event must not
        // pull an older patient into H2 and make the H2 backup look all-time.
-       "SELECT id,mr_no,name,gender,age,diagnosis,procedure,procedure_ii,implant,implant_ii,implant_id,implant_ii_id,address,file_name,custom_data_json,date,created_at,created_by,updated_at,updated_by FROM patients" + patientFilter.sql + " ORDER BY date DESC, created_at DESC",
+       `SELECT ${patientMetadataColumns} FROM patients${patientFilter.sql} ORDER BY date DESC, created_at DESC`,
        patientFilter.args,
      );
    } else {
-     patients = db.getAllSync<any>(`SELECT id,mr_no,name,gender,age,diagnosis,procedure,procedure_ii,implant,implant_ii,implant_id,implant_ii_id,address,file_name,custom_data_json,date,created_at,created_by,updated_at,updated_by FROM patients${pf.sql} ORDER BY date DESC, created_at DESC`, pf.args);
+     patients = db.getAllSync<any>(`SELECT ${patientMetadataColumns} FROM patients${pf.sql} ORDER BY date DESC, created_at DESC`, pf.args);
    }
  }
  const selectedPatientIds = new Set(patients.map((p:any)=>String(p.id)));
@@ -512,10 +513,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
      const archivedImage = archiveByPatientId.get(patientId);
      const archiveMatchesRevision = !!archivedImage &&
        String(archivedImage.patientUpdatedAt || "") === String(patient.updated_at || "");
-     let backupCustomData = patient.custom_data_json;
-     if (typeof backupCustomData === "string" && backupCustomData) {
-       try { backupCustomData = JSON.stringify(stripPatientPhotosDeep(JSON.parse(backupCustomData))); } catch {}
-     }
+     const backupCustomData = readJsonColumnWithoutPhotoPayload("patients", "custom_data_json", patientId);
      embeddedPatients.push({
        ...patient, custom_data_json: backupCustomData, photo_uri: "", photos_json: "",
        ...(archiveMatchesRevision ? {
@@ -609,11 +607,12 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
      // Yield to React Native so the progress message and cancel/back UI remain responsive.
      await new Promise<void>((resolve) => setTimeout(resolve, 0));
    }
-   const snapshotSelect = includePatientImages
-     ? "snapshot_json"
-     : "CASE WHEN json_valid(snapshot_json) THEN json_remove(snapshot_json, '$.photos', '$.photos_json', '$.photoUri', '$.photo_uri', '$.patient.photos', '$.patient.photos_json', '$.patient.photoUri', '$.patient.photo_uri') ELSE '{}' END AS snapshot_json";
-   const snapshotRow = db.getFirstSync<any>(`SELECT ${snapshotSelect} FROM patient_history WHERE id=?`, [h.id]);
-   const rawSnapshot = String(snapshotRow?.snapshot_json || "");
+   // Strip nested legacy images inside SQLite before a multi-megabyte JSON
+    // snapshot crosses into Hermes. Fixed JSON paths miss older PDF-import shapes.
+    const snapshotRow = includePatientImages
+      ? db.getFirstSync<any>("SELECT snapshot_json FROM patient_history WHERE id=? LIMIT 1", [h.id])
+      : { snapshot_json: readJsonColumnWithoutPhotoPayload("patient_history", "snapshot_json", String(h.id)) };
+    const rawSnapshot = String(snapshotRow?.snapshot_json || "");
    if (!includePatientImages) {
      try {
        const snapshot = JSON.parse(rawSnapshot || "{}");
@@ -974,6 +973,60 @@ function stripPatientPhotoPayload(row: any): any {
 }
 
 // Strip patient photo fields recursively, but retain inventory bills/documents.
+// Remove legacy embedded image payloads inside SQLite, not after JSON.parse in
+// JavaScript. Older backups can nest photo fields at arbitrary depths; parsing
+// an unfiltered multi-megabyte snapshot can exhaust Hermes' JavaScript heap.
+function readJsonColumnWithoutPhotoPayload(
+  table: "patients" | "patient_history",
+  column: "custom_data_json" | "snapshot_json",
+  rowId: string,
+): string {
+  const allowedColumn = table === "patients" ? "custom_data_json" : "snapshot_json";
+  if (column !== allowedColumn || !rowId) return "{}";
+  const jsonExpr = "CASE WHEN json_valid(source." + column + ") THEN source." + column + " ELSE '{}' END";
+  const pathRows = db.getAllSync<any>(
+    "SELECT node.fullkey AS path FROM " + table + " AS source, json_tree(" + jsonExpr + ") AS node " +
+    "WHERE source.id=? AND (" +
+    "lower(CAST(COALESCE(node.key, '') AS TEXT)) IN (" +
+    "'photos','photos_json','photouri','photo_uri','photo','image','images'," +
+    "'bill_image','bill_files_json','image_data','imagedata','image_base64'," +
+    "'imagebase64','photo_data','photodata','photo_base64','photobase64'," +
+    "'photo_url','photourl','patient_photo','patientphoto','patient_photos'," +
+    "'patientphotos','patient_images','patientimages','attached_images'," +
+    "'attachedimages','scan_images','scanimages') " +
+    "OR lower(CAST(COALESCE(node.key, '') AS TEXT)) LIKE '%photo_uri' " +
+    "OR lower(CAST(COALESCE(node.key, '') AS TEXT)) LIKE '%photouri' " +
+    "OR lower(CAST(COALESCE(node.key, '') AS TEXT)) LIKE '%photo_data' " +
+    "OR lower(CAST(COALESCE(node.key, '') AS TEXT)) LIKE '%photodata' " +
+    "OR lower(CAST(COALESCE(node.key, '') AS TEXT)) LIKE '%photo_base64' " +
+    "OR lower(CAST(COALESCE(node.key, '') AS TEXT)) LIKE '%photobase64' " +
+    "OR lower(CAST(COALESCE(node.key, '') AS TEXT)) LIKE '%image_data' " +
+    "OR lower(CAST(COALESCE(node.key, '') AS TEXT)) LIKE '%imagedata' " +
+    "OR lower(CAST(COALESCE(node.key, '') AS TEXT)) LIKE '%image_base64' " +
+    "OR lower(CAST(COALESCE(node.key, '') AS TEXT)) LIKE '%imagebase64' " +
+    "OR lower(CAST(COALESCE(node.key, '') AS TEXT)) LIKE '%photos' " +
+    "OR lower(CAST(COALESCE(node.key, '') AS TEXT)) LIKE '%images' " +
+    "OR (node.type='text' AND lower(substr(CAST(node.value AS TEXT),1,11))='data:image/')" +
+    ") ORDER BY length(node.fullkey) ASC",
+    [rowId],
+  );
+  const paths: string[] = [];
+  for (const item of pathRows) {
+    const path = String(item?.path || "");
+    if (!path) continue;
+    if (paths.some(parent => path === parent || path.startsWith(parent + ".") || path.startsWith(parent + "["))) continue;
+    paths.push(path);
+  }
+  const placeholders = paths.map(() => "?").join(",");
+  const expression = paths.length ? "json_remove(" + column + "," + placeholders + ")" : column;
+  const row = db.getFirstSync<any>(
+    "SELECT CASE WHEN json_valid(" + column + ") THEN " + expression + " ELSE '{}' END AS safe_json " +
+    "FROM " + table + " WHERE id=? LIMIT 1",
+    [...paths, rowId],
+  );
+  return String(row?.safe_json || "{}");
+}
+
 function stripPatientPhotosDeep(value: any, key = ""): any {
  if (Array.isArray(value)) return value.map((item) => stripPatientPhotosDeep(item));
  if (!value || typeof value !== "object") {
