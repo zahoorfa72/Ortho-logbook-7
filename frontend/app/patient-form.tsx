@@ -1282,24 +1282,23 @@ export default function PatientForm() {
   };
 
   const addFromCamera = async () => {
-    // Use the native document scanner that was in the stable patient-photo flow.
-    // The newer in-app CameraView path introduced extra full-resolution bitmap
-    // allocations (capture -> persist/compress -> perspective editor) on Android.
-    // Keep patient photos private and normalized, but avoid that custom camera path.
+    // Simple multi-photo camera: capture one or more pictures, then tap Done.
+    // Do not run document scanning, perspective correction, OCR, or WebView image processing here.
     if (photoBusy || cameraOpen || imagePickerOpening.current) return;
     imagePickerOpening.current = true;
     setPhotoBusy(true);
     try {
-      const scannedUris = await scanPatientDocuments();
-      if (!scannedUris.length) return;
-      const permanentUris: string[] = [];
-      for (const uri of scannedUris) permanentUris.push(await persistPhoto(uri));
-      setP(previous => ({ ...previous, photos: [...previous.photos, ...permanentUris] }));
-      toast(permanentUris.length === 1
-        ? "Photo captured and saved."
-        : permanentUris.length + " pages captured and saved.", "success");
+      let permission = cameraPermission;
+      if (!permission?.granted) permission = await requestCameraPermission();
+      if (!permission?.granted) throw new Error("Camera permission is required. Enable it in Android Settings and try again.");
+      setDocumentScannerMode(false);
+      setDocumentScannerTorch(false);
+      setDocumentScannerZoom(0);
+      setDocumentScannerPageCount(0);
+      setCameraReady(false);
+      setCameraOpen(true);
     } catch (e: any) {
-      toast("Could not capture patient photo. " + String(e?.message || e || "Please try again."), "error");
+      toast("Could not open camera. " + String(e?.message || e || "Please try again."), "error");
     } finally {
       setPhotoBusy(false);
       imagePickerOpening.current = false;
@@ -2093,13 +2092,9 @@ export default function PatientForm() {
         </View>
         <View style={styles.photoActions}>
           <PrimaryButton title={"Add Multiple Images from Gallery" + (p.photos.length ? " (+)" : "")} onPress={addFromLibrary} disabled={!imagePickerReady || photoBusy} testID="add-photo-library-button" />
-          <Pressable style={[styles.secondary, photoBusy && { opacity: 0.5 }]} onPress={() => { void scanWithCameraDocuments(); }} disabled={photoBusy || cameraOpen} testID="scan-patient-document-button">
-            <Ionicons name="scan-outline" size={18} color={colors.brandPrimary} />
-            <Text style={styles.secondaryText}> {photoBusy ? "Starting scanner…" : (p.photos.length ? "Scan Existing Photo" : "Open Document Scanner")}</Text>
-          </Pressable>
           <Pressable style={[styles.secondary, photoBusy && { opacity: 0.5 }]} onPress={addFromCamera} disabled={photoBusy || cameraOpen} testID="add-photo-camera-button">
             <Ionicons name="camera" size={18} color={colors.onSurface} />
-            <Text style={styles.secondaryText}> Take & Auto-Scan</Text>
+            <Text style={styles.secondaryText}> {photoBusy ? "Opening camera…" : "Take Photo(s)"}</Text>
           </Pressable>
         </View>
         {p.photos.length > 0 ? (
