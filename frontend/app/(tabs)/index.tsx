@@ -6,7 +6,6 @@ import * as SecureStore from "expo-secure-store";
 import { triggerAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-backup";
 import { evaluateLabResultForReview, extractLabReportDate, isLikelyLabReportText, parseLabReportRows, recognizeLabText, type LabTestDefinition } from "@/src/utils/lab-ocr";
 import { fetchTrustedMedicalTestInfo, isMedicalTestInfoFresh, LAB_TEST_DEFINITIONS_KEY, MEDICAL_INFO_CACHE_KEY, medicalInfoCacheKey, type MedicalTestOnlineInfo } from "@/src/utils/medical-test-info";
-import { generateLocalLabMedicalInfo, getLocalLabModelDownloaded } from "@/src/utils/local-lab-ai";
 import { loadLabVisionSettings, matchCandidateToConfiguredTest, requestLabVisionCandidates } from "@/src/utils/lab-vision";
 import {
   ActivityIndicator,
@@ -544,7 +543,10 @@ export default function Logbook() {
   const loadMedicalInfoForResult = async (testName: string, definition?: LabTestDefinition, resultLabel = "") => {
     const key = medicalInfoCacheKey(testName);
     const existing = definition?.onlineMedicalInfo || medicalInfoCache[key];
-    const localModelReady = await getLocalLabModelDownloaded().catch(() => false);
+    // ExecuTorch loads native runtime code; defer importing it until the user
+    // explicitly opens medical information instead of initializing it at app start.
+    const localLabAI = await import("@/src/utils/local-lab-ai");
+    const localModelReady = await localLabAI.getLocalLabModelDownloaded().catch(() => false);
     const alreadyLocallyGenerated = existing?.modelProvider === "local-gemma4-e2b";
     if (isMedicalTestInfoFresh(existing) && (!localModelReady || alreadyLocallyGenerated)) return;
     setMedicalInfoBusy(true);
@@ -624,7 +626,7 @@ export default function Logbook() {
         }
       }
       const locallyGenerated = localModelReady && trustedFetched
-        ? await generateLocalLabMedicalInfo(
+        ? await localLabAI.generateLocalLabMedicalInfo(
             testName,
             definition?.aliases || "",
             abnormalDirection,
@@ -1353,23 +1355,12 @@ export default function Logbook() {
   }, [labOcrEnabled, saveLabScanState]);
 
   useEffect(() => {
-    if (!labScanStateLoaded || !labOcrEnabled || !labOcrEnabledRef.current || isLoading || !Array.isArray(data)) return;
-    AsyncStorage.getItem(NEW_PATIENT_LAB_SCAN_QUEUE_KEY).then(raw => {
-      let queuedIds: string[] = [];
-      try { const parsed = raw ? JSON.parse(raw) : []; if (Array.isArray(parsed)) queuedIds = parsed.map(String); } catch {}
-      const patientIds = new Set((data || []).map(patient => patient.id));
-      for (const patientId of queuedIds) {
-        if (!patientIds.has(patientId) || autoQueuedPatientIdsRef.current.has(patientId)) continue;
-        requestLabScanRef.current(patientId, true);
-      }
-
-      // Do not automatically re-scan every historical patient when the OCR
-      // pipeline version changes. On large logbooks this can enqueue hundreds
-      // of image reads/OCR jobs at launch and make the whole app feel frozen.
-      // New-patient scans still run from the saved queue, and administrators can
-      // use the existing Retry control to rescan an older patient's current photos.
-    }).catch(() => {});
-  }, [labScanStateLoaded, labOcrEnabled, isLoading, data]);
+    // Older builds persisted a queue that automatically launched native OCR
+    // after saving a new patient and again on startup. It is transient work,
+    // not patient data; discard old pending tasks. Manual Scan/Retry controls
+    // continue to work and never auto-scan patient photos on launch.
+    void AsyncStorage.removeItem(NEW_PATIENT_LAB_SCAN_QUEUE_KEY).catch(() => {});
+  }, []);
 
   const toggleLabResultsHidden = async (id: string) => {
     const next = { ...labResultsHiddenByPatient, [id]: !labResultsHiddenByPatient[id] };

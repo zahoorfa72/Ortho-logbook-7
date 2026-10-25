@@ -1,4 +1,8 @@
-import { recognizeText } from "expo-ocr-kit";
+// Load the native OCR bridge only when an administrator explicitly starts a scan.
+async function recognizeText(uri: string): Promise<any> {
+  const nativeOcr = await import("expo-ocr-kit");
+  return nativeOcr.recognizeText(uri);
+}
 import { Image } from "react-native";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as FileSystem from "expo-file-system/legacy";

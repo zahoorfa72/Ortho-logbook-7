@@ -25,7 +25,6 @@ import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api } from "@/src/api/client";
-import { checkAndSendImmediateLowStockAlerts } from "@/src/utils/low-stock-auto-report";
 import { useAuth } from "@/src/auth/AuthContext";
 import { AutocompleteField, type Suggestion } from "@/src/components/AutocompleteField";
 import { Field } from "@/src/components/Field";
@@ -1928,20 +1927,9 @@ export default function PatientForm() {
     },
     onSuccess: (savedPatient: Patient) => {
       // The local SQLite transaction has already committed before onSuccess.
-      // Keep navigation responsive by not waiting for optional post-save tasks.
-      if (!isEdit && savedPatient?.id) {
-        void (async () => {
-          try {
-            const queueKey = "ortho_lab_ocr_new_patient_queue_v1";
-            const rawQueue = await AsyncStorage.getItem(queueKey);
-            let queued: string[] = [];
-            try { const parsed = rawQueue ? JSON.parse(rawQueue) : []; if (Array.isArray(parsed)) queued = parsed.map(String); } catch {}
-            if (!queued.includes(String(savedPatient.id))) queued.push(String(savedPatient.id));
-            await AsyncStorage.setItem(queueKey, JSON.stringify(queued));
-          } catch {}
-        })();
-      }
-      void checkAndSendImmediateLowStockAlerts().catch(() => {});
+      // Do not launch OCR or inventory-alert jobs in the save callback. Both
+      // need native/database work and can compete with the post-save navigation.
+      // Lab scanning remains available from the explicit Scan/Retry controls.
       void qc.invalidateQueries({ queryKey: ["patients"] });
       void qc.invalidateQueries({ queryKey: ["inventory"] });
       void qc.invalidateQueries({ queryKey: ["stats"] });
