@@ -991,6 +991,11 @@ export default function Logbook() {
         const fullPatient = await api.get<Patient>("/patients/" + patientId);
         if (fullPatient?.id) patient = { ...patient, ...fullPatient };
       } catch {}
+      if (!patient) {
+        saveLabScanState(patientId, { status: "failed", message: "Patient record is not available for lab scanning.", updatedAt: new Date().toISOString() });
+        await removeNewPatientQueueEntry(patientId);
+        return;
+      }
       const photos = [...new Set([...(patient.photos || []), ...((patient as any).photoUri ? [(patient as any).photoUri] : [])])].filter((date): date is string => typeof date === "string" && date.length > 0);
       if (!photos.length) {
         saveLabScanState(patientId, { status: "failed", message: "No saved photos found. Add the lab report photo to this patient, then tap Retry.", updatedAt: new Date().toISOString() });
