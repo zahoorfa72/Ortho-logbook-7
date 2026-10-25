@@ -2,7 +2,7 @@
   "expo": {
     "name": "Ortho Logbook",
     "slug": "ortho-logbook",
-    "version": "1.0.8",
+    "version": "1.0.9",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "orthologbook",
@@ -18,7 +18,7 @@
       },
       "package": "com.sasims.orthologbook",
       "softwareKeyboardLayoutMode": "resize",
-      "versionCode": 9
+      "versionCode": 10
     },
     "web": {
       "bundler": "metro",
@@ -87,10 +87,12 @@
         "expo-build-properties",
         {
           "android": {
-            "minSdkVersion": 26
+            "minSdkVersion": 26,
+            "newArchEnabled": false
           },
           "ios": {
-            "deploymentTarget": "17.0"
+            "deploymentTarget": "17.0",
+            "newArchEnabled": false
           }
         }
       ]
@@ -99,6 +101,6 @@
       "typedRoutes": true
     },
     "description": "Offline-first orthopaedic patient logbook with local records, inventory, statistics and encrypted backup.",
-    "newArchEnabled": true
+    "newArchEnabled": false
   }
 }
