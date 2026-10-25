@@ -7,11 +7,7 @@ import {
 import { setDriveSyncState, setDriveSyncRefreshHandler } from "@/src/utils/storage/drive-sync-status";
 import { storage } from "@/src/utils/storage";
 
-// Batch rapid edits into one sync; this avoids repeated uploads while typing/saving related fields.
 const DEBOUNCE_MS = 7000;
-// The full table list is reserved for first sync and explicit manual refresh.
-// Normal app launches resume only previously queued changes; SQLite change events
-// identify actual writes, and the exporter still compares them with the last snapshot.
 const ALL_SYNC_TABLES = [
   "patients", "procedures", "inventoryCategories", "inventory", "patientImplants",
   "patientCustomFields", "implantRecords", "expenses", "users", "patientHistory",
@@ -45,8 +41,6 @@ const tableMap: Record<string, string> = {
 };
 
 function persistPendingTables(): Promise<void> {
-  // Serialize writes so a slower older AsyncStorage write cannot overwrite a
-  // newer pending-table snapshot and silently lose a queued table.
   const snapshot = JSON.stringify(Array.from(pendingTables));
   pendingWriteQueue = pendingWriteQueue.then(async () => {
     try {
@@ -107,7 +101,6 @@ async function runBackup() {
   }
 
   uploading = true;
-  // Remove only this batch. Changes arriving during upload remain queued.
   const batch = Array.from(pendingTables);
   batch.forEach((name) => pendingTables.delete(name));
   await persistPendingTables();
@@ -118,11 +111,6 @@ async function runBackup() {
   });
 
   try {
-    // A very large first-sync batch can exceed the JavaScript engine's maximum
-    // string length before the native file uploader gets control. If that exact
-    // failure occurs, retry the same work in smaller table groups. Each group
-    // uses the normal verified journal/cache path, so changes remain recoverable
-    // and a retry after partial success is safe (already-synced groups diff to no-op).
     const syncBatch = async (tables: string[]): Promise<any> => {
       try {
         return await backupIncrementalToGoogleDrive(tables, (message) => {
@@ -133,17 +121,12 @@ async function runBackup() {
         if (!/String length exceeds limit/i.test(details) || tables.length <= 1) {
           if (/String length exceeds limit/i.test(details) && tables.length === 1) {
             throw new Error(
-              "One backup data group is larger than this Android build can serialize. Local data remains on this phone. Install the latest APK with large-backup streaming, then retry. Original patient images have not been reduced."
+              "One backup data group is larger than this Android build can serialize. Local data remains on this phone."
             );
           }
           throw error;
         }
         const midpoint = Math.ceil(tables.length / 2);
-        setDriveSyncState({
-          phase: "uploading",
-          updates: batch.length,
-          message: "Large backup detected · safely splitting the sync into smaller groups…",
-        });
         const first = await syncBatch(tables.slice(0, midpoint));
         const second = await syncBatch(tables.slice(midpoint));
         return {
@@ -158,29 +141,17 @@ async function runBackup() {
     const completedAt = result.completedAt
       ? new Date(result.completedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
       : "";
-    const successMessage = ((result as any).migrationPending
-      ? "Monthly backup uploaded · older backup merge needs retry"
-      : result.baselineCreated
-        ? "Monthly full backup uploaded and confirmed"
-        : result.skipped
-          ? "Drive checked · no changed records"
-          : "Changed data uploaded to Google Drive") +
-      (completedAt ? " · " + completedAt : "") +
-      (Array.isArray((result as any).cleanupFailures) && (result as any).cleanupFailures.length
-        ? " · Old backup cleanup needs retry: " + (result as any).cleanupFailures.join("; ")
-        : "") +
-      (Array.isArray((result as any).snapshotFailures) && (result as any).snapshotFailures.length
-        ? " · Range snapshot pending: " + (result as any).snapshotFailures.join("; ")
-        : " · monthly backup checked");
-    // Always show the confirmed upload result, even if new edits arrived
-    // during the transfer. Those newer edits remain queued and are synced next.
+    const successMessage = (result.baselineCreated
+      ? "Monthly full backup uploaded and confirmed"
+      : result.skipped
+        ? "Drive checked · no changed records"
+        : "Changed data uploaded to Google Drive") +
+      (completedAt ? " · " + completedAt : "");
     const queuedMessage = pendingTables.size
       ? " · " + pendingTables.size + " newer change group(s) queued"
       : "";
     setDriveSyncState({ phase: "success", updates: 0, message: successMessage + queuedMessage });
   } catch (error) {
-    // Retain failed table names. Use backoff rather than rebuilding a large
-    // photo backup every seven seconds while the network is unavailable.
     retryAttempt = Math.min(retryAttempt + 1, 6);
     batch.forEach((name) => pendingTables.add(name));
     await persistPendingTables();
@@ -206,14 +177,9 @@ async function runBackup() {
 }
 
 export function triggerAutomaticDriveBackup(tableName: typeof ALL_SYNC_TABLES[number] | "branding" | "appSettings" = "branding") {
-  // Explicit callers can enqueue known SQLite tables after critical mutations, or non-SQLite metadata such as branding and OAuth client configuration.
   scheduleBackup(tableName);
 }
 
-// Called when the user taps the floating sync indicator. It re-checks every
-// syncable table, but the exporter uploads only real differences from the last
-// confirmed snapshot. If an upload is stalled, queue an immediate retry as soon
-// as the current request's timeout/recovery path releases the upload lock.
 export function setAutomaticDriveBackupPaused(paused: boolean) {
   backupPaused = paused;
   if (paused) {
@@ -254,37 +220,22 @@ export function startAutomaticDriveBackup() {
   setDriveSyncRefreshHandler(refreshAutomaticDriveBackup);
   const unregisterRefresh = () => setDriveSyncRefreshHandler(null);
   void loadPendingTables().then(async () => {
-    // Do not mark every table dirty just because SecureStore's last-success
-    // marker is missing. Reinstall/restore can clear that marker while a valid
-    // large Drive baseline still exists; a full scan here can re-read every
-    // historic snapshot and trigger a memory spike before the user edits data.
-    // Existing pending work is resumed normally. If no baseline exists, the
-    // first real database change creates it; the Sync button can still request
-    // an explicit all-table check.
     await persistPendingTables();
     scheduleBackup();
   });
-  const subscription = SQLite.addDatabaseChangeListener((event: any) => {
-    const changedTable = tableMap[String(event?.tableName || "")];
-    // Only actual writes to syncable tables enqueue a comparison. The diff is
-    // checked before any upload, so no-op SQLite events cannot upload backups.
-    if (changedTable) scheduleBackup(changedTable);
-  });
+  // Disabled: SQLite change listeners + sync writes can hard-kill the Android
+  // process during patient save with expo-sqlite 57. Explicit trigger calls remain.
+  const subscription = { remove() {} };
 
-  // On foreground, retry only edits that were already pending/failed. Never
-  // mark every table dirty merely because the user returned to the app.
   let appStateSubscription: { remove: () => void } | null = null;
   try {
     const { AppState } = require("react-native");
     appStateSubscription = AppState.addEventListener("change", (state: string) => {
       if (state === "active" && pendingTables.size) {
-        // Resume any changes retained while Android suspended the JS runtime.
         scheduleBackup();
         return;
       }
       if ((state === "background" || state === "inactive") && timer) {
-        // Keep pending edits queued for the next foreground session. Do not
-        // start a new Drive transfer as the app is leaving the foreground.
         clearTimeout(timer);
         timer = null;
       }
