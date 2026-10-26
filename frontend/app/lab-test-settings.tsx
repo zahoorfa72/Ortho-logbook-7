@@ -2,7 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { router } from "expo-router";
 import { useEffect, useState } from "react";
-import { Switch } from "react-native";
+import { Switch, Modal } from "react-native";
 import * as SecureStore from "expo-secure-store";
 import { Alert, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -42,6 +42,7 @@ export default function LabTestSettingsScreen() {
   const [tests, setTests] = useState<LabTestDefinition[]>([]);
   const [branches, setBranches] = useState<string[]>([]);
   const [newBranch, setNewBranch] = useState("");
+  const [branchPickerVisible, setBranchPickerVisible] = useState(false);
   const [form, setForm] = useState<LabTestDefinition>(blank());
   const [editingId, setEditingId] = useState("");
   const [busy, setBusy] = useState(false);
@@ -279,7 +280,38 @@ export default function LabTestSettingsScreen() {
         </Pressable>)}
       </View>
       {field("Test name", "name", "e.g. Hemoglobin")}
-      {field("Assigned branch", "category", "Choose a branch above or type a new one")}
+      <Text style={styles.label}>Assigned branch</Text>
+      <Pressable
+        onPress={() => setBranchPickerVisible(true)}
+        accessibilityRole="button"
+        accessibilityLabel="Choose assigned lab branch"
+        style={[styles.input, { minHeight: 48, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }]}
+      >
+        <Text style={{ color: form.category ? colors.onSurface : colors.muted, fontFamily: fontFamily.medium, flex: 1 }}>
+          {form.category || "Select a branch"}
+        </Text>
+        <Ionicons name="chevron-down" size={20} color={colors.muted} />
+      </Pressable>
+      <Modal visible={branchPickerVisible} transparent animationType="fade" onRequestClose={() => setBranchPickerVisible(false)}>
+        <Pressable onPress={() => setBranchPickerVisible(false)} style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", padding: spacing.lg }}>
+          <Pressable onPress={() => {}} style={{ backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.md, maxHeight: "75%" }}>
+            <Text style={{ color: colors.onSurface, fontFamily: fontFamily.semibold, fontSize: fontSize.lg, marginBottom: spacing.sm }}>Select lab branch</Text>
+            <ScrollView keyboardShouldPersistTaps="handled">
+              <Pressable onPress={() => { update({ category: "" }); setBranchPickerVisible(false); }} style={{ paddingVertical: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.border }}>
+                <Text style={{ color: colors.onSurface, fontFamily: fontFamily.medium }}>No branch</Text>
+              </Pressable>
+              {branches.map(branch => (
+                <Pressable key={branch} onPress={() => { update({ category: branch }); setBranchPickerVisible(false); }} style={{ paddingVertical: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.border, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                  <Text style={{ color: colors.onSurface, fontFamily: fontFamily.medium }}>{branch}</Text>
+                  {(form.category || "").toLocaleLowerCase() === branch.toLocaleLowerCase() ? <Ionicons name="checkmark-circle" size={20} color={colors.brandPrimary} /> : null}
+                </Pressable>
+              ))}
+              {!branches.length ? <Text style={{ color: colors.muted, paddingVertical: spacing.md }}>Create a branch above first.</Text> : null}
+            </ScrollView>
+            <Pressable onPress={() => setBranchPickerVisible(false)} style={[styles.action, { marginTop: spacing.md }]}><Text style={styles.actionText}>Close</Text></Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
       <Text style={styles.help}>Each test belongs to the branch shown here. The scanner still matches test names/aliases and uses the saved male/female range first, regardless of branch.</Text>
       {field("Other report labels / OCR aliases", "aliases", "e.g. Hb, HGB, Haemoglobin (comma-separated)") }
       <Text style={styles.help}>Enter all labels this laboratory may print for the same test (abbreviations, alternate spellings, and common OCR misspellings). Exact admin labels are preferred; the scanner can cautiously recover small spelling errors in longer configured names. Saved male/female ranges and the saved unit take priority over ranges read from the image. Do not add a different test as an alias.</Text>
