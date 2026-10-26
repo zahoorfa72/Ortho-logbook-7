@@ -404,7 +404,7 @@ export default function Inventory() {
             return (
               <>
                 {showLowSectionHeader ? (
-                  <View style={{ marginBottom: spacing.sm, marginTop: index === 0 ? 0 : spacing.md }}>
+                  <View style={{ marginBottom: spacing.sm, marginTop: index === 0 ? 0 : spacing.base }}>
                     <Text style={{ fontFamily: fontFamily.bold, fontSize: fontSize.lg, color: colors.onSurface }}>
                       {index === 0 && newLow ? "New Low Stock — First 15 Days" : "Other Low Stock"}
                     </Text>
@@ -414,7 +414,7 @@ export default function Inventory() {
                   </View>
                 ) : null}
                 {showCategoryHeader ? (
-                  <View style={{ marginBottom: spacing.sm, marginTop: index === 0 ? 0 : spacing.md }}>
+                  <View style={{ marginBottom: spacing.sm, marginTop: index === 0 ? 0 : spacing.base }}>
                     <Text style={{ fontFamily: fontFamily.bold, fontSize: fontSize.base, color: colors.brandPrimary }}>
                       {thisCategory}
                     </Text>
@@ -529,7 +529,7 @@ export default function Inventory() {
                   onPress={saveEdit}
                   loading={updateItem.isPending}
                 />
-                <View style={{ height: spacing.md }} />
+                <View style={{ height: spacing.base }} />
                 <PrimaryButton
                   title="Delete Item"
                   testID="edit-delete-button"
@@ -610,7 +610,7 @@ const useStyles = makeStyles((colors) => ({
   header: {
     backgroundColor: colors.surface,
     paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.md,
+    paddingBottom: spacing.base,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },
@@ -622,8 +622,8 @@ const useStyles = makeStyles((colors) => ({
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: radius.md,
-    paddingHorizontal: spacing.md,
-    marginTop: spacing.md,
+    paddingHorizontal: spacing.base,
+    marginTop: spacing.base,
   },
   searchInput: { flex: 1, paddingVertical: spacing.sm, color: colors.onSurface },
   smallBtn: {
@@ -638,16 +638,16 @@ const useStyles = makeStyles((colors) => ({
     fontFamily: fontFamily.bold,
     fontSize: fontSize.lg,
     color: colors.onSurface,
-    marginBottom: spacing.md,
+    marginBottom: spacing.base,
   },
-  historyRow: { paddingVertical: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.border },
+  historyRow: { paddingVertical: spacing.base, borderBottomWidth: 1, borderBottomColor: colors.border },
   historyType: { fontFamily: fontFamily.semibold, color: colors.onSurface },
   historyMeta: { fontSize: fontSize.sm, color: colors.muted, marginTop: spacing.xs },
   headerTop: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    marginBottom: spacing.md,
+    marginBottom: spacing.base,
     gap: spacing.sm,
   },
   title: { fontFamily: fontFamily.bold, fontSize: fontSize.xxl, color: colors.onSurface },
@@ -666,7 +666,7 @@ const useStyles = makeStyles((colors) => ({
     alignItems: "center",
     gap: spacing.xs,
     backgroundColor: colors.brandPrimary,
-    paddingHorizontal: spacing.md,
+    paddingHorizontal: spacing.base,
     paddingVertical: spacing.sm,
     borderRadius: radius.md,
     minHeight: 40,
@@ -681,7 +681,7 @@ const useStyles = makeStyles((colors) => ({
     backgroundColor: colors.surface,
     borderRadius: radius.md,
     padding: spacing.lg,
-    marginBottom: spacing.md,
+    marginBottom: spacing.base,
     borderWidth: 1,
     borderColor: colors.border,
   },
@@ -723,7 +723,7 @@ const useStyles = makeStyles((colors) => ({
     borderRadius: 2,
     backgroundColor: colors.borderStrong,
     alignSelf: "center",
-    marginBottom: spacing.md,
+    marginBottom: spacing.base,
   },
   modalTitle: {
     fontFamily: fontFamily.bold,
@@ -731,6 +731,6 @@ const useStyles = makeStyles((colors) => ({
     color: colors.onSurface,
     marginBottom: spacing.lg,
   },
-  cancel: { alignItems: "center", paddingVertical: spacing.md, marginTop: spacing.sm },
+  cancel: { alignItems: "center", paddingVertical: spacing.base, marginTop: spacing.sm },
   cancelText: { fontFamily: fontFamily.semibold, fontSize: fontSize.base, color: colors.muted },
 }));
