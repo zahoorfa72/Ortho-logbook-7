@@ -355,9 +355,21 @@ async function embedPatientPhotos(row:any, cache?: Map<string,string>, onProgres
   };
 }
 
-export type BackupFilter = { type: "all" | "date" | "month" | "year"; value?: string };
+export type BackupFilter = { type: "all" | "date" | "month" | "year" | "halfyear"; value?: string };
+
+function halfYearMonthBounds(value?: string): { start: string; end: string } {
+  const match = /^([0-9]{4})-(H1|H2)$/i.exec(String(value || "").trim());
+  if (!match) throw new Error("Enter the half-year as YYYY-H1 or YYYY-H2.");
+  const startMonth = match[2].toUpperCase() === "H1" ? "01" : "07";
+  const endMonth = match[2].toUpperCase() === "H1" ? "06" : "12";
+  return { start: match[1] + "-" + startMonth, end: match[1] + "-" + endMonth };
+}
 
 function whereForFilter(filter: BackupFilter, column: string) {
+  if (filter.type === "halfyear") {
+    const bounds = halfYearMonthBounds(filter.value);
+    return { sql: ` WHERE substr(${column},1,7) BETWEEN ? AND ?`, args: [bounds.start, bounds.end] };
+  }
   if (filter.type === "date") return { sql: ` WHERE ${column}=?`, args: [filter.value || ""] };
   if (filter.type === "month") return { sql: ` WHERE ${column} LIKE ?`, args: [`${filter.value || ""}-%`] };
   if (filter.type === "year") return { sql: ` WHERE ${column} LIKE ?`, args: [`${filter.value || ""}-%`] };
@@ -461,16 +473,22 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
  const pf=whereForFilter(filter, "date");
  let patients: any[] = [];
  if (include("patients")) {
-   if (filter.type === "month" || filter.type === "year") {
+   if (filter.type === "halfyear") {
+     const bounds = halfYearMonthBounds(filter.value);
+     patients = db.getAllSync<any>(
+       "SELECT id,mr_no,name,gender,age,diagnosis,procedure,procedure_ii,implant,implant_ii,implant_id,implant_ii_id,address,file_name,date,created_at,created_by,updated_at,updated_by FROM patients WHERE (substr(date,1,7) BETWEEN ? AND ?) OR id IN (SELECT DISTINCT patient_id FROM patient_history WHERE substr(created_at,1,7) BETWEEN ? AND ?) ORDER BY date DESC, created_at DESC",
+       [bounds.start, bounds.end, bounds.start, bounds.end],
+     );
+   } else if (filter.type === "month" || filter.type === "year") {
      const pattern = `${filter.value || ""}-%`;
      // Include patient records for anyone with history created in this period,
      // even if their original admit date was earlier.
      patients = db.getAllSync<any>(
-       "SELECT id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,implant_id,implant_ii_id,address,file_name,date,created_at,created_by,updated_at,updated_by FROM patients WHERE date LIKE ? OR id IN (SELECT DISTINCT patient_id FROM patient_history WHERE created_at LIKE ?) ORDER BY date DESC, created_at DESC",
+       "SELECT id,mr_no,name,gender,age,diagnosis,procedure,procedure_ii,implant,implant_ii,implant_id,implant_ii_id,address,file_name,date,created_at,created_by,updated_at,updated_by FROM patients WHERE date LIKE ? OR id IN (SELECT DISTINCT patient_id FROM patient_history WHERE created_at LIKE ?) ORDER BY date DESC, created_at DESC",
        [pattern, pattern],
      );
    } else {
-     patients = db.getAllSync<any>(`SELECT id,mr_no,name,gender,age,diagnosis,procedure,implant,implant_ii,implant_id,implant_ii_id,address,file_name,date,created_at,created_by,updated_at,updated_by FROM patients${pf.sql} ORDER BY date DESC, created_at DESC`, pf.args);
+     patients = db.getAllSync<any>(`SELECT id,mr_no,name,gender,age,diagnosis,procedure,procedure_ii,implant,implant_ii,implant_id,implant_ii_id,address,file_name,date,created_at,created_by,updated_at,updated_by FROM patients${pf.sql} ORDER BY date DESC, created_at DESC`, pf.args);
    }
  }
  const selectedPatientIds = new Set(patients.map((p:any)=>String(p.id)));
@@ -554,7 +572,9 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
  const historyAll=include("patientHistory") ? db.getAllSync<any>("SELECT id,patient_id,user_id,action,created_at FROM patient_history ORDER BY created_at ASC") : [];
  const history=filter.type==="all" ? historyAll : filter.type === "month" || filter.type === "year"
    ? historyAll.filter((h:any)=>String(h.created_at || "").startsWith(String(filter.value || "") + "-"))
-   : historyAll.filter((h:any)=>selectedPatientIds.has(String(h.patient_id)) && String(h.created_at || "").startsWith(String(filter.value || "")));
+   : filter.type === "halfyear"
+     ? (() => { const bounds = halfYearMonthBounds(filter.value); return historyAll.filter((h:any) => selectedPatientIds.has(String(h.patient_id)) && String(h.created_at || "").slice(0,7) >= bounds.start && String(h.created_at || "").slice(0,7) <= bounds.end); })()
+     : historyAll.filter((h:any)=>selectedPatientIds.has(String(h.patient_id)) && String(h.created_at || "").startsWith(String(filter.value || "")));
  const embeddedHistory:any[]=[];
  onProgress?.("Processing patient history images… 0/" + history.length);
  for (let historyIndex = 0; historyIndex < history.length; historyIndex++) {
@@ -630,6 +650,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
  const trashSourceRows = include("trash") ? (() => {
    const all = db.getAllSync<any>("SELECT id,kind,title,deleted_at,expires_at,deleted_by FROM deleted_records ORDER BY deleted_at DESC");
    if (filter.type === "all") return all;
+   if (filter.type === "halfyear") { const bounds = halfYearMonthBounds(filter.value); return all.filter((row:any) => String(row.deleted_at || "").slice(0,7) >= bounds.start && String(row.deleted_at || "").slice(0,7) <= bounds.end); }
    const prefix = String(filter.value || "");
    return all.filter((row:any) => String(row.deleted_at || "").startsWith(prefix));
  })() : [];
@@ -781,7 +802,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
   // Live access/session tokens are deliberately excluded from settings backups.
   users:include("users") ? db.getAllSync<any>("SELECT * FROM users ORDER BY created_at ASC") : [],
   patientHistory:embeddedHistory,
-  inventoryMovements:include("inventoryMovements") ? (()=>{if(filter.type==="all") return db.getAllSync<any>("SELECT * FROM inventory_movements ORDER BY created_at ASC"); const f=filter.type==="date" ? {sql:" WHERE date(created_at)=?",args:[filter.value||""]} : filter.type==="month" ? {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]} : {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]}; return db.getAllSync<any>(`SELECT * FROM inventory_movements${f.sql} ORDER BY created_at ASC`,f.args);})() : [],
+  inventoryMovements:include("inventoryMovements") ? (()=>{if(filter.type==="all") return db.getAllSync<any>("SELECT * FROM inventory_movements ORDER BY created_at ASC"); const f=filter.type==="date" ? {sql:" WHERE date(created_at)=?",args:[filter.value||""]} : filter.type==="month" ? {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]} : filter.type==="halfyear" ? (()=>{const bounds=halfYearMonthBounds(filter.value);return {sql:" WHERE substr(created_at,1,7) BETWEEN ? AND ?",args:[bounds.start,bounds.end]};})() : {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]}; return db.getAllSync<any>(`SELECT * FROM inventory_movements${f.sql} ORDER BY created_at ASC`,f.args);})() : [],
   inventoryPurchaseReceipts:include("inventoryPurchaseReceipts") ? await (async()=>{const f=whereForFilter(filter,"created_at");const rows=db.getAllSync<any>(`SELECT id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,description,created_at,created_by FROM inventory_purchase_receipts${f.sql} ORDER BY created_at ASC`,f.args);return await mapWithConcurrency(rows, 2, async (row:any)=>{const billRow=db.getFirstSync<any>("SELECT bill_image FROM inventory_purchase_receipts WHERE id=?",[row.id]);const source=billRow?.bill_image;const billImage=!includeAttachedImages ? "" : typeof source==="string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(source) ? await embedOptionalPhoto(source,compressedPhotoCache) : source; if(billRow)billRow.bill_image=""; return {...row,bill_image:billImage};});})() : [],
   stockReceipts:include("stockReceipts") ? await (async()=>{const f=whereForFilter(filter,"created_at");const rows=db.getAllSync<any>(`SELECT id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,description,created_at,created_by FROM stock_receipts${f.sql} ORDER BY created_at ASC`,f.args);return await mapWithConcurrency(rows, 2, async (row:any)=>{const billRow=db.getFirstSync<any>("SELECT bill_image FROM stock_receipts WHERE id=?",[row.id]);const source=billRow?.bill_image;const billImage=!includeAttachedImages ? "" : typeof source==="string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(source) ? await embedOptionalPhoto(source,compressedPhotoCache) : source; if(billRow)billRow.bill_image=""; return {...row,bill_image:billImage};});})() : [],
   trash:trashRows,

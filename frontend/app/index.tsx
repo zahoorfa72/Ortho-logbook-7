@@ -1,4 +1,5 @@
 import { Redirect } from "expo-router";
+import { Image } from "expo-image";
 import { ActivityIndicator, View } from "react-native";
 
 import { useAuth } from "@/src/auth/AuthContext";
@@ -14,6 +15,7 @@ export default function Index() {
         testID="app-loading"
         style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.surface }}
       >
+        <Image source={require("../assets/images/ortho-logo-app.png")} contentFit="contain" style={{ width: 164, height: 164, marginBottom: 20 }} />
         <ActivityIndicator size="large" color={colors.brandPrimary} />
       </View>
     );

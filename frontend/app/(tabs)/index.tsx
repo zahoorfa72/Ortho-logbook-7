@@ -335,6 +335,7 @@ export default function Logbook() {
   const toast = useToast();
   const queryClient = useQueryClient();
   const [query, setQuery] = useState("");
+  const [procedureFilter, setProcedureFilter] = useState<"all" | "missing">("all");
   const [patientSort, setPatientSort] = useState<"date-desc" | "date-asc" | "name-asc" | "name-desc" | "mr-asc" | "mr-desc">("date-desc");
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -1045,16 +1046,19 @@ export default function Logbook() {
     return source.map((p) => ({ ...p, ...(counts.get(p.id) || {}) }));
   }, [data]);
 
+  const missingFirstProcedureCount = useMemo(
+    () => patientsWithOperationCounts.filter((p) => !String(p.procedure || "").trim()).length,
+    [patientsWithOperationCounts],
+  );
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    let list = patientsWithOperationCounts.filter((p) =>
-      !q ||
-      [p.mrNo, p.name, p.diagnosis, p.procedure, p.procedureII, p.implant, p.implantII, ...(p.implants || []).flatMap(x => [x.category, x.name, x.size])]
-        .join(" ")
-        .toLowerCase()
-        .includes(q),
-    );
-
+    let list = patientsWithOperationCounts.filter((p) => {
+      if (procedureFilter === "missing" && String(p.procedure || "").trim()) return false;
+      if (!q) return true;
+      return [p.mrNo, p.name, p.diagnosis, p.procedure, p.procedureII, p.implant, p.implantII, ...(p.implants || []).flatMap(x => [x.category, x.name, x.size])]
+        .join(" ").toLowerCase().includes(q);
+    });
     list = [...list].sort((a, b) => {
       if (patientSort === "name-asc") return (a.name || "").localeCompare(b.name || "", undefined, { numeric: true, sensitivity: "base" });
       if (patientSort === "name-desc") return (b.name || "").localeCompare(a.name || "", undefined, { numeric: true, sensitivity: "base" });
@@ -1064,7 +1068,7 @@ export default function Logbook() {
       return (b.date || "").localeCompare(a.date || "");
     });
     return list;
-  }, [patientsWithOperationCounts, query, patientSort]);
+  }, [patientsWithOperationCounts, query, patientSort, procedureFilter]);
 
   const availableYears = useMemo(() => [...new Set((data || []).map(p => String(p.date || "").slice(0,4)).filter(Boolean))].sort().reverse(), [data]);
   const filteredForPdf = useCallback(() => {
@@ -1200,6 +1204,21 @@ export default function Logbook() {
               <Ionicons name="close-circle" size={18} color={colors.muted} />
             </Pressable>
           )}
+        </View>
+        <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.sm }}>
+          <Pressable accessibilityRole="button" accessibilityState={{ selected: procedureFilter === "all" }}
+            onPress={() => setProcedureFilter("all")}
+            style={{ borderWidth: 1, borderColor: procedureFilter === "all" ? colors.brandPrimary : colors.border, backgroundColor: procedureFilter === "all" ? colors.brandPrimary + "18" : colors.surface, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 8 }}>
+            <Text style={{ color: colors.onSurface, fontFamily: fontFamily.semibold, fontSize: fontSize.xs }}>All patients</Text>
+          </Pressable>
+          <View style={{ position: "relative" }}>
+            <Pressable testID="missing-procedure-filter" accessibilityRole="button" accessibilityState={{ selected: procedureFilter === "missing" }}
+              onPress={() => setProcedureFilter("missing")}
+              style={{ borderWidth: 1, borderColor: procedureFilter === "missing" ? "#D32F2F" : colors.border, backgroundColor: procedureFilter === "missing" ? "#D32F2F18" : colors.surface, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 8 }}>
+              <Text style={{ color: colors.onSurface, fontFamily: fontFamily.semibold, fontSize: fontSize.xs }}>Missing first procedure ({missingFirstProcedureCount})</Text>
+            </Pressable>
+            {missingFirstProcedureCount > 0 ? <View accessibilityLabel="Patients missing a first procedure" style={{ position: "absolute", top: -5, right: -5, width: 11, height: 11, borderRadius: 6, backgroundColor: "#D32F2F", borderWidth: 1.5, borderColor: colors.surface }} /> : null}
+          </View>
         </View>
         <View style={{ marginTop: spacing.sm }}>
           <SortMenu

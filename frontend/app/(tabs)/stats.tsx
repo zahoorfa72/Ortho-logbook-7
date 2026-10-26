@@ -19,7 +19,7 @@ import { buildSecondProcedureStatsHtml, buildStatsHtml, generateAndSharePdf } fr
 
 type Stats = { total_patients: number; procedures: { name: string; count: number }[]; proceduresII?: { name: string; count: number }[] };
 
-const HERO = require("../../assets/images/icon.png");
+const HERO = require("../../assets/images/ortho-logo-app.png");
 
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",

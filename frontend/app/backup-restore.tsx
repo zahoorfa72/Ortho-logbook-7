@@ -12,7 +12,7 @@ import { queryClient } from "@/src/query-client";
 import { useAuth } from "@/src/auth/AuthContext";
 import { Segmented } from "@/src/components/Segmented";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
-import { backupIncrementalToGoogleDrive, connectGoogleAccount, disconnectGoogleAccount, getConnectedGoogleAccount, restoreLatestFromGoogleDrive, listGoogleDriveBackups, restoreGoogleDriveBackupById } from "@/src/utils/storage/google-drive";
+import { backupIncrementalToGoogleDrive, createPreviousHalfYearArchiveToGoogleDrive, connectGoogleAccount, disconnectGoogleAccount, getConnectedGoogleAccount, restoreLatestFromGoogleDrive, listGoogleDriveBackups, restoreGoogleDriveBackupById } from "@/src/utils/storage/google-drive";
 import { refreshAutomaticDriveBackup, triggerAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-backup";
 
  // Selective restore reads from the single complete Drive master snapshot.
@@ -71,6 +71,7 @@ export default function BackupRestoreScreen() {
     backupText: string;
     info: { createdAt: string; encrypted: boolean };
     source: "drive" | "phone";
+    isHalfYearArchive?: boolean;
     recoveryWarnings?: string[];
   } | null>(null);
 
@@ -220,6 +221,26 @@ export default function BackupRestoreScreen() {
     }
   };
 
+  const isHalfYearArchiveNameForUi = (name: string) => /Ortho Logbook Backup - Archive [0-9]{4}-H[12]\.orbackup/i.test(name);
+
+  const handleCreateHalfYearArchive = async () => {
+    if (!googleAccount) { await handleConnectGoogle(); return; }
+    try {
+      setDriveLoading(true);
+      setDriveStatus("Preparing previous completed H1/H2 archive…");
+      const result = await createPreviousHalfYearArchiveToGoogleDrive(setDriveStatus);
+      setDriveBackups(await listGoogleDriveBackups());
+      Alert.alert("Half-year archive verified", String(result.name || "Half-year archive") +
+        "\nIncludes dated records for " + String(result.period || "the completed half-year") +
+        " only. Upload and restore compatibility were checked. Use Merge to restore the period.");
+    } catch (error) {
+      Alert.alert("Half-year archive failed", error instanceof Error ? error.message : "Unable to create the H1/H2 archive.");
+    } finally {
+      setDriveLoading(false);
+      setDriveStatus("");
+    }
+  };
+
   const handleLoadDriveBackups = async () => {
     try {
       setDriveLoading(true);
@@ -238,14 +259,19 @@ export default function BackupRestoreScreen() {
   const handleChooseDriveBackup = async (file: {id:string;name:string;modifiedTime:string}) => {
     try {
       setDriveLoading(true);
-      setDriveStatus("Downloading master backup…");
+      setDriveStatus("Downloading selected backup…");
       const result = await restoreGoogleDriveBackupById(file.id, setDriveStatus);
       const info = getBackupInfo(result.backupText);
-      setSelectedBackup({ name: result.name, backupText: result.backupText, info, source: "drive", recoveryWarnings: (result as any).recoveryWarnings || [] });
+      const backupJson: any = JSON.parse(result.backupText);
+      const isHalfYearArchive = backupJson?.filter?.type === "halfyear" || isHalfYearArchiveNameForUi(result.name);
+      setSelectedBackup({ name: result.name, backupText: result.backupText, info, source: "drive", isHalfYearArchive, recoveryWarnings: (result as any).recoveryWarnings || [] });
       setRestorePassword("");
       setRestorePeriod("all");
       setRestorePeriodValue(new Date().toISOString().slice(0, 7));
-      Alert.alert("Master backup selected", result.name + "\nUpdated: " + new Date(result.modifiedTime).toLocaleString() + "\nChoose all-time or a month/year to restore.");
+      if (isHalfYearArchive) setMode("Merge (safe)");
+      Alert.alert(isHalfYearArchive ? "Half-year archive selected" : "Master backup selected",
+        result.name + "\nUpdated: " + new Date(result.modifiedTime).toLocaleString() +
+        (isHalfYearArchive ? "\nThis file contains only its H1/H2 period. Use Merge so other periods are not replaced." : "\nChoose all-time or a month/year to restore."));
     } catch (error) {
       Alert.alert("Selected backup failed", error instanceof Error ? error.message : "Unable to download this backup.");
     } finally {
@@ -343,8 +369,9 @@ export default function BackupRestoreScreen() {
       Alert.alert("Password required", "Enter the password used when this encrypted backup was created.");
       return;
     }
-    const isPeriodRestore = restorePeriod !== "all";
-    if (isPeriodRestore && !(restorePeriod === "month" ? /^\d{4}-\d{2}$/.test(restorePeriodValue.trim()) : /^\d{4}$/.test(restorePeriodValue.trim()))) {
+    const isHalfYearArchive = selectedBackup.isHalfYearArchive === true;
+    const isPeriodRestore = restorePeriod !== "all" || isHalfYearArchive;
+    if (isPeriodRestore && !isHalfYearArchive && !(restorePeriod === "month" ? /^\d{4}-\d{2}$/.test(restorePeriodValue.trim()) : /^\d{4}$/.test(restorePeriodValue.trim()))) {
       Alert.alert("Choose a valid period", restorePeriod === "month" ? "Enter the month as YYYY-MM." : "Enter the year as YYYY.");
       return;
     }
@@ -352,7 +379,9 @@ export default function BackupRestoreScreen() {
     const isReplace = !isPeriodRestore && mode === "Replace";
     const title = isPeriodRestore ? "Restore selected period?" : isReplace ? "Replace with backup?" : "Merge backup?";
     const message = (isPeriodRestore
-      ? "Merge records from " + (restorePeriod === "month" ? "month " : "year ") + restorePeriodValue.trim() + " into this phone. Other periods stay untouched; current stock quantities are not replayed."
+      ? (isHalfYearArchive
+          ? "Merge dated records from " + selectedBackup.name + " into this phone. Other periods and current stock stay untouched."
+          : "Merge records from " + (restorePeriod === "month" ? "month " : "year ") + restorePeriodValue.trim() + " into this phone. Other periods stay untouched; current stock quantities are not replayed.")
       : isReplace
         ? "This wipes all current data and replaces it with the backup. You will be logged out."
         : "New records will be added. Re-importing the same backup will not add inventory again. Inventory from a different phone can be combined by item.") +
@@ -369,7 +398,7 @@ export default function BackupRestoreScreen() {
             setLoading(true);
             const completeBackup = await decryptBackup(selectedBackup.backupText, restorePassword);
             const backup = isPeriodRestore
-              ? filterBackupForPeriod(completeBackup, restorePeriod as "month" | "year", restorePeriodValue)
+              ? (isHalfYearArchive ? completeBackup : filterBackupForPeriod(completeBackup, restorePeriod as "month" | "year", restorePeriodValue))
               : completeBackup;
             // Drive restore already manages separate PDFs through the Drive folder.
             // Older PDFs can be downloaded individually from their patient record.
@@ -392,7 +421,7 @@ export default function BackupRestoreScreen() {
             if (isReplace) {
               const result = await restoreBackup(backup);
               const restoredLabel = selectedBackup.name +
-                (isPeriodRestore ? " · " + restorePeriodValue.trim() : "") +
+                (isPeriodRestore ? " · " + (isHalfYearArchive ? selectedBackup.name : restorePeriodValue.trim()) : "") +
                 " · " + new Date().toLocaleString();
               await storage.setItem("ortho_last_drive_restore", restoredLabel);
               setLastRestoredBackup(restoredLabel);
@@ -410,7 +439,7 @@ export default function BackupRestoreScreen() {
             } else {
               const result = await mergeBackup(backup);
               const restoredLabel = selectedBackup.name +
-                (isPeriodRestore ? " · " + restorePeriodValue.trim() : "") +
+                (isPeriodRestore ? " · " + (isHalfYearArchive ? selectedBackup.name : restorePeriodValue.trim()) : "") +
                 " · " + new Date().toLocaleString();
               await storage.setItem("ortho_last_drive_restore", restoredLabel);
               setLastRestoredBackup(restoredLabel);
@@ -545,7 +574,7 @@ export default function BackupRestoreScreen() {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Google Drive Backup</Text>
           <Text style={styles.cardSub}>
-            Connect a Google account on this phone. The app maintains one master backup per six-month period, rather than separate monthly files. During restore, choose a month from the selected master. Drive backups are unencrypted; phone/file backups remain encrypted.
+            Keep the complete rolling master for compatibility. After a half-year closes, Drive sync also creates a separate restorable archive: H1 contains dated records for January–June; H2 contains dated records for July–December. Archive restores merge those records without replacing other periods or current stock. Drive backups are unencrypted; phone/file backups remain encrypted.
           </Text>
           {googleAccount ? (
             <>
@@ -564,6 +593,14 @@ export default function BackupRestoreScreen() {
                     <Text style={styles.primaryText}>Backup to Google Drive</Text>
                   </>
                 )}
+              </Pressable>
+              <Pressable
+                style={[styles.secondaryButton, driveLoading && styles.disabledButton, { marginTop: spacing.sm }]}
+                onPress={handleCreateHalfYearArchive}
+                disabled={driveLoading}
+              >
+                <Ionicons name="archive-outline" size={18} color={colors.onSurface} />
+                <Text style={styles.secondaryText}>Create / Refresh Previous H1/H2 Archive</Text>
               </Pressable>
               <Pressable
                 style={[styles.secondaryButton, driveLoading && styles.disabledButton, { marginTop: spacing.sm }]}
@@ -593,7 +630,7 @@ export default function BackupRestoreScreen() {
                     {file.modifiedTime ? new Date(file.modifiedTime).toLocaleString() : "Drive backup"}
                     {file.size ? " · " + (Number(file.size) / (1024 * 1024)).toFixed(1) + " MB" : ""}
                   </Text>
-                  <Text style={styles.hint}>{file.name.includes(" - Month ") ? "Legacy monthly archive" : "Six-month master · choose all data or a month/year during restore"}</Text>
+                  <Text style={styles.hint}>{isHalfYearArchiveNameForUi(file.name) ? "H1/H2 archive · dated records from that half-year only; merge to restore" : file.name.includes(" - Month ") ? "Legacy monthly archive" : "Complete rolling master · choose all data or a month/year during restore"}</Text>
                 </Pressable>
               ))}
               <Pressable
@@ -763,13 +800,13 @@ export default function BackupRestoreScreen() {
 
           {selectedBackup && (
             <View style={styles.selectedBox}>
-              <Text style={styles.selectedTitle}>Selected master backup</Text>
+              <Text style={styles.selectedTitle}>{selectedBackup.isHalfYearArchive ? "Selected H1/H2 archive" : "Selected master backup"}</Text>
               <Text style={styles.fileName}>{selectedBackup.name}</Text>
               <Text style={styles.fileInfo}>
                 Created: {new Date(selectedBackup.info.createdAt).toLocaleString()}
               </Text>
-              <Text style={[styles.hint, { marginTop: spacing.md }]}>Restore everything or select a period. Period restore merges records and does not delete other months/years.</Text>
-              <Segmented
+              <Text style={[styles.hint, { marginTop: spacing.md }]}>{selectedBackup.isHalfYearArchive ? "This backup contains only its H1/H2 period. Merge adds those records without wiping other periods or stock." : "Restore everything or select a period. Period restore merges records and does not delete other months/years."}</Text>
+              {!selectedBackup.isHalfYearArchive ? <Segmented
                 options={["All Time", "Month", "Year"] as any}
                 value={restorePeriod === "all" ? "All Time" : restorePeriod === "month" ? "Month" : "Year"}
                 onChange={(v) => {
@@ -780,8 +817,8 @@ export default function BackupRestoreScreen() {
                   if (next === "year") setRestorePeriodValue(new Date().toISOString().slice(0, 4));
                 }}
                 testIDPrefix="restore-period"
-              />
-              {restorePeriod !== "all" && (
+              /> : null}
+              {!selectedBackup.isHalfYearArchive && restorePeriod !== "all" && (
                 <TextInput
                   value={restorePeriodValue}
                   onChangeText={setRestorePeriodValue}

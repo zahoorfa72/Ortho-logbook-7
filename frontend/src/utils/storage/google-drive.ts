@@ -29,6 +29,15 @@ function sixMonthMasterName(date: Date = new Date()): string {
 function isSixMonthMasterName(name: string): boolean {
   return /^Ortho Logbook Backup - Master \d{4}-H[12]\.orbackup$/i.test(name);
 }
+function halfYearArchiveName(year: number, half: "H1" | "H2"): string {
+  return "Ortho Logbook Backup - Archive " + year + "-" + half + ".orbackup";
+}
+function isHalfYearArchiveName(name: string): boolean {
+  return /^Ortho Logbook Backup - Archive \d{4}-H[12]\.orbackup$/i.test(name);
+}
+function previousCompletedHalfYear(date: Date = new Date()): { year: number; half: "H1" | "H2" } {
+  return date.getMonth() >= 6 ? { year: date.getFullYear(), half: "H1" } : { year: date.getFullYear() - 1, half: "H2" };
+}
 function isMasterBackupName(name: string): boolean {
   return name === BACKUP_NAME || isSixMonthMasterName(name);
 }
@@ -277,6 +286,50 @@ async function findBackupByName(name: string) {
   return Array.isArray(data.files) ? data.files.find((item: any) => item?.id && item.mimeType !== "application/vnd.google-apps.folder") || null : null;
 }
 
+async function writeHalfYearArchiveUnlocked(year: number, half: "H1" | "H2", onProgress?: (stage: string) => void, overwrite = false) {
+  if (!Number.isInteger(year) || year < 2000 || year > 2200) throw new Error("Choose a valid archive year.");
+  const value = String(year) + "-" + half;
+  const name = halfYearArchiveName(year, half);
+  const existing = await findBackupByName(name);
+  if (existing?.id && !overwrite) {
+    return { id: String(existing.id), name, modifiedTime: String(existing.modifiedTime || ""), skipped: true, period: value };
+  }
+  onProgress?.("Preparing " + value + " dated records only (January–June or July–December)…");
+  const backup: any = await exportUnencryptedBackupData({ type: "halfyear", value }, onProgress);
+  backup.filter = { type: "halfyear", value };
+  backup.incremental = false;
+  delete backup.changedTables; delete backup._rowDelta; delete backup.deletedIds;
+  delete backup.fullTables; delete backup._baselineKey; delete backup._updateCount;
+  pruneBackupPhotoAssets(backup);
+  const uploaded: any = await uploadContent(JSON.stringify(backup), existing?.id ? String(existing.id) : undefined, onProgress, name);
+  const uploadedId = String(uploaded?.id || existing?.id || "");
+  if (!uploadedId) throw new Error("Google Drive did not return an ID for the " + value + " archive.");
+  onProgress?.("Verifying " + value + " archive can be restored…");
+  const verified: any = await downloadDriveJsonValidated(uploadedId, onProgress);
+  if (verified?.app !== "Ortho Logbook" || !Array.isArray(verified.patients) ||
+      !Array.isArray(verified.inventory) || !Array.isArray(verified.users) ||
+      verified?.filter?.type !== "halfyear" || String(verified?.filter?.value || "") !== value) {
+    throw new Error("The uploaded " + value + " archive failed restore validation. Keep the complete master and retry.");
+  }
+  return { ...uploaded, id: uploadedId, name, skipped: false, period: value, verified: true };
+}
+
+async function ensurePreviousHalfYearArchive(onProgress?: (stage: string) => void) {
+  const period = previousCompletedHalfYear();
+  try { return await writeHalfYearArchiveUnlocked(period.year, period.half, onProgress, false); }
+  catch (error) {
+    console.warn("[drive-backup] completed half-year archive was not created; full master remains available", error);
+    onProgress?.("The complete Drive master is safe; the completed H1/H2 archive can be retried from Sync & Backup.");
+    return null;
+  }
+}
+
+export function createPreviousHalfYearArchiveToGoogleDrive(onProgress?: (stage: string) => void): Promise<any> {
+  const period = previousCompletedHalfYear();
+  return queueDriveOperation(() => writeHalfYearArchiveUnlocked(period.year, period.half, onProgress, true), onProgress);
+}
+
+
 export async function listGoogleDriveBackups(): Promise<Array<{id:string;name:string;modifiedTime:string;size?:string}>> {
   const files = await findLatestBackupCandidates();
   // Offer only complete snapshots that restoreGoogleDriveBackupById understands.
@@ -289,6 +342,7 @@ export async function listGoogleDriveBackups(): Promise<Array<{id:string;name:st
     // New UI lists six-month masters, not separate monthly archive files.
     // Keep legacy all-time backups selectable for recovery.
     return isMasterBackupName(name) ||
+      isHalfYearArchiveName(name) ||
       name === "Ortho Logbook Backup - All Time.orbackup";
   }).map((file: any) => ({
     id: String(file.id),
@@ -301,7 +355,8 @@ export async function listGoogleDriveBackups(): Promise<Array<{id:string;name:st
     const rank = (name: string) => name === sixMonthMasterName() ? 0 :
       isSixMonthMasterName(name) ? 1 :
       name === BACKUP_NAME ? 2 :
-      name === "Ortho Logbook Backup - All Time.orbackup" ? 3 : 4;
+      name === "Ortho Logbook Backup - All Time.orbackup" ? 3 :
+      isHalfYearArchiveName(name) ? 4 : 5;
     return rank(a.name) - rank(b.name) ||
       Date.parse(b.modifiedTime || "") - Date.parse(a.modifiedTime || "");
   });
@@ -318,6 +373,18 @@ export async function restoreGoogleDriveBackupById(fileId: string, onProgress?: 
   const parsed = await downloadDriveJsonValidated(fileId, onProgress);
   if (!parsed || parsed.app !== "Ortho Logbook" || !Array.isArray(parsed.patients) || !Array.isArray(parsed.inventory)) {
     throw new Error("The selected file is not a complete Ortho Logbook backup.");
+  }
+  // Half-year archives are standalone scoped snapshots. Do not replay the
+  // full-master journal into one, or unrelated dates could leak into restore.
+  const halfYearMatch = /^Ortho Logbook Backup - Archive (\d{4})-(H1|H2)\.orbackup$/i.exec(String(metadata.name || ""));
+  if (halfYearMatch) {
+    const value = halfYearMatch[1] + "-" + halfYearMatch[2].toUpperCase();
+    parsed.filter = { type: "halfyear", value };
+    parsed.incremental = false;
+    delete parsed.changedTables; delete parsed._rowDelta; delete parsed.deletedIds;
+    delete parsed.fullTables; delete parsed._baselineKey; delete parsed._updateCount;
+    return { name: String(metadata.name), modifiedTime: String(metadata.modifiedTime || ""),
+      backupText: JSON.stringify(parsed), appliedIncrementals: 0, recoveryWarnings: [] };
   }
   // Monthly files contain full snapshots. Apply only the journal for the same
   // month and exact baseline file; never mix other months into this restore.
@@ -2840,7 +2907,14 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
 }
 
 export function backupIncrementalToGoogleDrive(changedTables: string[], onProgress?: (stage: string) => void): Promise<any> {
-  return queueDriveOperation(() => backupIncrementalToGoogleDriveUnlocked(changedTables, onProgress), onProgress);
+  return queueDriveOperation(async () => {
+    const result = await backupIncrementalToGoogleDriveUnlocked(changedTables, onProgress);
+    // Keep the complete rolling master for compatibility. When a half-year closes,
+    // create its independent scoped archive after successful sync.
+    const archive = await ensurePreviousHalfYearArchive(onProgress);
+    if (archive && !archive.skipped) result.halfYearArchiveName = archive.name;
+    return result;
+  }, onProgress);
 }
 
 export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) => void) {

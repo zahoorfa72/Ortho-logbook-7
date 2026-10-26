@@ -15,6 +15,7 @@ type Patient = {
   age: string;
   diagnosis: string;
   procedure: string;
+  procedureII?: string;
   implant: string;
   implantII: string;
   date: string;
@@ -190,9 +191,12 @@ export function buildPatientListHtml(branding: BrandingConfig, patients: Patient
     return true;
   });
   patients=filteredPatients;
-  const fields = Array.isArray(branding.pdfPatientFields) && branding.pdfPatientFields.length
+  const configuredFields = Array.isArray(branding.pdfPatientFields) && branding.pdfPatientFields.length
     ? branding.pdfPatientFields
     : ["date","mrNo","name","gender","age","diagnosis","procedure"];
+  const fields = patients.some((p: any) => String(p.procedureII || "").trim()) && !configuredFields.includes("procedureII")
+    ? [...configuredFields, "procedureII"]
+    : configuredFields;
   const labels: Record<string,string> = {date:"Date",mrNo:"MR No",name:"Patient",gender:"Gender",age:"Age",address:"Address",diagnosis:"Diagnosis",procedure:"Procedure",procedureII:String((branding as any).procedureSecondLabel||"Procedure 2"),implants:"Implants",fileName:"File Name",hcvPlus:"HCV+",hbaSg:"HbAsg",hiv:"HIV",labOcrManualResults:"Manually Verified Lab Results"};
   // Custom field keys include a stable unique suffix (for example description_bcf286b5).
   // Use a readable label in every PDF location instead of exposing the storage key.
@@ -552,7 +556,7 @@ export function buildStatsHtml(
         ${header(branding, `${reportKey === "procedureIIStatistics" ? "Second Procedure Statistics" : "Statistics"} — ${periodLabel}`, reportKey)}
         <div class="kpiRow">
           <div class="kpi">
-            <div class="kpiLabel">Total Surgeries</div>
+            <div class="kpiLabel">${reportKey === "procedureIIStatistics" ? "Second Procedures Recorded" : "Total Surgeries"}</div>
             <div class="kpiValue">${stats.total_patients}</div>
           </div>
           <div class="kpi">
@@ -585,7 +589,9 @@ export function buildStatsHtml(
 }
 
 export function buildSecondProcedureStatsHtml(branding: BrandingConfig, stats: StatsData, periodLabel: string): string {
-  return buildStatsHtml(branding, { total_patients: stats.total_patients, procedures: stats.proceduresII || [] }, periodLabel, "procedureIIStatistics");
+  const proceduresII = Array.isArray(stats.proceduresII) ? stats.proceduresII : [];
+  const totalSecondProcedures = proceduresII.reduce((total, procedure) => total + Math.max(0, Number(procedure.count || 0)), 0);
+  return buildStatsHtml(branding, { total_patients: totalSecondProcedures, procedures: proceduresII }, periodLabel, "procedureIIStatistics");
 }
 
 export function buildInventoryHtml(
@@ -646,8 +652,19 @@ export async function generateAndSharePdf(html: string, fileNameHint: string): P
     (globalThis as any).window?.open?.(uri, "_blank");
     return;
   }
-  const canShare = await Sharing.isAvailableAsync();
-  if (canShare) {
-    await Sharing.shareAsync(uri, { mimeType: "application/pdf", dialogTitle: fileNameHint, UTI: "com.adobe.pdf" });
+  let shareFailure: unknown = null;
+  try {
+    const canShare = await Sharing.isAvailableAsync();
+    if (canShare) {
+      await Sharing.shareAsync(uri, { mimeType: "application/pdf", dialogTitle: fileNameHint,
+        ...(Platform.OS === "ios" ? { UTI: "com.adobe.pdf" } : {}) });
+      return;
+    }
+  } catch (error) { shareFailure = error; }
+  try {
+    await Print.printAsync({ uri });
+  } catch (printError: any) {
+    const shareMessage = shareFailure instanceof Error ? shareFailure.message : String(shareFailure || "sharing is unavailable");
+    throw new Error("Could not share or open the PDF. Share error: " + shareMessage + ". " + String(printError?.message || printError || ""));
   }
 }

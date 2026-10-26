@@ -4,7 +4,7 @@
     "slug": "frontend",
     "version": "1.0.1",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/images/ortho-logo-app.png",
     "scheme": "frontend",
     "userInterfaceStyle": "automatic",
     "ios": {
@@ -13,8 +13,8 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#000000"
+        "foregroundImage": "./assets/images/ortho-logo-app.png",
+        "backgroundColor": "#FFFFFF"
       },
       "package": "com.emergent.androidnobackend.vm3pwn",
       "softwareKeyboardLayoutMode": "resize",
@@ -23,17 +23,17 @@
     "web": {
       "bundler": "metro",
       "output": "single",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./assets/images/ortho-logo-app.png"
     },
     "plugins": [
       "expo-router",
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/splash-image.png",
-          "imageWidth": 200,
+          "image": "./assets/images/ortho-logo-app.png",
+          "imageWidth": 220,
           "resizeMode": "contain",
-          "backgroundColor": "#000000"
+          "backgroundColor": "#FFFFFF"
         }
       ],
       "expo-font",
