@@ -274,11 +274,6 @@ export default function LabTestSettingsScreen() {
         <TextInput value={newBranch} onChangeText={setNewBranch} placeholder="New branch name (e.g. CBC)" placeholderTextColor={colors.muted} autoCapitalize="words" style={[styles.input, { flex: 1 }]} />
         <Pressable onPress={addBranch} style={styles.branchAdd}><Text style={styles.primaryText}>Add</Text></Pressable>
       </View>
-      <View style={styles.branchList}>
-        {branches.map(branch => <Pressable key={branch} onPress={() => update({ category: branch })} style={[styles.branchChip, (form.category || "").toLocaleLowerCase() === branch.toLocaleLowerCase() ? styles.branchChipSelected : null]}>
-          <Text style={[styles.branchChipText, (form.category || "").toLocaleLowerCase() === branch.toLocaleLowerCase() ? styles.branchChipTextSelected : null]}>{branch}</Text>
-        </Pressable>)}
-      </View>
       {field("Test name", "name", "e.g. Hemoglobin")}
       <Text style={styles.label}>Assigned branch</Text>
       <Pressable
