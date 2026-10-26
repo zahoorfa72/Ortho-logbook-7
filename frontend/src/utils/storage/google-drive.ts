@@ -383,6 +383,12 @@ export async function restoreGoogleDriveBackupById(fileId: string, onProgress?: 
     parsed.incremental = false;
     delete parsed.changedTables; delete parsed._rowDelta; delete parsed.deletedIds;
     delete parsed.fullTables; delete parsed._baselineKey; delete parsed._updateCount;
+    // Restore recent PDFs referenced by this archive through the same verified
+    // patient-ID-matched path used by full-master restore. Older PDFs remain
+    // available from the individual patient record in Drive.
+    void downloadPatientImageArchivesFromDrive(parsed, onProgress).catch((error: any) => {
+      onProgress?.("The H1/H2 data is ready, but recent patient-PDF recovery had a problem. You can download a patient's PDF from their record. " + String(error?.message || error));
+    });
     return { name: String(metadata.name), modifiedTime: String(metadata.modifiedTime || ""),
       backupText: JSON.stringify(parsed), appliedIncrementals: 0, recoveryWarnings: [] };
   }
