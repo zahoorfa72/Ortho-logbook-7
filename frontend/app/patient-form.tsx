@@ -33,7 +33,7 @@ import { Segmented } from "@/src/components/Segmented";
 import { useToast } from "@/src/components/toast";
 import { formatInventoryLabel } from "@/src/utils/inventory-label";
 import { archivePatientImagesForPatient, createPatientImagePdfFile, getPatientImageArchive, openPatientImageArchivePdf } from "@/src/utils/storage/patient-image-archive";
-import { deletePatientImagePdfFromDrive, downloadPatientImageArchiveForPatient, uploadPatientImageArchivesToDrive } from "@/src/utils/storage/google-drive";
+import { deletePatientImagePdfFromDrive, downloadPatientImageArchiveForPatient, ensurePatientImagePdfOnDrive, uploadPatientImageArchivesToDrive } from "@/src/utils/storage/google-drive";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 const LAB_OCR_PIPELINE_VERSION = "row-safe-2026-10-20-v15-fm-sex-range-tiny-text-retry";
 const CUSTOM_SCREENING_BOXES_KEY = "ortho_custom_screening_boxes_v1";
@@ -1461,8 +1461,15 @@ export default function PatientForm() {
         { text: "Approve PDF update", style: "destructive", onPress: () => { void (async () => {
           setPhotoBusy(true);
           try {
-            await archivePatientImagesForPatient(patientId);
-            await uploadPatientImageArchivesToDrive();
+            if (p.photos.length) {
+              await archivePatientImagesForPatient(patientId);
+              await uploadPatientImageArchivesToDrive();
+            } else {
+              // This explicit admin approval is the only flow allowed to replace
+              // an existing Drive image PDF with a documented zero-image PDF.
+              await archivePatientImagesForPatient(patientId, undefined, true);
+              await ensurePatientImagePdfOnDrive(patientId);
+            }
             const latest = await getPatientImageArchive(patientId);
             setPatientArchiveAvailable(!!latest);
             setPatientArchiveOnDrive(!!latest?.driveFileId);
