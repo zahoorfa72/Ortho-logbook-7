@@ -33,7 +33,7 @@ function halfYearArchiveName(year: number, half: "H1" | "H2"): string {
   return "Ortho Logbook Backup - " + half + " " + year + ".orbackup";
 }
 function isHalfYearArchiveName(name: string): boolean {
-  return /^Ortho Logbook Backup - H[12] \d{4}\.orbackup$/i.test(name);
+  return /^Ortho Logbook Backup - H[12] \d{4}\.orbackup$/i.test(name) || /^Ortho Logbook Backup - Archive \d{4}-H[12]\.orbackup$/i.test(name);
 }
 function previousCompletedHalfYear(date: Date = new Date()): { year: number; half: "H1" | "H2" } {
   return date.getMonth() >= 6 ? { year: date.getFullYear(), half: "H1" } : { year: date.getFullYear() - 1, half: "H2" };
@@ -377,8 +377,9 @@ export async function restoreGoogleDriveBackupById(fileId: string, onProgress?: 
   // Half-year archives are standalone scoped snapshots. Do not replay the
   // full-master journal into one, or unrelated dates could leak into restore.
   const halfYearMatch = /^Ortho Logbook Backup - (H1|H2) (\d{4})\.orbackup$/i.exec(String(metadata.name || ""));
-  if (halfYearMatch) {
-    const value = halfYearMatch[2] + "-" + halfYearMatch[1].toUpperCase();
+  const legacyHalfYearMatch = /^Ortho Logbook Backup - Archive (\d{4})-(H1|H2)\.orbackup$/i.exec(String(metadata.name || ""));
+  if (halfYearMatch || legacyHalfYearMatch) {
+    const value = halfYearMatch ? halfYearMatch[2] + "-" + halfYearMatch[1].toUpperCase() : legacyHalfYearMatch![1] + "-" + legacyHalfYearMatch![2].toUpperCase();
     parsed.filter = { type: "halfyear", value };
     parsed.incremental = false;
     delete parsed.changedTables; delete parsed._rowDelta; delete parsed.deletedIds;
