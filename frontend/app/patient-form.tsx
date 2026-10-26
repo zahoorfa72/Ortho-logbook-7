@@ -2023,7 +2023,7 @@ export default function PatientForm() {
             <Text style={styles.secondaryText}>{photoBusy ? "Downloading images…" : "Download patient images from Drive"}</Text>
           </Pressable>
         ) : null}
-        {isEdit && user?.role === "admin" && (patientArchiveOnDrive || patientArchiveAvailable || p.photos.length > 0) ? (
+        {isEdit && user?.role === "admin" ? (
           <Pressable
             style={[styles.secondary, { marginTop: spacing.sm, justifyContent: "center", borderColor: colors.warning }, photoBusy && { opacity: 0.5 }]}
             onPress={approveAndUpdateDrivePatientPdf}
