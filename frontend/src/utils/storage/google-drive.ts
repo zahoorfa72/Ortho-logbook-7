@@ -30,7 +30,7 @@ function isSixMonthMasterName(name: string): boolean {
   return /^Ortho Logbook Backup - Master \d{4}-H[12]\.orbackup$/i.test(name);
 }
 function halfYearArchiveName(year: number, half: "H1" | "H2"): string {
-  return "Ortho Logbook Backup - Archive " + year + "-" + half + ".orbackup";
+  return "Ortho Logbook Backup - " + half + " " + year + ".orbackup";
 }
 function isHalfYearArchiveName(name: string): boolean {
   return /^Ortho Logbook Backup - Archive \d{4}-H[12]\.orbackup$/i.test(name);
@@ -378,7 +378,7 @@ export async function restoreGoogleDriveBackupById(fileId: string, onProgress?: 
   // full-master journal into one, or unrelated dates could leak into restore.
   const halfYearMatch = /^Ortho Logbook Backup - Archive (\d{4})-(H1|H2)\.orbackup$/i.exec(String(metadata.name || ""));
   if (halfYearMatch) {
-    const value = halfYearMatch[1] + "-" + halfYearMatch[2].toUpperCase();
+    const value = halfYearMatch[2] + "-" + halfYearMatch[1].toUpperCase();
     parsed.filter = { type: "halfyear", value };
     parsed.incremental = false;
     delete parsed.changedTables; delete parsed._rowDelta; delete parsed.deletedIds;
