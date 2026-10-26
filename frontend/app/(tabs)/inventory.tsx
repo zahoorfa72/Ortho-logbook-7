@@ -415,7 +415,7 @@ export default function Inventory() {
                 ) : null}
                 {showCategoryHeader ? (
                   <View style={{ marginBottom: spacing.sm, marginTop: index === 0 ? 0 : spacing.md }}>
-                    <Text style={{ fontFamily: fontFamily.bold, fontSize: fontSize.md, color: colors.brandPrimary }}>
+                    <Text style={{ fontFamily: fontFamily.bold, fontSize: fontSize.base, color: colors.brandPrimary }}>
                       {thisCategory}
                     </Text>
                     <Text style={{ fontFamily: fontFamily.regular, fontSize: fontSize.xs, color: colors.muted }}>
