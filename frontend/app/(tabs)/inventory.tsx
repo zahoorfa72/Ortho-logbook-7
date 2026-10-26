@@ -513,7 +513,7 @@ export default function Inventory() {
                   }}
                   style={[styles.categoryOption, { borderBottomColor: colors.border }]}
                 >
-                  <Text style={{ color: colors.text, fontFamily: fontFamily.medium, fontSize: fontSize.base }}>{item.name}</Text>
+                  <Text style={{ color: colors.onSurface, fontFamily: fontFamily.medium, fontSize: fontSize.base }}>{item.name}</Text>
                   {String(editItem?.categoryId || "") === String(item.id) ? <Ionicons name="checkmark-circle" size={20} color={colors.brandPrimary} /> : null}
                 </Pressable>
               )}
@@ -537,7 +537,7 @@ export default function Inventory() {
                   onPress={() => setCategoryPickerOpen(true)}
                   style={[styles.categorySelectButton, { borderColor: colors.border, backgroundColor: colors.surface }]}
                 >
-                  <Text style={{ color: colors.text, fontFamily: fontFamily.medium, fontSize: fontSize.base }}>
+                  <Text style={{ color: colors.onSurface, fontFamily: fontFamily.medium, fontSize: fontSize.base }}>
                     {editItem.category || "Choose category"}
                   </Text>
                   <Ionicons name="chevron-down" size={18} color={colors.muted} />
