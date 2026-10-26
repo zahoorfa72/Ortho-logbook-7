@@ -1461,7 +1461,12 @@ export async function downloadPatientImageArchiveForPatient(
   if (!folder?.id) throw new Error("The Patient Image PDFs folder was not found in the connected Google Drive.");
   const archives = await getLocalPatientImageArchives();
   const local = archives.find(item => item.patientId === patientId);
-  const fileName = local?.fileName;
+  const safeFilePart = (value: string) => String(value || "").normalize("NFKD").replace(/[\\u0300-\\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9 -]/g, "").trim().replace(/\\s+/g, " ").replace(/ /g, "-").slice(0, 64) || "Patient";
+  const expectedFileName = [safeFilePart(String(patient.name || local?.patientName || "Patient")),
+    (patient.mrNo || local?.mrNo) ? "MR-" + safeFilePart(String(patient.mrNo || local?.mrNo || "")) : "",
+    safeFilePart(patientId).slice(-10)].filter(Boolean).join(" - ") + ".pdf";
+  const fileName = local?.fileName || expectedFileName;
   const token = await accessToken();
   const q = encodeURIComponent("'" + escapeDriveQuery(String(folder.id)) + "' in parents and appProperties has { key='orthoPatientId' and value='" + escapeDriveQuery(patientId.slice(0,100)) + "' } and trashed = false");
   onProgress?.("Finding this patient's archived PDF…");
@@ -1473,11 +1478,16 @@ export async function downloadPatientImageArchiveForPatient(
     (!fileName || String(item.name || "") === fileName));
   if (!remote && fileName) {
     const byName = await findPatientPdfInFolder(fileName, String(folder.id));
+    // Older patient PDFs may predate Drive appProperties. The generated filename
+    // includes this patient's ID suffix, so accept a metadata-free legacy file
+    // only when its name is an exact match for the expected patient filename.
     if (byName?.id && byName.mimeType === "application/pdf" &&
-        String(byName.appProperties?.orthoPatientId || "") === patientId.slice(0,100)) remote = byName;
+        String(byName.name || "") === expectedFileName &&
+        (!byName.appProperties?.orthoPatientId || String(byName.appProperties.orthoPatientId) === patientId.slice(0,100))) remote = byName;
   }
   if (!remote?.id || remote.mimeType !== "application/pdf" || Number(remote.size || 0) < 8 ||
-      String(remote.appProperties?.orthoPatientId || "") !== patientId.slice(0,100) ||
+      (remote.appProperties?.orthoPatientId && String(remote.appProperties.orthoPatientId) !== patientId.slice(0,100)) ||
+      (!remote.appProperties?.orthoPatientId && String(remote.name || "") !== expectedFileName) ||
       !(Array.isArray(remote.parents) ? remote.parents : []).includes(String(folder.id))) {
     throw new Error("No verified image PDF for this exact patient ID was found. No other patient's images were downloaded.");
   }
