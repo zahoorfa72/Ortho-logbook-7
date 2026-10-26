@@ -2,9 +2,9 @@
   "expo": {
     "name": "Ortho Logbook",
     "slug": "frontend",
-    "version": "1.0.1",
+    "version": "1.0.8",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/images/ortho-logo-app.png",
     "scheme": "frontend",
     "userInterfaceStyle": "automatic",
     "ios": {
@@ -13,12 +13,12 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "foregroundImage": "./assets/images/ortho-logo-app.png",
         "backgroundColor": "#FFFFFF"
       },
       "package": "com.emergent.androidnobackend.vm3pwn",
       "softwareKeyboardLayoutMode": "resize",
-      "versionCode": 2
+      "versionCode": 3
     },
     "web": {
       "bundler": "metro",
@@ -30,7 +30,7 @@
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/splash-image.png",
+          "image": "./assets/images/ortho-logo-app.png",
           "imageWidth": 200,
           "resizeMode": "contain",
           "backgroundColor": "#FFFFFF"
