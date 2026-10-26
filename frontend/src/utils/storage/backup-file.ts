@@ -2,7 +2,6 @@ import { File, Paths } from "expo-file-system";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
 import * as DocumentPicker from "expo-document-picker";
-import { Platform } from "react-native";
 
 import {
   exportBackup,
@@ -99,20 +98,32 @@ export async function savePatientImageArchivesToPhone(): Promise<{ saved: number
 
 export async function shareBackupFile(password: string, filter: BackupFilter = { type: "all" }) {
   const fileUri = await createBackupFile(password, filter);
-  const fileInfo: any = await FileSystem.getInfoAsync(fileUri);
-  if (!fileInfo.exists || Number(fileInfo.size || 0) <= 0) throw new Error("The encrypted backup file could not be verified before sharing. Use Save Backup to Phone and retry.");
   const available = await Sharing.isAvailableAsync();
-  if (!available) throw new Error("File sharing is not available on this device. Use Save Backup to Phone to save a verified copy.");
-  try {
-    await Sharing.shareAsync(fileUri, {
-      mimeType: Platform.OS === "android" ? "application/octet-stream" : "application/json",
-      dialogTitle: "Save Ortho Logbook Backup",
-      ...(Platform.OS === "ios" ? { UTI: "public.data" } : {}),
-    });
-  } catch (error: any) {
-    throw new Error("Android could not open the share sheet (" + String(error?.message || error) + "). The encrypted file was created but not shared; use Save Backup to Phone.");
+
+  if (!available) {
+    throw new Error("File sharing is not available on this device.");
   }
+
+  try {
+    const shareUri = fileUri.startsWith("file://") || fileUri.startsWith("content://") ? fileUri : `file://${fileUri}`;
+    await Sharing.shareAsync(shareUri, {
+      mimeType: "application/json",
+      dialogTitle: "Save Ortho Logbook Backup",
+      UTI: "public.data",
+    });
+  } catch (err: any) {
+    const msg = String(err?.message || err || "");
+    if (/cancel|dismiss|abort|User did not share/i.test(msg)) {
+      // User closed the share sheet — still treat as non-fatal.
+      return fileUri;
+    }
+    throw new Error(msg.includes("rejected") ? "Could not open the share sheet for the backup. Try Save to phone instead." : msg || "Could not share backup file.");
+  }
+
+  // Assume the admin completed the share; record the timestamp so the
+  // evening reminder stays quiet for the rest of the day.
   await markBackupTaken();
+
   return fileUri;
 }
 
