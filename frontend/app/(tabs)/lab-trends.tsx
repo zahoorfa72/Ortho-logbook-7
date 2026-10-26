@@ -239,8 +239,8 @@ export default function LabTrendsScreen() {
   );
 
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: colors.surfaceSecondary }} contentContainerStyle={{ padding: spacing.md, paddingTop: Math.max(insets.top, spacing.md), paddingBottom: Math.max(insets.bottom, spacing.xl) + 24 }}>
-      <View style={{ flexDirection: "row", alignItems: "center", marginBottom: spacing.md }}>
+    <ScrollView style={{ flex: 1, backgroundColor: colors.surfaceSecondary }} contentContainerStyle={{ padding: spacing.base, paddingTop: Math.max(insets.top, spacing.base), paddingBottom: Math.max(insets.bottom, spacing.xl) + 24 }}>
+      <View style={{ flexDirection: "row", alignItems: "center", marginBottom: spacing.base }}>
         <View style={{ width: 42, height: 42, borderRadius: 13, backgroundColor: colors.brandPrimary, alignItems: "center", justifyContent: "center", marginRight: 12 }}>
           <Ionicons name="analytics-outline" size={22} color="#FFFFFF" />
         </View>
@@ -253,7 +253,7 @@ export default function LabTrendsScreen() {
         </Pressable>
       </View>
 
-      <View style={{ borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, padding: spacing.md, marginBottom: spacing.md }}>
+      <View style={{ borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, padding: spacing.base, marginBottom: spacing.base }}>
         <Text style={{ color: colors.onSurface, fontFamily: fontFamily.bold, fontSize: fontSize.lg, marginBottom: 4 }}>1. Choose patient</Text>
         {field("Search by patient name or MR number", patientSearch, setPatientSearch, "Search patients")}
         {isLoading ? <Text style={{ color: colors.muted, marginTop: 10 }}>Loading patients…</Text> : (
@@ -272,7 +272,7 @@ export default function LabTrendsScreen() {
         )}
       </View>
 
-      <View style={{ borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, padding: spacing.md, marginBottom: spacing.md }}>
+      <View style={{ borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, padding: spacing.base, marginBottom: spacing.base }}>
         <Text style={{ color: colors.onSurface, fontFamily: fontFamily.bold, fontSize: fontSize.lg }}>2. Add a dated result</Text>
         <Text style={{ color: colors.muted, fontSize: fontSize.sm, marginTop: 4 }}>This separate history lets you preserve multiple values for the same test without changing the existing OCR/manual lab workflow.</Text>
         {field("Test name", test, setTest, "e.g. Hemoglobin")}
@@ -282,10 +282,10 @@ export default function LabTrendsScreen() {
         </View>
         {field("Date (YYYY-MM-DD)", date, setDate, "2026-10-17")}
         {field("Reference range (optional)", reference, setReference, "e.g. 12–16 g/dL")}
-        <View style={{ marginTop: spacing.md }}>{button("Save trend entry", () => { void addEntry(); }, "save-outline", busy || !selectedPatient)}</View>
+        <View style={{ marginTop: spacing.base }}>{button("Save trend entry", () => { void addEntry(); }, "save-outline", busy || !selectedPatient)}</View>
       </View>
 
-      <View style={{ borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, padding: spacing.md, marginBottom: spacing.md }}>
+      <View style={{ borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, padding: spacing.base, marginBottom: spacing.base }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
           <View style={{ flex: 1 }}>
             <Text style={{ color: colors.onSurface, fontFamily: fontFamily.bold, fontSize: fontSize.lg }}>3. Trend chart</Text>
@@ -301,7 +301,7 @@ export default function LabTrendsScreen() {
             {field("Filter test name", testFilter, setTestFilter, "e.g. Hemoglobin")}
             {selectedTestEntries.length ? (
               <>
-                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: spacing.md, marginBottom: spacing.sm }}>
+                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: spacing.base, marginBottom: spacing.sm }}>
                   <View style={{ flex: 1 }}>
                     <Text style={{ color: colors.onSurface, fontFamily: fontFamily.semibold }}>{selectedTestEntries[selectedTestEntries.length - 1].test}</Text>
                     <Text style={{ color: colors.muted, fontSize: fontSize.xs }}>{chartEntries.length} numeric point(s)</Text>
@@ -323,18 +323,18 @@ export default function LabTrendsScreen() {
                 ) : <Text style={{ color: colors.muted, marginTop: 10 }}>No numeric values yet. Add numeric result entries to display the chart.</Text>}
                 <Text style={{ color: colors.muted, fontSize: fontSize.xs, marginTop: spacing.sm }}>The chart shows saved trend snapshots only; it does not diagnose a condition. Review results with a clinician.</Text>
               </>
-            ) : <Text style={{ color: colors.muted, marginTop: spacing.md }}>No trend entries for this patient and filter yet. Add a dated result or import verified results below.</Text>}
+            ) : <Text style={{ color: colors.muted, marginTop: spacing.base }}>No trend entries for this patient and filter yet. Add a dated result or import verified results below.</Text>}
           </>
         ) : null}
       </View>
 
-      <View style={{ borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, padding: spacing.md, marginBottom: spacing.md }}>
+      <View style={{ borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, padding: spacing.base, marginBottom: spacing.base }}>
         <Text style={{ color: colors.onSurface, fontFamily: fontFamily.bold, fontSize: fontSize.lg }}>4. Import existing verified results</Text>
         <Text style={{ color: colors.muted, fontSize: fontSize.sm, marginVertical: spacing.sm }}>Reads the existing saved verified results without editing them. Import skips duplicate patient/test/date/value snapshots.</Text>
         {button(busy ? "Importing…" : "Import verified results", () => { void importVerifiedResults(); }, "download-outline", busy)}
       </View>
 
-      <View style={{ borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, padding: spacing.md }}>
+      <View style={{ borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, padding: spacing.base }}>
         <Text style={{ color: colors.onSurface, fontFamily: fontFamily.bold, fontSize: fontSize.lg }}>Saved snapshots ({patientEntries.length})</Text>
         {patientEntries.slice().reverse().map(entry => (
           <View key={entry.id} style={{ flexDirection: "row", alignItems: "center", borderTopWidth: 1, borderColor: colors.border, paddingVertical: 11, gap: 8 }}>
