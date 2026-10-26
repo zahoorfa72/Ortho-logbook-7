@@ -139,7 +139,7 @@ const useStyles = makeStyles((colors) => ({
   header: {
     backgroundColor: colors.surface,
     paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.md,
+    paddingBottom: spacing.base,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
     flexDirection: "row",
@@ -152,7 +152,7 @@ const useStyles = makeStyles((colors) => ({
     alignItems: "center",
     gap: spacing.xs,
     backgroundColor: colors.brandPrimary,
-    paddingHorizontal: spacing.md,
+    paddingHorizontal: spacing.base,
     paddingVertical: spacing.sm,
     borderRadius: radius.md,
   },
@@ -161,7 +161,7 @@ const useStyles = makeStyles((colors) => ({
   row: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.md,
+    gap: spacing.base,
     backgroundColor: colors.surface,
     borderRadius: radius.md,
     paddingHorizontal: spacing.lg,
@@ -185,9 +185,9 @@ const useStyles = makeStyles((colors) => ({
     borderRadius: 2,
     backgroundColor: colors.borderStrong,
     alignSelf: "center",
-    marginBottom: spacing.md,
+    marginBottom: spacing.base,
   },
   modalTitle: { fontFamily: fontFamily.bold, fontSize: fontSize.xl, color: colors.onSurface, marginBottom: spacing.lg },
-  cancel: { alignItems: "center", paddingVertical: spacing.md, marginTop: spacing.sm },
+  cancel: { alignItems: "center", paddingVertical: spacing.base, marginTop: spacing.sm },
   cancelText: { fontFamily: fontFamily.semibold, fontSize: fontSize.base, color: colors.muted },
 }));
