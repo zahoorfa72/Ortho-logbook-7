@@ -249,7 +249,7 @@ export default function Inventory() {
   };
 
   const doNewLowExport = useCallback(async () => {
-    const items = (data || []).filter(isNewLowStock);
+    const items = list.filter(isNewLowStock);
     if (!items.length) {
       toast("No new low-stock items in the last 15 days.", "info");
       return;
@@ -263,7 +263,7 @@ export default function Inventory() {
     } finally {
       setExportingNewLow(false);
     }
-  }, [branding, data, isNewLowStock, toast]);
+  }, [branding, list, isNewLowStock, toast]);
 
   const requestNewLowExport = useCallback(async () => {
     setPinExportMode("new-low");
@@ -272,21 +272,21 @@ export default function Inventory() {
   }, [doNewLowExport]);
 
   const doExport = useCallback(async () => {
-    const items = data || [];
+    const items = list;
     if (!items.length) {
       toast("Inventory is empty.", "info");
       return;
     }
     setExporting(true);
     try {
-      const html = buildInventoryHtml(branding, items, tab === "Low Stock");
+      const html = buildInventoryHtml(branding, items, tab === "Low Stock" || tab === "New Low Stock", search.trim() ? `Inventory Search — ${search.trim()}` : tab === "New Low Stock" ? "New Low Stock — Last 15 Days" : tab === "Low Stock" ? "Low Stock Report" : "Inventory");
       await generateAndSharePdf(html, tab === "Low Stock" ? "Low Stock Report" : "Inventory");
     } catch (e: any) {
       toast(e?.message || "Could not create PDF.", "error");
     } finally {
       setExporting(false);
     }
-  }, [branding, data, tab, toast]);
+  }, [branding, list, tab, search, toast]);
 
   const requestExport = useCallback(async () => {
     setPinExportMode("inventory");
