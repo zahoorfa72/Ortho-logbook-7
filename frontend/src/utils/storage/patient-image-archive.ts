@@ -379,5 +379,15 @@ export async function openPatientImageArchivePdf(patientId: string): Promise<voi
   const archive = await getPatientImageArchive(patientId);
   if (!archive) throw new Error("No archived image PDF is available for this patient yet. Connect backup and let the automatic archive finish.");
   if (!(await Sharing.isAvailableAsync())) throw new Error("PDF sharing is not available on this device.");
-  await Sharing.shareAsync(archive.localUri, { mimeType: "application/pdf", UTI: "com.adobe.pdf", dialogTitle: archive.fileName });
+  const shareUri = archive.localUri.startsWith("file://") || archive.localUri.startsWith("content://")
+    ? archive.localUri
+    : `file://${archive.localUri}`;
+  try {
+    await Sharing.shareAsync(shareUri, { mimeType: "application/pdf", UTI: "com.adobe.pdf", dialogTitle: archive.fileName });
+  } catch (err: any) {
+    const msg = String(err?.message || err || "");
+    if (!/cancel|dismiss|abort|User did not share/i.test(msg)) {
+      throw new Error(msg.includes("rejected") ? "Could not open the share sheet. Try again." : msg);
+    }
+  }
 }
