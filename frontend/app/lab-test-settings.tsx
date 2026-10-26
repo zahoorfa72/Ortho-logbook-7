@@ -43,6 +43,8 @@ export default function LabTestSettingsScreen() {
   const [branches, setBranches] = useState<string[]>([]);
   const [newBranch, setNewBranch] = useState("");
   const [branchPickerVisible, setBranchPickerVisible] = useState(false);
+  const [testBranchFilterVisible, setTestBranchFilterVisible] = useState(false);
+  const [testBranchFilter, setTestBranchFilter] = useState("__all__");
   const [form, setForm] = useState<LabTestDefinition>(blank());
   const [editingId, setEditingId] = useState("");
   const [busy, setBusy] = useState(false);
@@ -214,6 +216,12 @@ export default function LabTestSettingsScreen() {
     } },
   ]);
 
+  const filteredTests = tests.filter(item => {
+    const category = String(item.category || "").trim();
+    if (testBranchFilter === "__all__") return true;
+    if (testBranchFilter === "__unassigned__") return !category;
+    return category.toLocaleLowerCase() === testBranchFilter.toLocaleLowerCase();
+  });
   const edit = (item: LabTestDefinition) => { setForm({ ...item }); setEditingId(item.id); };
   const remove = (item: LabTestDefinition) => Alert.alert("Delete test?", "Remove " + item.name + " and its configured reference ranges?", [
     { text: "Cancel", style: "cancel" },
@@ -317,8 +325,35 @@ export default function LabTestSettingsScreen() {
       {field("Unit", "unit", "g/dL")}
       <Pressable disabled={busy} onPress={save} style={styles.primary}><Text style={styles.primaryText}>{busy ? "Saving…" : editingId ? "Save changes" : "Add test"}</Text></Pressable>
       {editingId ? <Pressable onPress={() => { setEditingId(""); setForm(blank()); }} style={styles.action}><Text style={styles.actionText}>Cancel editing</Text></Pressable> : null}
-      <Text style={styles.section}>Saved tests ({tests.length})</Text>
-      {tests.map(item => <View key={item.id} style={styles.item}>
+      <Text style={styles.section}>Saved tests ({filteredTests.length})</Text>
+      <Text style={styles.label}>Show tests by branch</Text>
+      <Pressable onPress={() => setTestBranchFilterVisible(true)} accessibilityRole="button" accessibilityLabel="Filter saved tests by branch" style={[styles.input, { minHeight: 48, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }]}>
+        <Text style={{ color: colors.onSurface, fontFamily: fontFamily.medium, flex: 1 }}>
+          {testBranchFilter === "__all__" ? "All branches" : testBranchFilter === "__unassigned__" ? "Unassigned" : testBranchFilter}
+        </Text>
+        <Ionicons name="chevron-down" size={20} color={colors.muted} />
+      </Pressable>
+      <Modal visible={testBranchFilterVisible} transparent animationType="fade" onRequestClose={() => setTestBranchFilterVisible(false)}>
+        <Pressable onPress={() => setTestBranchFilterVisible(false)} style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", padding: spacing.lg }}>
+          <Pressable onPress={() => {}} style={{ backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.md, maxHeight: "75%" }}>
+            <Text style={{ color: colors.onSurface, fontFamily: fontFamily.semibold, fontSize: fontSize.lg, marginBottom: spacing.sm }}>Filter saved tests</Text>
+            <ScrollView keyboardShouldPersistTaps="handled">
+              {[
+                { value: "__all__", label: "All branches" },
+                { value: "__unassigned__", label: "Unassigned" },
+                ...branches.map(branch => ({ value: branch, label: branch })),
+              ].map(option => (
+                <Pressable key={option.value} onPress={() => { setTestBranchFilter(option.value); setTestBranchFilterVisible(false); }} style={{ paddingVertical: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.border, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                  <Text style={{ color: colors.onSurface, fontFamily: fontFamily.medium }}>{option.label}</Text>
+                  {testBranchFilter === option.value ? <Ionicons name="checkmark-circle" size={20} color={colors.brandPrimary} /> : null}
+                </Pressable>
+              ))}
+            </ScrollView>
+            <Pressable onPress={() => setTestBranchFilterVisible(false)} style={[styles.action, { marginTop: spacing.md }]}><Text style={styles.actionText}>Close</Text></Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
+      {filteredTests.map(item => <View key={item.id} style={styles.item}>
         <View style={{ flex: 1 }}>
           <Text style={styles.itemTitle}>{item.name}</Text>
           {item.category?.trim() ? <Text style={styles.branchLabel}>Branch: {item.category}</Text> : <Text style={styles.branchLabel}>Branch: Not assigned</Text>}
