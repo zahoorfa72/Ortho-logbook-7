@@ -58,6 +58,7 @@ export default function Inventory() {
 
   const [tab, setTab] = useState("All");
   const [editItem, setEditItem] = useState<InventoryItem | null>(null);
+  const [categoryPickerOpen, setCategoryPickerOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [inventorySort, setInventorySort] = useState<"name-asc" | "name-desc" | "size-asc" | "size-desc" | "qty-desc" | "qty-asc" | "low-first">("name-asc");
   const [historyItem, setHistoryItem] = useState<InventoryItem | null>(null);
@@ -69,8 +70,14 @@ export default function Inventory() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
   const { data, isLoading, isError, refetch, isRefetching } = useQuery<InventoryItem[]>({
-    queryKey: ["inventory", selectedCategoryId],
-    queryFn: async () => await api.get<InventoryItem[]>(selectedCategoryId ? "/inventory?categoryId=" + encodeURIComponent(selectedCategoryId) : "/inventory"),
+    // Fetch all items once and filter locally: older stock rows may have a valid
+    // category name but a missing/stale categoryId, so server-side ID filtering hid them.
+    queryKey: ["inventory"],
+    queryFn: async () => await api.get<InventoryItem[]>("/inventory"),
+  });
+  const { data: categories = [] } = useQuery<Array<{ id: string; name: string; itemCount?: number }>>({
+    queryKey: ["inventory-categories"],
+    queryFn: () => api.get<Array<{ id: string; name: string; itemCount?: number }>>("/inventory-categories"),
   });
 
   const invalidate = () => {
@@ -136,8 +143,16 @@ export default function Inventory() {
 
   const list = useMemo(() => {
     let items = (data || []).filter((i) => {
+      if (selectedCategoryId) {
+        const selectedCategory = categories.find((category) => String(category.id) === selectedCategoryId);
+        const itemCategoryId = String(i.categoryId || "").trim();
+        const itemCategoryName = String(i.category || "").trim().toLocaleLowerCase();
+        // Match the category ID first; gracefully include legacy rows by category name.
+        if (itemCategoryId !== selectedCategoryId &&
+            !(selectedCategory && itemCategoryName === selectedCategory.name.trim().toLocaleLowerCase())) return false;
+      }
       const s = search.trim().toLowerCase();
-      return !s || i.name.toLowerCase().includes(s) || i.size.toLowerCase().includes(s) || i.category.toLowerCase().includes(s);
+      return !s || String(i.name || "").toLowerCase().includes(s) || String(i.size || "").toLowerCase().includes(s) || String(i.category || "").toLowerCase().includes(s);
     });
     if (tab === "New Low Stock") items = items.filter(isNewLowStock);
     else if (tab === "Low Stock") items = items.filter((i) => i.quantity <= i.minimumStock);
@@ -176,7 +191,7 @@ export default function Inventory() {
       return formatInventoryLabel(a.category, a.name, a.size).localeCompare(formatInventoryLabel(b.category, b.name, b.size), undefined, { numeric: true, sensitivity: "base" });
     });
     return items;
-  }, [data, tab, search, inventorySort, isNewLowStock]);
+  }, [data, tab, search, inventorySort, isNewLowStock, selectedCategoryId, categories]);
 
   const changeQty = (item: InventoryItem, delta: number) => {
     const next = Math.max(0, item.quantity + delta);
@@ -480,6 +495,34 @@ export default function Inventory() {
         />
       )}
 
+      <Modal visible={categoryPickerOpen} transparent animationType="slide" onRequestClose={() => setCategoryPickerOpen(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalCard, { paddingBottom: insets.bottom + spacing.lg, maxHeight: "75%" }]}>
+            <View style={styles.modalHandle} />
+            <Text style={styles.modalTitle}>Choose Category</Text>
+            <FlatList
+              data={categories}
+              keyExtractor={(item) => String(item.id)}
+              ListEmptyComponent={<Text style={{ color: colors.muted, paddingVertical: spacing.lg }}>No categories found. Add a category first.</Text>}
+              renderItem={({ item }) => (
+                <Pressable
+                  testID={`choose-category-${item.id}`}
+                  onPress={() => {
+                    if (editItem) setEditItem({ ...editItem, categoryId: String(item.id), category: String(item.name) });
+                    setCategoryPickerOpen(false);
+                  }}
+                  style={[styles.categoryOption, { borderBottomColor: colors.border }]}
+                >
+                  <Text style={{ color: colors.text, fontFamily: fontFamily.medium, fontSize: fontSize.md }}>{item.name}</Text>
+                  {String(editItem?.categoryId || "") === String(item.id) ? <Ionicons name="checkmark-circle" size={20} color={colors.brandPrimary} /> : null}
+                </Pressable>
+              )}
+            />
+            <PrimaryButton title="Cancel" variant="secondary" onPress={() => setCategoryPickerOpen(false)} />
+          </View>
+        </View>
+      </Modal>
+
       <Modal visible={!!editItem} transparent animationType="slide" onRequestClose={() => setEditItem(null)}>
         <View style={styles.modalOverlay}>
           <View style={[styles.modalCard, { paddingBottom: insets.bottom + spacing.lg }]}>
@@ -487,12 +530,18 @@ export default function Inventory() {
             <Text style={styles.modalTitle}>Edit Inventory Item</Text>
             {editItem ? (
               <KeyboardAwareScrollView bottomOffset={40} keyboardShouldPersistTaps="handled">
-                <Field
-                  label="Category"
+                <Text style={styles.fieldLabel}>Category</Text>
+                <Pressable
                   testID="edit-category-input"
-                  value={editItem.category}
-                  onChangeText={(v) => setEditItem({ ...editItem, category: v })}
-                />
+                  accessibilityRole="button"
+                  onPress={() => setCategoryPickerOpen(true)}
+                  style={[styles.categorySelectButton, { borderColor: colors.border, backgroundColor: colors.surface }]}
+                >
+                  <Text style={{ color: colors.text, fontFamily: fontFamily.medium, fontSize: fontSize.md }}>
+                    {editItem.category || "Choose category"}
+                  </Text>
+                  <Ionicons name="chevron-down" size={18} color={colors.muted} />
+                </Pressable>
                 <Field
                   label="Size / Length"
                   testID="edit-size-input"
@@ -725,6 +774,9 @@ const useStyles = makeStyles((colors) => ({
     alignSelf: "center",
     marginBottom: spacing.base,
   },
+  fieldLabel: { fontFamily: fontFamily.medium, fontSize: fontSize.sm, color: colors.muted, marginBottom: spacing.xs },
+  categorySelectButton: { minHeight: 48, borderWidth: 1, borderRadius: radius.md, paddingHorizontal: spacing.md, flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: spacing.md },
+  categoryOption: { minHeight: 50, paddingVertical: spacing.md, flexDirection: "row", alignItems: "center", justifyContent: "space-between", borderBottomWidth: 1 },
   modalTitle: {
     fontFamily: fontFamily.bold,
     fontSize: fontSize.xl,
