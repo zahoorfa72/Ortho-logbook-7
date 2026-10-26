@@ -32,6 +32,10 @@ export default function InventoryCategories() {
     queryKey: ["inventory-categories"],
     queryFn: () => api.get<Category[]>("/inventory-categories"),
   });
+  const inventoryQuery = useQuery<Array<{ id: string; categoryId?: string; category?: string }>>({
+    queryKey: ["inventory"],
+    queryFn: () => api.get<Array<{ id: string; categoryId?: string; category?: string }>>("/inventory"),
+  });
 
   const add = useMutation({
     mutationFn: () => api.post<Category>("/inventory-categories", { name: name.trim() }),
@@ -156,12 +160,17 @@ export default function InventoryCategories() {
           contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xl, flexGrow: 1 }}
           refreshControl={<RefreshControl refreshing={q.isRefetching} onRefresh={q.refetch} />}
           ListEmptyComponent={<View style={styles.empty}><Ionicons name="layers-outline" size={42} color={colors.muted} /><Text style={styles.emptyTitle}>No categories</Text><Text style={styles.emptySub}>Add a category such as Interlocking Nail 10mm, DCP Broad, or another implant group.</Text></View>}
-          renderItem={({ item }) => (
+          renderItem={({ item }) => {
+            const actualCount = (inventoryQuery.data || []).filter((stock) =>
+              String(stock.categoryId || "").trim() === String(item.id) ||
+              String(stock.category || "").trim().toLocaleLowerCase() === item.name.trim().toLocaleLowerCase()
+            ).length;
+            return (
             <View style={styles.row}>
               <View style={styles.categoryIcon}><Ionicons name="layers" size={22} color={colors.brandPrimary} /></View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.itemName}>{item.name}</Text>
-                <Text style={styles.meta}>{item.itemCount} {item.itemCount === 1 ? "item" : "items"}</Text>
+                <Text style={styles.meta}>{actualCount} {actualCount === 1 ? "item" : "items"}</Text>
               </View>
               <Pressable
                 testID={`edit-category-${item.id}`}
@@ -188,7 +197,8 @@ export default function InventoryCategories() {
                 <Ionicons name="trash-outline" size={18} color={colors.error} />
               </Pressable>
             </View>
-          )}
+            );
+          }}
         />
       )}
       <Modal visible={!!editCategory} transparent animationType="slide" onRequestClose={() => setEditCategory(null)}>
