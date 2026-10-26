@@ -123,21 +123,35 @@ export default function StockScreen(){
 
   const saveStock=useMutation({
     mutationFn:()=>{
+      // Always resolve the category ID against the current saved category list.
+      // Older rows and categories restored from backups can carry stale IDs.
+      const normalizeRow = (row: StockRow) => {
+        const categoryName = String(row.category || "").trim();
+        const matched = (Array.isArray(stockCategories) ? stockCategories : []).find((cat: any) =>
+          String(cat?.id || "") === String(row.categoryId || "") ||
+          (categoryName && String(cat?.name || "").trim().toLocaleLowerCase() === categoryName.toLocaleLowerCase())
+        );
+        if (!matched) throw new Error(categoryName ? `Inventory category "${categoryName}" not found. Please select the category again.` : "Select an inventory category for every item.");
+        return { ...row, categoryId: String(matched.id), category: String(matched.name) };
+      };
       if(editingReceipt){
-        const row=stockRows[0];
+        const row=normalizeRow(stockRows[0] || newRow());
         return api.put("/stock-receipts/"+encodeURIComponent(String(editingReceipt.id)),{
-          categoryId:row?.categoryId,category:row?.category,size:row?.size,
-          quantity:Number(row?.quantity)||0,minimumStock:Number(row?.minimumStock)||0,
-          addedDate:stockDate,billImage:row?.billImage||"",description:description.trim(),
+          categoryId:row.categoryId,category:row.category,size:row.size,
+          quantity:Number(row.quantity)||0,minimumStock:Number(row.minimumStock)||0,
+          addedDate:stockDate,billImage:row.billImage||"",description:description.trim(),
         });
       }
       return api.post("/inventory-bulk-add",{
         description:description.trim(),
-        items:stockRows.map(row=>({
-          categoryId:row.categoryId,category:row.category,size:row.size,
-          quantity:Number(row.quantity)||0,minimumStock:Number(row.minimumStock)||0,
-          addedDate:stockDate,billImage:row.billImage||"",
-        }))
+        items:stockRows.map(source=>{
+          const row=normalizeRow(source);
+          return {
+            categoryId:row.categoryId,category:row.category,size:row.size,
+            quantity:Number(row.quantity)||0,minimumStock:Number(row.minimumStock)||0,
+            addedDate:stockDate,billImage:row.billImage||"",
+          };
+        })
       });
     },
     onSuccess:()=>{
