@@ -1,8 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
-import { useCallback, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-native";
+import { useCallback, useMemo, useState } from "react";
+import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -19,12 +19,17 @@ import { buildSecondProcedureStatsHtml, buildStatsHtml, generateAndSharePdf } fr
 
 type Stats = { total_patients: number; procedures: { name: string; count: number }[]; proceduresII?: { name: string; count: number }[] };
 
-const HERO = require("../../assets/images/ortho-logo-app.png");
+const HERO = require("../../assets/images/icon.png");
 
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December",
 ];
+
+function isoToday() {
+  const d = new Date();
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
 
 export default function StatsScreen() {
   const styles = useStyles();
@@ -38,23 +43,36 @@ export default function StatsScreen() {
   const [scope, setScope] = useState("Monthly");
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
+  const [fromDate, setFromDate] = useState(isoToday().slice(0, 8) + "01");
+  const [toDate, setToDate] = useState(isoToday());
   const [pinPromptOpen, setPinPromptOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportSecondProcedure, setExportSecondProcedure] = useState(false);
 
   const isMonthly = scope === "Monthly";
+  const isCustom = scope === "Custom";
+
+  const statsUrl = useMemo(() => {
+    if (isCustom) {
+      const from = fromDate.trim();
+      const to = toDate.trim();
+      return `/stats?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+    }
+    return `/stats?scope=${isMonthly ? "monthly" : "yearly"}&year=${year}${isMonthly ? `&month=${month}` : ""}`;
+  }, [isCustom, isMonthly, year, month, fromDate, toDate]);
 
   const { data, isLoading } = useQuery<Stats>({
-    queryKey: ["stats", scope, year, month],
-    queryFn: () =>
-      api.get<Stats>(
-        `/stats?scope=${isMonthly ? "monthly" : "yearly"}&year=${year}${isMonthly ? `&month=${month}` : ""}`,
-      ),
+    queryKey: ["stats", scope, year, month, fromDate, toDate],
+    queryFn: () => api.get<Stats>(statsUrl),
   });
 
   const maxCount = Math.max(1, ...(data?.procedures || []).map((p) => p.count));
   const maxSecondCount = Math.max(1, ...(data?.proceduresII || []).map((p) => p.count));
-  const periodLabel = isMonthly ? `${MONTHS[month - 1]} ${year}` : `Year ${year}`;
+  const periodLabel = isCustom
+    ? `${fromDate.trim() || "…"} → ${toDate.trim() || "…"}`
+    : isMonthly
+      ? `${MONTHS[month - 1]} ${year}`
+      : `Year ${year}`;
 
   const doExport = useCallback(async (secondProcedure = false) => {
     if (!data) return;
@@ -83,7 +101,6 @@ export default function StatsScreen() {
         contentContainerStyle={{ paddingBottom: bottomChrome + spacing.xl }}
         showsVerticalScrollIndicator={false}
       >
-        {/* Hero */}
         <View style={styles.hero}>
           <Image source={HERO} style={styles.heroImg} contentFit="cover" />
           <LinearGradient
@@ -139,25 +156,56 @@ export default function StatsScreen() {
         </View>
 
         <View style={styles.body}>
-          <Segmented options={["Monthly", "Yearly"]} value={scope} onChange={setScope} testIDPrefix="stats-scope" />
+          <Segmented options={["Monthly", "Yearly", "Custom"]} value={scope} onChange={setScope} testIDPrefix="stats-scope" />
 
-          <View style={styles.selectors}>
-            {isMonthly && (
+          {isCustom ? (
+            <View style={styles.customRange}>
+              <View style={styles.dateField}>
+                <Text style={styles.dateLabel}>From</Text>
+                <TextInput
+                  testID="stats-from-date"
+                  value={fromDate}
+                  onChangeText={setFromDate}
+                  placeholder="YYYY-MM-DD"
+                  placeholderTextColor={colors.onSurfaceTertiary}
+                  style={styles.dateInput}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+              </View>
+              <View style={styles.dateField}>
+                <Text style={styles.dateLabel}>To</Text>
+                <TextInput
+                  testID="stats-to-date"
+                  value={toDate}
+                  onChangeText={setToDate}
+                  placeholder="YYYY-MM-DD"
+                  placeholderTextColor={colors.onSurfaceTertiary}
+                  style={styles.dateInput}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+              </View>
+            </View>
+          ) : (
+            <View style={styles.selectors}>
+              {isMonthly && (
+                <Stepper
+                  testID="stats-month"
+                  label={MONTHS[month - 1]}
+                  onPrev={() => setMonth((m) => (m === 1 ? 12 : m - 1))}
+                  onNext={() => setMonth((m) => (m === 12 ? 1 : m + 1))}
+                />
+              )}
               <Stepper
-                testID="stats-month"
-                label={MONTHS[month - 1]}
-                onPrev={() => setMonth((m) => (m === 1 ? 12 : m - 1))}
-                onNext={() => setMonth((m) => (m === 12 ? 1 : m + 1))}
+                testID="stats-year"
+                label={String(year)}
+                mono
+                onPrev={() => setYear((y) => y - 1)}
+                onNext={() => setYear((y) => y + 1)}
               />
-            )}
-            <Stepper
-              testID="stats-year"
-              label={String(year)}
-              mono
-              onPrev={() => setYear((y) => y - 1)}
-              onNext={() => setYear((y) => y + 1)}
-            />
-          </View>
+            </View>
+          )}
 
           <Text style={styles.section}>Procedure Breakdown</Text>
           {isLoading ? (
@@ -282,6 +330,20 @@ const useStyles = makeStyles((colors) => ({
   bigLabel: { fontFamily: fontFamily.medium, fontSize: fontSize.lg, color: colors.onSurfaceInverse, opacity: 0.9 },
   body: { padding: spacing.lg },
   selectors: { flexDirection: "row", gap: spacing.md, marginTop: spacing.lg },
+  customRange: { flexDirection: "row", gap: spacing.md, marginTop: spacing.lg },
+  dateField: { flex: 1 },
+  dateLabel: { fontFamily: fontFamily.medium, fontSize: fontSize.sm, color: colors.onSurfaceSecondary, marginBottom: spacing.xs },
+  dateInput: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    fontFamily: fontFamily.monoMedium,
+    fontSize: fontSize.base,
+    color: colors.onSurface,
+  },
   stepper: {
     flex: 1,
     flexDirection: "row",
