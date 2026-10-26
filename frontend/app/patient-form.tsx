@@ -736,23 +736,8 @@ export default function PatientForm() {
     implants:(prev.implants || []).map(x => x.id === id ? { ...x, quantity:Math.max(1,x.quantity + delta) } : x),
   }));
   const [ready, setReady] = useState(false);
-  const lastAutoLabScan = useRef("");
-  useEffect(() => {
-    if (!labOcrEnabled || labOcrBusy) return;
-    // Inspect only pictures already saved in this patient's file; the OCR
-    // classifier excludes ordinary clinical photos from lab-result parsing.
-    const uris = [...new Set(p.photos)].filter(Boolean);
-    if (!uris.length || (isEdit && !ready)) return;
-    const signature = LAB_OCR_PIPELINE_VERSION + "|" + uris.join("|");
-    if (lastAutoLabScan.current === signature) return;
-    const timer = setTimeout(() => {
-      // Mark the set only when the scan can start; if another scan is busy,
-      // analyzeLabPhotos clears this signature and the effect retries.
-      lastAutoLabScan.current = signature;
-      void analyzeLabPhotos(uris, true);
-    }, 500);
-    return () => clearTimeout(timer);
-  }, [labOcrEnabled, labOcrBusy, p.photos, ready, isEdit]);
+  // Lab OCR is intentionally manual: scanning starts only when the user taps
+  // "Rescan lab photos", avoiding unexpected CPU use while opening patient files.
   useEffect(() => {
     const source = isEdit ? detailedExisting : existing;
     if (!source) return;
@@ -2293,8 +2278,8 @@ export default function PatientForm() {
               <Ionicons name={labFindingsExpanded ? "chevron-up" : "chevron-down"} size={26} color={colors.error || "#B91C1C"} />
             </Pressable>
             {labFindingsExpanded ? <View>
-            <Text style={styles.hint}>{labOcrBusy ? "Checking saved pictures for lab reports…" : "Saved photos are checked automatically. Unchanged photos use the previous scan to keep the app responsive; use Rescan if a clear test name or result was missed."}</Text>
-            <Pressable disabled={labOcrBusy || !p.photos.length} onPress={() => { lastAutoLabScan.current = ""; void analyzeLabPhotos([...new Set(p.photos)], false, true); }} style={{ alignSelf: "flex-start", marginTop: spacing.xs, paddingVertical: spacing.sm, paddingHorizontal: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md }}>
+            <Text style={styles.hint}>{labOcrBusy ? "Checking saved pictures for lab reports…" : "Lab scanning runs only when you tap Rescan. The scanner uses saved test names, aliases, units, and sex-specific reference ranges; it does not use ranges printed on the image."}</Text>
+            <Pressable disabled={labOcrBusy || !p.photos.length} onPress={() => { void analyzeLabPhotos([...new Set(p.photos)], false, true); }} style={{ alignSelf: "flex-start", marginTop: spacing.xs, paddingVertical: spacing.sm, paddingHorizontal: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md }}>
               <Text style={{ color: colors.brandPrimary, fontFamily: fontFamily.semibold }}>{labOcrBusy ? "Scanning…" : "Rescan lab photos"}</Text>
             </Pressable>
             {labOcrText ? <View style={{ marginTop: spacing.sm, padding: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md }}>
