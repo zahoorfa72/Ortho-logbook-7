@@ -184,7 +184,7 @@ export async function installPatientImageArchivePdf(
   all[String(metadata.patientId)] = { ...all[String(metadata.patientId)], ...metadata, localUri: target };
   await writeArchives(all);
 }
-export async function archivePatientImagesForPatient(patientId: string, onProgress?: (stage: string) => void): Promise<PatientImageArchive> {
+export async function archivePatientImagesForPatient(patientId: string, onProgress?: (stage: string) => void, allowEmptyReplacement = false): Promise<PatientImageArchive> {
   initializeDatabase();
   const id = String(patientId || "").trim();
   if (!id) throw new Error("Save this patient before creating an image PDF.");
@@ -198,10 +198,40 @@ export async function archivePatientImagesForPatient(patientId: string, onProgre
   const all = await readArchives();
   const existing = all[id];
 
+  // Empty replacement is allowed only for the explicit admin-approved
+  // "update Drive PDF" action. Routine backup/restore must never interpret
+  // missing local photos as permission to erase an existing Drive archive.
+  if (!sources.length && allowEmptyReplacement) {
+    const stamp = await stampFor(id, name, mrNo, String(patient.created_at || patient.date || ""), []);
+    if (existing?.sourceStamp === stamp && existing.imageCount === 0) {
+      const info = await FileSystem.getInfoAsync(existing.localUri);
+      if (info.exists && Number(info.size || 0) > 8) return existing;
+    }
+    onProgress?.("Creating an approved empty patient PDF…");
+    await FileSystem.makeDirectoryAsync(ARCHIVE_DIR, { intermediates: true });
+    const generated = await Print.printToFileAsync({ html: makeHtml(name, mrNo, []), base64: false });
+    try {
+      const info = await FileSystem.getInfoAsync(generated.uri);
+      if (!info.exists || Number(info.size || 0) < 8) throw new Error("The replacement patient PDF is empty or unreadable.");
+      await installPatientImageArchivePdf({
+        patientId: id, patientName: name, mrNo,
+        fileName: existing?.fileName || fileNameFor(name, mrNo, id),
+        sourceStamp: stamp, archivedAt: new Date().toISOString(), imageCount: 0,
+        patientUpdatedAt: String(patient.updated_at || ""),
+        driveFileId: existing?.driveFileId, driveSourceStamp: existing?.driveSourceStamp,
+      }, generated.uri);
+    } finally {
+      try { await FileSystem.deleteAsync(generated.uri, { idempotent: true }); } catch {}
+    }
+    const savedEmpty = await getPatientImageArchive(id);
+    if (!savedEmpty) throw new Error("The approved empty PDF could not be verified in phone storage.");
+    return savedEmpty;
+  }
+
   // A data-only backup may intentionally contain no photo bytes. Never turn
   // that absence into an empty PDF and never overwrite a good Drive archive.
   // Reuse a verified local archive if available; otherwise require the admin
-  // to download the original PDF or explicitly delete it before changing it.
+  // to download the original PDF or explicitly approve an empty replacement.
   if (!sources.length) {
     if (existing?.localUri) {
       const info = await FileSystem.getInfoAsync(existing.localUri);
