@@ -250,9 +250,7 @@ export default function PatientForm() {
       p.customData?.labOcrPhotoSignature === photoSignature;
     const cachedExtracted = hasCachedScan ? String(p.customData?.labOcrExtractedText || "") : null;
     if (labOcrBusy) {
-      // The automatic-scan effect may have queued a new photo set while another
-      // scan was finishing. Clear its signature so the effect retries when idle.
-      lastAutoLabScan.current = "";
+      // A scan is already running; the user can retry manually when it finishes.
       return;
     }
     setLabOcrBusy(true);
