@@ -83,18 +83,32 @@ export default function Inventory() {
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["inventory"] });
   };
+  const resolveCategory = (item: InventoryItem) => {
+    const itemCategoryId = String(item.categoryId || "").trim();
+    const itemCategoryName = String(item.category || "").trim();
+    const matched = (Array.isArray(categories) ? categories : []).find((category) =>
+      (itemCategoryId && String(category.id) === itemCategoryId) ||
+      (itemCategoryName && String(category.name || "").trim().toLocaleLowerCase() === itemCategoryName.toLocaleLowerCase())
+    );
+    if (!matched) throw new Error(itemCategoryName
+      ? `Inventory category "${itemCategoryName}" was not found. Re-select its saved category before saving.`
+      : "Select a saved inventory category before saving this item.");
+    return { categoryId: String(matched.id), category: String(matched.name) };
+  };
 
   const updateItem = useMutation({
-    mutationFn: (item: InventoryItem) =>
-      api.put(`/inventory/${item.id}`, {
+    mutationFn: (item: InventoryItem) => {
+      const resolved = resolveCategory(item);
+      return api.put(`/inventory/${item.id}`, {
         name: item.name,
-        categoryId: item.categoryId,
-        category: item.category,
+        categoryId: resolved.categoryId,
+        category: resolved.category,
         size: item.size,
         quantity: item.quantity,
         unit: item.unit,
         minimumStock: item.minimumStock,
-      }),
+      });
+    },
     onSuccess: () => {
       invalidate();
       void checkAndSendImmediateLowStockAlerts().then(result => {
@@ -118,15 +132,17 @@ export default function Inventory() {
   });
 
   const adjust = useMutation({
-    mutationFn: (item: InventoryItem) =>
-      api.put(`/inventory/${item.id}`, {
+    mutationFn: (item: InventoryItem) => {
+      const resolved = resolveCategory(item);
+      return api.put(`/inventory/${item.id}`, {
         name: item.name,
-        categoryId: item.categoryId,
-        category: item.category,
+        categoryId: resolved.categoryId,
+        category: resolved.category,
         quantity: item.quantity,
         unit: item.unit,
         minimumStock: item.minimumStock,
-      }),
+      });
+    },
     onSuccess: () => { invalidate(); void checkAndSendImmediateLowStockAlerts().then(result => {
         if (/FAILED|failed|error|could not|missing/i.test(result) && !/disabled/i.test(result)) toast("Immediate low-stock alert failed. " + result.slice(0, 100), "error");
         else if (result.includes("sent")) toast("Immediate low-stock alert sent successfully.", "success");
