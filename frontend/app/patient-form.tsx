@@ -2638,7 +2638,7 @@ export default function PatientForm() {
           {!!selectedPhoto && (
             <ScrollView ref={photoScrollRef} scrollEnabled={!photoPinching} key={selectedPhoto || "none"} horizontal pagingEnabled showsHorizontalScrollIndicator={false} contentOffset={{ x: Math.max(0, allViewerPhotos.indexOf(selectedPhoto)) * screenWidth, y: 0 }} onMomentumScrollEnd={(event) => { const idx = Math.max(0, Math.min(allViewerPhotos.length - 1, Math.round(event.nativeEvent.contentOffset.x / screenWidth))); resetPhotoZoom(); setSelectedPhoto(allViewerPhotos[idx] || null); }} style={{ flex: 1, width: screenWidth }} contentContainerStyle={{ alignItems: "center" }}>
               {allViewerPhotos.map((uri, idx) => <View key={uri + "-" + idx} style={{ width: screenWidth, height: "100%", alignItems: "center", justifyContent: "center" }}>
-                <PinchGestureHandler minPointers={2} maxPointers={2} shouldCancelWhenOutside={false} simultaneousHandlers={photoScrollRef} onGestureEvent={onPhotoPinch} onHandlerStateChange={finishPhotoPinch}>
+                <PinchGestureHandler shouldCancelWhenOutside={false} simultaneousHandlers={photoScrollRef} onGestureEvent={onPhotoPinch} onHandlerStateChange={finishPhotoPinch}>
                   <Animated.View collapsable={false} style={{ width: "100%", height: "100%", alignItems: "center", justifyContent: "center" }}>
                     <Animated.Image source={{ uri }} style={[styles.photoFull, { transform: [{ scale: combinedPhotoScale }] }]} resizeMode="contain" />
                   </Animated.View>
