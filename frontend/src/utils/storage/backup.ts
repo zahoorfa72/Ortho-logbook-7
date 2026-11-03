@@ -1213,11 +1213,21 @@ export async function exportIncrementalBackupData(changedTables: string[], onPro
   // local comparison cache retains only metadata plus media signatures.
   nextTables[table] = currentRows.map((row) => stripBackupCacheRow(row));
  }
+ const stableCacheJson = (value: any): string => {
+  if (value === undefined) return "undefined";
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return "[" + value.map(stableCacheJson).join(",") + "]";
+  return "{" + Object.keys(value).sort().filter(key => value[key] !== undefined)
+   .map(key => JSON.stringify(key) + ":" + stableCacheJson(value[key])).join(",") + "}";
+ };
  const effectiveTables = tables.filter((table) => {
   if (table === "branding" || table === "appSettings") {
    const currentValue = (backup as any)[table] ?? null;
    const previousValue = canDiff ? previous!.tables[table] : undefined;
-   return !canDiff || JSON.stringify(previousValue) !== JSON.stringify(currentValue);
+   // AsyncStorage key/object enumeration can vary; compare settings
+   // independent of property order so app-open/navigation does not appear
+   // as a settings change and trigger a redundant Drive upload.
+   return !canDiff || stableCacheJson(previousValue) !== stableCacheJson(currentValue);
   }
   const rows = Array.isArray((backup as any)[table]) ? (backup as any)[table] : [];
   const hasDeletes = Array.isArray(deletedIds[table]) && deletedIds[table].length > 0;
