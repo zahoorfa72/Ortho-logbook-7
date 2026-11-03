@@ -323,15 +323,19 @@ async function sendWhatsApp(pdf: PdfResult, config: LowStockReportConfig) {
 }
 
 
-async function sendLowStockAlertEmail(subject: string, message: string, config: LowStockReportConfig) {
+async function sendLowStockAlertEmail(subject: string, message: string, config: LowStockReportConfig, htmlMessage?: string) {
   const recipients = config.emails.split(/[;,\n]/).map(x => x.trim()).filter(Boolean);
   if (!recipients.length) throw new Error("Add a recipient email for immediate low-stock alerts.");
   const invalid = recipients.filter(address => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address));
   if (invalid.length) throw new Error("Invalid low-stock alert email recipient(s): " + invalid.join(", "));
   const token = await getGoogleGmailAccessToken();
-  const raw = "To: " + recipients.join(", ") + "\r\nSubject: " + subject +
-    "\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n" +
-    btoa(unescape(encodeURIComponent(message)));
+  // Keep the subject ASCII-only to prevent Gmail showing mojibake such as Ã¢Â€Â”.
+  const safeSubject = subject.replace(/[–—]/g, "-").replace(/[^\x20-\x7E]/g, "");
+  const body = htmlMessage || message;
+  const contentType = htmlMessage ? "text/html" : "text/plain";
+  const raw = "To: " + recipients.join(", ") + "\r\nSubject: " + safeSubject +
+    "\r\nMIME-Version: 1.0\r\nContent-Type: " + contentType + "; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n" +
+    btoa(unescape(encodeURIComponent(body)));
   const encoded = btoa(unescape(encodeURIComponent(raw))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   const response = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
     method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
@@ -472,6 +476,9 @@ export async function checkAndSendImmediateLowStockAlerts(): Promise<string> {
     };
     await saveState(queuedState);
 
+    const escapeEmailHtml = (value: string) => String(value).replace(/[&<>"']/g, char => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    }[char] || char));
     const formatQueuedMessage = (alert: PendingImmediateAlert) => {
       const detail = alert.items.map((item, index) => [
         (index + 1) + ". " + item.name,
@@ -483,19 +490,43 @@ export async function checkAndSendImmediateLowStockAlerts(): Promise<string> {
       ].join("\n")).join("\n\n");
       return [
         "ORTHO LOGBOOK",
-        alert.kind === "zero" ? "OUT-OF-STOCK ALERT" : "IMMEDIATE LOW-STOCK ALERT",
-        "--------------------------------",
-        "Newly affected item(s): " + alert.items.length,
+        alert.kind === "zero" ? "OUT OF STOCK ALERT" : "IMMEDIATE LOW STOCK ALERT",
+        "NEWLY AFFECTED ITEMS: " + alert.items.length,
         "",
         detail,
         "",
         alert.kind === "zero"
-          ? "Action required: Replenish these item(s) urgently; stock was zero when detected."
-          : "Action required: Arrange replenishment for the item(s) listed above.",
+          ? "URGENT: Replenish these items. Stock was zero when detected."
+          : "ACTION REQUIRED: Arrange replenishment for the items listed above.",
         "Detected at: " + new Date(alert.detectedAt).toLocaleString(),
-        "",
-        "This message contains only item(s) that crossed the stock threshold at the detected time.",
       ].join("\n");
+    };
+    const formatQueuedHtml = (alert: PendingImmediateAlert) => {
+      const zero = alert.kind === "zero";
+      const cards = alert.items.map((item, index) => {
+        const name = escapeEmailHtml(item.name);
+        const details = [
+          item.category && item.category.toLowerCase() !== item.name.toLowerCase() ? "Category: " + escapeEmailHtml(item.category) : "",
+          item.size ? "Size: " + escapeEmailHtml(item.size) : "",
+        ].filter(Boolean).join(" &nbsp; | &nbsp; ");
+        return '<div style="border:2px solid ' + (zero ? '#b91c1c' : '#d97706') + ';border-radius:12px;padding:18px;margin:14px 0;background:#fff7ed">' +
+          '<div style="font-size:12px;font-weight:700;color:#7c2d12;margin-bottom:8px">LOW STOCK ITEM ' + (index + 1) + '</div>' +
+          '<div style="font-size:22px;line-height:1.3;font-weight:800;color:#111827;margin-bottom:12px">' + name + '</div>' +
+          (details ? '<div style="font-size:13px;color:#4b5563;margin-bottom:12px">' + details + '</div>' : '') +
+          '<table role="presentation" style="width:100%;border-collapse:collapse"><tr>' +
+          '<td style="background:#ffedd5;border-radius:8px;padding:12px;width:50%"><div style="font-size:11px;color:#7c2d12;font-weight:700">CURRENT STOCK</div><div style="font-size:24px;font-weight:800;color:#9a3412">' + item.quantity + ' ' + escapeEmailHtml(item.unit) + '</div></td>' +
+          '<td style="width:10px"></td><td style="background:#f3f4f6;border-radius:8px;padding:12px;width:50%"><div style="font-size:11px;color:#374151;font-weight:700">MINIMUM STOCK</div><div style="font-size:24px;font-weight:800;color:#111827">' + item.minimumStock + ' ' + escapeEmailHtml(item.unit) + '</div></td>' +
+          '</tr></table><div style="margin-top:12px;font-size:13px;font-weight:800;color:' + (zero ? '#b91c1c' : '#9a3412') + '">' + (zero ? 'OUT OF STOCK - URGENT' : 'BELOW OR AT MINIMUM STOCK') + '</div></div>';
+      }).join("");
+      return '<!doctype html><html><body style="margin:0;padding:20px;background:#f3f4f6;font-family:Arial,sans-serif;color:#111827">' +
+        '<div style="max-width:620px;margin:0 auto;background:#fff;border-radius:16px;padding:22px">' +
+        '<div style="font-size:13px;font-weight:800;letter-spacing:1px;color:#6b7280">ORTHO LOGBOOK</div>' +
+        '<div style="font-size:24px;font-weight:800;margin:8px 0 4px;color:' + (zero ? '#b91c1c' : '#9a3412') + '">' + (zero ? 'OUT OF STOCK ALERT' : 'LOW STOCK ALERT') + '</div>' +
+        '<div style="font-size:14px;color:#4b5563;margin-bottom:18px">Immediate attention required - ' + alert.items.length + ' newly affected item(s)</div>' +
+        cards +
+        '<div style="font-size:14px;font-weight:700;margin-top:18px">' + (zero ? 'Urgent: replenish these items immediately.' : 'Please arrange replenishment for the highlighted item(s).') + '</div>' +
+        '<div style="font-size:12px;color:#6b7280;margin-top:12px">Detected at: ' + escapeEmailHtml(new Date(alert.detectedAt).toLocaleString()) + '</div>' +
+        '</div></body></html>';
     };
 
     const results: string[] = [];
@@ -517,9 +548,9 @@ export async function checkAndSendImmediateLowStockAlerts(): Promise<string> {
         const message = formatQueuedMessage(alert);
         const names = alert.items.map(item => item.name).join(", ");
         if (alert.channel === "gmail") {
-          const subject = (alert.kind === "zero" ? "OUT OF STOCK ALERT — " : "LOW STOCK ALERT — ") +
-            names + " — " + alert.detectedAt.slice(0, 10);
-          await sendLowStockAlertEmail(subject, message, config);
+          const subject = (alert.kind === "zero" ? "OUT OF STOCK ALERT - " : "LOW STOCK ALERT - ") +
+            names + " - " + alert.detectedAt.slice(0, 10);
+          await sendLowStockAlertEmail(subject, message, config, formatQueuedHtml(alert));
         } else {
           await sendLowStockAlertWhatsApp(message, config);
         }
