@@ -293,8 +293,10 @@ export function repairDatabaseData() {
       db.runSync("DELETE FROM inventory_movements WHERE inventory_id NOT IN (SELECT id FROM inventory)");
       db.runSync("DELETE FROM patient_history WHERE patient_id NOT IN (SELECT id FROM patients)");
       db.runSync("UPDATE users SET role='doctor' WHERE role NOT IN ('admin','doctor','staff') OR role IS NULL OR role=''");
-      db.runSync("UPDATE users SET can_edit_patients=CASE WHEN can_edit_patients>0 THEN 1 ELSE 0 END");
-      db.runSync("UPDATE users SET disabled=CASE WHEN disabled>0 THEN 1 ELSE 0 END");
+      // Repair only invalid values. Updating already-correct rows emits SQLite
+      // change events and used to queue needless Drive backups on every launch.
+      db.runSync("UPDATE users SET can_edit_patients=CASE WHEN COALESCE(can_edit_patients,0)>0 THEN 1 ELSE 0 END WHERE COALESCE(can_edit_patients,-1)<>CASE WHEN COALESCE(can_edit_patients,0)>0 THEN 1 ELSE 0 END");
+      db.runSync("UPDATE users SET disabled=CASE WHEN COALESCE(disabled,0)>0 THEN 1 ELSE 0 END WHERE COALESCE(disabled,-1)<>CASE WHEN COALESCE(disabled,0)>0 THEN 1 ELSE 0 END");
       ensureInventoryCategoryLinks();
     });
     return true;

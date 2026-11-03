@@ -227,8 +227,15 @@ export function setAutomaticDriveBackupPaused(paused: boolean) {
 
 export function refreshAutomaticDriveBackup() {
   void loadPendingTables().then(async () => {
+    if (!pendingTables.size) {
+      setDriveSyncState({
+        phase: "success",
+        updates: 0,
+        message: "Backup is up to date · no unsynced changes",
+      });
+      return;
+    }
     retryAttempt = 0;
-    ALL_SYNC_TABLES.forEach((name) => pendingTables.add(name));
     await persistPendingTables();
     if (timer) {
       clearTimeout(timer);
@@ -239,7 +246,7 @@ export function refreshAutomaticDriveBackup() {
       setDriveSyncState({
         phase: "waiting",
         updates: pendingTables.size,
-        message: "Refresh requested · retry will start after the current upload releases",
+        message: "Retry requested · will resume after the current upload",
       });
       return;
     }

@@ -95,6 +95,57 @@ function autoDetectPageCorners(){
   if(Math.abs(area)<canvas.width*canvas.height*.05)throw new Error("The detected page shape is too small. Please adjust the corners manually.");
   points=candidate;draw();
 }
+window.trimWhiteMargins = function(){
+  try {
+    if(!img.naturalWidth || !img.naturalHeight) throw new Error("The selected image is not ready yet.");
+    var w=img.naturalWidth,h=img.naturalHeight;
+    var sample=document.createElement("canvas");sample.width=w;sample.height=h;
+    var sctx=sample.getContext("2d",{willReadFrequently:true});
+    if(!sctx)throw new Error("White-edge detection is unavailable on this device.");
+    sctx.drawImage(img,0,0);
+    var pixels=sctx.getImageData(0,0,w,h).data;
+    var band=Math.max(2,Math.floor(Math.min(w,h)*.025)),borderSum=0,borderCount=0;
+    for(var y=0;y<band;y++)for(var x=0;x<w;x+=2){
+      var at=(y*w+x)*4;borderSum+=.299*pixels[at]+.587*pixels[at+1]+.114*pixels[at+2];borderCount++;
+      var bt=((h-1-y)*w+x)*4;borderSum+=.299*pixels[bt]+.587*pixels[bt+1]+.114*pixels[bt+2];borderCount++;
+    }
+    for(var xx=0;xx<band;xx++)for(var yy=band;yy<h-band;yy+=2){
+      var ct=(yy*w+xx)*4;borderSum+=.299*pixels[ct]+.587*pixels[ct+1]+.114*pixels[ct+2];borderCount++;
+      var dt=(yy*w+(w-1-xx))*4;borderSum+=.299*pixels[dt]+.587*pixels[dt+1]+.114*pixels[dt+2];borderCount++;
+    }
+    var threshold=Math.max(170,Math.min(246,(borderCount?borderSum/borderCount:250)-13));
+    var rowCounts=new Uint32Array(h),colCounts=new Uint32Array(w);
+    for(var yy2=0;yy2<h;yy2++){
+      var count=0,offset=yy2*w*4;
+      for(var xx2=0;xx2<w;xx2++){
+        var p=offset+xx2*4,r=pixels[p],g=pixels[p+1],b=pixels[p+2];
+        var lum=.299*r+.587*g+.114*b,chroma=Math.max(r,g,b)-Math.min(r,g,b);
+        if(lum<threshold || (chroma>22 && lum<threshold+9)){count++;colCounts[xx2]++;}
+      }
+      rowCounts[yy2]=count;
+    }
+    var rowLimit=Math.max(3,Math.floor(w*.0012)),colLimit=Math.max(3,Math.floor(h*.0012));
+    var top=0,bottom=h-1,left=0,right=w-1;
+    while(top<h&&rowCounts[top]<rowLimit)top++;
+    while(bottom>top&&rowCounts[bottom]<rowLimit)bottom--;
+    while(left<w&&colCounts[left]<colLimit)left++;
+    while(right>left&&colCounts[right]<colLimit)right--;
+    if(top>=h||left>=w||right-left<w*.28||bottom-top<h*.28)throw new Error("Could not confidently find the document edges. Use Auto-Scan Page or manual crop instead.");
+    var padX=Math.max(8,Math.round((right-left)*.012)),padY=Math.max(8,Math.round((bottom-top)*.012));
+    left=Math.max(0,left-padX);right=Math.min(w-1,right+padX);top=Math.max(0,top-padY);bottom=Math.min(h-1,bottom+padY);
+    var cropW=right-left+1,cropH=bottom-top+1;
+    if(cropW>w*.985&&cropH>h*.985)throw new Error("No removable white margins were detected.");
+    var out=document.createElement("canvas");out.width=cropW;out.height=cropH;
+    var outCtx=out.getContext("2d");if(!outCtx)throw new Error("Could not create the trimmed image.");
+    outCtx.filter="contrast(1.08)";
+    outCtx.drawImage(img,left,top,cropW,cropH,0,0,cropW,cropH);
+    var data=out.toDataURL("image/jpeg",.97);
+    if(!data||data.length<1000)throw new Error("The trimmed image could not be created.");
+    window.ReactNativeWebView&&window.ReactNativeWebView.postMessage(JSON.stringify({type:"done",action:"trim",dataUrl:data}));
+  }catch(err){
+    window.ReactNativeWebView&&window.ReactNativeWebView.postMessage(JSON.stringify({type:"error",message:String(err&&err.message||err)}));
+  }
+};
 document.getElementById("autoScan").onclick=function(){
   var button=this;button.disabled=true;button.textContent="Detecting…";
   try{autoDetectPageCorners();button.textContent="Correcting page…";document.getElementById("apply").click();}
