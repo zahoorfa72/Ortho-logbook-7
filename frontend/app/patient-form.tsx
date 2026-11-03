@@ -116,7 +116,6 @@ export default function PatientForm() {
   }, [procedures, patients]);
 
   const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
-  const [photoPinching, setPhotoPinching] = useState(false);
   const photoScrollRef = useRef<any>(null);
   const [patientArchiveAvailable, setPatientArchiveAvailable] = useState(false);
   const [patientArchiveOnDrive, setPatientArchiveOnDrive] = useState(false);
@@ -155,16 +154,11 @@ export default function PatientForm() {
   const onPhotoPinch = useRef(Animated.event([{ nativeEvent: { scale: pinchScale } }], { useNativeDriver: true })).current;
   const finishPhotoPinch = (event: any) => {
     const state = event?.nativeEvent?.state;
-    if (state === GestureState.BEGAN || state === GestureState.ACTIVE) {
-      setPhotoPinching(true);
-      return;
-    }
     if (state === GestureState.END || state === GestureState.CANCELLED || state === GestureState.FAILED) {
       const nextScale = Math.max(1, Math.min(5, basePhotoScaleNumber.current * (Number(event?.nativeEvent?.scale) || 1)));
       basePhotoScaleNumber.current = nextScale;
       basePhotoScale.setValue(nextScale);
       pinchScale.setValue(1);
-      setPhotoPinching(false);
     }
   };
   const resetPhotoZoom = useCallback(() => {
@@ -174,14 +168,7 @@ export default function PatientForm() {
   }, [basePhotoScale, pinchScale]);
   useEffect(() => {
     resetPhotoZoom();
-    setPhotoPinching(false);
   }, [selectedPhoto, resetPhotoZoom]);
-  const adjustPhotoZoom = (factor: number) => {
-    const nextScale = Math.max(1, Math.min(5, basePhotoScaleNumber.current * factor));
-    basePhotoScaleNumber.current = nextScale;
-    basePhotoScale.setValue(nextScale);
-    pinchScale.setValue(1);
-  };
   const [labAddedResults, setLabAddedResults] = useState<Array<{ test: string; unit: string; result: string; reference: string; photoUri: string; reportDate?: string; min?: number; max?: number }>>([]);
   const [manualTestName, setManualTestName] = useState("");
   const [manualTestUnit, setManualTestUnit] = useState("");
@@ -2623,20 +2610,7 @@ export default function PatientForm() {
             <Ionicons name="close" size={30} color="#FFFFFF" />
           </Pressable>
           {!!selectedPhoto && (
-            <View style={{ position: "absolute", top: 58, alignSelf: "center", zIndex: 10, elevation: 10, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 22, backgroundColor: "rgba(0,0,0,0.68)" }}>
-              <Pressable accessibilityRole="button" accessibilityLabel="Zoom out" onPress={() => adjustPhotoZoom(0.8)} hitSlop={8} style={{ width: 32, height: 32, alignItems: "center", justifyContent: "center" }}>
-                <Ionicons name="remove" size={24} color="#FFFFFF" />
-              </Pressable>
-              <Pressable accessibilityRole="button" accessibilityLabel="Reset photo zoom" onPress={resetPhotoZoom} style={{ paddingHorizontal: 4, minWidth: 42, alignItems: "center" }}>
-                <Text style={{ color: "#FFFFFF", fontSize: 12, fontWeight: "700" }}>RESET</Text>
-              </Pressable>
-              <Pressable accessibilityRole="button" accessibilityLabel="Zoom in" onPress={() => adjustPhotoZoom(1.25)} hitSlop={8} style={{ width: 32, height: 32, alignItems: "center", justifyContent: "center" }}>
-                <Ionicons name="add" size={24} color="#FFFFFF" />
-              </Pressable>
-            </View>
-          )}
-          {!!selectedPhoto && (
-            <ScrollView ref={photoScrollRef} scrollEnabled={!photoPinching} key={selectedPhoto || "none"} horizontal pagingEnabled showsHorizontalScrollIndicator={false} contentOffset={{ x: Math.max(0, allViewerPhotos.indexOf(selectedPhoto)) * screenWidth, y: 0 }} onMomentumScrollEnd={(event) => { const idx = Math.max(0, Math.min(allViewerPhotos.length - 1, Math.round(event.nativeEvent.contentOffset.x / screenWidth))); resetPhotoZoom(); setSelectedPhoto(allViewerPhotos[idx] || null); }} style={{ flex: 1, width: screenWidth }} contentContainerStyle={{ alignItems: "center" }}>
+            <ScrollView ref={photoScrollRef} key={selectedPhoto || "none"} horizontal pagingEnabled showsHorizontalScrollIndicator={false} contentOffset={{ x: Math.max(0, allViewerPhotos.indexOf(selectedPhoto)) * screenWidth, y: 0 }} onMomentumScrollEnd={(event) => { const idx = Math.max(0, Math.min(allViewerPhotos.length - 1, Math.round(event.nativeEvent.contentOffset.x / screenWidth))); resetPhotoZoom(); setSelectedPhoto(allViewerPhotos[idx] || null); }} style={{ flex: 1, width: screenWidth }} contentContainerStyle={{ alignItems: "center" }}>
               {allViewerPhotos.map((uri, idx) => <View key={uri + "-" + idx} style={{ width: screenWidth, height: "100%", alignItems: "center", justifyContent: "center" }}>
                 <PinchGestureHandler shouldCancelWhenOutside={false} simultaneousHandlers={photoScrollRef} onGestureEvent={onPhotoPinch} onHandlerStateChange={finishPhotoPinch}>
                   <Animated.View collapsable={false} style={{ width: "100%", height: "100%", alignItems: "center", justifyContent: "center" }}>
