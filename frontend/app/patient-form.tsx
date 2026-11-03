@@ -2611,7 +2611,7 @@ export default function PatientForm() {
             <Ionicons name="close" size={30} color="#FFFFFF" />
           </Pressable>
           {!!selectedPhoto && (
-            <NativeViewGestureHandler ref={photoScrollRef} disallowInterruption={false} style={{ flex: 1 }}>
+            <NativeViewGestureHandler ref={photoScrollRef} disallowInterruption={false}>
               <ScrollView key={selectedPhoto || "none"} horizontal pagingEnabled showsHorizontalScrollIndicator={false} contentOffset={{ x: Math.max(0, allViewerPhotos.indexOf(selectedPhoto)) * screenWidth, y: 0 }} onMomentumScrollEnd={(event) => { const idx = Math.max(0, Math.min(allViewerPhotos.length - 1, Math.round(event.nativeEvent.contentOffset.x / screenWidth))); resetPhotoZoom(); setSelectedPhoto(allViewerPhotos[idx] || null); }} style={{ flex: 1, width: screenWidth }} contentContainerStyle={{ alignItems: "center" }}>
               {allViewerPhotos.map((uri, idx) => <View key={uri + "-" + idx} style={{ width: screenWidth, height: "100%", alignItems: "center", justifyContent: "center" }}>
                 <PinchGestureHandler shouldCancelWhenOutside={false} simultaneousHandlers={photoScrollRef} onGestureEvent={onPhotoPinch} onHandlerStateChange={finishPhotoPinch}>
