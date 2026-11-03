@@ -17,7 +17,7 @@ import { recordDiagnosticError } from "@/src/utils/problem-report";
 import { Dimensions } from "react-native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Animated, AppState, Image, InteractionManager, Linking, Modal, Pressable, ScrollView, Text, View } from "react-native";
-import { PinchGestureHandler, State as GestureState } from "react-native-gesture-handler";
+import { GestureHandlerRootView, NativeViewGestureHandler, PinchGestureHandler, State as GestureState } from "react-native-gesture-handler";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { WebView } from "react-native-webview";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
@@ -2605,12 +2605,14 @@ export default function PatientForm() {
       </Modal>
 
       <Modal visible={!!selectedPhoto} transparent animationType="fade" onRequestClose={() => setSelectedPhoto(null)}>
+        <GestureHandlerRootView style={{ flex: 1 }}>
         <View style={styles.photoViewer}>
           <Pressable style={styles.photoViewerClose} onPress={() => setSelectedPhoto(null)} hitSlop={10}>
             <Ionicons name="close" size={30} color="#FFFFFF" />
           </Pressable>
           {!!selectedPhoto && (
-            <ScrollView ref={photoScrollRef} key={selectedPhoto || "none"} horizontal pagingEnabled showsHorizontalScrollIndicator={false} contentOffset={{ x: Math.max(0, allViewerPhotos.indexOf(selectedPhoto)) * screenWidth, y: 0 }} onMomentumScrollEnd={(event) => { const idx = Math.max(0, Math.min(allViewerPhotos.length - 1, Math.round(event.nativeEvent.contentOffset.x / screenWidth))); resetPhotoZoom(); setSelectedPhoto(allViewerPhotos[idx] || null); }} style={{ flex: 1, width: screenWidth }} contentContainerStyle={{ alignItems: "center" }}>
+            <NativeViewGestureHandler ref={photoScrollRef} disallowInterruption={false} style={{ flex: 1 }}>
+              <ScrollView key={selectedPhoto || "none"} horizontal pagingEnabled showsHorizontalScrollIndicator={false} contentOffset={{ x: Math.max(0, allViewerPhotos.indexOf(selectedPhoto)) * screenWidth, y: 0 }} onMomentumScrollEnd={(event) => { const idx = Math.max(0, Math.min(allViewerPhotos.length - 1, Math.round(event.nativeEvent.contentOffset.x / screenWidth))); resetPhotoZoom(); setSelectedPhoto(allViewerPhotos[idx] || null); }} style={{ flex: 1, width: screenWidth }} contentContainerStyle={{ alignItems: "center" }}>
               {allViewerPhotos.map((uri, idx) => <View key={uri + "-" + idx} style={{ width: screenWidth, height: "100%", alignItems: "center", justifyContent: "center" }}>
                 <PinchGestureHandler shouldCancelWhenOutside={false} simultaneousHandlers={photoScrollRef} onGestureEvent={onPhotoPinch} onHandlerStateChange={finishPhotoPinch}>
                   <Animated.View collapsable={false} style={{ width: "100%", height: "100%", alignItems: "center", justifyContent: "center" }}>
@@ -2618,7 +2620,8 @@ export default function PatientForm() {
                   </Animated.View>
                 </PinchGestureHandler>
               </View>)}
-            </ScrollView>
+              </ScrollView>
+            </NativeViewGestureHandler>
           )}
           {!!selectedPhoto && (
             <View style={styles.photoViewerToolbar}>
@@ -2640,6 +2643,7 @@ export default function PatientForm() {
             </View>
           )}
         </View>
+        </GestureHandlerRootView>
       </Modal>
 
       <View style={[styles.footer, { paddingBottom: insets.bottom + spacing.md }]}>
