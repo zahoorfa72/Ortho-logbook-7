@@ -2,6 +2,7 @@ import * as Crypto from "expo-crypto";
 import { db, initializeDatabase } from "@/src/db/database";
 import { storage } from "@/src/utils/storage";
 import { triggerAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-backup";
+import { removeDuplicateProcedureAliases } from "@/src/utils/procedure-names";
 
 const id = () => Crypto.randomUUID();
 const nowIso = () => new Date().toISOString();
@@ -688,8 +689,20 @@ export const api = {
       }));
       return patient as any;
     }
-    if (normalizedPath === "/procedures")
-      return db.getAllSync<any>("SELECT id,name FROM procedures ORDER BY name COLLATE NOCASE") as any;
+    if (normalizedPath === "/procedures") {
+      const rows = db.getAllSync<any>("SELECT id,name FROM procedures ORDER BY name COLLATE NOCASE");
+      const visibleNames = removeDuplicateProcedureAliases(rows.map((row: any) => String(row.name || "")));
+      const visibleKeys = new Set(visibleNames.map(name => String(name).trim().toLowerCase()));
+      const duplicateRows = rows.filter((row: any) => !visibleKeys.has(String(row.name || "").trim().toLowerCase()));
+      // Remove only duplicate procedure-catalog abbreviations. Patient rows
+      // store procedure text independently and are deliberately never updated.
+      if (duplicateRows.length) {
+        db.withTransactionSync(() => {
+          for (const row of duplicateRows) db.runSync("DELETE FROM procedures WHERE id=?", [row.id]);
+        });
+      }
+      return rows.filter((row: any) => visibleKeys.has(String(row.name || "").trim().toLowerCase())) as any;
+    }
     if (normalizedPath === "/patient-custom-fields")
       return db.getAllSync<any>("SELECT id,key,label,type,sort_order,enabled,created_at,updated_at FROM patient_custom_fields WHERE enabled=1 ORDER BY sort_order ASC,label COLLATE NOCASE") as any;
     if (normalizedPath === "/implant-records") {
@@ -1015,6 +1028,11 @@ export const api = {
         [name],
       );
       if (duplicate) throw new Error("This procedure already exists.");
+      const existingNames = db.getAllSync<any>("SELECT name FROM procedures").map((row: any) => String(row.name || ""));
+      const visibleWithCandidate = removeDuplicateProcedureAliases([...existingNames, name]);
+      if (!visibleWithCandidate.some(value => value.trim().toLowerCase() === name.trim().toLowerCase())) {
+        throw new Error("This abbreviation already exists as part of a full procedure name.");
+      }
       const procedure = { id: id(), name };
       db.runSync("INSERT INTO procedures (id,name) VALUES (?,?)", [procedure.id, procedure.name]);
       return procedure as any;

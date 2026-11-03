@@ -32,6 +32,7 @@ import { PrimaryButton } from "@/src/components/PrimaryButton";
 import { Segmented } from "@/src/components/Segmented";
 import { useToast } from "@/src/components/toast";
 import { formatInventoryLabel } from "@/src/utils/inventory-label";
+import { removeDuplicateProcedureAliases } from "@/src/utils/procedure-names";
 import { archivePatientImagesForPatient, createPatientImagePdfFile, getPatientImageArchive, openPatientImageArchivePdf } from "@/src/utils/storage/patient-image-archive";
 import { deletePatientImagePdfFromDrive, downloadPatientImageArchiveForPatient, ensurePatientImagePdfOnDrive, uploadPatientImageArchivesToDrive } from "@/src/utils/storage/google-drive";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
@@ -109,12 +110,13 @@ export default function PatientForm() {
       const n2 = (pt as any).procedureII?.trim();
       if (n2 && !byLower.has(n2.toLowerCase())) byLower.set(n2.toLowerCase(), n2);
     }
-    return [...byLower.values()]
+    return removeDuplicateProcedureAliases([...byLower.values()])
       .sort((a, b) => a.localeCompare(b))
       .map((n) => ({ key: n.toLowerCase(), label: n }));
   }, [procedures, patients]);
 
   const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
+  const photoScrollRef = useRef<any>(null);
   const [patientArchiveAvailable, setPatientArchiveAvailable] = useState(false);
   const [patientArchiveOnDrive, setPatientArchiveOnDrive] = useState(false);
   useFocusEffect(useCallback(() => {
@@ -159,11 +161,14 @@ export default function PatientForm() {
       pinchScale.setValue(1);
     }
   };
-  const resetPhotoZoom = () => {
+  const resetPhotoZoom = useCallback(() => {
     basePhotoScaleNumber.current = 1;
     basePhotoScale.setValue(1);
     pinchScale.setValue(1);
-  };
+  }, [basePhotoScale, pinchScale]);
+  useEffect(() => {
+    resetPhotoZoom();
+  }, [selectedPhoto, resetPhotoZoom]);
   const [labAddedResults, setLabAddedResults] = useState<Array<{ test: string; unit: string; result: string; reference: string; photoUri: string; reportDate?: string; min?: number; max?: number }>>([]);
   const [manualTestName, setManualTestName] = useState("");
   const [manualTestUnit, setManualTestUnit] = useState("");
@@ -2591,9 +2596,9 @@ export default function PatientForm() {
             <Ionicons name="close" size={30} color="#FFFFFF" />
           </Pressable>
           {!!selectedPhoto && (
-            <ScrollView key={selectedPhoto || "none"} horizontal pagingEnabled showsHorizontalScrollIndicator={false} contentOffset={{ x: Math.max(0, allViewerPhotos.indexOf(selectedPhoto)) * screenWidth, y: 0 }} onMomentumScrollEnd={(event) => { const idx = Math.max(0, Math.min(allViewerPhotos.length - 1, Math.round(event.nativeEvent.contentOffset.x / screenWidth))); resetPhotoZoom(); setSelectedPhoto(allViewerPhotos[idx] || null); }} style={{ flex: 1, width: screenWidth }} contentContainerStyle={{ alignItems: "center" }}>
+            <ScrollView ref={photoScrollRef} key={selectedPhoto || "none"} horizontal pagingEnabled showsHorizontalScrollIndicator={false} contentOffset={{ x: Math.max(0, allViewerPhotos.indexOf(selectedPhoto)) * screenWidth, y: 0 }} onMomentumScrollEnd={(event) => { const idx = Math.max(0, Math.min(allViewerPhotos.length - 1, Math.round(event.nativeEvent.contentOffset.x / screenWidth))); resetPhotoZoom(); setSelectedPhoto(allViewerPhotos[idx] || null); }} style={{ flex: 1, width: screenWidth }} contentContainerStyle={{ alignItems: "center" }}>
               {allViewerPhotos.map((uri, idx) => <View key={uri + "-" + idx} style={{ width: screenWidth, height: "100%", alignItems: "center", justifyContent: "center" }}>
-                <PinchGestureHandler onGestureEvent={onPhotoPinch} onHandlerStateChange={finishPhotoPinch}>
+                <PinchGestureHandler simultaneousHandlers={photoScrollRef} onGestureEvent={onPhotoPinch} onHandlerStateChange={finishPhotoPinch}>
                   <Animated.View style={{ width: "100%", height: "100%", alignItems: "center", justifyContent: "center" }}>
                     <Animated.Image source={{ uri }} style={[styles.photoFull, { transform: [{ scale: combinedPhotoScale }] }]} resizeMode="contain" />
                   </Animated.View>

@@ -156,9 +156,9 @@ export default function StockScreen(){
     },
     onSuccess:()=>{
       void checkAndSendImmediateLowStockAlerts().then(result=>{
-        if (/FAILED|failed|error|could not|missing/i.test(result) && !/disabled/i.test(result)) toast("Immediate low-stock alert failed. " + result.slice(0, 100), "error");
-        else if (result.includes("sent")) toast("Immediate low-stock alert sent successfully.", "success");
-      }).catch(()=>toast("Immediate low-stock alert failed. Admin can retry it in Automatic Low Stock Reports.", "error"));
+        if (/FAILED|failed|error|could not|missing/i.test(result) && !/disabled/i.test(result)) toast("Low-stock alert queued for retry. " + result.slice(0, 85), "info");
+        else if (result.includes("sent successfully")) toast("Low-stock alert sent successfully.", "success");
+      }).catch(()=>toast("Low-stock alert saved locally and will retry automatically.", "info"));
       qc.invalidateQueries({queryKey:["inventory"]});
       qc.invalidateQueries({queryKey:["inventory","stock-picker"]});
       qc.invalidateQueries({queryKey:["inventory-purchase-receipts"]});

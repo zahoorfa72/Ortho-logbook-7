@@ -34,10 +34,50 @@ export type LowStockReportConfig = {
   lowStockWhatsAppTemplateLanguage?: string;
   savedAt: string;
 };
-type ReportState = { lastGeneratedAt?: string; lastSentAt?: string; lastPeriodKey?: string; lastStatus?: string; activeLowStockIds?: string[]; activeLowStockGmailIds?: string[]; activeLowStockWhatsAppIds?: string[]; lastImmediateAlertAt?: string };
+type LowStockAlertItemSnapshot = {
+  id: string;
+  name: string;
+  category: string;
+  size: string;
+  quantity: number;
+  minimumStock: number;
+  unit: string;
+};
+type PendingImmediateAlert = {
+  id: string;
+  channel: "gmail" | "whatsapp";
+  kind: "minimum" | "zero";
+  detectedAt: string;
+  items: LowStockAlertItemSnapshot[];
+  attempts: number;
+  nextAttemptAt?: string;
+  lastError?: string;
+};
+type DeliveredImmediateAlert = {
+  id: string;
+  channel: "gmail" | "whatsapp";
+  kind: "minimum" | "zero";
+  detectedAt: string;
+  sentAt: string;
+  itemNames: string[];
+  itemIds: string[];
+};
+type ReportState = {
+  lastGeneratedAt?: string;
+  lastSentAt?: string;
+  lastPeriodKey?: string;
+  lastStatus?: string;
+  activeLowStockIds?: string[];
+  activeLowStockGmailIds?: string[];
+  activeLowStockWhatsAppIds?: string[];
+  lastImmediateAlertAt?: string;
+  pendingImmediateAlerts?: PendingImmediateAlert[];
+  deliveredImmediateAlertHistory?: DeliveredImmediateAlert[];
+};
 type PdfResult = { uri: string; count: number; periodStart: string; periodEnd: string; periodKey: string };
 const CONFIG_KEY = "ortho_low_stock_report_config";
 const STATE_KEY = "ortho_low_stock_report_state";
+let immediateAlertCheckInFlight = false;
 
 export async function loadLowStockReportConfig(): Promise<LowStockReportConfig | null> {
   try {
@@ -310,149 +350,206 @@ async function sendLowStockAlertWhatsApp(message: string, config: LowStockReport
  * then remembers the active low-stock set to avoid repeated messages for the same low-stock condition.
  */
 export async function checkAndSendImmediateLowStockAlerts(): Promise<string> {
-  const config = await loadLowStockReportConfig();
-  if (!config) return "Immediate low-stock alerts are not configured.";
-  const masterOn = config.instantLowStockAlertsEnabled !== false;
-  const gmailOn = masterOn && !!config.instantLowStockGmailEnabled;
-  const whatsappOn = masterOn && !!config.instantLowStockWhatsAppEnabled;
-  if (!gmailOn && !whatsappOn) return "Immediate low-stock alerts are disabled.";
-  const inventory = await api.get<any[]>("/inventory");
-  const low = (Array.isArray(inventory) ? inventory : []).filter((item: any) => {
-    const qty = Number(item?.quantity);
-    const min = Number(item?.minimumStock ?? item?.minimum_stock);
-    return !!item?.id && Number.isFinite(qty) && Number.isFinite(min) && qty <= min;
-  });
-  const state = await getLowStockReportState();
-  // Track minimum-stock and zero-stock crossings independently so an item
-  // can alert at its configured minimum and again if it later reaches zero.
-  const thresholdKeys = (item: any): string[] => {
-    const id = String(item?.id || "");
-    const qty = Number(item?.quantity);
-    const min = Number(item?.minimumStock ?? item?.minimum_stock);
-    if (!id || !Number.isFinite(qty) || !Number.isFinite(min) || qty > min) return [];
-    const keys = [id + ":minimum"];
-    if (qty <= 0) keys.push(id + ":zero");
-    return keys;
-  };
-  const currentKeys = [...new Set(low.flatMap(thresholdKeys))];
-  // Migrate old saved states that stored bare item IDs before threshold tracking.
-  const normalizeSavedKeys = (values: string[] | undefined) => (values || []).flatMap(value =>
-    String(value).endsWith(":minimum") || String(value).endsWith(":zero")
-      ? [String(value)]
-      : [String(value) + ":minimum"]
-  );
-  const gmailActive = new Set(normalizeSavedKeys(state.activeLowStockGmailIds));
-  const whatsappActive = new Set(normalizeSavedKeys(state.activeLowStockWhatsAppIds));
+  if (immediateAlertCheckInFlight) return "Immediate low-stock alert check is already running.";
+  immediateAlertCheckInFlight = true;
+  try {
+    const config = await loadLowStockReportConfig();
+    if (!config) return "Immediate low-stock alerts are not configured.";
+    const masterOn = config.instantLowStockAlertsEnabled !== false;
+    const gmailOn = masterOn && !!config.instantLowStockGmailEnabled;
+    const whatsappOn = masterOn && !!config.instantLowStockWhatsAppEnabled;
+    if (!gmailOn && !whatsappOn) return "Immediate low-stock alerts are disabled.";
 
-  // First run establishes a baseline so existing low stock is not falsely reported.
-  const hasGmailBaseline = Array.isArray(state.activeLowStockGmailIds);
-  const hasWhatsAppBaseline = Array.isArray(state.activeLowStockWhatsAppIds);
-  const gmailNew = gmailOn && hasGmailBaseline ? low.filter((item: any) => Number(item.quantity) > 0 && !gmailActive.has(String(item.id) + ":minimum")) : [];
-  const whatsappNew = whatsappOn && hasWhatsAppBaseline ? low.filter((item: any) => Number(item.quantity) > 0 && !whatsappActive.has(String(item.id) + ":minimum")) : [];
-  // Do not send an immediate zero-stock email/WhatsApp for items already at zero on first run.
-  // Establish the baseline first; only a later transition to zero should trigger an urgent alert.
-  const gmailZeroNew = gmailOn && hasGmailBaseline ? low.filter((item: any) => Number(item.quantity) <= 0 && !gmailActive.has(String(item.id) + ":zero")) : [];
-  const whatsappZeroNew = whatsappOn && hasWhatsAppBaseline ? low.filter((item: any) => Number(item.quantity) <= 0 && !whatsappActive.has(String(item.id) + ":zero")) : [];
+    // The API is backed by the local SQLite database, so this event check also
+    // runs with no internet connection. Delivery is queued locally until online.
+    const inventory = await api.get<any[]>("/inventory");
+    const low = (Array.isArray(inventory) ? inventory : []).filter((item: any) => {
+      const quantity = Number(item?.quantity);
+      const minimum = Number(item?.minimumStock ?? item?.minimum_stock);
+      return !!item?.id && Number.isFinite(quantity) && Number.isFinite(minimum) && quantity <= minimum;
+    });
+    const state = await getLowStockReportState();
+    const thresholdKeys = (item: any): string[] => {
+      const itemId = String(item?.id || "");
+      const quantity = Number(item?.quantity);
+      const minimum = Number(item?.minimumStock ?? item?.minimum_stock);
+      if (!itemId || !Number.isFinite(quantity) || !Number.isFinite(minimum) || quantity > minimum) return [];
+      const keys = [itemId + ":minimum"];
+      if (quantity <= 0) keys.push(itemId + ":zero");
+      return keys;
+    };
+    const currentKeys = [...new Set(low.flatMap(thresholdKeys))];
+    const normalizeSavedKeys = (values: string[] | undefined) => (values || []).flatMap(value =>
+      String(value).endsWith(":minimum") || String(value).endsWith(":zero")
+        ? [String(value)]
+        : [String(value) + ":minimum"]
+    );
+    const gmailActive = new Set(normalizeSavedKeys(state.activeLowStockGmailIds));
+    const whatsappActive = new Set(normalizeSavedKeys(state.activeLowStockWhatsAppIds));
+    const hasGmailBaseline = Array.isArray(state.activeLowStockGmailIds);
+    const hasWhatsAppBaseline = Array.isArray(state.activeLowStockWhatsAppIds);
 
-  const formatMessage = (items: any[]) => {
-    const timestamp = new Date().toLocaleString();
-    const itemDetails = items.map((item: any, index: number) => {
-      const name = String(item.name || item.category || "Inventory item");
-      const category = String(item.category || "");
-      const size = String(item.size || "");
-      const qty = Number(item.quantity);
-      const min = Number(item.minimumStock ?? item.minimum_stock);
-      const unit = String(item.unit || "pcs");
+    const gmailNew = gmailOn && hasGmailBaseline
+      ? low.filter((item: any) => Number(item.quantity) > 0 && !gmailActive.has(String(item.id) + ":minimum"))
+      : [];
+    const whatsappNew = whatsappOn && hasWhatsAppBaseline
+      ? low.filter((item: any) => Number(item.quantity) > 0 && !whatsappActive.has(String(item.id) + ":minimum"))
+      : [];
+    const gmailZeroNew = gmailOn && hasGmailBaseline
+      ? low.filter((item: any) => Number(item.quantity) <= 0 && !gmailActive.has(String(item.id) + ":zero"))
+      : [];
+    const whatsappZeroNew = whatsappOn && hasWhatsAppBaseline
+      ? low.filter((item: any) => Number(item.quantity) <= 0 && !whatsappActive.has(String(item.id) + ":zero"))
+      : [];
+
+    const detectedAt = new Date().toISOString();
+    const snapshotItems = (items: any[]): LowStockAlertItemSnapshot[] => items.map((item: any) => ({
+      id: String(item.id),
+      name: String(item.name || item.category || "Inventory item"),
+      category: String(item.category || ""),
+      size: String(item.size || ""),
+      quantity: Number(item.quantity),
+      minimumStock: Number(item.minimumStock ?? item.minimum_stock),
+      unit: String(item.unit || "pcs"),
+    }));
+    const pending: PendingImmediateAlert[] = Array.isArray(state.pendingImmediateAlerts)
+      ? [...state.pendingImmediateAlerts]
+      : [];
+    const queue = (channel: "gmail" | "whatsapp", kind: "minimum" | "zero", items: any[]) => {
+      if (!items.length) return;
+      pending.push({
+        id: channel + "-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 9),
+        channel,
+        kind,
+        detectedAt,
+        items: snapshotItems(items),
+        attempts: 0,
+      });
+    };
+
+    if (gmailOn) {
+      if (hasGmailBaseline) {
+        queue("gmail", "minimum", gmailNew);
+        queue("gmail", "zero", gmailZeroNew);
+      }
+    }
+    if (whatsappOn) {
+      if (hasWhatsAppBaseline) {
+        queue("whatsapp", "minimum", whatsappNew);
+        queue("whatsapp", "zero", whatsappZeroNew);
+      }
+    }
+
+    // Commit the event snapshots and active-threshold state BEFORE attempting
+    // network delivery. This prevents missed alerts if the app closes offline.
+    const queuedState: ReportState = {
+      ...state,
+      ...(gmailOn ? { activeLowStockGmailIds: currentKeys } : {}),
+      ...(whatsappOn ? { activeLowStockWhatsAppIds: currentKeys } : {}),
+      activeLowStockIds: currentKeys,
+      pendingImmediateAlerts: pending,
+    };
+    await saveState(queuedState);
+
+    const formatQueuedMessage = (alert: PendingImmediateAlert) => {
+      const detail = alert.items.map((item, index) => [
+        (index + 1) + ". " + item.name,
+        ...(item.category && item.category.toLowerCase() !== item.name.toLowerCase() ? ["Category: " + item.category] : []),
+        ...(item.size ? ["Size: " + item.size] : []),
+        "Stock at detection: " + item.quantity + " " + item.unit,
+        "Minimum stock at detection: " + item.minimumStock + " " + item.unit,
+        "Status: " + (alert.kind === "zero" ? "OUT OF STOCK" : "LOW STOCK"),
+      ].join("\n")).join("\n\n");
       return [
-        (index + 1) + ". " + name,
-        ...(category && category.toLowerCase() !== name.toLowerCase() ? ["Category: " + category] : []),
-        ...(size ? ["Size: " + size] : []),
-        "Current stock: " + qty + " " + unit,
-        "Minimum stock: " + min + " " + unit,
-        "Status: " + (qty <= 0 ? "OUT OF STOCK" : "AT/BELOW MINIMUM STOCK"),
+        "ORTHO LOGBOOK",
+        alert.kind === "zero" ? "OUT-OF-STOCK ALERT" : "IMMEDIATE LOW-STOCK ALERT",
+        "--------------------------------",
+        "Newly affected item(s): " + alert.items.length,
+        "",
+        detail,
+        "",
+        alert.kind === "zero"
+          ? "Action required: Replenish these item(s) urgently; stock was zero when detected."
+          : "Action required: Arrange replenishment for the item(s) listed above.",
+        "Detected at: " + new Date(alert.detectedAt).toLocaleString(),
+        "",
+        "This message contains only item(s) that crossed the stock threshold at the detected time.",
       ].join("\n");
-    }).join("\n\n");
-    return [
-      "ORTHO LOGBOOK",
-      items.length > 0 && items.every((item: any) => Number(item.quantity) <= 0) ? "OUT-OF-STOCK ALERT" : "IMMEDIATE LOW-STOCK ALERT",
-      "--------------------------------",
-      "Newly affected item(s): " + items.length,
-      "",
-      itemDetails,
-      "",
-      items.length > 0 && items.every((item: any) => Number(item.quantity) <= 0) ? "Action required: Replenish these item(s) urgently; available stock is zero." : "Action required: Please arrange replenishment for the item(s) listed above.",
-      "Alert time: " + timestamp,
-      "",
-      "This alert includes only item(s) newly reaching or falling below minimum stock."
-    ].join("\n");
-  };
+    };
 
-  const results: string[] = [];
-  let gmailActiveIds = [...(state.activeLowStockGmailIds || [])];
-  let whatsappActiveIds = [...(state.activeLowStockWhatsAppIds || [])];
-  if (gmailOn) {
-    if (!hasGmailBaseline || !gmailNew.length) gmailActiveIds = currentKeys;
-    else {
+    const results: string[] = [];
+    const remaining: PendingImmediateAlert[] = [];
+    const delivered: DeliveredImmediateAlert[] = [];
+    const now = Date.now();
+    for (const alert of pending) {
+      const channelEnabled = alert.channel === "gmail" ? gmailOn : whatsappOn;
+      if (!channelEnabled) {
+        remaining.push(alert);
+        continue;
+      }
+      const retryAt = alert.nextAttemptAt ? new Date(alert.nextAttemptAt).getTime() : 0;
+      if (Number.isFinite(retryAt) && retryAt > now) {
+        remaining.push(alert);
+        continue;
+      }
       try {
-        await sendLowStockAlertEmail(
-          "LOW STOCK ALERT — " + gmailNew.map((item: any) => String(item.name || item.category || "Inventory item")).join(", "),
-          formatMessage(gmailNew),
-          config
-        );
-        gmailActiveIds = currentKeys;
-        results.push("Gmail immediate alert sent");
-      } catch (e: any) { results.push("Gmail FAILED: " + String(e?.message || e)); }
+        const message = formatQueuedMessage(alert);
+        const names = alert.items.map(item => item.name).join(", ");
+        if (alert.channel === "gmail") {
+          const subject = (alert.kind === "zero" ? "OUT OF STOCK ALERT — " : "LOW STOCK ALERT — ") +
+            names + " — " + alert.detectedAt.slice(0, 10);
+          await sendLowStockAlertEmail(subject, message, config);
+        } else {
+          await sendLowStockAlertWhatsApp(message, config);
+        }
+        const sentAt = new Date().toISOString();
+        delivered.push({
+          id: alert.id,
+          channel: alert.channel,
+          kind: alert.kind,
+          detectedAt: alert.detectedAt,
+          sentAt,
+          itemNames: alert.items.map(item => item.name),
+          itemIds: alert.items.map(item => item.id),
+        });
+        results.push((alert.channel === "gmail" ? "Gmail" : "WhatsApp") +
+          (alert.kind === "zero" ? " out-of-stock" : " immediate low-stock") + " alert sent successfully");
+      } catch (error: any) {
+        const attempts = (Number(alert.attempts) || 0) + 1;
+        const retryMinutes = [1, 5, 15, 30, 60][Math.min(attempts - 1, 4)];
+        const message = String(error?.message || error || "Delivery failed");
+        remaining.push({
+          ...alert,
+          attempts,
+          nextAttemptAt: new Date(Date.now() + retryMinutes * 60 * 1000).toISOString(),
+          lastError: message.slice(0, 300),
+        });
+        results.push((alert.channel === "gmail" ? "Gmail" : "WhatsApp") +
+          " FAILED (retry " + attempts + " in " + retryMinutes + " min): " + message);
+      }
     }
-  }
-  if (whatsappOn) {
-    if (!hasWhatsAppBaseline || !whatsappNew.length) whatsappActiveIds = currentKeys;
-    else {
-      try {
-        await sendLowStockAlertWhatsApp(formatMessage(whatsappNew), config);
-        whatsappActiveIds = currentKeys;
-        results.push("WhatsApp immediate alert sent");
-      } catch (e: any) { results.push("WhatsApp FAILED: " + String(e?.message || e)); }
-    }
-  }
 
-  // Send a distinct urgent message at zero, even if the item already triggered at minimum.
-  // Do not record failed :zero thresholds so the admin retry can resend them.
-  if (gmailOn && gmailZeroNew.length) {
-    try {
-      await sendLowStockAlertEmail("OUT OF STOCK ALERT — " + gmailZeroNew.map((item: any) => String(item.name || item.category || "Inventory item")).join(", "), formatMessage(gmailZeroNew), config);
-      gmailActiveIds = [...new Set([...gmailActiveIds.filter(key => currentKeys.includes(key)), ...gmailZeroNew.map((item: any) => String(item.id) + ":zero")])];
-      results.push("Gmail out-of-stock alert sent");
-    } catch (e: any) {
-      const failedKeys = new Set(gmailZeroNew.map((item: any) => String(item.id) + ":zero"));
-      gmailActiveIds = gmailActiveIds.filter(key => currentKeys.includes(key) && !failedKeys.has(key));
-      results.push("Gmail out-of-stock alert FAILED: " + String(e?.message || e));
-    }
+    const history = [
+      ...(Array.isArray(state.deliveredImmediateAlertHistory) ? state.deliveredImmediateAlertHistory : []),
+      ...delivered,
+    ].slice(-50);
+    const status = results.length
+      ? "Immediate low-stock alert: " + results.join("; ")
+      : remaining.length
+        ? remaining.length + " immediate low-stock alert(s) are queued and will retry automatically."
+        : "No newly low-stock items.";
+    await saveState({
+      ...queuedState,
+      pendingImmediateAlerts: remaining,
+      deliveredImmediateAlertHistory: history,
+      ...(delivered.length ? { lastImmediateAlertAt: new Date().toISOString() } : {}),
+      lastStatus: status,
+    });
+    return status;
+  } finally {
+    immediateAlertCheckInFlight = false;
   }
-  if (whatsappOn && whatsappZeroNew.length) {
-    try {
-      await sendLowStockAlertWhatsApp(formatMessage(whatsappZeroNew), config);
-      whatsappActiveIds = [...new Set([...whatsappActiveIds.filter(key => currentKeys.includes(key)), ...whatsappZeroNew.map((item: any) => String(item.id) + ":zero")])];
-      results.push("WhatsApp out-of-stock alert sent");
-    } catch (e: any) {
-      const failedKeys = new Set(whatsappZeroNew.map((item: any) => String(item.id) + ":zero"));
-      whatsappActiveIds = whatsappActiveIds.filter(key => currentKeys.includes(key) && !failedKeys.has(key));
-      results.push("WhatsApp out-of-stock alert FAILED: " + String(e?.message || e));
-    }
-  }
-
-  await saveState({
-    ...state,
-    ...(gmailOn ? { activeLowStockGmailIds: gmailActiveIds } : {}),
-    ...(whatsappOn ? { activeLowStockWhatsAppIds: whatsappActiveIds } : {}),
-    activeLowStockIds: currentKeys,
-    ...(results.some(x => x.includes("sent")) ? { lastImmediateAlertAt: new Date().toISOString() } : {}),
-    ...(results.length ? { lastStatus: "Immediate low-stock alert: " + results.join("; ") } : {}),
-  });
-
-  // Failed thresholds are deliberately not recorded as active, so retry can resend them.
-return results.length ? results.join("; ") : "No newly low-stock items.";
 }
-
 
 /** Manually send a plain-text alert for every item currently at/below minimum stock.
  * This intentionally ignores the automatic-channel switches; manual sending remains available when automation is off.

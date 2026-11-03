@@ -2,13 +2,13 @@ import { useEffect, useState } from "react";
 import { useFonts } from "expo-font";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import { KeyboardAvoidingView, LogBox, Platform, Pressable, Text, View } from "react-native";
+import { AppState, KeyboardAvoidingView, LogBox, Platform, Pressable, Text, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { QueryClientProvider } from "@tanstack/react-query";
 
-import { AuthProvider } from "@/src/auth/AuthContext";
+import { AuthProvider, useAuth } from "@/src/auth/AuthContext";
 import { ErrorBoundary } from "@/src/components/error-boundary";
 import { ToastProvider, useToast } from "@/src/components/toast";
 import { queryClient } from "@/src/query-client";
@@ -23,37 +23,46 @@ LogBox.ignoreAllLogs(true);
 
 function LowStockAlertBootstrap() {
   const toast = useToast();
+  const { user } = useAuth();
   useEffect(() => {
+    if (!user || user.role !== "admin") return;
     let active = true;
+    let running = false;
     const run = async () => {
+      if (running || AppState.currentState !== "active") return;
+      running = true;
       try {
-        const result = await attemptDueLowStockReport();
-        if (active && /automatically sent|successfully/i.test(result) && !/not due yet|already been sent/i.test(result)) {
-          const channels = ["Gmail", "WhatsApp"].filter(channel => new RegExp("\\b" + channel + "\\b", "i").test(result));
+        const scheduled = await attemptDueLowStockReport();
+        if (active && /automatically sent|successfully/i.test(scheduled) && !/not due yet|already been sent/i.test(scheduled)) {
+          const channels = ["Gmail", "WhatsApp"].filter(channel => new RegExp("\\\\b" + channel + "\\\\b", "i").test(scheduled));
           toast("Scheduled low-stock report sent successfully" + (channels.length ? " via " + channels.join(" and ") : "") + ".", "success");
         }
-      } catch (error: any) {
-        if (active) {
-          const detail = String(error?.message || error || "Unknown delivery error");
-          toast("Scheduled low-stock report failed. " + detail.slice(0, 105), "error");
-        }
+      } catch {
+        // Keep scheduled reports eligible for another attempt; do not spam a toast while offline.
       }
       try {
         const result = await checkAndSendImmediateLowStockAlerts();
-        if (!active) return;
-        if (/FAILED|failed|error|could not|missing/i.test(result) && !/disabled/i.test(result)) {
-          toast("Immediate low-stock delivery failed. " + result.slice(0, 100) + ". Admin can retry in Automatic Low Stock Reports.", "error");
-        } else if (result.includes("sent")) {
-          const channels = ["Gmail", "WhatsApp"].filter(channel => new RegExp("\\b" + channel + "\\b", "i").test(result));
-          toast("Immediate low-stock alert sent successfully" + (channels.length ? " via " + channels.join(" and ") : "") + ".", "success");
+        if (active && /sent successfully/i.test(result)) {
+          const channels = ["Gmail", "WhatsApp"].filter(channel => new RegExp("\\\\b" + channel + "\\\\b", "i").test(result));
+          toast("Low-stock alert sent successfully" + (channels.length ? " via " + channels.join(" and ") : "") + ".", "success");
         }
       } catch {
-        if (active) toast("Immediate low-stock alert failed. Admin can retry it in Automatic Low Stock Reports.", "error");
+        // The event remains in the local alert outbox and will retry on the next check.
+      } finally {
+        running = false;
       }
     };
     void run();
-    return () => { active = false; };
-  }, [toast]);
+    const timer = setInterval(() => { void run(); }, 60_000);
+    const subscription = AppState.addEventListener("change", state => {
+      if (state === "active") void run();
+    });
+    return () => {
+      active = false;
+      clearInterval(timer);
+      subscription.remove();
+    };
+  }, [toast, user?.id, user?.role]);
   return null;
 }
 
