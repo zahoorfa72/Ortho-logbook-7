@@ -34,7 +34,7 @@ function LowStockAlertBootstrap() {
       try {
         const scheduled = await attemptDueLowStockReport();
         if (active && /automatically sent|successfully/i.test(scheduled) && !/not due yet|already been sent/i.test(scheduled)) {
-          const channels = ["Gmail", "WhatsApp"].filter(channel => new RegExp("\\\\b" + channel + "\\\\b", "i").test(scheduled));
+          const channels = ["Gmail", "WhatsApp"].filter(channel => new RegExp("\\b" + channel + "\\b", "i").test(scheduled));
           toast("Scheduled low-stock report sent successfully" + (channels.length ? " via " + channels.join(" and ") : "") + ".", "success");
         }
       } catch {
@@ -43,7 +43,7 @@ function LowStockAlertBootstrap() {
       try {
         const result = await checkAndSendImmediateLowStockAlerts();
         if (active && /sent successfully/i.test(result)) {
-          const channels = ["Gmail", "WhatsApp"].filter(channel => new RegExp("\\\\b" + channel + "\\\\b", "i").test(result));
+          const channels = ["Gmail", "WhatsApp"].filter(channel => new RegExp("\\b" + channel + "\\b", "i").test(result));
           toast("Low-stock alert sent successfully" + (channels.length ? " via " + channels.join(" and ") : "") + ".", "success");
         }
       } catch {

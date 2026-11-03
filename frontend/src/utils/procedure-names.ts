@@ -4,14 +4,10 @@ const normalizeProcedureName = (value: string) =>
 const ignoredAcronymWords = new Set(["and", "of", "for", "with", "the", "to", "in", "on"]);
 
 function explicitProcedureAcronym(fullName: string): string {
+  // Parentheses are an explicit alias declaration in this catalog. Trust the
+  // supplied abbreviation instead of trying to infer how a hospital expands it.
   const match = /^(.*?)\s*\(([A-Za-z][A-Za-z0-9-]{1,9})\)\s*$/.exec(String(fullName || "").trim());
-  if (!match) return "";
-  const words = (match[1].match(/[A-Za-z0-9]+/g) || [])
-    .filter(word => !ignoredAcronymWords.has(word.toLowerCase()));
-  const acronym = words.map(word => word[0]).join("");
-  return normalizeProcedureName(acronym) === normalizeProcedureName(match[2])
-    ? normalizeProcedureName(match[2])
-    : "";
+  return match ? normalizeProcedureName(match[2]) : "";
 }
 
 /**
