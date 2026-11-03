@@ -1106,11 +1106,11 @@ export async function exportIncrementalBackupData(changedTables: string[], onPro
  if (!requestedTables.length) throw new Error("There are no changed data tables to sync.");
  const previous = await readDeltaCache();
  const canDiff = !!previous;
- const cachedPatientPhotos = !!previous && Object.keys(previous.photoSources || {}).some((key) => !key.startsWith("images:"));
+ // Patient photos are maintained as separate per-patient PDFs. Legacy photo
+ // signatures must never force the entire patient table into each incremental sync.
  const cachedHistoryPhotos = !!previous && Object.keys(previous.photoSources || {}).some((key) => key.startsWith("images:patientHistory:"));
  const tables = Array.from(new Set([
    ...requestedTables,
-   ...(cachedPatientPhotos ? ["patients"] : []),
    ...(cachedHistoryPhotos ? ["patientHistory"] : []),
  ])).filter((name) => allowed.has(name));
  const backup = await createBackupData(
@@ -1126,6 +1126,11 @@ export async function exportIncrementalBackupData(changedTables: string[], onPro
 
  const nextTables: Record<string, any> = canDiff ? { ...previous!.tables } : {};
  const nextPhotoSources: Record<string, string> = canDiff && previous!.photoSources ? { ...previous!.photoSources } : {};
+ // Migrate obsolete per-patient photo signatures from older app versions.
+ // Only attached-image signatures with an images:<table>:<id> prefix are valid.
+ for (const key of Object.keys(nextPhotoSources)) {
+  if (!key.startsWith("images:")) delete nextPhotoSources[key];
+ }
  const deletedIds: Record<string, string[]> = {};
  const fullTables: string[] = [];
  const currentRowsForCache: Record<string, any[]> = {};
@@ -1180,35 +1185,24 @@ export async function exportIncrementalBackupData(changedTables: string[], onPro
   const newById = new Map<string, any>();
   for (const row of previousRows) { const id = rowKey(row); if (id !== null) oldById.set(id, row); }
   for (const row of currentRows) { const id = rowKey(row); if (id !== null) newById.set(id, row); }
-   // Patient images are archived separately as PDFs, not in the master JSON.
-   const currentPhotoSignatures: Record<string, string> = {};
-
   const changedRows = currentRows.filter((row) => {
    const id = rowKey(row);
    if (id === null) return true;
    const old = oldById.get(id);
    const comparableRow = stripBackupCacheRow(row);
    const metadataChanged = !old || JSON.stringify(old) !== JSON.stringify(comparableRow);
-   const patientPhotosChanged = table === "patients" && (!previous!.photoSources || previous!.photoSources[id] !== currentPhotoSignatures[id]);
    const currentImageSignature = currentImageSignatures.get(id) || "";
    const previousImageSignature = previous!.photoSources?.["images:" + table + ":" + id];
    const rowImagesChanged = IMAGE_SIGNATURE_TABLES.has(table) &&
      (currentImageSignature !== "" || previousImageSignature !== undefined) &&
      currentImageSignature !== previousImageSignature;
-   return metadataChanged || patientPhotosChanged || rowImagesChanged;
+   return metadataChanged || rowImagesChanged;
   });
   deletedIds[table] = Array.from(oldById.keys()).filter((id) => !newById.has(id));
   (backup as any)[table] = changedRows.map((row) => {
    const id = String(row.id ?? "");
    const old = oldById.get(id);
-   if (table === "patients") {
-    const oldPhotoSignature = previous!.photoSources?.[id];
-    if (old && oldPhotoSignature && oldPhotoSignature === currentPhotoSignatures[id]) {
-     // Patient metadata changed but the image source did not. Keep the original
-     // photo in the master and omit its bytes from this delta.
-     return stripBackupImages(row);
-    }
-   } else if (IMAGE_SIGNATURE_TABLES.has(table)) {
+   if (IMAGE_SIGNATURE_TABLES.has(table)) {
     const oldImageSignature = previous!.photoSources?.["images:" + table + ":" + id];
     const currentImageSignature = currentImageSignatures.get(id) || "";
     if (old && oldImageSignature === currentImageSignature) return stripBackupImages(row);
@@ -1249,13 +1243,7 @@ export async function exportIncrementalBackupData(changedTables: string[], onPro
    }
   }
 
-  if (tables.includes("patients")) {
-   for (const key of Object.keys(nextPhotoSources)) {
-    if (!key.startsWith("images:")) delete nextPhotoSources[key];
-   }
-  }
-
- // Changed rows can omit unchanged photos. Keep only assets referenced by this delta.
+ // Changed rows can omit unchanged attached images. Keep only assets referenced by this delta.
  pruneBackupPhotoAssets(backup);
  // Do not persist the new baseline until the upload succeeds.
  pendingDeltaCacheText = JSON.stringify({ baselineKey, tables: nextTables, photoSources: nextPhotoSources });
