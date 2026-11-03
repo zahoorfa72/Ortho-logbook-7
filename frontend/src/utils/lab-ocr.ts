@@ -534,7 +534,7 @@ function safeAdjacentMeasuredResult(lines: string[], index: number, configuredTe
   return match?.[1] || null;
 }
 
-export function parseLabReportRows(text: string, configuredTests: LabTestDefinition[] = [], gender = "", warningPercent = 10, includeNormal = false): ParsedLabRow[] {
+export function parseLabReportRows(text: string, configuredTests: LabTestDefinition[] = [], gender = "", warningPercent = 10, includeNormal = false, allowAdjacentMeasuredResult = true): ParsedLabRow[] {
   const rows: ParsedLabRow[] = [];
   const seen = new Set<string>();
 
@@ -618,7 +618,7 @@ export function parseLabReportRows(text: string, configuredTests: LabTestDefinit
         const referenceStart = firstReferenceStart(rest);
         const resultArea = referenceStart >= 0 ? rest.slice(0, referenceStart) : rest;
         resultRaw = resultNumber(resultArea);
-        if (resultRaw === null) {
+        if (resultRaw === null && allowAdjacentMeasuredResult) {
           // Some reports put the value directly below its test label. Recover
           // only an isolated scalar on the immediately following OCR line.
           resultRaw = safeAdjacentMeasuredResult(sourceLines, lineIndex, configuredTests);
@@ -1051,7 +1051,7 @@ export async function recognizeLabText(
   }
   const initialText = String(best?.text || "").trim();
   const potentialLabMarker = /\b(?:hemoglobin|haemoglobin|hgb|platelets?|plt|hbs\s*ag|hbsag|hcv|hepatitis|hiv|wbc|rbc|mcv|mchc?|glucose|creatinine|bilirubin|urea|sodium|potassium|chloride|result|investigation|reference\s*range|lab(?:oratory)?\s*report)\b/i.test(initialText);
-  const initialRows = parseLabReportRows(initialText, configuredTests, gender, 10, true);
+  const initialRows = parseLabReportRows(initialText, configuredTests, gender, 10, true, !fastMode);
   const hasInitialLabSignal = potentialLabMarker || initialRows.length > 0;
   // Keep automatic scanning quick for ordinary clinical photos, but permit two
   // inexpensive orientation retries when the first pass barely reads anything.
@@ -1062,7 +1062,7 @@ export async function recognizeLabText(
     const text = String(value?.text || "");
     // Judge OCR passes by recognized test/result pairs and the saved sex-specific
     // ranges, not merely by how much text or how many reference-range numbers they contain.
-    const parsedRows = parseLabReportRows(text, configuredTests, gender, 10, true);
+    const parsedRows = parseLabReportRows(text, configuredTests, gender, 10, true, !fastMode);
     const matchedNames = configuredTests.filter(test => {
       const name = normaliseName(test.name);
       return name.length > 1 && normaliseName(text).includes(name);
@@ -1074,12 +1074,13 @@ export async function recognizeLabText(
       parsedRows.length * 160 + matchedNames * 90 + flagged * 35 +
       (extractLabReportDate(text) ? 25 : 0);
   };
-  // If the first read is weak, retry sideways images at both orientations and
-  // keep the OCR pass that reads the most text/numbers/lab terms.
-  // Fast automatic scans still retry when OCR returns no usable test/result
-  // rows, even if it detected a generic word such as "result" or "reference".
-  // That generic marker must not suppress orientation recovery for a rotated report.
-  const shouldRetryOrientation = !fastMode && (localScore(best) < 220 || initialRows.length === 0);
+  // Manual scans retry weak images; automatic scans retry rotations only when
+  // the image already looks like a lab report but its configured rows are
+  // incomplete. Ordinary patient photographs keep the fast path.
+  const expectedRows = Math.min(3, Math.max(1, configuredTests.length));
+  const shouldRetryOrientation = fastMode
+    ? hasInitialLabSignal && initialRows.length < expectedRows
+    : localScore(best) < 220 || initialRows.length === 0;
   if (shouldRetryOrientation) {
     for (const degrees of [90, 270]) {
       let rotatedUri = "";
@@ -1191,22 +1192,39 @@ export async function recognizeLabText(
   } catch {
     // Return no guessed rows if geometry is unavailable.
   }
-  const filteredRows = structuredText.split(/\r?\n/).map(line => {
+  const structuredRows = structuredText.split(/\r?\n/).map(line => {
     const cells = line.split("|").map(cell => cell.trim());
-    if (cells.length < 2) return "";
+    if (cells.length < 2) return null;
     const prefix = findTestPrefix(cells[0], configuredTests);
-    if (!prefix) return "";
+    if (!prefix) return null;
     let result = resultNumber(cells[1] || "") || "";
     if (isPlateletTestName(prefix.name)) {
       const rawPlatelet = rawMeasuredResultForTest(prefix.name, rawOcrText, configuredTests);
-      // A platelet number must be explicitly read beside its own label. If raw
-      // OCR did not capture that pair, do not publish a geometry-only number.
+      // Platelets require a number explicitly associated with their own label.
       if (rawPlatelet === null) result = "";
       else result = rawPlatelet;
     }
-    // Return only the saved test name and its result, never OCR-derived units/ranges.
-    return String(prefix.configured?.name || prefix.name).trim() + " | " + result + " |  | ";
-  }).filter(Boolean);
+    return {
+      key: canonicalTestName(prefix.name),
+      result,
+      line: String(prefix.configured?.name || prefix.name).trim() + " | " + result + " |  | ",
+    };
+  }).filter((item): item is { key: string; result: string; line: string } => !!item);
+  // Some on-device OCR versions return plain text but no word bounding boxes.
+  // Recover only test/result pairs explicitly present on the SAME OCR line.
+  // Do not use adjacent-line values here: CBC tables can be flattened in the
+  // wrong column order, which could silently assign Hb to Platelets or vice versa.
+  const rawTextRows = parseLabReportRows(rawOcrText, configuredTests, gender, 10, true, false);
+  const structuredHasResult = new Set(structuredRows.filter(item => !!item.result).map(item => item.key));
+  const mergedRows = [...structuredRows.map(item => item.line)];
+  for (const row of rawTextRows) {
+    const key = canonicalTestName(row.test);
+    if (structuredHasResult.has(key)) continue;
+    if (!row.result || mergedRows.some(line => canonicalTestName(line.split("|")[0]) === key && line.split("|")[1]?.trim())) continue;
+    mergedRows.push(String(row.test).trim() + " | " + String(row.result).trim() + " |  | ");
+    structuredHasResult.add(key);
+  }
+  const filteredRows = mergedRows.filter(line => !!line.split("|")[1]?.trim());
   const dateLine = reportDate ? "REPORT DATE: " + reportDate : "";
   const reviewText = [dateLine, ...filteredRows].filter(Boolean).join("\n");
   return { text: reviewText, structuredText: filteredRows.join("\n"), mode };
