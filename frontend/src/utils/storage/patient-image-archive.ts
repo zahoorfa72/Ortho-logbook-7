@@ -124,23 +124,29 @@ async function stampFor(id: string, name: string, mrNo: string, createdAt: strin
   const signatures: string[] = [];
   for (const source of sources) signatures.push(await imageContentKey(source));
   return Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256,
-    JSON.stringify([id, name, mrNo, createdAt, signatures]));
+    JSON.stringify(["patient-image-pdf-layout-v2", id, name, mrNo, createdAt, signatures]));
 }
 function makeHtml(name: string, mrNo: string, images: string[]): string {
   const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   return "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><style>" +
-    "@page{size:A4;margin:12mm}*{box-sizing:border-box}body{font-family:Arial,sans-serif;color:#111;margin:0}" +
-    ".head{font-size:16px;font-weight:700;margin:0 0 5px}.meta{font-size:10px;color:#555;margin-bottom:12px}" +
-    ".photo{height:255mm;display:flex;align-items:center;justify-content:center;page-break-after:always;break-after:page;overflow:hidden}" +
-    ".photo:last-child{page-break-after:auto;break-after:auto}img{max-width:100%;max-height:100%;object-fit:contain;image-orientation:from-image}" +
+    "@page{size:A4;margin:0}*{box-sizing:border-box}html,body{width:210mm;min-height:297mm;margin:0;padding:0}" +
+    "body{font-family:Arial,sans-serif;color:#18251D;background:#EEF2EE}" +
+    ".photo{width:210mm;height:297mm;padding:7mm;display:flex;align-items:stretch;justify-content:stretch;page-break-after:always;break-after:page;overflow:hidden;background:#EEF2EE}" +
+    ".photo:last-child{page-break-after:auto;break-after:auto}" +
+    ".photoContent{width:100%;height:100%;min-height:0;display:flex;flex-direction:column;padding:6mm;background:#F7F9F7;border:1px solid #D8E2D9;border-radius:4mm;overflow:hidden}" +
+    ".head{font-size:16px;font-weight:700;line-height:1.25;margin:0 0 2mm;color:#244C37}" +
+    ".meta{font-size:10px;color:#647268;margin:0 0 4mm}" +
+    ".imageFrame{flex:1;min-height:0;width:100%;display:flex;align-items:center;justify-content:center;overflow:hidden;padding:2mm;background:#FFFFFF;border:1px solid #E1E7E1;border-radius:3mm}" +
+    "img{display:block;width:100%;height:100%;max-width:100%;max-height:100%;object-fit:contain;image-orientation:from-image}" +
     "</style></head><body>" + images.map((src, index) =>
-      "<section class='photo'><div style='width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center'>" +
-      "<div style='align-self:flex-start;width:100%'><div class='head'>" + esc(name || "Patient") + "</div><div class='meta'>MR No: " + esc(mrNo || "—") +
-      " · Image " + (index + 1) + " of " + images.length + "</div></div><img src='" + src.replace(/'/g, "%27") + "' /></div></section>"
+      "<section class='photo'><div class='photoContent'>" +
+      "<div class='head'>" + esc(name || "Patient") + "</div><div class='meta'>MR No: " + esc(mrNo || "—") +
+      " · Image " + (index + 1) + " of " + images.length + "</div>" +
+      "<div class='imageFrame'><img src='" + src.replace(/'/g, "%27") + "' /></div></div></section>"
     ).join("") + (images.length ? "" :
-      "<section class='photo'><div style='width:100%'><div class='head'>" + esc(name || "Patient") +
+      "<section class='photo'><div class='photoContent'><div class='head'>" + esc(name || "Patient") +
       "</div><div class='meta'>MR No: " + esc(mrNo || "—") +
-      "</div><p>No images are currently attached to this patient.</p></div></section>") + "</body></html>";
+      "</div><div class='imageFrame'><p>No images are currently attached to this patient.</p></div></div></section>") + "</body></html>";
 }
 
 export async function getLocalPatientImageArchives(): Promise<PatientImageArchive[]> {
