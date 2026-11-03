@@ -1809,7 +1809,10 @@ export default function PatientForm() {
           await AsyncStorage.setItem(queueKey, JSON.stringify(queued));
         } catch {}
       }
-      void checkAndSendImmediateLowStockAlerts().catch(() => {});
+      void checkAndSendImmediateLowStockAlerts().then(result => {
+        if (/sent successfully/i.test(result)) toast("Low-stock alert sent successfully.", "success");
+        else if (/FAILED/i.test(result)) toast("Low-stock alert saved locally and will retry automatically.", "info");
+      }).catch(() => toast("Low-stock alert saved locally and will retry automatically.", "info"));
       qc.invalidateQueries({ queryKey: ["patients"] });
       qc.invalidateQueries({ queryKey: ["inventory"] });
       qc.invalidateQueries({ queryKey: ["stats"] });

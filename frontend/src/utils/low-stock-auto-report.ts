@@ -1,4 +1,5 @@
 import * as SecureStore from "expo-secure-store";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
 import * as FileSystem from "expo-file-system/legacy";
@@ -90,9 +91,29 @@ export async function saveLowStockReportConfig(config: LowStockReportConfig): Pr
   await SecureStore.setItemAsync(CONFIG_KEY, JSON.stringify(config));
 }
 export async function getLowStockReportState(): Promise<ReportState> {
-  try { return JSON.parse((await SecureStore.getItemAsync(STATE_KEY)) || "{}") as ReportState; } catch { return {}; }
+  try {
+    const current = await AsyncStorage.getItem(STATE_KEY);
+    if (current) return JSON.parse(current) as ReportState;
+    // Migrate existing state (baseline and timestamps) from the previous
+    // SecureStore implementation without removing the old value.
+    const legacy = await SecureStore.getItemAsync(STATE_KEY);
+    if (legacy) {
+      await AsyncStorage.setItem(STATE_KEY, legacy);
+      return JSON.parse(legacy) as ReportState;
+    }
+  } catch {
+    try {
+      const legacy = await SecureStore.getItemAsync(STATE_KEY);
+      if (legacy) return JSON.parse(legacy) as ReportState;
+    } catch {}
+  }
+  return {};
 }
-async function saveState(state: ReportState) { await SecureStore.setItemAsync(STATE_KEY, JSON.stringify(state)); }
+async function saveState(state: ReportState) {
+  // Queue/history may grow while offline; AsyncStorage handles larger local
+  // JSON state better than the small-value secure credential store.
+  await AsyncStorage.setItem(STATE_KEY, JSON.stringify(state));
+}
 
 function getPeriod(schedule: LowStockSchedule, now = new Date(), fromDate?: string, toDate?: string) {
   if (schedule === "fixedDate") {
