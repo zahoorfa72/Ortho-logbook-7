@@ -331,18 +331,18 @@ async function sendLowStockAlertEmail(subject: string, message: string, config: 
   const token = await getGoogleGmailAccessToken();
   // Keep the subject ASCII-only to prevent Gmail showing mojibake such as Ã¢Â€Â”.
   const safeSubject = subject.replace(/[–—]/g, "-").replace(/[^\x20-\x7E]/g, "");
-  const body = htmlMessage || message;
+  const emailBody = htmlMessage || message;
   const contentType = htmlMessage ? "text/html" : "text/plain";
   const raw = "To: " + recipients.join(", ") + "\r\nSubject: " + safeSubject +
     "\r\nMIME-Version: 1.0\r\nContent-Type: " + contentType + "; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n" +
-    btoa(unescape(encodeURIComponent(body)));
+    btoa(unescape(encodeURIComponent(emailBody)));
   const encoded = btoa(unescape(encodeURIComponent(raw))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   const response = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
     method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
     body: JSON.stringify({ raw: encoded }),
   });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(String((body as any)?.error?.message || "Gmail low-stock alert failed (HTTP " + response.status + ")"));
+  const responseBody = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(String((responseBody as any)?.error?.message || "Gmail low-stock alert failed (HTTP " + response.status + ")"));
 }
 
 async function sendLowStockAlertWhatsApp(message: string, config: LowStockReportConfig) {
