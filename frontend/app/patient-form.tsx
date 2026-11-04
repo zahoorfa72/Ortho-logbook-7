@@ -19,7 +19,7 @@ import { Dimensions } from "react-native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Animated, AppState, Image, InteractionManager, Linking, Modal, Pressable, ScrollView, Text, View } from "react-native";
 import { Gesture, GestureDetector, GestureHandlerRootView } from "react-native-gesture-handler";
-import Animated, { useAnimatedStyle, useSharedValue } from "react-native-reanimated";
+import Reanimated, { useAnimatedStyle, useSharedValue } from "react-native-reanimated";
 import { runOnJS } from "react-native-worklets";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { WebView } from "react-native-webview";
@@ -151,6 +151,7 @@ export default function PatientForm() {
   const [labTestTemplates, setLabTestTemplates] = useState<import("@/src/utils/lab-ocr").LabTestDefinition[]>([]);
   const [labDetailsExpanded, setLabDetailsExpanded] = useState(false);
   const [labFindingsExpanded, setLabFindingsExpanded] = useState(false);
+  const screenWidth = Dimensions.get("window").width;
   const photoScale = useSharedValue(1);
   const photoStartScale = useSharedValue(1);
   const photoTranslateX = useSharedValue(0);
@@ -198,7 +199,6 @@ export default function PatientForm() {
   const [labWarningThreshold, setLabWarningThreshold] = useState(10);
   const [showLabRawText, setShowLabRawText] = useState(false);
   const [labOcrOnlineHelp, setLabOcrOnlineHelp] = useState<string[]>([]);
-  const screenWidth = Dimensions.get("window").width;
   const [editingPhotoIndex, setEditingPhotoIndex] = useState<number | null>(null);
   const [editingPhotoOriginal, setEditingPhotoOriginal] = useState<string | null>(null);
   const [editingPhotoUri, setEditingPhotoUri] = useState<string | null>(null);
@@ -2712,7 +2712,7 @@ export default function PatientForm() {
                 return <View key={uri + "-" + idx} style={{ width: screenWidth, height: "100%", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
                   {active ? <GestureDetector gesture={photoGesture}>
                     <Animated.View collapsable={false} style={{ width: "100%", height: "100%", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
-                      <Animated.Image source={{ uri }} style={[styles.photoFull, photoAnimatedStyle]} resizeMode="contain" />
+                      <Reanimated.Image source={{ uri }} style={[styles.photoFull, photoAnimatedStyle]} resizeMode="contain" />
                     </Animated.View>
                   </GestureDetector> : <Image source={{ uri }} style={styles.photoFull} resizeMode="contain" />}
                 </View>;
