@@ -18,7 +18,9 @@ import { recordDiagnosticError } from "@/src/utils/problem-report";
 import { Dimensions } from "react-native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Animated, AppState, Image, InteractionManager, Linking, Modal, Pressable, ScrollView, Text, View } from "react-native";
-import { GestureHandlerRootView, NativeViewGestureHandler, PanGestureHandler, PinchGestureHandler, State as GestureState } from "react-native-gesture-handler";
+import { Gesture, GestureDetector, GestureHandlerRootView } from "react-native-gesture-handler";
+import Animated, { useAnimatedStyle, useSharedValue } from "react-native-reanimated";
+import { runOnJS } from "react-native-worklets";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { WebView } from "react-native-webview";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
@@ -149,110 +151,43 @@ export default function PatientForm() {
   const [labTestTemplates, setLabTestTemplates] = useState<import("@/src/utils/lab-ocr").LabTestDefinition[]>([]);
   const [labDetailsExpanded, setLabDetailsExpanded] = useState(false);
   const [labFindingsExpanded, setLabFindingsExpanded] = useState(false);
-  const basePhotoScale = useRef(new Animated.Value(1)).current;
-  const pinchScale = useRef(new Animated.Value(1)).current;
-  const basePhotoScaleNumber = useRef(1);
-  const pinchStartScaleNumber = useRef(1);
-  const basePhotoTranslateX = useRef(new Animated.Value(0)).current;
-  const basePhotoTranslateY = useRef(new Animated.Value(0)).current;
-  const photoPanGestureX = useRef(new Animated.Value(0)).current;
-  const photoPanGestureY = useRef(new Animated.Value(0)).current;
-  const basePhotoTranslateXNumber = useRef(0);
-  const basePhotoTranslateYNumber = useRef(0);
-  const photoPanStartXNumber = useRef(0);
-  const photoPanStartYNumber = useRef(0);
-  const photoPinchRef = useRef<any>(null);
-  const photoPanRef = useRef<any>(null);
-  const combinedPhotoScale = Animated.multiply(basePhotoScale, pinchScale);
-  const combinedPhotoTranslateX = Animated.add(basePhotoTranslateX, photoPanGestureX);
-  const combinedPhotoTranslateY = Animated.add(basePhotoTranslateY, photoPanGestureY);
-  // Keep gesture updates on the native driver. JS only receives the final
-  // gesture state, avoiding a React/JS update for every pinch movement frame.
-  const onPhotoPinch = useRef(Animated.event(
-    [{ nativeEvent: { scale: pinchScale } }],
-    { useNativeDriver: true },
-  )).current;
-  const onPhotoPan = useRef(Animated.event(
-    [{ nativeEvent: { translationX: photoPanGestureX, translationY: photoPanGestureY } }],
-    { useNativeDriver: true },
-  )).current;
-  const clampPhotoOffset = (value: number, limit: number) => Math.max(-limit, Math.min(limit, value));
-  const finishPhotoPinch = (event: any) => {
-    const state = event?.nativeEvent?.state;
-    if (state === GestureState.BEGAN) {
-      pinchStartScaleNumber.current = basePhotoScaleNumber.current;
-      return;
-    }
-    if (state === GestureState.END || state === GestureState.CANCELLED || state === GestureState.FAILED) {
-      const gestureScale = Number(event?.nativeEvent?.scale) || 1;
-      const nextScale = Math.max(1, Math.min(5, pinchStartScaleNumber.current * gestureScale));
-      basePhotoScaleNumber.current = nextScale;
-      basePhotoScale.setValue(nextScale);
-      pinchScale.setValue(1);
-
-      const screenHeight = Dimensions.get("window").height;
-      const maxX = screenWidth * Math.max(0, nextScale - 1) / 2;
-      const maxY = screenHeight * Math.max(0, nextScale - 1) / 2;
-      basePhotoTranslateXNumber.current = nextScale <= 1.02
-        ? 0
-        : clampPhotoOffset(basePhotoTranslateXNumber.current, maxX);
-      basePhotoTranslateYNumber.current = nextScale <= 1.02
-        ? 0
-        : clampPhotoOffset(basePhotoTranslateYNumber.current, maxY);
-      basePhotoTranslateX.setValue(basePhotoTranslateXNumber.current);
-      basePhotoTranslateY.setValue(basePhotoTranslateYNumber.current);
-      if (nextScale <= 1.02) {
-        photoPanGestureX.setValue(0);
-        photoPanGestureY.setValue(0);
-      }
-      setPhotoZoomed(nextScale > 1.02);
-    }
-  };
-  const finishPhotoPan = (event: any) => {
-    const state = event?.nativeEvent?.state;
-    if (state === GestureState.BEGAN) {
-      photoPanStartXNumber.current = basePhotoTranslateXNumber.current;
-      photoPanStartYNumber.current = basePhotoTranslateYNumber.current;
-      photoPanGestureX.setValue(0);
-      photoPanGestureY.setValue(0);
-      return;
-    }
-    if (state === GestureState.END || state === GestureState.CANCELLED || state === GestureState.FAILED) {
-      const pointerCount = Number(event?.nativeEvent?.numberOfPointers || 1);
-      if (pointerCount <= 1 && basePhotoScaleNumber.current > 1.02) {
-        const scale = basePhotoScaleNumber.current;
-        const screenHeight = Dimensions.get("window").height;
-        const maxX = screenWidth * (scale - 1) / 2;
-        const maxY = screenHeight * (scale - 1) / 2;
-        const movedX = Number(event?.nativeEvent?.translationX) || 0;
-        const movedY = Number(event?.nativeEvent?.translationY) || 0;
-        basePhotoTranslateXNumber.current = clampPhotoOffset(photoPanStartXNumber.current + movedX, maxX);
-        basePhotoTranslateYNumber.current = clampPhotoOffset(photoPanStartYNumber.current + movedY, maxY);
-        basePhotoTranslateX.setValue(basePhotoTranslateXNumber.current);
-        basePhotoTranslateY.setValue(basePhotoTranslateYNumber.current);
-      }
-      photoPanGestureX.setValue(0);
-      photoPanGestureY.setValue(0);
-    }
-  };
+  const photoScale = useSharedValue(1);
+  const photoStartScale = useSharedValue(1);
+  const photoTranslateX = useSharedValue(0);
+  const photoTranslateY = useSharedValue(0);
+  const photoStartX = useSharedValue(0);
+  const photoStartY = useSharedValue(0);
+  const photoPinchActive = useSharedValue(false);
+  const photoAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: photoTranslateX.value }, { translateY: photoTranslateY.value }, { scale: photoScale.value }],
+  }));
+  const photoGesture = useMemo(() => {
+    const pinch = Gesture.Pinch().enabled(!!selectedPhoto)
+      .onBegin(() => { photoPinchActive.value = true; photoStartScale.value = photoScale.value; })
+      .onUpdate(e => { photoScale.value = Math.max(1, Math.min(5, photoStartScale.value * e.scale)); })
+      .onEnd(() => {
+        if (photoScale.value <= 1.02) { photoScale.value = 1; photoTranslateX.value = 0; photoTranslateY.value = 0; }
+        runOnJS(setPhotoZoomed)(photoScale.value > 1.02);
+      })
+      .onFinalize(() => { photoPinchActive.value = false; });
+    const pan = Gesture.Pan().enabled(!!selectedPhoto).maxPointers(1)
+      .onBegin(() => { photoStartX.value = photoTranslateX.value; photoStartY.value = photoTranslateY.value; })
+      .onUpdate(e => {
+        if (photoScale.value <= 1.02 || photoPinchActive.value) return;
+        const maxX = screenWidth * (photoScale.value - 1) / 2;
+        const maxY = Dimensions.get("window").height * (photoScale.value - 1) / 2;
+        photoTranslateX.value = Math.max(-maxX, Math.min(maxX, photoStartX.value + e.translationX));
+        photoTranslateY.value = Math.max(-maxY, Math.min(maxY, photoStartY.value + e.translationY));
+      });
+    return Gesture.Simultaneous(pinch, pan);
+  }, [selectedPhoto, screenWidth]);
   const resetPhotoZoom = useCallback(() => {
-    basePhotoScaleNumber.current = 1;
-    pinchStartScaleNumber.current = 1;
-    basePhotoScale.setValue(1);
-    pinchScale.setValue(1);
-    basePhotoTranslateXNumber.current = 0;
-    basePhotoTranslateYNumber.current = 0;
-    photoPanStartXNumber.current = 0;
-    photoPanStartYNumber.current = 0;
-    basePhotoTranslateX.setValue(0);
-    basePhotoTranslateY.setValue(0);
-    photoPanGestureX.setValue(0);
-    photoPanGestureY.setValue(0);
-    setPhotoZoomed(false);
-  }, [basePhotoScale, pinchScale, basePhotoTranslateX, basePhotoTranslateY, photoPanGestureX, photoPanGestureY]);
-  useEffect(() => {
-    resetPhotoZoom();
-  }, [selectedPhoto, resetPhotoZoom]);
+    photoScale.value = 1; photoStartScale.value = 1;
+    photoTranslateX.value = 0; photoTranslateY.value = 0;
+    photoStartX.value = 0; photoStartY.value = 0;
+    photoPinchActive.value = false; setPhotoZoomed(false);
+  }, []);
+  useEffect(() => { resetPhotoZoom(); }, [selectedPhoto, resetPhotoZoom]);
   const [labAddedResults, setLabAddedResults] = useState<Array<{ test: string; unit: string; result: string; reference: string; photoUri: string; reportDate?: string; min?: number; max?: number }>>([]);
   const [manualTestName, setManualTestName] = useState("");
   const [manualTestUnit, setManualTestUnit] = useState("");
@@ -2768,45 +2703,21 @@ export default function PatientForm() {
             <Ionicons name="close" size={30} color="#FFFFFF" />
           </Pressable>
           {!!selectedPhoto && (
-            <NativeViewGestureHandler ref={photoScrollRef} disallowInterruption={false}>
-              <ScrollView scrollEnabled={!photoZoomed} key={selectedPhoto || "none"} horizontal pagingEnabled showsHorizontalScrollIndicator={false} contentOffset={{ x: Math.max(0, allViewerPhotos.indexOf(selectedPhoto)) * screenWidth, y: 0 }} onMomentumScrollEnd={(event) => { const idx = Math.max(0, Math.min(allViewerPhotos.length - 1, Math.round(event.nativeEvent.contentOffset.x / screenWidth))); resetPhotoZoom(); setSelectedPhoto(allViewerPhotos[idx] || null); }} style={{ flex: 1, width: screenWidth }} contentContainerStyle={{ alignItems: "center" }}>
+            <ScrollView scrollEnabled={!photoZoomed} key={selectedPhoto || "none"} horizontal pagingEnabled showsHorizontalScrollIndicator={false}
+              contentOffset={{ x: Math.max(0, allViewerPhotos.indexOf(selectedPhoto)) * screenWidth, y: 0 }}
+              onMomentumScrollEnd={event => { const idx = Math.max(0, Math.min(allViewerPhotos.length - 1, Math.round(event.nativeEvent.contentOffset.x / screenWidth))); resetPhotoZoom(); setSelectedPhoto(allViewerPhotos[idx] || null); }}
+              style={{ flex: 1, width: screenWidth }} contentContainerStyle={{ alignItems: "center" }}>
               {allViewerPhotos.map((uri, idx) => {
-                const isSelectedPhoto = uri === selectedPhoto;
-                return (
-                  <View key={uri + "-" + idx} style={{ width: screenWidth, height: "100%", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
-                    <PinchGestureHandler
-                      ref={isSelectedPhoto ? photoPinchRef : undefined}
-                      enabled={isSelectedPhoto}
-                      shouldCancelWhenOutside={false}
-                      simultaneousHandlers={[photoScrollRef, photoPanRef]}
-                      onGestureEvent={onPhotoPinch}
-                      onHandlerStateChange={finishPhotoPinch}
-                    >
-                      <Animated.View collapsable={false} style={{ width: "100%", height: "100%", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
-                        <PanGestureHandler
-                          ref={isSelectedPhoto ? photoPanRef : undefined}
-                          enabled={isSelectedPhoto && photoZoomed}
-                          maxPointers={1}
-                          shouldCancelWhenOutside={false}
-                          simultaneousHandlers={[photoScrollRef, photoPinchRef]}
-                          onGestureEvent={onPhotoPan}
-                          onHandlerStateChange={finishPhotoPan}
-                        >
-                          <Animated.View collapsable={false} style={{ width: "100%", height: "100%", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
-                            <Animated.Image source={{ uri }} style={[styles.photoFull, { transform: [
-                              { translateX: isSelectedPhoto ? combinedPhotoTranslateX : 0 },
-                              { translateY: isSelectedPhoto ? combinedPhotoTranslateY : 0 },
-                              { scale: isSelectedPhoto ? combinedPhotoScale : 1 },
-                            ] }]} resizeMode="contain" />
-                          </Animated.View>
-                        </PanGestureHandler>
-                      </Animated.View>
-                    </PinchGestureHandler>
-                  </View>
-                );
+                const active = uri === selectedPhoto;
+                return <View key={uri + "-" + idx} style={{ width: screenWidth, height: "100%", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+                  {active ? <GestureDetector gesture={photoGesture}>
+                    <Animated.View collapsable={false} style={{ width: "100%", height: "100%", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+                      <Animated.Image source={{ uri }} style={[styles.photoFull, photoAnimatedStyle]} resizeMode="contain" />
+                    </Animated.View>
+                  </GestureDetector> : <Image source={{ uri }} style={styles.photoFull} resizeMode="contain" />}
+                </View>;
               })}
-              </ScrollView>
-            </NativeViewGestureHandler>
+            </ScrollView>
           )}
           {!!selectedPhoto && (
             <View style={styles.photoViewerToolbar}>
