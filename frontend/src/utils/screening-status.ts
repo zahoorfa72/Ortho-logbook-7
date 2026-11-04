@@ -83,7 +83,7 @@ function statusesOnlyOnLine(value: string): Array<"positive" | "negative"> {
   const token = /presumptive[\s-]+positive|non[\s-]?reactive|non[\s-]?detected|not[\s-]?detected|not[\s-]?reactive|negative|non[\s-]?positive|positive|reactive|undetected|absent|present|pos\.?|react\.?|\+{1,3}/gi;
   const matches = [...source.matchAll(token)];
   if (!matches.length) return [];
-  const remainder = source.replace(token, "").replace(/[\\s|,:;.\\-()\\[\\]]+/g, "");
+  const remainder = source.replace(token, "").replace(/[\s|,:;.\-()[\]]+/g, "");
   if (remainder) return [];
   return matches.map(match => statusInText(match[0])!).filter(Boolean);
 }
@@ -96,7 +96,7 @@ function statusInText(value: string): Exclude<ScreeningStatus, "conflict" | "unk
   if (negative && (!positive || negative.index <= positive.index)) return "negative";
   if (positive) return "positive";
   // Some rapid-test reports use a plus sign alone in the result cell.
-  if (/^\s*\+\s*$/.test(text)) return "positive";
+  if (/^\s*\+{1,3}\s*$/.test(text)) return "positive";
   return null;
 }
 
