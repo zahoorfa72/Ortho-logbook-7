@@ -33,7 +33,7 @@ export default function SettingsScreen() {
     return (
       <View style={[styles.container, { paddingTop: insets.top }]}>
         <View style={styles.header}>
-          <Pressable onPress={() => router.replace("/(tabs)/index" as any)} style={styles.headerBtn} testID="settings-back">
+          <Pressable onPress={() => router.canGoBack() ? router.back() : router.replace("/(tabs)/index" as any)} style={styles.headerBtn} testID="settings-back">
             <Ionicons name="arrow-back" size={24} color={colors.onSurface} />
           </Pressable>
           <Text style={styles.headerTitle}>Settings</Text>

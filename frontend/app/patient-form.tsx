@@ -18,7 +18,7 @@ import { recordDiagnosticError } from "@/src/utils/problem-report";
 import { Dimensions } from "react-native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Animated, AppState, Image, InteractionManager, Linking, Modal, Pressable, ScrollView, Text, View } from "react-native";
-import { GestureHandlerRootView, NativeViewGestureHandler, PinchGestureHandler, State as GestureState } from "react-native-gesture-handler";
+import { GestureHandlerRootView, NativeViewGestureHandler, PanGestureHandler, PinchGestureHandler, State as GestureState } from "react-native-gesture-handler";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { WebView } from "react-native-webview";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
@@ -150,18 +150,34 @@ export default function PatientForm() {
   const [labDetailsExpanded, setLabDetailsExpanded] = useState(false);
   const [labFindingsExpanded, setLabFindingsExpanded] = useState(false);
   const basePhotoScale = useRef(new Animated.Value(1)).current;
+  const pinchScale = useRef(new Animated.Value(1)).current;
   const basePhotoScaleNumber = useRef(1);
   const pinchStartScaleNumber = useRef(1);
-  const combinedPhotoScale = basePhotoScale;
-  const onPhotoPinch = useCallback((event: any) => {
-    const gestureScale = Number(event?.nativeEvent?.scale);
-    if (!Number.isFinite(gestureScale) || gestureScale <= 0) return;
-    const nextScale = Math.max(1, Math.min(5, pinchStartScaleNumber.current * gestureScale));
-    basePhotoScaleNumber.current = nextScale;
-    // Apply each update to the persistent scale itself. Finger-up does not
-    // reset a transient value, so the enlarged image remains at that size.
-    basePhotoScale.setValue(nextScale);
-  }, [basePhotoScale]);
+  const basePhotoTranslateX = useRef(new Animated.Value(0)).current;
+  const basePhotoTranslateY = useRef(new Animated.Value(0)).current;
+  const photoPanGestureX = useRef(new Animated.Value(0)).current;
+  const photoPanGestureY = useRef(new Animated.Value(0)).current;
+  const basePhotoTranslateXNumber = useRef(0);
+  const basePhotoTranslateYNumber = useRef(0);
+  const photoPanStartXNumber = useRef(0);
+  const photoPanStartYNumber = useRef(0);
+  const photoScrollRef = useRef<any>(null);
+  const photoPinchRef = useRef<any>(null);
+  const photoPanRef = useRef<any>(null);
+  const combinedPhotoScale = Animated.multiply(basePhotoScale, pinchScale);
+  const combinedPhotoTranslateX = Animated.add(basePhotoTranslateX, photoPanGestureX);
+  const combinedPhotoTranslateY = Animated.add(basePhotoTranslateY, photoPanGestureY);
+  // Keep gesture updates on the native driver. JS only receives the final
+  // gesture state, avoiding a React/JS update for every pinch movement frame.
+  const onPhotoPinch = useRef(Animated.event(
+    [{ nativeEvent: { scale: pinchScale } }],
+    { useNativeDriver: true },
+  )).current;
+  const onPhotoPan = useRef(Animated.event(
+    [{ nativeEvent: { translationX: photoPanGestureX, translationY: photoPanGestureY } }],
+    { useNativeDriver: true },
+  )).current;
+  const clampPhotoOffset = (value: number, limit: number) => Math.max(-limit, Math.min(limit, value));
   const finishPhotoPinch = (event: any) => {
     const state = event?.nativeEvent?.state;
     if (state === GestureState.BEGAN) {
@@ -169,18 +185,72 @@ export default function PatientForm() {
       return;
     }
     if (state === GestureState.END || state === GestureState.CANCELLED || state === GestureState.FAILED) {
-      const nextScale = Math.max(1, Math.min(5, basePhotoScaleNumber.current));
+      const gestureScale = Number(event?.nativeEvent?.scale) || 1;
+      const nextScale = Math.max(1, Math.min(5, pinchStartScaleNumber.current * gestureScale));
       basePhotoScaleNumber.current = nextScale;
       basePhotoScale.setValue(nextScale);
+      pinchScale.setValue(1);
+
+      const screenHeight = Dimensions.get("window").height;
+      const maxX = screenWidth * Math.max(0, nextScale - 1) / 2;
+      const maxY = screenHeight * Math.max(0, nextScale - 1) / 2;
+      basePhotoTranslateXNumber.current = nextScale <= 1.02
+        ? 0
+        : clampPhotoOffset(basePhotoTranslateXNumber.current, maxX);
+      basePhotoTranslateYNumber.current = nextScale <= 1.02
+        ? 0
+        : clampPhotoOffset(basePhotoTranslateYNumber.current, maxY);
+      basePhotoTranslateX.setValue(basePhotoTranslateXNumber.current);
+      basePhotoTranslateY.setValue(basePhotoTranslateYNumber.current);
+      if (nextScale <= 1.02) {
+        photoPanGestureX.setValue(0);
+        photoPanGestureY.setValue(0);
+      }
       setPhotoZoomed(nextScale > 1.02);
+    }
+  };
+  const finishPhotoPan = (event: any) => {
+    const state = event?.nativeEvent?.state;
+    if (state === GestureState.BEGAN) {
+      photoPanStartXNumber.current = basePhotoTranslateXNumber.current;
+      photoPanStartYNumber.current = basePhotoTranslateYNumber.current;
+      photoPanGestureX.setValue(0);
+      photoPanGestureY.setValue(0);
+      return;
+    }
+    if (state === GestureState.END || state === GestureState.CANCELLED || state === GestureState.FAILED) {
+      const pointerCount = Number(event?.nativeEvent?.numberOfPointers || 1);
+      if (pointerCount <= 1 && basePhotoScaleNumber.current > 1.02) {
+        const scale = basePhotoScaleNumber.current;
+        const screenHeight = Dimensions.get("window").height;
+        const maxX = screenWidth * (scale - 1) / 2;
+        const maxY = screenHeight * (scale - 1) / 2;
+        const movedX = Number(event?.nativeEvent?.translationX) || 0;
+        const movedY = Number(event?.nativeEvent?.translationY) || 0;
+        basePhotoTranslateXNumber.current = clampPhotoOffset(photoPanStartXNumber.current + movedX, maxX);
+        basePhotoTranslateYNumber.current = clampPhotoOffset(photoPanStartYNumber.current + movedY, maxY);
+        basePhotoTranslateX.setValue(basePhotoTranslateXNumber.current);
+        basePhotoTranslateY.setValue(basePhotoTranslateYNumber.current);
+      }
+      photoPanGestureX.setValue(0);
+      photoPanGestureY.setValue(0);
     }
   };
   const resetPhotoZoom = useCallback(() => {
     basePhotoScaleNumber.current = 1;
     pinchStartScaleNumber.current = 1;
     basePhotoScale.setValue(1);
+    pinchScale.setValue(1);
+    basePhotoTranslateXNumber.current = 0;
+    basePhotoTranslateYNumber.current = 0;
+    photoPanStartXNumber.current = 0;
+    photoPanStartYNumber.current = 0;
+    basePhotoTranslateX.setValue(0);
+    basePhotoTranslateY.setValue(0);
+    photoPanGestureX.setValue(0);
+    photoPanGestureY.setValue(0);
     setPhotoZoomed(false);
-  }, [basePhotoScale]);
+  }, [basePhotoScale, pinchScale, basePhotoTranslateX, basePhotoTranslateY, photoPanGestureX, photoPanGestureY]);
   useEffect(() => {
     resetPhotoZoom();
   }, [selectedPhoto, resetPhotoZoom]);
@@ -2705,9 +2775,32 @@ export default function PatientForm() {
                 const isSelectedPhoto = uri === selectedPhoto;
                 return (
                   <View key={uri + "-" + idx} style={{ width: screenWidth, height: "100%", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
-                    <PinchGestureHandler enabled={isSelectedPhoto} shouldCancelWhenOutside={false} simultaneousHandlers={photoScrollRef} onGestureEvent={onPhotoPinch} onHandlerStateChange={finishPhotoPinch}>
+                    <PinchGestureHandler
+                      ref={isSelectedPhoto ? photoPinchRef : undefined}
+                      enabled={isSelectedPhoto}
+                      shouldCancelWhenOutside={false}
+                      simultaneousHandlers={[photoScrollRef, photoPanRef]}
+                      onGestureEvent={onPhotoPinch}
+                      onHandlerStateChange={finishPhotoPinch}
+                    >
                       <Animated.View collapsable={false} style={{ width: "100%", height: "100%", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
-                        <Animated.Image source={{ uri }} style={[styles.photoFull, { transform: [{ scale: isSelectedPhoto ? combinedPhotoScale : 1 }] }]} resizeMode="contain" />
+                        <PanGestureHandler
+                          ref={isSelectedPhoto ? photoPanRef : undefined}
+                          enabled={isSelectedPhoto && photoZoomed}
+                          maxPointers={1}
+                          shouldCancelWhenOutside={false}
+                          simultaneousHandlers={[photoScrollRef, photoPinchRef]}
+                          onGestureEvent={onPhotoPan}
+                          onHandlerStateChange={finishPhotoPan}
+                        >
+                          <Animated.View collapsable={false} style={{ width: "100%", height: "100%", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+                            <Animated.Image source={{ uri }} style={[styles.photoFull, { transform: [
+                              { translateX: isSelectedPhoto ? combinedPhotoTranslateX : 0 },
+                              { translateY: isSelectedPhoto ? combinedPhotoTranslateY : 0 },
+                              { scale: isSelectedPhoto ? combinedPhotoScale : 1 },
+                            ] }]} resizeMode="contain" />
+                          </Animated.View>
+                        </PanGestureHandler>
                       </Animated.View>
                     </PinchGestureHandler>
                   </View>

@@ -7,6 +7,7 @@ import { triggerAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-back
 import { extractLabReportDate, isLikelyLabReportText, parseLabReportRows, recognizeLabText } from "@/src/utils/lab-ocr";
 import {
   ActivityIndicator,
+  InteractionManager,
   Linking,
   Alert,
   DeviceEventEmitter,
@@ -371,6 +372,7 @@ export default function Logbook() {
   const autoQueuedPatientIdsRef = useRef<Set<string>>(new Set());
   const forceRetryLabScanIdsRef = useRef<Set<string>>(new Set());
   const requestLabScanRef = useRef<(patientId: string, autoForNewPatient?: boolean) => void>(() => {});
+  const logbookFocusedRef = useRef(false);
 
   useEffect(() => {
     const subscription = DeviceEventEmitter.addListener("ortho_lab_ocr_enabled_changed", (value: unknown) => {
@@ -576,6 +578,11 @@ export default function Logbook() {
       let unreadableImages = 0;
       for (let offset = 0; offset < photos.length; offset += 1) {
         if (stopLabScansRef.current.has(patientId) || !labOcrEnabledRef.current) return;
+        if (!logbookFocusedRef.current) {
+          if (!pendingLabScansRef.current.includes(patientId)) pendingLabScansRef.current.unshift(patientId);
+          saveLabScanState(patientId, { status: "queued", message: "Lab scan paused while another screen is open; it will resume in Logbook.", updatedAt: new Date().toISOString() });
+          return;
+        }
         const batch = photos.slice(offset, offset + 1);
         const results = await Promise.all(batch.map(async uri => {
           const key = labPhotoCacheKey(uri);
@@ -603,6 +610,11 @@ export default function Logbook() {
           }
         }));
         if (stopLabScansRef.current.has(patientId) || !labOcrEnabledRef.current) return;
+        if (!logbookFocusedRef.current) {
+          if (!pendingLabScansRef.current.includes(patientId)) pendingLabScansRef.current.unshift(patientId);
+          saveLabScanState(patientId, { status: "queued", message: "Lab scan paused while another screen is open; it will resume in Logbook.", updatedAt: new Date().toISOString() });
+          return;
+        }
         for (const result of results) {
           photoCache[labPhotoCacheKey(result.uri)] = {
             text: result.text, structuredText: result.structuredText, isReport: result.isReport,
@@ -744,12 +756,12 @@ export default function Logbook() {
   }, [labOcrEnabled, queryClient, removeNewPatientQueueEntry, saveLabScanState]);
 
   const drainLabScanQueue = useCallback(async () => {
-    // Keep new-patient OCR independent of dashboard focus so opening Settings,
-    // patient details, or another in-app screen does not interrupt the queue.
-    if (scanQueueRunningRef.current || !labOcrEnabledRef.current) return;
+    // OCR is expensive on mobile. Pause it whenever Logbook is covered so
+    // navigation, settings and the back transition remain responsive.
+    if (scanQueueRunningRef.current || !labOcrEnabledRef.current || !logbookFocusedRef.current) return;
     scanQueueRunningRef.current = true;
     try {
-      while (labOcrEnabledRef.current && pendingLabScansRef.current.length) {
+      while (labOcrEnabledRef.current && logbookFocusedRef.current && pendingLabScansRef.current.length) {
         const patientId = pendingLabScansRef.current.shift()!;
         if (stopLabScansRef.current.has(patientId)) continue;
         activeLabScanRef.current = patientId;
@@ -758,9 +770,23 @@ export default function Logbook() {
       }
     } finally {
       scanQueueRunningRef.current = false;
-      if (labOcrEnabledRef.current && pendingLabScansRef.current.length) void drainLabScanQueue();
+      if (labOcrEnabledRef.current && logbookFocusedRef.current && pendingLabScansRef.current.length) {
+        setTimeout(() => { if (logbookFocusedRef.current) void drainLabScanQueue(); }, 180);
+      }
     }
   }, [runOnePatientLabScan]);
+
+  useFocusEffect(useCallback(() => {
+    logbookFocusedRef.current = true;
+    // Let the native navigation animation finish before resuming queued OCR.
+    const task = InteractionManager.runAfterInteractions(() => {
+      if (logbookFocusedRef.current) void drainLabScanQueue();
+    });
+    return () => {
+      logbookFocusedRef.current = false;
+      task.cancel();
+    };
+  }, [drainLabScanQueue]));
 
   const requestLabScan = useCallback((patientId: string, autoForNewPatient = false) => {
     if (!labOcrEnabledRef.current) return;
@@ -770,7 +796,7 @@ export default function Logbook() {
     else forceRetryLabScanIdsRef.current.add(patientId);
     pendingLabScansRef.current.push(patientId);
     saveLabScanState(patientId, { status: "queued", message: autoForNewPatient ? "Automatic scan: waiting to read saved lab photos…" : "Retry requested — waiting to scan this patient's photos…", updatedAt: new Date().toISOString() });
-    void drainLabScanQueue();
+    if (logbookFocusedRef.current) void drainLabScanQueue();
   }, [drainLabScanQueue, saveLabScanState]);
   requestLabScanRef.current = requestLabScan;
 

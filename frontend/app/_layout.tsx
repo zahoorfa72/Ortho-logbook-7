@@ -140,7 +140,7 @@ export default function RootLayout() {
                     behavior={Platform.OS === "ios" ? "padding" : undefined}
                     keyboardVerticalOffset={0}
                   >
-                  <Stack screenOptions={{ headerShown: false }}>
+                  <Stack screenOptions={{ headerShown: false, freezeOnBlur: true, animation: "simple_push" }}>
                     <Stack.Screen name="index" />
                     <Stack.Screen name="login" />
                     <Stack.Screen name="signup" />
