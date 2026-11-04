@@ -9,6 +9,7 @@ import { Asset, requestPermissionsAsync } from "expo-media-library";
 import * as FileSystem from "expo-file-system/legacy";
 import { convert as convertPdfPagesToImages } from "@uzimandias/react-native-pdf-to-image";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { recognizeText } from "expo-ocr-kit";
 import { extractLabReportDate, hasKnownLabTestName, isLabMetadataLine, isLikelyLabReportText, parseLabReportRows, recognizeLabText } from "@/src/utils/lab-ocr";
 import { detectScreeningStatuses } from "@/src/utils/screening-status";
 import { scanPatientDocuments } from "@/src/utils/document-scanner";
@@ -17,7 +18,7 @@ import { recordDiagnosticError } from "@/src/utils/problem-report";
 import { Dimensions } from "react-native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Animated, AppState, Image, InteractionManager, Linking, Modal, Pressable, ScrollView, Text, View } from "react-native";
-import { GestureHandlerRootView, PinchGestureHandler, State as GestureState } from "react-native-gesture-handler";
+import { GestureHandlerRootView, NativeViewGestureHandler, PinchGestureHandler, State as GestureState } from "react-native-gesture-handler";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { WebView } from "react-native-webview";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
@@ -2678,7 +2679,8 @@ export default function PatientForm() {
             <Ionicons name="close" size={30} color="#FFFFFF" />
           </Pressable>
           {!!selectedPhoto && (
-            <ScrollView ref={photoScrollRef} scrollEnabled={!photoZoomed} key={selectedPhoto || "none"} horizontal pagingEnabled showsHorizontalScrollIndicator={false} contentOffset={{ x: Math.max(0, allViewerPhotos.indexOf(selectedPhoto)) * screenWidth, y: 0 }} onMomentumScrollEnd={(event) => { const idx = Math.max(0, Math.min(allViewerPhotos.length - 1, Math.round(event.nativeEvent.contentOffset.x / screenWidth))); resetPhotoZoom(); setSelectedPhoto(allViewerPhotos[idx] || null); }} style={{ flex: 1, width: screenWidth }} contentContainerStyle={{ alignItems: "center" }}>
+            <NativeViewGestureHandler ref={photoScrollRef} disallowInterruption={false}>
+              <ScrollView scrollEnabled={!photoZoomed} key={selectedPhoto || "none"} horizontal pagingEnabled showsHorizontalScrollIndicator={false} contentOffset={{ x: Math.max(0, allViewerPhotos.indexOf(selectedPhoto)) * screenWidth, y: 0 }} onMomentumScrollEnd={(event) => { const idx = Math.max(0, Math.min(allViewerPhotos.length - 1, Math.round(event.nativeEvent.contentOffset.x / screenWidth))); resetPhotoZoom(); setSelectedPhoto(allViewerPhotos[idx] || null); }} style={{ flex: 1, width: screenWidth }} contentContainerStyle={{ alignItems: "center" }}>
               {allViewerPhotos.map((uri, idx) => {
                 const isSelectedPhoto = uri === selectedPhoto;
                 return (
@@ -2692,6 +2694,7 @@ export default function PatientForm() {
                 );
               })}
               </ScrollView>
+            </NativeViewGestureHandler>
           )}
           {!!selectedPhoto && (
             <View style={styles.photoViewerToolbar}>
