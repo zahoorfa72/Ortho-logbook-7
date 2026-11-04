@@ -17,11 +17,11 @@ const SCREENING_LABELS: Array<{ key: ScreeningKey; pattern: RegExp }> = [
   },
   {
     key: "hcvPlus",
-    pattern: /^(?:anti\s*[- ]?\s*h\s*c\s*v|h\s*c\s*v(?:\s*(?:antibody|ab|antigen))?|hepatitis\s*c(?:\s*(?:antibody|ab))?)\b/i,
+    pattern: /^(?:anti\s*[- ]?\s*h\s*c\s*v|h\s*c\s*v(?:\s*(?:antibody|ab|antigen))?|hepatitis\s*[- ]?\s*c(?:\s*(?:antibody|ab))?)\b/i,
   },
   {
     key: "hiv",
-    pattern: /^h\s*i\s*v(?:\s*[- ]?\s*1\s*\/?\s*2)?(?:\s*(?:antibody|ab|screen|ag))?\b/i,
+    pattern: /^h\s*i\s*v(?:\s*(?:(?:[-/&,]?\s*1\s*[/&,]?\s*2)|(?:i\s*(?:&|and)?\s*ii)))?(?:\s*(?:antibody|ab|screen|ag))?\b/i,
   },
   {
     key: "mp",
@@ -144,16 +144,32 @@ export function detectScreeningStatuses(text: string): ScreeningStatusResults {
     .map(line => line.replace(/\s+/g, " ").trim())
     .filter(Boolean);
 
-  // Reconstructed table rows use a stable layout. Only the result cell (column
-  // 2) is considered, never the unit or reference-range cells.
-  for (const line of lines) {
+  // Reconstructed table rows use explicit cells. A single-label row uses
+  // only its immediate result cell. Multi-column screening panels (HIV | HCV |
+  // HBsAg, followed by Negative | Positive | Negative) are paired by column.
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
     if (!line.includes("|")) continue;
     const cells = line.split("|").map(cell => cell.trim());
     if (cells.length < 2) continue;
-    const label = screeningLabel(cells[0]);
-    if (!label) continue;
-    const status = statusInText(cells[1]);
-    if (status) table[label.key].push(status);
+    const labelledCells = cells.map((cell, cellIndex) => ({
+      label: screeningLabel(cell),
+      cellIndex,
+    })).filter((entry): entry is { label: DetectedLabel; cellIndex: number } => !!entry.label);
+    if (!labelledCells.length) continue;
+
+    if (labelledCells.length > 1) {
+      const nextCells = String(lines[index + 1] || "").split("|").map(cell => cell.trim());
+      const columnValues = labelledCells.map(entry => statusInText(nextCells[entry.cellIndex] || ""));
+      if (columnValues.every((status): status is "positive" | "negative" => status !== null)) {
+        labelledCells.forEach((entry, labelIndex) => table[entry.label.key].push(columnValues[labelIndex]!));
+      }
+      continue;
+    }
+
+    const entry = labelledCells[0];
+    const status = statusInText(cells[entry.cellIndex + 1] || "");
+    if (status) table[entry.label.key].push(status);
   }
 
   // Raw OCR fallback handles reports that have no reconstructed table. Do not
