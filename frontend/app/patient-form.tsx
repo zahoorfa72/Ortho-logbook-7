@@ -1001,6 +1001,7 @@ export default function PatientForm() {
         Image.getSize(sourceUri, (width, height) => resolve({ width, height }), reject);
       });
     } catch (error) {
+      if (orientationTempUri) await FileSystem.deleteAsync(orientationTempUri, { idempotent: true }).catch(() => {});
       if (sourceTempUri) await FileSystem.deleteAsync(sourceTempUri, { idempotent: true }).catch(() => {});
       throw error;
     }
