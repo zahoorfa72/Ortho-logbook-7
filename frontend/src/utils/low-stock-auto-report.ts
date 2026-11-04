@@ -911,6 +911,7 @@ export async function attemptDueLowStockReport(): Promise<string> {
   const config = await loadLowStockReportConfig();
   if (!config) return "Automatic low-stock reporting is not configured.";
   const state = await getLowStockReportState();
+  if (!config.autoEmailEnabled) return "Automatic scheduled low-stock reporting is disabled.";
 
   const normalizedEmails = config.emails.split(/[;,\n]/).map(value => value.trim().toLowerCase()).filter(Boolean).sort().join(",");
   const normalizedPhones = config.whatsappNumbers.split(/[;,\n]/).map(value => value.trim().replace(/^\+/, "").replace(/[\s().-]/g, "")).filter(Boolean).sort().join(",");
