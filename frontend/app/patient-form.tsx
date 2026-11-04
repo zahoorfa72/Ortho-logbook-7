@@ -37,7 +37,7 @@ import { removeDuplicateProcedureAliases } from "@/src/utils/procedure-names";
 import { archivePatientImagesForPatient, createPatientImagePdfFile, getPatientImageArchive, openPatientImageArchivePdf } from "@/src/utils/storage/patient-image-archive";
 import { deletePatientImagePdfFromDrive, downloadPatientImageArchiveForPatient, ensurePatientImagePdfOnDrive, uploadPatientImageArchivesToDrive } from "@/src/utils/storage/google-drive";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
-const LAB_OCR_PIPELINE_VERSION = "row-safe-2026-10-20-v15-fm-sex-range-tiny-text-retry";
+const LAB_OCR_PIPELINE_VERSION = "row-safe-2026-11-04-v16-qualitative-screening-results";
 const CUSTOM_SCREENING_BOXES_KEY = "ortho_custom_screening_boxes_v1";
 type CustomScreeningBox = { id: string; label: string };
 
@@ -149,27 +149,38 @@ export default function PatientForm() {
   const [labTestTemplates, setLabTestTemplates] = useState<import("@/src/utils/lab-ocr").LabTestDefinition[]>([]);
   const [labDetailsExpanded, setLabDetailsExpanded] = useState(false);
   const [labFindingsExpanded, setLabFindingsExpanded] = useState(false);
-  const pinchScale = useRef(new Animated.Value(1)).current;
   const basePhotoScale = useRef(new Animated.Value(1)).current;
   const basePhotoScaleNumber = useRef(1);
-  const combinedPhotoScale = Animated.multiply(basePhotoScale, pinchScale);
-  const onPhotoPinch = useRef(Animated.event([{ nativeEvent: { scale: pinchScale } }], { useNativeDriver: true })).current;
+  const pinchStartScaleNumber = useRef(1);
+  const combinedPhotoScale = basePhotoScale;
+  const onPhotoPinch = useCallback((event: any) => {
+    const gestureScale = Number(event?.nativeEvent?.scale);
+    if (!Number.isFinite(gestureScale) || gestureScale <= 0) return;
+    const nextScale = Math.max(1, Math.min(5, pinchStartScaleNumber.current * gestureScale));
+    basePhotoScaleNumber.current = nextScale;
+    // Apply each update to the persistent scale itself. Finger-up does not
+    // reset a transient value, so the enlarged image remains at that size.
+    basePhotoScale.setValue(nextScale);
+  }, [basePhotoScale]);
   const finishPhotoPinch = (event: any) => {
     const state = event?.nativeEvent?.state;
+    if (state === GestureState.BEGAN) {
+      pinchStartScaleNumber.current = basePhotoScaleNumber.current;
+      return;
+    }
     if (state === GestureState.END || state === GestureState.CANCELLED || state === GestureState.FAILED) {
-      const nextScale = Math.max(1, Math.min(5, basePhotoScaleNumber.current * (Number(event?.nativeEvent?.scale) || 1)));
+      const nextScale = Math.max(1, Math.min(5, basePhotoScaleNumber.current));
       basePhotoScaleNumber.current = nextScale;
       basePhotoScale.setValue(nextScale);
-      pinchScale.setValue(1);
       setPhotoZoomed(nextScale > 1.02);
     }
   };
   const resetPhotoZoom = useCallback(() => {
     basePhotoScaleNumber.current = 1;
+    pinchStartScaleNumber.current = 1;
     basePhotoScale.setValue(1);
-    pinchScale.setValue(1);
     setPhotoZoomed(false);
-  }, [basePhotoScale, pinchScale]);
+  }, [basePhotoScale]);
   useEffect(() => {
     resetPhotoZoom();
   }, [selectedPhoto, resetPhotoZoom]);
@@ -292,9 +303,17 @@ export default function PatientForm() {
           const knownTestLabels = evidenceText.split(/\r?\n/)
             .filter(line => hasKnownLabTestName(line, configuredLabTests)).length;
           const splitLineLabEvidence = knownTestLabels > 0 && numericContent;
+          // Qualitative screening panels often contain only "Positive",
+          // "Reactive", "Negative" or "Non-reactive" and have no numeric result
+          // or configured reference range. Detect them before this early filter
+          // so the HIV/HCV/HBsAg checkboxes receive the actual OCR evidence.
+          const screeningEvidence = detectScreeningStatuses(evidenceText);
+          const hasScreeningEvidence = Object.values(screeningEvidence).some(status =>
+            status === "positive" || status === "negative" || status === "conflict"
+          );
           // A reconstructed table may identify a lab page when raw OCR loses its
           // headings/columns. Use both outputs so valid scans aren't silently discarded.
-          if (evidenceText && (recognizedRows || (labCues && numericContent) || splitLineLabEvidence)) {
+          if (evidenceText && (recognizedRows || (labCues && numericContent) || splitLineLabEvidence || hasScreeningEvidence)) {
             pages.push("LAB REPORT IMAGE " + (i + 1) + "\n" +
               (structuredText ? "RECONSTRUCTED TABLE ROWS (test | result | unit | reference range)\n" + structuredText + "\n" : "") +
               "RAW OCR TEXT FOR REVIEW\n" + (text || "[No reliable plain-text OCR was returned.]"));
