@@ -8,6 +8,7 @@ import { db } from "@/src/db/database";
 import { defaultBranding } from "@/src/theme";
 import { storage } from "@/src/utils/storage";
 import { buildInventoryHtml } from "@/src/utils/pdf";
+import { formatInventoryLabel } from "@/src/utils/inventory-label";
 import { getGoogleGmailAccessToken } from "@/src/utils/storage/google-drive";
 
 export type LowStockSchedule = "weekly" | "15days" | "monthly" | "onOpen" | "fixedDate";
@@ -33,6 +34,8 @@ export type LowStockReportConfig = {
   instantLowStockWhatsAppEnabled?: boolean;
   lowStockWhatsAppTemplateName?: string;
   lowStockWhatsAppTemplateLanguage?: string;
+  scheduledWhatsAppTextTemplateName?: string;
+  scheduledWhatsAppTextTemplateLanguage?: string;
   savedAt: string;
 };
 type LowStockAlertItemSnapshot = {
@@ -74,8 +77,35 @@ type ReportState = {
   lastImmediateAlertAt?: string;
   pendingImmediateAlerts?: PendingImmediateAlert[];
   deliveredImmediateAlertHistory?: DeliveredImmediateAlert[];
+  scheduledDeliveryProgress?: ScheduledDeliveryProgress;
 };
-type PdfResult = { uri: string; count: number; periodStart: string; periodEnd: string; periodKey: string };
+type LowStockReportItem = {
+  id: string;
+  name: string;
+  category: string;
+  size: string;
+  quantity: number;
+  minimumStock: number;
+  unit: string;
+  lowStockEventAt?: string;
+  lowStockEventType?: string;
+};
+type ScheduledDeliveryProgress = {
+  key: string;
+  periodKey: string;
+  periodEnd: string;
+  emailSent: boolean;
+  whatsappPdfSentTo: string[];
+  whatsappTextSentChunks: Record<string, number>;
+};
+type PdfResult = {
+  uri: string;
+  count: number;
+  periodStart: string;
+  periodEnd: string;
+  periodKey: string;
+  items: LowStockReportItem[];
+};
 const CONFIG_KEY = "ortho_low_stock_report_config";
 const STATE_KEY = "ortho_low_stock_report_state";
 let immediateAlertCheckInFlight = false;
@@ -139,8 +169,9 @@ function getPeriod(schedule: LowStockSchedule, now = new Date(), fromDate?: stri
 }
 function iso(v: Date) { return v.toISOString(); }
 
-async function makePdf(schedule: LowStockSchedule = "weekly", fromDate?: string, toDate?: string): Promise<PdfResult> {
-  const now = new Date();
+async function makePdf(schedule: LowStockSchedule = "weekly", fromDate?: string, toDate?: string, periodAnchor?: string): Promise<PdfResult> {
+  const anchoredDate = periodAnchor ? new Date(periodAnchor) : new Date();
+  const now = Number.isFinite(anchoredDate.getTime()) ? anchoredDate : new Date();
   const period = getPeriod(schedule, now, fromDate, toDate);
   const inventory = await api.get<any[]>("/inventory");
   const all = Array.isArray(inventory) ? inventory : [];
@@ -238,13 +269,34 @@ async function makePdf(schedule: LowStockSchedule = "weekly", fromDate?: string,
   }
   const low = [...latestById.values()];
   if (!low.length) throw new Error(`No new low-stock events were recorded from ${period.start.toLocaleDateString()} to ${period.end.toLocaleDateString()}.`);
+  // Normalize once, sort deterministically, and feed this exact snapshot to
+  // both PDF and WhatsApp. Numeric strings are kept as ordinary decimal values
+  // (e.g. 0.25 remains 0.25) rather than rounded for display.
+  const reportItems: LowStockReportItem[] = low
+    .map((item: any) => ({
+      id: String(item.id || ""),
+      name: String(item.name || "Inventory item").trim(),
+      category: String(item.category || ""),
+      size: String(item.size || ""),
+      quantity: Number(item.quantity),
+      minimumStock: Number(item.minimumStock ?? item.minimum_stock),
+      unit: String(item.unit || "pcs"),
+      lowStockEventAt: item.lowStockEventAt ? String(item.lowStockEventAt) : undefined,
+      lowStockEventType: item.lowStockEventType ? String(item.lowStockEventType) : undefined,
+    }))
+    .filter(item => item.id && Number.isFinite(item.quantity) && Number.isFinite(item.minimumStock))
+    .sort((a, b) =>
+      formatInventoryLabel(a.category, a.name, a.size).localeCompare(formatInventoryLabel(b.category, b.name, b.size)) ||
+      a.id.localeCompare(b.id)
+    );
+  if (!reportItems.length) throw new Error("No valid low-stock item quantities were available for the report.");
   const saved = await storage.getItem<string>("ortho_branding", "");
   let branding: any = defaultBranding;
   if (saved) { try { branding = { ...defaultBranding, ...(typeof saved === "string" ? JSON.parse(saved) : saved) }; } catch {} }
   const title = `Low Stock Report (${period.start.toLocaleDateString()} – ${period.end.toLocaleDateString()})`;
-  const html = buildInventoryHtml(branding, low, true, title);
+  const html = buildInventoryHtml(branding, reportItems, true, title);
   const file = await Print.printToFileAsync({ html, base64: false });
-  return { uri: file.uri, count: low.length, periodStart: iso(period.start), periodEnd: iso(period.end), periodKey: period.key };
+  return { uri: file.uri, count: reportItems.length, periodStart: iso(period.start), periodEnd: iso(period.end), periodKey: period.key, items: reportItems };
 }
 
 async function readPdfBase64(uri: string): Promise<string> {
@@ -292,33 +344,192 @@ async function sendEmail(pdf: PdfResult, config: LowStockReportConfig) {
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(String((body as any)?.error?.message || `Gmail send failed (HTTP ${response.status})`));
 }
-async function sendWhatsApp(pdf: PdfResult, config: LowStockReportConfig) {
+function formatWhatsAppQuantity(value: number): string {
+  if (!Number.isFinite(value)) return "0";
+  return Object.is(value, -0) ? "0" : String(value);
+}
+
+function buildWhatsAppLowStockChunks(pdf: PdfResult, templateMode: boolean): string[] {
+  const periodStart = pdf.periodStart.slice(0, 10);
+  const periodEnd = pdf.periodEnd.slice(0, 10);
+  const maxLength = templateMode ? 900 : 3500;
+  const intro = [
+    "*ORTHO LOGBOOK | LOW-STOCK REPORT*",
+    "Period: " + periodStart + " to " + periodEnd,
+    "Newly low-stock items: " + pdf.items.length,
+    "",
+  ].join("\n");
+  const lines = pdf.items.map((item, index) => {
+    const label = formatInventoryLabel(item.category, item.name, item.size, " / ")
+      .replace(/[|\r\n]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 180) || "Inventory item";
+    const unit = String(item.unit || "pcs").replace(/[|\r\n]+/g, " ").trim() || "pcs";
+    const status = item.quantity <= 0 ? "OUT OF STOCK" : "LOW STOCK";
+    return String(index + 1).padStart(2, "0") + ". " + label +
+      " | Stock: " + formatWhatsAppQuantity(item.quantity) + " " + unit +
+      " | Minimum: " + formatWhatsAppQuantity(item.minimumStock) + " " + unit +
+      " | " + status;
+  });
+  const chunks: string[] = [];
+  let current = intro;
+  for (const line of lines) {
+    const addition = line + "\n";
+    if (current.length + addition.length > maxLength && current !== intro) {
+      chunks.push(current.trimEnd());
+      current = "*ORTHO LOGBOOK | LOW-STOCK REPORT (CONTINUED)*\nPeriod: " +
+        periodStart + " to " + periodEnd + "\n\n";
+    }
+    if (current.length + addition.length > maxLength) {
+      // Item names are capped above; this final guard prevents API-limit
+      // violations even when an unusually long category or unit is configured.
+      chunks.push(current.trimEnd());
+      current = line.slice(0, Math.max(80, maxLength - 80)) + "\n";
+    } else {
+      current += addition;
+    }
+  }
+  if (current.trim()) chunks.push(current.trimEnd());
+  return chunks;
+}
+
+async function sendWhatsApp(
+  pdf: PdfResult,
+  config: LowStockReportConfig,
+  progress?: ScheduledDeliveryProgress,
+  onProgress?: (next: ScheduledDeliveryProgress) => Promise<void>,
+) {
   if (!config.whatsappToken?.trim() || !config.whatsappPhoneNumberId?.trim() || !config.whatsappNumbers?.trim()) {
     throw new Error("WhatsApp sending is enabled but recipient number, access token, or phone-number ID is missing.");
   }
+  const recipients = [...new Set(config.whatsappNumbers.split(/[;,\n]/)
+    .map(x => x.trim().replace(/^\+/, "").replace(/[\s().-]/g, ""))
+    .filter(Boolean))];
+  if (!recipients.length || recipients.some(x => !/^\d{8,15}$/.test(x))) {
+    throw new Error("Enter WhatsApp recipient numbers with country code, digits only (for example 923001234567).");
+  }
+
   const version = (config.whatsappGraphVersion || "v23.0").trim();
-  const base = `https://graph.facebook.com/${version}/${config.whatsappPhoneNumberId.trim()}`;
-  const form = new FormData();
-  form.append("messaging_product", "whatsapp");
-  form.append("type", "application/pdf");
-  form.append("file", { uri: pdf.uri, name: "low-stock-report.pdf", type: "application/pdf" } as any);
-  const upload = await fetch(`${base}/media`, { method: "POST", headers: { Authorization: `Bearer ${config.whatsappToken.trim()}` }, body: form });
-  const media = await upload.json().catch(() => ({}));
-  if (!upload.ok || !(media as any).id) throw new Error(String((media as any)?.error?.message || `WhatsApp PDF upload failed (HTTP ${upload.status})`));
-  const recipients = [...new Set(config.whatsappNumbers.split(/[;,\n]/).map(x => x.trim().replace(/^\+/, "").replace(/[\s().-]/g, "")).filter(Boolean))];
-  if (!recipients.length || recipients.some(x => !/^\d{8,15}$/.test(x))) throw new Error("Enter WhatsApp recipient numbers with country code, digits only (for example 923001234567).");
-  for (const to of recipients) {
-    const templateName = String(config.whatsappTemplateName || "").trim();
-    const message = templateName
-      ? { messaging_product: "whatsapp", to, type: "template", template: { name: templateName, language: { code: String(config.whatsappTemplateLanguage || "en_US").trim() }, components: [{ type: "header", parameters: [{ type: "document", document: { id: (media as any).id, filename: "low-stock-report.pdf" } }] }] } }
-      : { messaging_product: "whatsapp", to, type: "document", document: { id: (media as any).id, filename: "low-stock-report.pdf", caption: "Low-stock report " + pdf.periodStart.slice(0,10) + " to " + pdf.periodEnd.slice(0,10) } };
+  const base = "https://graph.facebook.com/" + version + "/" + config.whatsappPhoneNumberId.trim();
+  const current: ScheduledDeliveryProgress = {
+    key: progress?.key || pdf.periodKey,
+    periodKey: progress?.periodKey || pdf.periodKey,
+    periodEnd: progress?.periodEnd || pdf.periodEnd,
+    emailSent: !!progress?.emailSent,
+    whatsappPdfSentTo: [...(progress?.whatsappPdfSentTo || [])],
+    whatsappTextSentChunks: { ...(progress?.whatsappTextSentChunks || {}) },
+  };
+  const completedPdfRecipients = new Set(current.whatsappPdfSentTo);
+  const missingPdfRecipients = recipients.filter(to => !completedPdfRecipients.has(to));
+
+  let mediaId = "";
+  if (missingPdfRecipients.length) {
+    const form = new FormData();
+    form.append("messaging_product", "whatsapp");
+    form.append("type", "application/pdf");
+    form.append("file", { uri: pdf.uri, name: "low-stock-report.pdf", type: "application/pdf" } as any);
+    const upload = await fetch(base + "/media", {
+      method: "POST",
+      headers: { Authorization: "Bearer " + config.whatsappToken.trim() },
+      body: form,
+    });
+    const media = await upload.json().catch(() => ({}));
+    if (!upload.ok || !(media as any).id) {
+      throw new Error(String((media as any)?.error?.message || "WhatsApp PDF upload failed (HTTP " + upload.status + ")"));
+    }
+    mediaId = String((media as any).id);
+  }
+
+  const documentTemplateName = String(config.whatsappTemplateName || "").trim();
+  const documentTemplateLanguage = String(config.whatsappTemplateLanguage || "en_US").trim();
+  const textTemplateName = String(config.scheduledWhatsAppTextTemplateName || config.lowStockWhatsAppTemplateName || "").trim();
+  const textTemplateLanguage = String(
+    config.scheduledWhatsAppTextTemplateName
+      ? config.scheduledWhatsAppTextTemplateLanguage || "en_US"
+      : config.lowStockWhatsAppTemplateLanguage || "en_US"
+  ).trim();
+  const textChunks = buildWhatsAppLowStockChunks(pdf, !!textTemplateName);
+
+  const sendMessage = async (payload: any, label: string) => {
     const response = await fetch(base + "/messages", {
       method: "POST",
-      headers: { Authorization: "Bearer " + config.whatsappToken.trim(), "Content-Type": "application/json" },
-      body: JSON.stringify(message),
+      headers: {
+        Authorization: "Bearer " + config.whatsappToken.trim(),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
     });
     const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(String((body as any)?.error?.message || `WhatsApp send failed (HTTP ${response.status})`));
+    if (!response.ok) {
+      throw new Error(String((body as any)?.error?.message || "WhatsApp " + label + " failed (HTTP " + response.status + ")"));
+    }
+  };
+
+  for (const to of recipients) {
+    if (!completedPdfRecipients.has(to)) {
+      const documentMessage = documentTemplateName
+        ? {
+            messaging_product: "whatsapp",
+            to,
+            type: "template",
+            template: {
+              name: documentTemplateName,
+              language: { code: documentTemplateLanguage },
+              components: [{
+                type: "header",
+                parameters: [{
+                  type: "document",
+                  document: { id: mediaId, filename: "low-stock-report.pdf" },
+                }],
+              }],
+            },
+          }
+        : {
+            messaging_product: "whatsapp",
+            to,
+            type: "document",
+            document: {
+              id: mediaId,
+              filename: "low-stock-report.pdf",
+              caption: "Low-stock report " + pdf.periodStart.slice(0, 10) +
+                " to " + pdf.periodEnd.slice(0, 10) + " (" + pdf.items.length + " items)",
+            },
+          };
+      await sendMessage(documentMessage, "PDF send");
+      completedPdfRecipients.add(to);
+      current.whatsappPdfSentTo = [...completedPdfRecipients];
+      if (onProgress) await onProgress({ ...current, whatsappPdfSentTo: [...current.whatsappPdfSentTo], whatsappTextSentChunks: { ...current.whatsappTextSentChunks } });
+    }
+
+    let sentChunks = Math.max(0, Number(current.whatsappTextSentChunks[to] || 0));
+    for (let chunkIndex = sentChunks; chunkIndex < textChunks.length; chunkIndex++) {
+      const text = textChunks[chunkIndex];
+      const textMessage = textTemplateName
+        ? {
+            messaging_product: "whatsapp",
+            to,
+            type: "template",
+            template: {
+              name: textTemplateName,
+              language: { code: textTemplateLanguage },
+              components: [{
+                type: "body",
+                parameters: [{ type: "text", text }],
+              }],
+            },
+          }
+        : {
+            messaging_product: "whatsapp",
+            to,
+            type: "text",
+            text: { preview_url: false, body: text },
+          };
+      await sendMessage(textMessage, "text summary");
+      sentChunks = chunkIndex + 1;
+      current.whatsappTextSentChunks[to] = sentChunks;
+      if (onProgress) await onProgress({ ...current, whatsappPdfSentTo: [...current.whatsappPdfSentTo], whatsappTextSentChunks: { ...current.whatsappTextSentChunks } });
+    }
   }
 }
 
