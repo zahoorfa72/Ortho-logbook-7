@@ -9,7 +9,7 @@ import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/s
 import { getLowStockReportState, loadLowStockReportConfig, saveLowStockReportConfig, shareLowStockPdfViaWhatsApp, testLowStockReportDeliveryNow, testImmediateLowStockAlertDeliveryNow, checkAndSendImmediateLowStockAlerts, sendManualLowStockTextAlertNow, attemptDueLowStockReport, type LowStockReportConfig, type LowStockSchedule } from "@/src/utils/low-stock-auto-report";
 import { connectGoogleGmailAccount, getConnectedGoogleAccount } from "@/src/utils/storage/google-drive";
 
-const blank = (): LowStockReportConfig => ({ schedule: "weekly", fixedDate: "", reportFromDate: "", reportToDate: "", autoEmailEnabled: false, emailEnabled: false, emails: "", resendApiKey: "", senderEmail: "", whatsappNumbers: "", whatsappToken: "", whatsappPhoneNumberId: "", whatsappGraphVersion: "v23.0", whatsappMode: "manual", instantLowStockAlertsEnabled: false, instantLowStockGmailEnabled: false, instantLowStockWhatsAppEnabled: false, lowStockWhatsAppTemplateName: "", lowStockWhatsAppTemplateLanguage: "en_US", savedAt: "" });
+const blank = (): LowStockReportConfig => ({ schedule: "weekly", fixedDate: "", reportFromDate: "", reportToDate: "", autoEmailEnabled: false, emailEnabled: false, emails: "", resendApiKey: "", senderEmail: "", whatsappNumbers: "", whatsappToken: "", whatsappPhoneNumberId: "", whatsappGraphVersion: "v23.0", whatsappMode: "manual", instantLowStockAlertsEnabled: false, instantLowStockGmailEnabled: false, instantLowStockWhatsAppEnabled: false, lowStockWhatsAppTemplateName: "", lowStockWhatsAppTemplateLanguage: "en_US", scheduledWhatsAppTextTemplateName: "", scheduledWhatsAppTextTemplateLanguage: "en_US", savedAt: "" });
 export default function LowStockReportsScreen() {
   const { user } = useAuth();
   const { colors } = useTheme();
@@ -36,6 +36,7 @@ export default function LowStockReportsScreen() {
     if (config.autoEmailEnabled && !config.emails.trim() && !(config.whatsappMode === "meta" && config.whatsappNumbers.trim())) { toast("Add at least one email or WhatsApp recipient before enabling automatic sending.", "error"); return false; }
     if (config.instantLowStockGmailEnabled && !config.emails.trim()) { toast("Enter recipient email(s) for immediate Gmail low-stock alerts.", "error"); return false; }
     if (config.instantLowStockWhatsAppEnabled && (!config.whatsappNumbers.trim() || !config.whatsappToken.trim() || !config.whatsappPhoneNumberId.trim())) { toast("For immediate WhatsApp alerts, enter recipient number(s), Cloud API token, and phone-number ID.", "error"); return false; }
+    if (config.autoEmailEnabled && config.whatsappMode === "meta" && config.whatsappNumbers.trim() && (!config.whatsappToken.trim() || !config.whatsappPhoneNumberId.trim())) { toast("For scheduled WhatsApp delivery, enter the Cloud API token and phone-number ID.", "error"); return false; }
     try { const next = { ...config, savedAt: new Date().toISOString() }; await saveLowStockReportConfig(next); setConfig(next); toast("Low-stock delivery settings saved securely on this device.", "success"); return true; }
     catch { toast("Could not save settings on this device.", "error"); return false; }
   };
@@ -94,7 +95,7 @@ export default function LowStockReportsScreen() {
       {field("Recipient email(s)", config.emails, v => update({ emails: v }), "recipient@gmail.com; another@gmail.com")}
       <Text style={styles.help}>The Google account you connect is the sender. Google may require the Gmail API to be enabled and the OAuth consent screen configured for your app.</Text>
       <Text style={styles.section}>WhatsApp delivery (manual and automatic)</Text>
-      {toggle("Enable automatic WhatsApp PDF delivery (Meta Cloud API)", config.whatsappMode === "meta", () => update({ whatsappMode: config.whatsappMode === "meta" ? "manual" : "meta" }))}
+      {toggle("Send WhatsApp text summary + PDF automatically (Meta Cloud API)", config.whatsappMode === "meta", () => update({ whatsappMode: config.whatsappMode === "meta" ? "manual" : "meta" }))}
       {toggle("Send immediate low-stock text alerts by WhatsApp", !!config.instantLowStockWhatsAppEnabled, () => update({ instantLowStockWhatsAppEnabled: !config.instantLowStockWhatsAppEnabled }))}
       {field("Recipient WhatsApp number(s)", config.whatsappNumbers, v => update({ whatsappNumbers: v }), "923001234567; 923331234567")}
       {(config.whatsappMode === "meta" || config.instantLowStockWhatsAppEnabled) && <>
@@ -102,10 +103,12 @@ export default function LowStockReportsScreen() {
         {field("WhatsApp Phone Number ID", config.whatsappPhoneNumberId, v => update({ whatsappPhoneNumberId: v }), "Phone Number ID")}
         {field("Graph API version", config.whatsappGraphVersion || "v23.0", v => update({ whatsappGraphVersion: v }), "v23.0")}
         {field("Approved WhatsApp document template name (optional)", config.whatsappTemplateName || "", v => update({ whatsappTemplateName: v }), "low_stock_report")}
-        {field("Template language code", config.whatsappTemplateLanguage || "en_US", v => update({ whatsappTemplateLanguage: v }), "en_US")}
-        {field("Approved low-stock TEXT template name (optional)", config.lowStockWhatsAppTemplateName || "", v => update({ lowStockWhatsAppTemplateName: v }), "low_stock_alert")}
-        {field("Low-stock text template language", config.lowStockWhatsAppTemplateLanguage || "en_US", v => update({ lowStockWhatsAppTemplateLanguage: v }), "en_US")}
-        <Text style={styles.help}>Automatic sending uses Meta's official Cloud API and requires a Meta business portfolio, WhatsApp Business Account, registered business phone number, and token with whatsapp_business_messaging permission. The token is saved in this phone's secure storage, but a token stored in a mobile app can still be extracted; a server-side secret is safer. API delivery needs internet access. For scheduled PDF messages outside WhatsApp's 24-hour customer-service window, configure an approved document-header template. For immediate plain-text alerts outside that window, configure an approved TEXT template with one body placeholder ({'{{1}}'}); otherwise Meta may reject the free-form text.</Text>
+        {field("Document template language code", config.whatsappTemplateLanguage || "en_US", v => update({ whatsappTemplateLanguage: v }), "en_US")}
+        {field("Approved scheduled-report TEXT template name (optional)", config.scheduledWhatsAppTextTemplateName || "", v => update({ scheduledWhatsAppTextTemplateName: v }), "low_stock_summary")}
+        {field("Scheduled text template language", config.scheduledWhatsAppTextTemplateLanguage || "en_US", v => update({ scheduledWhatsAppTextTemplateLanguage: v }), "en_US")}
+        {field("Approved immediate low-stock TEXT template name (optional)", config.lowStockWhatsAppTemplateName || "", v => update({ lowStockWhatsAppTemplateName: v }), "low_stock_alert")}
+        {field("Immediate alert text template language", config.lowStockWhatsAppTemplateLanguage || "en_US", v => update({ lowStockWhatsAppTemplateLanguage: v }), "en_US")}
+        <Text style={styles.help}>Scheduled reports send a compact, copy-friendly item/quantity summary and attach the full PDF. Outside Meta's 24-hour customer-service window, configure an approved document-header template for the PDF and an approved one-body-placeholder TEXT template for the summary. Without the text template, the summary uses a normal WhatsApp text message and Meta may reject it outside the 24-hour window. Immediate alerts can continue using the separate immediate TEXT template. API delivery requires internet access.</Text>
       </>}
       <Text style={styles.help}>Manual sharing is always available from the Share PDF button below. It opens Android's share menu; select WhatsApp, choose the recipient, and press Send. Automatic sending works when Cloud API mode is selected and credentials are configured.</Text>
       <Pressable disabled={busy} onPress={async () => { if (await save()) toast("Settings saved.", "success"); }} style={styles.action}><Text style={styles.actionText}>Save delivery settings</Text></Pressable>
