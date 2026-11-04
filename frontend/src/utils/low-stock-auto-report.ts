@@ -911,32 +911,98 @@ export async function attemptDueLowStockReport(): Promise<string> {
   const config = await loadLowStockReportConfig();
   if (!config) return "Automatic low-stock reporting is not configured.";
   const state = await getLowStockReportState();
-  if (!dueNow(config, state)) return "Automatic report is not due yet.";
+
+  const normalizedEmails = config.emails.split(/[;,\n]/).map(value => value.trim().toLowerCase()).filter(Boolean).sort().join(",");
+  const normalizedPhones = config.whatsappNumbers.split(/[;,\n]/).map(value => value.trim().replace(/^\+/, "").replace(/[\s().-]/g, "")).filter(Boolean).sort().join(",");
+  const progressKey = [
+    config.schedule,
+    String(config.fixedDate || ""),
+    String(config.reportFromDate || ""),
+    String(config.reportToDate || ""),
+    normalizedEmails,
+    normalizedPhones,
+  ].join("|");
+  const savedProgress = state.scheduledDeliveryProgress?.key === progressKey
+    ? state.scheduledDeliveryProgress
+    : undefined;
+
+  // Resume an interrupted send even when the normal weekly/15-day/monthly
+  // interval has not elapsed again. A previously successful Gmail/PDF part is
+  // not sent a second time when only WhatsApp text remains.
+  if (!savedProgress && !dueNow(config, state)) return "Automatic report is not due yet.";
+
   const channels = [
     config.emailEnabled && config.emails?.trim() ? "email" : "",
     config.whatsappMode === "meta" && config.whatsappNumbers?.trim() ? "WhatsApp" : "",
   ].filter(Boolean);
   if (!channels.length) return "Automatic report is enabled, but no delivery channel and recipient are configured.";
-  const pdf = await makePdf(config.schedule, config.reportFromDate, config.reportToDate);
-  if (state.lastPeriodKey === pdf.periodKey) return "This reporting period has already been sent.";
+
+  const pdf = await makePdf(config.schedule, config.reportFromDate, config.reportToDate, savedProgress?.periodEnd);
+  const dedupePeriodKey = config.schedule === "fixedDate"
+    ? "fixedDate:" + String(config.fixedDate || "") + ":" + String(config.reportFromDate || "") + ":" + String(config.reportToDate || "")
+    : pdf.periodKey;
+  if (state.lastPeriodKey === dedupePeriodKey && !savedProgress) return "This reporting period has already been sent.";
+
+  let progress: ScheduledDeliveryProgress = savedProgress
+    ? {
+        ...savedProgress,
+        periodKey: pdf.periodKey,
+        periodEnd: savedProgress.periodEnd || pdf.periodEnd,
+        whatsappPdfSentTo: [...(savedProgress.whatsappPdfSentTo || [])],
+        whatsappTextSentChunks: { ...(savedProgress.whatsappTextSentChunks || {}) },
+      }
+    : {
+        key: progressKey,
+        periodKey: pdf.periodKey,
+        periodEnd: pdf.periodEnd,
+        emailSent: false,
+        whatsappPdfSentTo: [],
+        whatsappTextSentChunks: {},
+      };
   const deliveredChannels: string[] = [];
-  try {
-    if (channels.includes("email")) {
+  const saveProgress = async () => {
+    await saveState({
+      ...state,
+      scheduledDeliveryProgress: {
+        ...progress,
+        whatsappPdfSentTo: [...progress.whatsappPdfSentTo],
+        whatsappTextSentChunks: { ...progress.whatsappTextSentChunks },
+      },
+      lastGeneratedAt: new Date().toISOString(),
+      lastStatus: "Scheduled low-stock report delivery is in progress; successful parts are saved for retry.",
+    });
+  };
+
+  if (channels.includes("email")) {
+    if (!progress.emailSent) {
       await sendEmail(pdf, config);
-      deliveredChannels.push("Gmail");
+      progress.emailSent = true;
+      await saveProgress();
     }
-    if (channels.includes("WhatsApp")) {
-      await sendWhatsApp(pdf, config);
-      deliveredChannels.push("WhatsApp");
-    }
-  } catch (error: any) {
-    // Compact failure feedback is shown by the app toast.
-    throw error;
+    deliveredChannels.push("Gmail PDF");
   }
-  const nextState = {
-    ...state, lastGeneratedAt: new Date().toISOString(), lastSentAt: new Date().toISOString(),
-    lastPeriodKey: config.schedule === "fixedDate" ? "fixedDate:" + String(config.fixedDate || "") + ":" + String(config.reportFromDate || "") + ":" + String(config.reportToDate || "") : pdf.periodKey,
-    lastStatus: `Automatically sent ${pdf.count} low-stock item(s) for ${pdf.periodStart.slice(0,10)} to ${pdf.periodEnd.slice(0,10)} via ${deliveredChannels.join(" and ")}.`,
+  if (channels.includes("WhatsApp")) {
+    await sendWhatsApp(pdf, config, progress, async next => {
+      progress = {
+        ...next,
+        whatsappPdfSentTo: [...next.whatsappPdfSentTo],
+        whatsappTextSentChunks: { ...next.whatsappTextSentChunks },
+      };
+      await saveProgress();
+    });
+    deliveredChannels.push("WhatsApp text + PDF");
+  }
+
+  const nowIso = new Date().toISOString();
+  const nextState: ReportState = {
+    ...state,
+    lastGeneratedAt: nowIso,
+    lastSentAt: nowIso,
+    lastPeriodKey: dedupePeriodKey,
+    scheduledDeliveryProgress: undefined,
+    lastStatus: "Automatically sent " + pdf.count + " low-stock item(s) for " +
+      pdf.periodStart.slice(0, 10) + " to " + pdf.periodEnd.slice(0, 10) +
+      " via " + deliveredChannels.join(" and ") + ".",
   };
   await saveState(nextState);
   return nextState.lastStatus!;
