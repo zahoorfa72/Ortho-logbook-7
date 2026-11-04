@@ -367,10 +367,13 @@ function buildWhatsAppLowStockChunks(pdf: PdfResult, templateMode: boolean): str
       .slice(0, 180) || "Inventory item";
     const unit = String(item.unit || "pcs").replace(/[|\r\n]+/g, " ").trim() || "pcs";
     const status = item.quantity <= 0 ? "OUT OF STOCK" : "LOW STOCK";
-    return String(index + 1).padStart(2, "0") + ". " + label +
-      " | Stock: " + formatWhatsAppQuantity(item.quantity) + " " + unit +
-      " | Minimum: " + formatWhatsAppQuantity(item.minimumStock) + " " + unit +
-      " | " + status;
+    const detectedAt = item.lowStockEventAt
+      ? new Date(item.lowStockEventAt).toLocaleString()
+      : "date not recorded";
+    return String(index + 1).padStart(2, "0") + " | " + label +
+      " | Stock " + formatWhatsAppQuantity(item.quantity) + " " + unit +
+      " / Min " + formatWhatsAppQuantity(item.minimumStock) + " " + unit +
+      " | " + status + " | Detected " + detectedAt;
   });
   const chunks: string[] = [];
   let current = intro;
