@@ -53,6 +53,41 @@ function screeningLabel(line: string): DetectedLabel | null {
   return null;
 }
 
+type LocatedScreeningLabel = { key: ScreeningKey; start: number; end: number };
+
+function screeningLabelsInLine(value: string): LocatedScreeningLabel[] {
+  const text = String(value || "").replace(/\u00a0/g, " ");
+  const candidates: LocatedScreeningLabel[] = [];
+  for (const item of SCREENING_LABELS) {
+    const source = item.pattern.source.replace(/^\^/, "\\b");
+    const pattern = new RegExp(source, "gi");
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(text)) !== null) {
+      candidates.push({ key: item.key, start: match.index, end: match.index + match[0].length });
+      if (!match[0].length) pattern.lastIndex += 1;
+    }
+  }
+  // If an OCR token matches more than one alias, keep the longest label match.
+  candidates.sort((a, b) => a.start - b.start || (b.end - b.start) - (a.end - a.start));
+  const result: LocatedScreeningLabel[] = [];
+  for (const candidate of candidates) {
+    if (result.some(item => candidate.start < item.end && candidate.end > item.start)) continue;
+    result.push(candidate);
+  }
+  return result.sort((a, b) => a.start - b.start);
+}
+
+function statusesOnlyOnLine(value: string): Array<"positive" | "negative"> {
+  const source = String(value || "").trim();
+  if (!source) return [];
+  const token = /presumptive[\s-]+positive|non[\s-]?reactive|non[\s-]?detected|not[\s-]?detected|not[\s-]?reactive|negative|non[\s-]?positive|positive|reactive|undetected|absent|present|pos\.?|react\.?|\+{1,3}/gi;
+  const matches = [...source.matchAll(token)];
+  if (!matches.length) return [];
+  const remainder = source.replace(token, "").replace(/[\\s|,:;.\\-()\\[\\]]+/g, "");
+  if (remainder) return [];
+  return matches.map(match => statusInText(match[0])!).filter(Boolean);
+}
+
 function statusInText(value: string): Exclude<ScreeningStatus, "conflict" | "unknown"> | null {
   const text = String(value || "").replace(/\u00a0/g, " ").trim();
   if (!text) return null;
@@ -126,23 +161,41 @@ export function detectScreeningStatuses(text: string): ScreeningStatusResults {
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index];
     if (line.includes("|")) continue;
-    const label = screeningLabel(line);
-    if (!label) continue;
+    const labels = screeningLabelsInLine(line);
+    if (!labels.length) continue;
 
-    let area = beforeReference(label.remainder)
-      .replace(/^\s*(?:result|status|finding)?\s*[:=|,;\-]?\s*/i, "")
-      .trim();
-    let status = statusInText(area);
-    if (!status) {
-      for (let offset = 1; offset <= 2 && index + offset < lines.length; offset++) {
-        const next = lines[index + offset];
-        if (screeningLabel(next)) break;
-        if (!isStandaloneStatusLine(next)) continue;
-        status = statusInText(next);
-        if (status) break;
+    // Several rapid screening panels print HIV, HCV and HBsAg in columns.
+    // When OCR preserves all labels on one line and all corresponding
+    // qualitative results on the next, map them by their original left-to-right
+    // order. Accept this only when the next line contains nothing except
+    // recognized result tokens, so a nearby reference value cannot be borrowed.
+    if (labels.length > 1) {
+      const nextLine = lines[index + 1] || "";
+      const columnStatuses = statusesOnlyOnLine(nextLine);
+      if (columnStatuses.length === labels.length) {
+        labels.forEach((label, labelIndex) => raw[label.key].push(columnStatuses[labelIndex]));
+        continue;
       }
     }
-    if (status) raw[label.key].push(status);
+
+    for (let labelIndex = 0; labelIndex < labels.length; labelIndex++) {
+      const label = labels[labelIndex];
+      const nextLabel = labels[labelIndex + 1];
+      let area = beforeReference(line.slice(label.end, nextLabel ? nextLabel.start : undefined))
+        .replace(/^\s*(?:result|status|finding)?\s*[:=|,;\-]?\s*/i, "")
+        .trim();
+      let status = statusInText(area);
+      if (!status && labels.length === 1) {
+        for (let offset = 1; offset <= 2 && index + offset < lines.length; offset++) {
+          const next = lines[index + offset];
+          if (screeningLabelsInLine(next).length) break;
+          if (!isStandaloneStatusLine(next)) continue;
+          status = statusInText(next);
+          if (status) break;
+        }
+      }
+      if (status) raw[label.key].push(status);
+    }
   }
 
   const resolve = (key: ScreeningKey) =>
