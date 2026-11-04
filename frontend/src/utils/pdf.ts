@@ -601,6 +601,29 @@ export function buildInventoryHtml(
   reportTitle?: string,
 ): string {
   const list = lowOnly ? items.filter((i) => i.quantity <= i.minimumStock) : items;
+  if (lowOnly) {
+    const rows = list.length ? list.map((item, index) => {
+      const quantity = Number(item.quantity);
+      const minimum = Number(item.minimumStock);
+      const unit = escapeHtml(item.unit || "pcs");
+      const eventDate = item.lowStockEventAt || item.lowStockTriggeredAt || "";
+      const detected = eventDate ? escapeHtml(new Date(eventDate).toLocaleString()) : "Date not recorded";
+      const status = quantity <= 0 ? "OUT OF STOCK" : "LOW STOCK";
+      const statusColor = quantity <= 0 ? "#991B1B" : "#9A5700";
+      return "<tr><td class=\"lowIndex\">" + (index + 1) + "</td>" +
+        "<td class=\"lowItem\"><strong>" + escapeHtml(formatInventoryLabel(item.category, item.name, item.size)) + "</strong></td>" +
+        "<td class=\"lowNumber\"><strong>" + escapeHtml(quantity) + " " + unit + "</strong></td>" +
+        "<td class=\"lowNumber\">" + escapeHtml(minimum) + " " + unit + "</td>" +
+        "<td><span class=\"lowStatus\" style=\"color:" + statusColor + ";\">" + status + "</span><div class=\"lowDate\">" + detected + "</div></td></tr>";
+    }).join("") : "<tr><td colspan=\"5\" class=\"empty\">No low-stock items for this reporting period.</td></tr>";
+    const compactStyles = "<style>body.lowStockReport{padding:16px!important;font-size:10px}.lowStockReport .header{gap:10px;padding-bottom:7px;margin-bottom:8px;border-bottom-width:2px}.lowStockReport .logo,.lowStockReport .logoPlaceholder{width:44px;height:44px;border-radius:8px}.lowStockReport .title{font-size:18px!important}.lowStockReport .subtitle{font-size:10px!important;margin-top:3px}.lowStockReport .printed{font-size:8px;margin-top:2px}.lowStockReport .lowSummary{font-size:10px;font-weight:700;margin:0 0 7px;color:#444}.lowStockReport table{font-size:9px;margin-bottom:4px}.lowStockReport th{padding:5px 6px;font-size:8px;white-space:nowrap}.lowStockReport td{padding:5px 6px;vertical-align:middle}.lowStockReport tr{page-break-inside:avoid}.lowStockReport .lowIndex{width:22px;color:#777;text-align:center}.lowStockReport .lowItem{font-size:9.5px}.lowStockReport .lowNumber{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}.lowStockReport .lowStatus{font-size:8px;font-weight:800;white-space:nowrap}.lowStockReport .lowDate{font-size:7.5px;color:#666;margin-top:2px;white-space:nowrap}.lowStockReport .footer{margin-top:10px;padding-top:5px;font-size:8px}.lowStockReport .empty{padding:12px}</style>";
+    const compactHeader = header(branding, reportTitle || "Low Stock Report — " + list.length + " item" + (list.length === 1 ? "" : "s"), "lowStock");
+    return "<html><head><meta charset=\"utf-8\"/>" + styles(branding) + compactStyles + "</head>" +
+      "<body class=\"lowStockReport\">" + compactHeader +
+      "<div class=\"lowSummary\">" + list.length + " implant item(s) require replenishment · quantities shown in the item's stock unit</div>" +
+      "<table><thead><tr><th style=\"width:24px\">#</th><th>Implant / Size</th><th style=\"width:82px;text-align:right\">Current Stock</th><th style=\"width:76px;text-align:right\">Minimum</th><th style=\"width:120px\">Status / Detected</th></tr></thead><tbody>" + rows + "</tbody></table>" +
+      footer(branding) + "</body></html>";
+  }
   const rows = list.length
     ? list
         .map((i, idx) => {
