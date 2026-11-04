@@ -161,7 +161,6 @@ export default function PatientForm() {
   const basePhotoTranslateYNumber = useRef(0);
   const photoPanStartXNumber = useRef(0);
   const photoPanStartYNumber = useRef(0);
-  const photoScrollRef = useRef<any>(null);
   const photoPinchRef = useRef<any>(null);
   const photoPanRef = useRef<any>(null);
   const combinedPhotoScale = Animated.multiply(basePhotoScale, pinchScale);
