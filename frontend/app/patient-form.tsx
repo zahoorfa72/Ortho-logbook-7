@@ -17,7 +17,7 @@ import { recordDiagnosticError } from "@/src/utils/problem-report";
 import { Dimensions } from "react-native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Animated, AppState, Image, InteractionManager, Linking, Modal, Pressable, ScrollView, Text, View } from "react-native";
-import { GestureHandlerRootView, NativeViewGestureHandler, PinchGestureHandler, State as GestureState } from "react-native-gesture-handler";
+import { GestureHandlerRootView, PinchGestureHandler, State as GestureState } from "react-native-gesture-handler";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { WebView } from "react-native-webview";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
@@ -116,6 +116,7 @@ export default function PatientForm() {
   }, [procedures, patients]);
 
   const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
+  const [photoZoomed, setPhotoZoomed] = useState(false);
   const photoScrollRef = useRef<any>(null);
   const [patientArchiveAvailable, setPatientArchiveAvailable] = useState(false);
   const [patientArchiveOnDrive, setPatientArchiveOnDrive] = useState(false);
@@ -159,12 +160,14 @@ export default function PatientForm() {
       basePhotoScaleNumber.current = nextScale;
       basePhotoScale.setValue(nextScale);
       pinchScale.setValue(1);
+      setPhotoZoomed(nextScale > 1.02);
     }
   };
   const resetPhotoZoom = useCallback(() => {
     basePhotoScaleNumber.current = 1;
     basePhotoScale.setValue(1);
     pinchScale.setValue(1);
+    setPhotoZoomed(false);
   }, [basePhotoScale, pinchScale]);
   useEffect(() => {
     resetPhotoZoom();
@@ -899,6 +902,59 @@ export default function PatientForm() {
     return !!perm.granted;
   }
 
+
+  const documentTextOrientationScore = (value: any) => {
+    const text = String(value?.text || value?.blocks?.map((block: any) => block?.text || "").join("\n") || "").trim();
+    const words = text.match(/[\p{L}\p{N}]{2,}/gu) || [];
+    const longWords = words.filter(word => Array.from(word).length >= 4).length;
+    const characters = words.reduce((sum, word) => sum + Array.from(word).length, 0);
+    const lines = text.split(/\r?\n/).filter(line => line.trim().length >= 2).length;
+    return {
+      score: words.length * 4 + longWords * 2 + Math.min(characters, 240) * 0.12 + Math.min(lines, 24) * 2,
+      words: words.length,
+    };
+  };
+
+  const findUprightDocumentCopy = async (sourceUri: string): Promise<string | null> => {
+    let rotatedUri = "";
+    try {
+      const dimensions = await new Promise<{ width: number; height: number }>((resolve, reject) => {
+        Image.getSize(sourceUri, (width, height) => resolve({ width, height }), reject);
+      });
+      const shape = Math.min(dimensions.width, dimensions.height) / Math.max(dimensions.width, dimensions.height);
+      // Page-like photos are checked locally; panoramic and non-page-shaped
+      // clinical photos avoid the extra orientation OCR pass.
+      if (shape < 0.56 || shape > 0.86) return null;
+
+      const uprightRead = await recognizeText(sourceUri);
+      const uprightScore = documentTextOrientationScore(uprightRead);
+      const rotated = await ImageManipulator.manipulateAsync(
+        sourceUri,
+        [{ rotate: 180 }],
+        { compress: 0.94, format: ImageManipulator.SaveFormat.JPEG },
+      );
+      rotatedUri = rotated.uri;
+      const rotatedRead = await recognizeText(rotatedUri);
+      const rotatedScore = documentTextOrientationScore(rotatedRead);
+
+      // Keep the rotated copy only when OCR reads substantially more text.
+      // An empty/ambiguous OCR result never changes the image orientation.
+      const clearlyBetter = rotatedScore.words >= 4 &&
+        rotatedScore.score >= Math.max(24, uprightScore.score * 1.32) &&
+        rotatedScore.score - uprightScore.score >= 12;
+      if (clearlyBetter) {
+        const result = rotatedUri;
+        rotatedUri = "";
+        return result;
+      }
+    } catch {
+      // Best-effort enhancement: preserve the input if local OCR is unavailable.
+    } finally {
+      if (rotatedUri) await FileSystem.deleteAsync(rotatedUri, { idempotent: true }).catch(() => {});
+    }
+    return null;
+  };
+
   // Keep a private, permanent copy inside the app. Gallery/camera URIs can
   // point to temporary cache/content-provider locations that stop working later.
   // We copy/normalize every newly added photo immediately so the saved patient
@@ -906,6 +962,7 @@ export default function PatientForm() {
   const persistPhoto = async (sourceUri: string) => {
     if (!sourceUri) return sourceUri;
     let sourceTempUri = "";
+    let orientationTempUri = "";
     if (/^data:image\//i.test(sourceUri)) {
       const match = sourceUri.match(/^data:image\/([^;]+);base64,([\s\S]+)$/i);
       if (!match?.[2]) throw new Error("The selected image data is invalid.");
@@ -923,6 +980,15 @@ export default function PatientForm() {
       throw new Error("Private phone storage is unavailable for patient photos.");
     }
     await FileSystem.makeDirectoryAsync(directory, { intermediates: true }).catch(() => {});
+    try {
+      const uprightCopy = await findUprightDocumentCopy(sourceUri);
+      if (uprightCopy) {
+        orientationTempUri = uprightCopy;
+        sourceUri = uprightCopy;
+      }
+    } catch {
+      // Continue with the untouched source if auto-orientation is unavailable.
+    }
     const targetBytes = 1.5 * 1024 * 1024;
     // Preserve diagnostic detail: 1.5 MiB is the preferred target, not a reason
     // to destroy fine text. If that target cannot be met at good quality, allow
@@ -1014,6 +1080,7 @@ export default function PatientForm() {
         await FileSystem.deleteAsync(normalizedUri, { idempotent: true }).catch(() => {});
       }
     } finally {
+      if (orientationTempUri) await FileSystem.deleteAsync(orientationTempUri, { idempotent: true }).catch(() => {});
       if (sourceTempUri) await FileSystem.deleteAsync(sourceTempUri, { idempotent: true }).catch(() => {});
     }
   };
@@ -1034,7 +1101,7 @@ export default function PatientForm() {
       try {
         result = await ImagePicker.launchImageLibraryAsync({
           mediaTypes: ["images"], allowsEditing: false, allowsMultipleSelection: true,
-          selectionLimit: 20, quality: 1,
+          selectionLimit: 20, quality: 1, exif: true,
         });
       } catch (firstError: any) {
         // Android can recreate the Activity while the JS screen is still
@@ -1101,7 +1168,7 @@ export default function PatientForm() {
       let result: ImagePicker.ImagePickerResult;
       try {
         result = await ImagePicker.launchImageLibraryAsync({
-          mediaTypes: ["images"], allowsEditing: false, allowsMultipleSelection: false, quality: 1,
+          mediaTypes: ["images"], allowsEditing: false, allowsMultipleSelection: false, quality: 1, exif: true,
         });
       } catch (firstError: any) {
         if (!isUnregisteredLauncherError(firstError) || !(await rearmImagePickerAfterLauncherError())) throw firstError;
@@ -1227,7 +1294,7 @@ export default function PatientForm() {
     if (!cameraRef.current || !cameraReady || cameraTaking) return;
     setCameraTaking(true);
     try {
-      const result = await cameraRef.current.takePictureAsync({ quality: 1 });
+      const result = await cameraRef.current.takePictureAsync({ quality: 1, skipProcessing: false, exif: true });
       if (!result?.uri) throw new Error("The camera did not return a photo.");
       const permanentUri = await persistPhoto(result.uri);
       setP((x) => ({ ...x, photos: [...x.photos, permanentUri] }));
@@ -2611,17 +2678,20 @@ export default function PatientForm() {
             <Ionicons name="close" size={30} color="#FFFFFF" />
           </Pressable>
           {!!selectedPhoto && (
-            <NativeViewGestureHandler ref={photoScrollRef} disallowInterruption={false}>
-              <ScrollView key={selectedPhoto || "none"} horizontal pagingEnabled showsHorizontalScrollIndicator={false} contentOffset={{ x: Math.max(0, allViewerPhotos.indexOf(selectedPhoto)) * screenWidth, y: 0 }} onMomentumScrollEnd={(event) => { const idx = Math.max(0, Math.min(allViewerPhotos.length - 1, Math.round(event.nativeEvent.contentOffset.x / screenWidth))); resetPhotoZoom(); setSelectedPhoto(allViewerPhotos[idx] || null); }} style={{ flex: 1, width: screenWidth }} contentContainerStyle={{ alignItems: "center" }}>
-              {allViewerPhotos.map((uri, idx) => <View key={uri + "-" + idx} style={{ width: screenWidth, height: "100%", alignItems: "center", justifyContent: "center" }}>
-                <PinchGestureHandler shouldCancelWhenOutside={false} simultaneousHandlers={photoScrollRef} onGestureEvent={onPhotoPinch} onHandlerStateChange={finishPhotoPinch}>
-                  <Animated.View collapsable={false} style={{ width: "100%", height: "100%", alignItems: "center", justifyContent: "center" }}>
-                    <Animated.Image source={{ uri }} style={[styles.photoFull, { transform: [{ scale: combinedPhotoScale }] }]} resizeMode="contain" />
-                  </Animated.View>
-                </PinchGestureHandler>
-              </View>)}
+            <ScrollView ref={photoScrollRef} scrollEnabled={!photoZoomed} key={selectedPhoto || "none"} horizontal pagingEnabled showsHorizontalScrollIndicator={false} contentOffset={{ x: Math.max(0, allViewerPhotos.indexOf(selectedPhoto)) * screenWidth, y: 0 }} onMomentumScrollEnd={(event) => { const idx = Math.max(0, Math.min(allViewerPhotos.length - 1, Math.round(event.nativeEvent.contentOffset.x / screenWidth))); resetPhotoZoom(); setSelectedPhoto(allViewerPhotos[idx] || null); }} style={{ flex: 1, width: screenWidth }} contentContainerStyle={{ alignItems: "center" }}>
+              {allViewerPhotos.map((uri, idx) => {
+                const isSelectedPhoto = uri === selectedPhoto;
+                return (
+                  <View key={uri + "-" + idx} style={{ width: screenWidth, height: "100%", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+                    <PinchGestureHandler enabled={isSelectedPhoto} shouldCancelWhenOutside={false} simultaneousHandlers={photoScrollRef} onGestureEvent={onPhotoPinch} onHandlerStateChange={finishPhotoPinch}>
+                      <Animated.View collapsable={false} style={{ width: "100%", height: "100%", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+                        <Animated.Image source={{ uri }} style={[styles.photoFull, { transform: [{ scale: isSelectedPhoto ? combinedPhotoScale : 1 }] }]} resizeMode="contain" />
+                      </Animated.View>
+                    </PinchGestureHandler>
+                  </View>
+                );
+              })}
               </ScrollView>
-            </NativeViewGestureHandler>
           )}
           {!!selectedPhoto && (
             <View style={styles.photoViewerToolbar}>
