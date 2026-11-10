@@ -4,6 +4,7 @@ import * as FileSystem from "expo-file-system/legacy";
 import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
 import { db, initializeDatabase } from "@/src/db/database";
+import { File as ExpoFile } from "expo-file-system";
 
 const ARCHIVE_KEY = "ortho_patient_image_archives_v1";
 const ARCHIVE_DIR = (FileSystem.documentDirectory || "") + "patient-image-archives/";
@@ -180,8 +181,7 @@ async function readPdfHeader(uri: string): Promise<string> {
     finally { await FileSystem.deleteAsync(temp, { idempotent: true }).catch(() => {}); }
   }
   const path = decodeURIComponent(uri.replace(/^file:\/\//, ""));
-  const FileModule = await import("expo-file-system");
-  const file = new FileModule.File(path);
+  const file = new ExpoFile(path);
   const handle = await file.open();
   try {
     const bytes = await handle.readBytes(5);
@@ -220,14 +220,31 @@ export async function installPatientImageArchivePdf(
     await FileSystem.deleteAsync(temp, { idempotent: true }).catch(() => {});
     throw new Error("The patient image PDF could not be verified after saving to this phone.");
   }
-  if (existing?.localUri && existing.localUri !== target) {
-    try { await FileSystem.deleteAsync(existing.localUri, { idempotent: true }); } catch {}
-  }
+  // Preserve the last valid archive until the incoming copy is verified.
+  const previous = await FileSystem.getInfoAsync(target + ".previous");
+  if (previous.exists) await FileSystem.deleteAsync(target + ".previous", { idempotent: true });
   const current = await FileSystem.getInfoAsync(target);
-  if (current.exists) await FileSystem.deleteAsync(target, { idempotent: true });
-  await FileSystem.moveAsync({ from: temp, to: target });
-  all[id] = { ...existing, ...metadata, patientId: id, localUri: target };
-  await writeArchives(all);
+  if (current.exists) await FileSystem.moveAsync({ from: target, to: target + ".previous" });
+  try {
+    await FileSystem.moveAsync({ from: temp, to: target });
+    const finalInfo = await FileSystem.getInfoAsync(target);
+    if (!finalInfo.exists || Number(finalInfo.size || 0) !== Number(sourceInfo.size || 0)) {
+      throw new Error("The restored patient PDF failed final verification.");
+    }
+    all[id] = { ...existing, ...metadata, patientId: id, localUri: target };
+    await writeArchives(all);
+    if (existing?.localUri && existing.localUri !== target) {
+      try { await FileSystem.deleteAsync(existing.localUri, { idempotent: true }); } catch {}
+    }
+    await FileSystem.deleteAsync(target + ".previous", { idempotent: true }).catch(() => {});
+  } catch (error) {
+    const failed = await FileSystem.getInfoAsync(target);
+    if (failed.exists) await FileSystem.deleteAsync(target, { idempotent: true }).catch(() => {});
+    const backup = await FileSystem.getInfoAsync(target + ".previous");
+    if (backup.exists) await FileSystem.moveAsync({ from: target + ".previous", to: target }).catch(() => {});
+    await FileSystem.deleteAsync(temp, { idempotent: true }).catch(() => {});
+    throw error;
+  }
 }
 export async function archivePatientImagesForPatient(patientId: string, onProgress?: (stage: string) => void, allowEmptyReplacement = false): Promise<PatientImageArchive> {
   initializeDatabase();
