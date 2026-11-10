@@ -96,8 +96,13 @@ export async function buildAndSaveAllPatientImagePdfsToPhone(
     finally { await headerHandle.close(); }
     if (signature !== "%PDF-") throw new Error("Invalid PDF signature for " + archive.fileName);
     const existing = await findSafChild(folderUri, archive.fileName);
+    // SAF URIs are content:// and must be written via the SAF API. Stream
+    // through the legacy file reader only once per file; this path avoids
+    // changing the per-patient archive or loading every patient into one blob.
     const target = existing || await FileSystem.StorageAccessFramework.createFileAsync(folderUri, archive.fileName, "application/pdf");
-    await FileSystem.copyAsync({ from: archive.localUri, to: target });
+    const sourceBase64 = await FileSystem.readAsStringAsync(archive.localUri, { encoding: FileSystem.EncodingType.Base64 });
+    if (!sourceBase64.startsWith("JVBERi0")) throw new Error("Invalid PDF content for " + archive.fileName);
+    await FileSystem.writeAsStringAsync(target, sourceBase64, { encoding: FileSystem.EncodingType.Base64 });
     const verified: any = await FileSystem.getInfoAsync(target);
     if (!verified.exists || (typeof verified.size === "number" && verified.size !== Number(sourceInfo.size || 0))) {
       throw new Error("Could not verify saved patient PDF: " + archive.fileName);
