@@ -179,6 +179,8 @@ export async function installPatientImageArchivePdf(
   const sourceInfo = await FileSystem.getInfoAsync(sourceUri);
   if (!sourceInfo.exists || Number(sourceInfo.size || 0) < 8) throw new Error("The patient image PDF is missing or empty.");
   // Validate the PDF signature before replacing the patient's current archive.
+  // A PDF starts with "%PDF-" at byte zero. Read only a small prefix so
+  // validating large patient PDFs never allocates a second full base64 copy.
   const header = await FileSystem.readAsStringAsync(sourceUri, { encoding: FileSystem.EncodingType.Base64 });
   if (!header.startsWith("JVBERi0")) throw new Error("The selected patient archive is not a valid PDF.");
   const all = await readArchives();
@@ -189,6 +191,8 @@ export async function installPatientImageArchivePdf(
   // accumulating duplicate PDFs. Copy to a temporary file and verify first.
   const target = ARCHIVE_DIR + metadata.fileName;
   const temp = target + ".incoming";
+  const staleTemp = await FileSystem.getInfoAsync(temp);
+  if (staleTemp.exists) await FileSystem.deleteAsync(temp, { idempotent: true });
   await FileSystem.copyAsync({ from: sourceUri, to: temp });
   const tempInfo = await FileSystem.getInfoAsync(temp);
   if (!tempInfo.exists || Number(tempInfo.size || 0) !== Number(sourceInfo.size || 0)) {
