@@ -172,14 +172,17 @@ export async function setPatientImageArchiveDriveState(fileName: string, sourceS
   await writeArchives(all);
 }
 async function readPdfHeader(uri: string): Promise<string> {
-  if (!uri.startsWith("file://")) {
+  // Expo's modern File API requires an absolute URI. Keep the file:// scheme:
+  // stripping it and passing the remaining filesystem path makes Android
+  // reject File.open() with "URI is not absolute".
+  let absoluteUri = String(uri || "").trim();
+  if (!absoluteUri.startsWith("file://")) {
     const temp = ARCHIVE_DIR + "pdf-header-check-" + Date.now() + ".pdf";
-    await FileSystem.copyAsync({ from: uri, to: temp });
+    await FileSystem.copyAsync({ from: absoluteUri, to: temp });
     try { return await readPdfHeader(temp); }
     finally { await FileSystem.deleteAsync(temp, { idempotent: true }).catch(() => {}); }
   }
-  const path = decodeURIComponent(uri.replace(/^file:\/\//, ""));
-  const file = new ExpoFile(path);
+  const file = new ExpoFile(absoluteUri);
   const handle = await file.open();
   try {
     const bytes = await handle.readBytes(5);
