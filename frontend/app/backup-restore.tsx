@@ -5,7 +5,7 @@ import Ionicons from "@react-native-vector-icons/ionicons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { decryptBackup, getBackupInfo, mergeBackup, restoreBackup, type BackupFilter } from "../src/utils/storage/backup";
-import { pickBackupFile, pickPatientImageArchivesForRestore, saveBackupToPhone, savePatientImageArchivesToPhone, shareBackupFile } from "../src/utils/storage/backup-file";
+import { buildAndSaveAllPatientImagePdfsToPhone, pickBackupFile, pickPatientImageArchivesForRestore, saveBackupToPhone, shareBackupFile } from "../src/utils/storage/backup-file";
 import { storage } from "@/src/utils/storage";
 import * as SecureStore from "expo-secure-store";
 import { queryClient } from "@/src/query-client";
@@ -321,8 +321,14 @@ export default function BackupRestoreScreen() {
   const handleDownloadPatientPdfs = async () => {
     try {
       setLoading(true);
-      const result = await savePatientImageArchivesToPhone();
-      Alert.alert("Patient PDFs saved", result.saved + " archived patient-image PDF(s) were copied to the Patient Image PDFs folder you selected. Original PDF quality was preserved.");
+      const result = await buildAndSaveAllPatientImagePdfsToPhone((stage) => setDriveStatus(stage));
+      Alert.alert(
+        "Patient PDF collection saved",
+        "Saved " + result.saved + " patient PDF(s) into Patient Image PDFs.\nCreated: " + result.created +
+          " · Updated: " + result.updated + " · Unchanged: " + result.unchanged +
+          " · Skipped (no photos): " + result.skippedEmpty +
+          "\nThe folder also contains patient-image-pdf-manifest.json for safe ID-based restore."
+      );
     } catch (error) {
       Alert.alert("PDF download failed", error instanceof Error ? error.message : "Unable to save archived patient PDFs.");
     } finally {
@@ -771,7 +777,7 @@ export default function BackupRestoreScreen() {
             ) : (
               <>
                 <Ionicons name="document-text-outline" size={18} color={colors.onSurface} />
-                <Text style={styles.secondaryText}>Download Archived Patient PDFs</Text>
+                <Text style={styles.secondaryText}>Build & Save All Patient Image PDFs</Text>
               </>
             )}
           </Pressable>
