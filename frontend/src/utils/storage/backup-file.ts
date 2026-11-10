@@ -2,7 +2,6 @@ import { File, Paths } from "expo-file-system";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
 import * as DocumentPicker from "expo-document-picker";
-import { File as ExpoFile } from "expo-file-system";
 
 import {
   exportBackup,
@@ -89,16 +88,9 @@ export async function buildAndSaveAllPatientImagePdfsToPhone(
     const archive = archives[index];
     const sourceInfo: any = await FileSystem.getInfoAsync(archive.localUri);
     if (!sourceInfo.exists || Number(sourceInfo.size || 0) < 8) throw new Error("Patient PDF is missing or empty: " + archive.fileName);
-      const sourceFile = new ExpoFile(archive.localUri);
-    const headerHandle = await sourceFile.open();
-    let signature = "";
-    try { signature = String.fromCharCode(...await headerHandle.readBytes(5)); }
-    finally { await headerHandle.close(); }
-    if (signature !== "%PDF-") throw new Error("Invalid PDF signature for " + archive.fileName);
+    // SAF requires a provider write. Read and write one file at a time, then
+    // verify exact byte length before proceeding to the next patient.
     const existing = await findSafChild(folderUri, archive.fileName);
-    // SAF URIs are content:// and must be written via the SAF API. Stream
-    // through the legacy file reader only once per file; this path avoids
-    // changing the per-patient archive or loading every patient into one blob.
     const target = existing || await FileSystem.StorageAccessFramework.createFileAsync(folderUri, archive.fileName, "application/pdf");
     const sourceBase64 = await FileSystem.readAsStringAsync(archive.localUri, { encoding: FileSystem.EncodingType.Base64 });
     if (!sourceBase64.startsWith("JVBERi0")) throw new Error("Invalid PDF content for " + archive.fileName);
