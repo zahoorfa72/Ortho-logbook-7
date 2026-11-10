@@ -296,6 +296,51 @@ export async function archivePatientImagesForPatient(patientId: string, onProgre
   return saved;
 }
 
+/**
+ * Manual admin action: build/update one stable PDF per patient that actually has
+ * locally available photos. Existing unchanged PDFs are reused; changed image
+ * sets rebuild the same patient PDF. Empty-photo patients are skipped.
+ */
+export async function buildAllPatientImageArchivesManually(
+  onProgress?: (stage: string) => void,
+): Promise<{ created: number; updated: number; unchanged: number; skippedEmpty: number; total: number }> {
+  initializeDatabase();
+  const patients = db.getAllSync<any>(
+    "SELECT id,name,mr_no FROM patients ORDER BY created_at ASC",
+  );
+  const result = { created: 0, updated: 0, unchanged: 0, skippedEmpty: 0, total: patients.length };
+  for (let index = 0; index < patients.length; index++) {
+    const patient = patients[index];
+    const id = String(patient.id || "").trim();
+    if (!id) continue;
+    let row: { photo_uri: string; photos_json: string };
+    try {
+      row = readPatientPhotoRow(id);
+    } catch (error: any) {
+      const message = String(error?.message || error);
+      if (/CursorWindow|row too big|too big to fit/i.test(message)) {
+        throw new Error("Cannot safely read images for " + String(patient.name || id) + ". " + message);
+      }
+      throw error;
+    }
+    const sources = await deduplicatePhotoSources(getPhotoSources(row));
+    if (!sources.length) {
+      result.skippedEmpty++;
+      onProgress?.("Skipped " + String(patient.name || "patient") + ": no images");
+      continue;
+    }
+    const existing = await getPatientImageArchive(id);
+    const beforeStamp = existing?.sourceStamp || "";
+    onProgress?.("Creating patient PDF " + (index + 1) + "/" + patients.length + ": " + String(patient.name || "Patient"));
+    const saved = await archivePatientImagesForPatient(id, onProgress, false);
+    if (!beforeStamp) result.created++;
+    else if (beforeStamp === saved.sourceStamp) result.unchanged++;
+    else result.updated++;
+    await new Promise<void>(resolve => setTimeout(resolve, 0));
+  }
+  return result;
+}
+
 export async function archiveEligiblePatientImages(onProgress?: (stage: string) => void, patientIds?: string[]): Promise<boolean> {
   initializeDatabase();
   if (!FileSystem.documentDirectory) throw new Error("Private phone storage is unavailable for patient image archives.");
