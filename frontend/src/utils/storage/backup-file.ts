@@ -239,22 +239,21 @@ export async function pickPatientImageArchivesForRestore(backup: any): Promise<s
     }
   }
   if (!refs.size) return [];
-  const selected = await DocumentPicker.getDocumentAsync({
-    type: "*/*", copyToCacheDirectory: true, multiple: true,
+  // Pick manifest first, then each PDF by the exact manifest filename. Android
+  // providers differ in multi-select behavior; two-stage selection is reliable.
+  const selectedManifest = await DocumentPicker.getDocumentAsync({
+    type: ["application/json", "text/json", "*/*"], copyToCacheDirectory: true, multiple: false,
   });
-  if (selected.canceled) return Array.from(refs.values()).map(ref => String(ref.fileName || ref.patientId));
-  const assets = selected.assets || [];
-  const manifestAsset = assets.find((asset: any) => String(asset?.name || "").toLowerCase() === "patient-image-pdf-manifest.json");
-  if (!manifestAsset?.uri) {
-    throw new Error("Select the Patient Image PDFs folder contents including patient-image-pdf-manifest.json. The manifest is required to prevent attaching a PDF to the wrong patient.");
+  if (selectedManifest.canceled || !selectedManifest.assets?.[0]?.uri) {
+    return Array.from(refs.values()).map(ref => String(ref.fileName || ref.patientId));
   }
+  const manifestAsset = selectedManifest.assets[0];
   const manifestText = await FileSystem.readAsStringAsync(manifestAsset.uri, { encoding: FileSystem.EncodingType.UTF8 });
   let manifest: any;
   try { manifest = JSON.parse(manifestText); } catch { throw new Error("Patient PDF manifest is not valid JSON."); }
   if (manifest?.format !== "ortho-patient-image-pdf-bundle" || manifest?.version !== 1 || !Array.isArray(manifest?.patients)) {
-    throw new Error("Unsupported patient PDF bundle manifest.");
+    throw new Error("Select patient-image-pdf-manifest.json from the Patient Image PDFs folder.");
   }
-  const byName = new Map<string, any>(assets.filter((item: any) => item?.name && item?.uri).map((item: any) => [String(item.name), item]));
   const manifestById = new Map<string, any>();
   for (const entry of manifest.patients) {
     const id = String(entry?.patientId || "");
@@ -262,8 +261,8 @@ export async function pickPatientImageArchivesForRestore(backup: any): Promise<s
     if (!id || !fileName || manifestById.has(id)) throw new Error("Manifest has a missing or duplicate patient ID.");
     manifestById.set(id, entry);
   }
-  const missing: string[] = [];
   const dbPatientIds = new Set((Array.isArray(backup?.patients) ? backup.patients : []).map((p: any) => String(p?.id || "")));
+  const missing: string[] = [];
   for (const [patientId, ref] of refs.entries()) {
     const entry = manifestById.get(patientId);
     if (!entry) { missing.push(String(ref.fileName || patientId)); continue; }
@@ -273,11 +272,20 @@ export async function pickPatientImageArchivesForRestore(backup: any): Promise<s
     if (ref.sourceStamp && entry.sourceStamp && String(ref.sourceStamp) !== String(entry.sourceStamp)) {
       throw new Error("Patient PDF image revision does not match the backup for patient " + patientId + ".");
     }
-    const asset = byName.get(String(entry.fileName));
-    if (!asset?.uri) { missing.push(String(entry.fileName)); continue; }
-    // Never silently map an unknown patient ID or a mismatched MR number.
     if (dbPatientIds.size && !dbPatientIds.has(patientId)) {
-      throw new Error("The PDF bundle contains a patient ID that is absent from the selected backup. Restore patient data first.");
+      throw new Error("The PDF manifest contains patient " + patientId + " which is absent from this backup. Restore patient data first.");
+    }
+    const selectedPdf = await DocumentPicker.getDocumentAsync({
+      type: ["application/pdf", "application/octet-stream", "*/*"], copyToCacheDirectory: true, multiple: false,
+    });
+    if (selectedPdf.canceled || !selectedPdf.assets?.[0]?.uri) {
+      missing.push(String(entry.fileName));
+      continue;
+    }
+    const asset = selectedPdf.assets[0];
+    const selectedName = String(asset.name || "");
+    if (selectedName && selectedName !== String(entry.fileName)) {
+      throw new Error("Wrong file selected for patient " + patientId + ". Expected " + String(entry.fileName) + " but received " + selectedName + ".");
     }
     try {
       await installPatientImageArchivePdf({
