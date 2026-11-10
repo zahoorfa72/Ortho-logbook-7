@@ -170,6 +170,25 @@ export async function setPatientImageArchiveDriveState(fileName: string, sourceS
   }
   await writeArchives(all);
 }
+async function readPdfHeader(uri: string): Promise<string> {
+  if (!uri.startsWith("file://")) {
+    // External document-provider URIs are checked after they are copied to the
+    // app's private temporary path.
+    const temp = ARCHIVE_DIR + "pdf-header-check-" + Date.now() + ".pdf";
+    await FileSystem.copyAsync({ from: uri, to: temp });
+    try { return await readPdfHeader(temp); }
+    finally { await FileSystem.deleteAsync(temp, { idempotent: true }).catch(() => {}); }
+  }
+  const path = decodeURIComponent(uri.replace(/^file:\/\//, ""));
+  const FileModule = await import("expo-file-system");
+  const file = new FileModule.File(path);
+  const handle = await file.open();
+  try {
+    const bytes = await handle.readBytes(5);
+    return String.fromCharCode(...bytes);
+  } finally { await handle.close(); }
+}
+
 export async function installPatientImageArchivePdf(
   metadata: Omit<PatientImageArchive, "localUri"> & { localUri?: string },
   sourceUri: string,
@@ -181,8 +200,10 @@ export async function installPatientImageArchivePdf(
   // Validate the PDF signature before replacing the patient's current archive.
   // A PDF starts with "%PDF-" at byte zero. Read only a small prefix so
   // validating large patient PDFs never allocates a second full base64 copy.
-  const header = await FileSystem.readAsStringAsync(sourceUri, { encoding: FileSystem.EncodingType.Base64 });
-  if (!header.startsWith("JVBERi0")) throw new Error("The selected patient archive is not a valid PDF.");
+  // FileSystem readAsStringAsync returns the entire document, so avoid it for
+  // PDF signature validation. Use a bounded read through the PDF's local file.
+  const header = await readPdfHeader(sourceUri);
+  if (header !== "%PDF-") throw new Error("The selected patient archive is not a valid PDF.");
   const all = await readArchives();
   const id = String(metadata.patientId || "").trim();
   if (!id) throw new Error("Patient ID is missing from the PDF archive manifest.");
