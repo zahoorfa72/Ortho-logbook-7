@@ -176,18 +176,32 @@ export async function installPatientImageArchivePdf(
 ): Promise<void> {
   if (!FileSystem.documentDirectory) throw new Error("Private phone storage is unavailable for patient image PDFs.");
   await FileSystem.makeDirectoryAsync(ARCHIVE_DIR, { intermediates: true });
-  const target = ARCHIVE_DIR + metadata.fileName;
-  const targetBefore = await FileSystem.getInfoAsync(target);
-  if (targetBefore.exists) await FileSystem.deleteAsync(target, { idempotent: true });
   const sourceInfo = await FileSystem.getInfoAsync(sourceUri);
   if (!sourceInfo.exists || Number(sourceInfo.size || 0) < 8) throw new Error("The patient image PDF is missing or empty.");
-  await FileSystem.copyAsync({ from: sourceUri, to: target });
-  const targetInfo = await FileSystem.getInfoAsync(target);
-  if (!targetInfo.exists || Number(targetInfo.size || 0) !== Number(sourceInfo.size || 0)) {
+  // Validate the PDF signature before replacing the patient's current archive.
+  const header = await FileSystem.readAsStringAsync(sourceUri, { encoding: FileSystem.EncodingType.Base64 });
+  if (!header.startsWith("JVBERi0")) throw new Error("The selected patient archive is not a valid PDF.");
+  const all = await readArchives();
+  const id = String(metadata.patientId || "").trim();
+  if (!id) throw new Error("Patient ID is missing from the PDF archive manifest.");
+  const existing = all[id];
+  // Stable per-patient target: updates replace the same file rather than
+  // accumulating duplicate PDFs. Copy to a temporary file and verify first.
+  const target = ARCHIVE_DIR + metadata.fileName;
+  const temp = target + ".incoming";
+  await FileSystem.copyAsync({ from: sourceUri, to: temp });
+  const tempInfo = await FileSystem.getInfoAsync(temp);
+  if (!tempInfo.exists || Number(tempInfo.size || 0) !== Number(sourceInfo.size || 0)) {
+    await FileSystem.deleteAsync(temp, { idempotent: true }).catch(() => {});
     throw new Error("The patient image PDF could not be verified after saving to this phone.");
   }
-  const all = await readArchives();
-  all[String(metadata.patientId)] = { ...all[String(metadata.patientId)], ...metadata, localUri: target };
+  if (existing?.localUri && existing.localUri !== target) {
+    try { await FileSystem.deleteAsync(existing.localUri, { idempotent: true }); } catch {}
+  }
+  const current = await FileSystem.getInfoAsync(target);
+  if (current.exists) await FileSystem.deleteAsync(target, { idempotent: true });
+  await FileSystem.moveAsync({ from: temp, to: target });
+  all[id] = { ...existing, ...metadata, patientId: id, localUri: target };
   await writeArchives(all);
 }
 export async function archivePatientImagesForPatient(patientId: string, onProgress?: (stage: string) => void, allowEmptyReplacement = false): Promise<PatientImageArchive> {
