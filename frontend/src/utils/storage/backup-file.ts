@@ -9,7 +9,7 @@ import {
   type BackupFilter,
 } from "@/src/utils/storage/backup";
 import { markBackupTaken } from "@/src/utils/backup-reminder";
-import { buildAllPatientImageArchivesManually, getLocalPatientImageArchives, getPatientImageArchive, installPatientImageArchivePdf } from "@/src/utils/storage/patient-image-archive";
+import { getLocalPatientImageArchives, getPatientImageArchive, installPatientImageArchivePdf, type PatientImageArchive } from "@/src/utils/storage/patient-image-archive";
 
 const BACKUP_FILE_NAME = "ortho-logbook-backup.orbackup.json";
 
@@ -265,52 +265,76 @@ async function readPickedFile(uri: string, knownSize?: number | null): Promise<s
 export async function pickPatientImageArchivesForRestore(backup: any): Promise<string[]> {
   const refs = new Map<string, any>();
   for (const item of Array.isArray(backup?.patientImageArchives) ? backup.patientImageArchives : []) {
-    if (item?.patientId && item?.fileName) refs.set(String(item.fileName), item);
+    if (item?.patientId && item?.fileName) refs.set(String(item.patientId), item);
   }
   for (const patient of Array.isArray(backup?.patients) ? backup.patients : []) {
     if (patient?.id && patient?.photo_archive_file_name) {
-      const fileName = String(patient.photo_archive_file_name);
-      if (!refs.has(fileName)) refs.set(fileName, {
-        patientId: String(patient.id), patientName: String(patient.name || "Patient"), mrNo: String(patient.mr_no || ""),
-        fileName, sourceStamp: String(patient.photo_archive_source_stamp || ""),
-        archivedAt: String(patient.photo_archived_at || ""), imageCount: Number(patient.photo_archive_image_count || 0),
+      const patientId = String(patient.id);
+      if (!refs.has(patientId)) refs.set(patientId, {
+        patientId, patientName: String(patient.name || "Patient"), mrNo: String(patient.mr_no || ""),
+        fileName: String(patient.photo_archive_file_name),
+        sourceStamp: String(patient.photo_archive_source_stamp || ""),
+        archivedAt: String(patient.photo_archived_at || ""),
+        imageCount: Number(patient.photo_archive_image_count || 0),
       });
     }
   }
-  const missing: any[] = [];
-  for (const ref of refs.values()) {
-    const local = await getPatientImageArchive(String(ref.patientId));
-    if (local && local.sourceStamp === String(ref.sourceStamp || "")) continue;
-    missing.push(ref);
-  }
-  if (!missing.length) return [];
+  if (!refs.size) return [];
   const selected = await DocumentPicker.getDocumentAsync({
-    type: ["application/pdf", "application/octet-stream"], copyToCacheDirectory: true, multiple: true,
+    type: "*/*", copyToCacheDirectory: true, multiple: true,
   });
-  // Patient PDFs are optional attachments, stored separately from encrypted phone
-  // data. Cancelling must not block patient, inventory, account or settings restore.
-  if (selected.canceled) return missing.map(ref => String(ref.fileName));
+  if (selected.canceled) return Array.from(refs.values()).map(ref => String(ref.fileName || ref.patientId));
   const assets = selected.assets || [];
-  const byName = new Map<string, any>(assets.filter((item:any) => item?.name && item?.uri).map((item:any) => [String(item.name), item]));
-  const absent: string[] = [];
-  for (const ref of missing) {
-    const asset = byName.get(String(ref.fileName));
-    if (!asset) {
-      absent.push(String(ref.fileName));
-      continue;
+  const manifestAsset = assets.find((asset: any) => String(asset?.name || "").toLowerCase() === "patient-image-pdf-manifest.json");
+  if (!manifestAsset?.uri) {
+    throw new Error("Select the Patient Image PDFs folder contents including patient-image-pdf-manifest.json. The manifest is required to prevent attaching a PDF to the wrong patient.");
+  }
+  const manifestText = await FileSystem.readAsStringAsync(manifestAsset.uri, { encoding: FileSystem.EncodingType.UTF8 });
+  let manifest: any;
+  try { manifest = JSON.parse(manifestText); } catch { throw new Error("Patient PDF manifest is not valid JSON."); }
+  if (manifest?.format !== "ortho-patient-image-pdf-bundle" || manifest?.version !== 1 || !Array.isArray(manifest?.patients)) {
+    throw new Error("Unsupported patient PDF bundle manifest.");
+  }
+  const byName = new Map<string, any>(assets.filter((item: any) => item?.name && item?.uri).map((item: any) => [String(item.name), item]));
+  const manifestById = new Map<string, any>();
+  for (const entry of manifest.patients) {
+    const id = String(entry?.patientId || "");
+    const fileName = String(entry?.fileName || "");
+    if (!id || !fileName || manifestById.has(id)) throw new Error("Manifest has a missing or duplicate patient ID.");
+    manifestById.set(id, entry);
+  }
+  const missing: string[] = [];
+  const dbPatientIds = new Set((Array.isArray(backup?.patients) ? backup.patients : []).map((p: any) => String(p?.id || "")));
+  for (const [patientId, ref] of refs.entries()) {
+    const entry = manifestById.get(patientId);
+    if (!entry) { missing.push(String(ref.fileName || patientId)); continue; }
+    if (String(entry.fileName) !== String(ref.fileName || entry.fileName)) {
+      throw new Error("Patient PDF filename does not match the backup manifest for patient " + patientId + ".");
+    }
+    if (ref.sourceStamp && entry.sourceStamp && String(ref.sourceStamp) !== String(entry.sourceStamp)) {
+      throw new Error("Patient PDF image revision does not match the backup for patient " + patientId + ".");
+    }
+    const asset = byName.get(String(entry.fileName));
+    if (!asset?.uri) { missing.push(String(entry.fileName)); continue; }
+    // Never silently map an unknown patient ID or a mismatched MR number.
+    if (dbPatientIds.size && !dbPatientIds.has(patientId)) {
+      throw new Error("The PDF bundle contains a patient ID that is absent from the selected backup. Restore patient data first.");
     }
     try {
       await installPatientImageArchivePdf({
-        patientId: String(ref.patientId), patientName: String(ref.patientName || "Patient"),
-        mrNo: String(ref.mrNo || ""), fileName: String(ref.fileName),
-        sourceStamp: String(ref.sourceStamp || ""), archivedAt: String(ref.archivedAt || ""),
-        imageCount: Number(ref.imageCount || 0),
-      }, String(asset.uri));
-    } catch {
-      absent.push(String(ref.fileName));
+        patientId,
+        patientName: String(ref.patientName || entry.patientName || "Patient"),
+        mrNo: String(ref.mrNo || entry.mrNo || ""),
+        fileName: String(entry.fileName),
+        sourceStamp: String(entry.sourceStamp || ref.sourceStamp || ""),
+        archivedAt: String(entry.archivedAt || ref.archivedAt || ""),
+        imageCount: Number(entry.imageCount ?? ref.imageCount ?? 0),
+      } as Omit<PatientImageArchive, "localUri">, String(asset.uri));
+    } catch (error) {
+      throw new Error("Could not restore PDF for patient " + patientId + ": " + (error instanceof Error ? error.message : String(error)));
     }
   }
-  return absent;
+  return missing;
 }
 
 export async function pickBackupFile() {
