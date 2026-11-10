@@ -130,6 +130,53 @@ export async function buildAndSaveAllPatientImagePdfsToPhone(
   return { ...build, saved, folderUri, manifestName };
 }
 
+/**
+ * Manual export entry point. No app lifecycle or background task calls this.
+ * Each patient is archived by stable database ID, then exported with a manifest.
+ */
+export async function buildAndSaveAllPatientImagePdfsToPhone(
+  onProgress?: (stage: string) => void,
+): Promise<{ created: number; updated: number; unchanged: number; skippedEmpty: number; saved: number; folderUri: string; manifestName: string }> {
+  const build = await buildAllPatientImageArchivesManually(onProgress);
+  const archives = await getLocalPatientImageArchives();
+  const permissions = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
+  if (!permissions.granted) throw new Error("Save cancelled. Choose a folder in the phone's File Manager.");
+  const folderUri = await getOrCreateSafFolder(permissions.directoryUri, "Patient Image PDFs");
+  const manifestName = "patient-image-pdf-manifest.json";
+  let saved = 0;
+  const manifest: any = { format: "ortho-patient-image-pdf-bundle", version: 1, createdAt: new Date().toISOString(), patients: [] };
+  for (let index = 0; index < archives.length; index++) {
+    const archive = archives[index];
+    const sourceInfo: any = await FileSystem.getInfoAsync(archive.localUri);
+    if (!sourceInfo.exists || Number(sourceInfo.size || 0) < 8) throw new Error("Patient PDF is missing or empty: " + archive.fileName);
+    const sourceBase64 = await FileSystem.readAsStringAsync(archive.localUri, { encoding: FileSystem.EncodingType.Base64 });
+    if (!sourceBase64.startsWith("JVBERi0")) throw new Error("Invalid PDF signature for " + archive.fileName);
+    const existing = await findSafChild(folderUri, archive.fileName);
+    const target = existing || await FileSystem.StorageAccessFramework.createFileAsync(folderUri, archive.fileName, "application/pdf");
+    await FileSystem.writeAsStringAsync(target, sourceBase64, { encoding: FileSystem.EncodingType.Base64 });
+    const verified: any = await FileSystem.getInfoAsync(target);
+    if (!verified.exists || (typeof verified.size === "number" && verified.size !== Number(sourceInfo.size || 0))) {
+      throw new Error("Could not verify saved patient PDF: " + archive.fileName);
+    }
+    manifest.patients.push({
+      patientId: archive.patientId, patientName: archive.patientName, mrNo: archive.mrNo,
+      fileName: archive.fileName, sourceStamp: archive.sourceStamp, archivedAt: archive.archivedAt,
+      imageCount: archive.imageCount, size: Number(sourceInfo.size || 0),
+    });
+    saved++;
+    onProgress?.("Saved patient PDF " + (index + 1) + "/" + archives.length);
+  }
+  const manifestJson = JSON.stringify(manifest, null, 2);
+  const existingManifest = await findSafChild(folderUri, manifestName);
+  const manifestUri = existingManifest || await FileSystem.StorageAccessFramework.createFileAsync(folderUri, manifestName, "application/json");
+  await FileSystem.writeAsStringAsync(manifestUri, manifestJson, { encoding: FileSystem.EncodingType.UTF8 });
+  const verifiedManifest = JSON.parse(await FileSystem.readAsStringAsync(manifestUri, { encoding: FileSystem.EncodingType.UTF8 }));
+  if (verifiedManifest?.format !== "ortho-patient-image-pdf-bundle" || verifiedManifest?.patients?.length !== saved) {
+    throw new Error("Patient PDF manifest failed read-back validation.");
+  }
+  return { ...build, saved, folderUri, manifestName };
+}
+
 // Export archived patient-image PDFs independently of the encrypted database backup.
 // Files are copied byte-for-byte into a user-selected phone folder; source PDFs are not recompressed.
 export async function savePatientImageArchivesToPhone(): Promise<{ saved: number; folderUri: string }> {
