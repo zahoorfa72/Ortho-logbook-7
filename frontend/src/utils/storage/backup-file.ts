@@ -9,7 +9,7 @@ import {
   type BackupFilter,
 } from "@/src/utils/storage/backup";
 import { markBackupTaken } from "@/src/utils/backup-reminder";
-import { getLocalPatientImageArchives, getPatientImageArchive, installPatientImageArchivePdf } from "@/src/utils/storage/patient-image-archive";
+import { buildAllPatientImageArchivesManually, getLocalPatientImageArchives, getPatientImageArchive, installPatientImageArchivePdf, type PatientImageArchive } from "@/src/utils/storage/patient-image-archive";
 
 const BACKUP_FILE_NAME = "ortho-logbook-backup.orbackup.json";
 
@@ -69,31 +69,53 @@ export async function saveBackupToPhone(password: string, filter: BackupFilter =
   return fileUri;
 }
 
-// Export archived patient-image PDFs independently of the encrypted database backup.
-// Files are copied byte-for-byte into a user-selected phone folder; source PDFs are not recompressed.
-export async function savePatientImageArchivesToPhone(): Promise<{ saved: number; folderUri: string }> {
+/**
+ * Manual export entry point. No app lifecycle or background task calls this.
+ * Each patient is archived by stable database ID, then exported with a manifest.
+ */
+export async function buildAndSaveAllPatientImagePdfsToPhone(
+  onProgress?: (stage: string) => void,
+): Promise<{ created: number; updated: number; unchanged: number; skippedEmpty: number; saved: number; folderUri: string; manifestName: string }> {
+  const build = await buildAllPatientImageArchivesManually(onProgress);
   const archives = await getLocalPatientImageArchives();
-  if (!archives.length) throw new Error("There are no archived patient-image PDFs on this phone yet.");
   const permissions = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
-  if (!permissions.granted) throw new Error("Download cancelled. Please choose a folder in the phone's File Manager.");
+  if (!permissions.granted) throw new Error("Save cancelled. Choose a folder in the phone's File Manager.");
   const folderUri = await getOrCreateSafFolder(permissions.directoryUri, "Patient Image PDFs");
+  const manifestName = "patient-image-pdf-manifest.json";
   let saved = 0;
-  for (const archive of archives) {
+  const manifest: any = { format: "ortho-patient-image-pdf-bundle", version: 1, createdAt: new Date().toISOString(), patients: [] };
+  for (let index = 0; index < archives.length; index++) {
+    const archive = archives[index];
     const sourceInfo: any = await FileSystem.getInfoAsync(archive.localUri);
-    if (!sourceInfo.exists || Number(sourceInfo.size || 0) < 8) {
-      throw new Error("Patient PDF is missing or empty: " + archive.fileName + ". " + saved + " PDF(s) were saved before this error.");
-    }
+    if (!sourceInfo.exists || Number(sourceInfo.size || 0) < 8) throw new Error("Patient PDF is missing or empty: " + archive.fileName);
+    // SAF requires a provider write. Read and write one file at a time, then
+    // verify exact byte length before proceeding to the next patient.
     const existing = await findSafChild(folderUri, archive.fileName);
     const target = existing || await FileSystem.StorageAccessFramework.createFileAsync(folderUri, archive.fileName, "application/pdf");
-    const base64 = await FileSystem.readAsStringAsync(archive.localUri, { encoding: FileSystem.EncodingType.Base64 });
-    await FileSystem.writeAsStringAsync(target, base64, { encoding: FileSystem.EncodingType.Base64 });
+    const sourceBase64 = await FileSystem.readAsStringAsync(archive.localUri, { encoding: FileSystem.EncodingType.Base64 });
+    if (!sourceBase64.startsWith("JVBERi0")) throw new Error("Invalid PDF content for " + archive.fileName);
+    await FileSystem.writeAsStringAsync(target, sourceBase64, { encoding: FileSystem.EncodingType.Base64 });
     const verified: any = await FileSystem.getInfoAsync(target);
     if (!verified.exists || (typeof verified.size === "number" && verified.size !== Number(sourceInfo.size || 0))) {
-      throw new Error("Could not verify downloaded patient PDF: " + archive.fileName + ". " + saved + " PDF(s) were saved.");
+      throw new Error("Could not verify saved patient PDF: " + archive.fileName);
     }
+    manifest.patients.push({
+      patientId: archive.patientId, patientName: archive.patientName, mrNo: archive.mrNo,
+      fileName: archive.fileName, sourceStamp: archive.sourceStamp, archivedAt: archive.archivedAt,
+      imageCount: archive.imageCount, size: Number(sourceInfo.size || 0),
+    });
     saved++;
+    onProgress?.("Saved patient PDF " + (index + 1) + "/" + archives.length);
   }
-  return { saved, folderUri };
+  const manifestJson = JSON.stringify(manifest, null, 2);
+  const existingManifest = await findSafChild(folderUri, manifestName);
+  const manifestUri = existingManifest || await FileSystem.StorageAccessFramework.createFileAsync(folderUri, manifestName, "application/json");
+  await FileSystem.writeAsStringAsync(manifestUri, manifestJson, { encoding: FileSystem.EncodingType.UTF8 });
+  const verifiedManifest = JSON.parse(await FileSystem.readAsStringAsync(manifestUri, { encoding: FileSystem.EncodingType.UTF8 }));
+  if (verifiedManifest?.format !== "ortho-patient-image-pdf-bundle" || verifiedManifest?.patients?.length !== saved) {
+    throw new Error("Patient PDF manifest failed read-back validation.");
+  }
+  return { ...build, saved, folderUri, manifestName };
 }
 
 export async function shareBackupFile(password: string, filter: BackupFilter = { type: "all" }) {
@@ -204,52 +226,88 @@ async function readPickedFile(uri: string, knownSize?: number | null): Promise<s
 export async function pickPatientImageArchivesForRestore(backup: any): Promise<string[]> {
   const refs = new Map<string, any>();
   for (const item of Array.isArray(backup?.patientImageArchives) ? backup.patientImageArchives : []) {
-    if (item?.patientId && item?.fileName) refs.set(String(item.fileName), item);
+    if (item?.patientId && item?.fileName) refs.set(String(item.patientId), item);
   }
   for (const patient of Array.isArray(backup?.patients) ? backup.patients : []) {
     if (patient?.id && patient?.photo_archive_file_name) {
-      const fileName = String(patient.photo_archive_file_name);
-      if (!refs.has(fileName)) refs.set(fileName, {
-        patientId: String(patient.id), patientName: String(patient.name || "Patient"), mrNo: String(patient.mr_no || ""),
-        fileName, sourceStamp: String(patient.photo_archive_source_stamp || ""),
-        archivedAt: String(patient.photo_archived_at || ""), imageCount: Number(patient.photo_archive_image_count || 0),
+      const patientId = String(patient.id);
+      if (!refs.has(patientId)) refs.set(patientId, {
+        patientId, patientName: String(patient.name || "Patient"), mrNo: String(patient.mr_no || ""),
+        fileName: String(patient.photo_archive_file_name),
+        sourceStamp: String(patient.photo_archive_source_stamp || ""),
+        archivedAt: String(patient.photo_archived_at || ""),
+        imageCount: Number(patient.photo_archive_image_count || 0),
       });
     }
   }
-  const missing: any[] = [];
-  for (const ref of refs.values()) {
-    const local = await getPatientImageArchive(String(ref.patientId));
-    if (local && local.sourceStamp === String(ref.sourceStamp || "")) continue;
-    missing.push(ref);
-  }
-  if (!missing.length) return [];
-  const selected = await DocumentPicker.getDocumentAsync({
-    type: ["application/pdf", "application/octet-stream"], copyToCacheDirectory: true, multiple: true,
+  if (!refs.size) return [];
+  // Pick manifest first, then each PDF by the exact manifest filename. Android
+  // providers differ in multi-select behavior; two-stage selection is reliable.
+  const selectedManifest = await DocumentPicker.getDocumentAsync({
+    type: ["application/json", "text/json", "*/*"], copyToCacheDirectory: true, multiple: false,
   });
-  // Patient PDFs are optional attachments, stored separately from encrypted phone
-  // data. Cancelling must not block patient, inventory, account or settings restore.
-  if (selected.canceled) return missing.map(ref => String(ref.fileName));
-  const assets = selected.assets || [];
-  const byName = new Map<string, any>(assets.filter((item:any) => item?.name && item?.uri).map((item:any) => [String(item.name), item]));
-  const absent: string[] = [];
-  for (const ref of missing) {
-    const asset = byName.get(String(ref.fileName));
-    if (!asset) {
-      absent.push(String(ref.fileName));
+  if (selectedManifest.canceled || !selectedManifest.assets?.[0]?.uri) {
+    return Array.from(refs.values()).map(ref => String(ref.fileName || ref.patientId));
+  }
+  const manifestAsset = selectedManifest.assets[0];
+  const manifestText = await FileSystem.readAsStringAsync(manifestAsset.uri, { encoding: FileSystem.EncodingType.UTF8 });
+  let manifest: any;
+  try { manifest = JSON.parse(manifestText); } catch { throw new Error("Patient PDF manifest is not valid JSON."); }
+  if (manifest?.format !== "ortho-patient-image-pdf-bundle" || manifest?.version !== 1 || !Array.isArray(manifest?.patients)) {
+    throw new Error("Select patient-image-pdf-manifest.json from the Patient Image PDFs folder.");
+  }
+  const manifestById = new Map<string, any>();
+  for (const entry of manifest.patients) {
+    const id = String(entry?.patientId || "");
+    const fileName = String(entry?.fileName || "");
+    if (!id || !fileName || manifestById.has(id)) throw new Error("Manifest has a missing or duplicate patient ID.");
+    manifestById.set(id, entry);
+  }
+  const dbPatientIds = new Set((Array.isArray(backup?.patients) ? backup.patients : []).map((p: any) => String(p?.id || "")));
+  const missing: string[] = [];
+  for (const [patientId, ref] of refs.entries()) {
+    const entry = manifestById.get(patientId);
+    if (!entry) { missing.push(String(ref.fileName || patientId)); continue; }
+    if (String(entry.fileName) !== String(ref.fileName || entry.fileName)) {
+      throw new Error("Patient PDF filename does not match the backup manifest for patient " + patientId + ".");
+    }
+    if (ref.sourceStamp && entry.sourceStamp && String(ref.sourceStamp) !== String(entry.sourceStamp)) {
+      throw new Error("Patient PDF image revision does not match the backup for patient " + patientId + ".");
+    }
+    if (dbPatientIds.size && !dbPatientIds.has(patientId)) {
+      throw new Error("The PDF manifest contains patient " + patientId + " which is absent from this backup. Restore patient data first.");
+    }
+    const local = await getPatientImageArchive(patientId);
+    if (local && local.sourceStamp === String(entry.sourceStamp || "")) continue;
+    // Skip files already registered at the exact revision, so repeated restores
+    // are idempotent and do not prompt for or duplicate the same PDF.
+    const selectedPdf = await DocumentPicker.getDocumentAsync({
+      type: ["application/pdf", "application/octet-stream", "*/*"], copyToCacheDirectory: true, multiple: false,
+    });
+    if (selectedPdf.canceled || !selectedPdf.assets?.[0]?.uri) {
+      missing.push(String(entry.fileName));
       continue;
+    }
+    const asset = selectedPdf.assets[0];
+    const selectedName = String(asset.name || "");
+    if (!selectedName || selectedName !== String(entry.fileName)) {
+      throw new Error("Wrong file selected for patient " + patientId + ". Expected exactly " + String(entry.fileName) + ".");
     }
     try {
       await installPatientImageArchivePdf({
-        patientId: String(ref.patientId), patientName: String(ref.patientName || "Patient"),
-        mrNo: String(ref.mrNo || ""), fileName: String(ref.fileName),
-        sourceStamp: String(ref.sourceStamp || ""), archivedAt: String(ref.archivedAt || ""),
-        imageCount: Number(ref.imageCount || 0),
-      }, String(asset.uri));
-    } catch {
-      absent.push(String(ref.fileName));
+        patientId,
+        patientName: String(ref.patientName || entry.patientName || "Patient"),
+        mrNo: String(ref.mrNo || entry.mrNo || ""),
+        fileName: String(entry.fileName),
+        sourceStamp: String(entry.sourceStamp || ref.sourceStamp || ""),
+        archivedAt: String(entry.archivedAt || ref.archivedAt || ""),
+        imageCount: Number(entry.imageCount ?? ref.imageCount ?? 0),
+      } as Omit<PatientImageArchive, "localUri">, String(asset.uri));
+    } catch (error) {
+      throw new Error("Could not restore PDF for patient " + patientId + ": " + (error instanceof Error ? error.message : String(error)));
     }
   }
-  return absent;
+  return missing;
 }
 
 export async function pickBackupFile() {

@@ -4,6 +4,7 @@ import * as FileSystem from "expo-file-system/legacy";
 import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
 import { db, initializeDatabase } from "@/src/db/database";
+import { File as ExpoFile } from "expo-file-system";
 
 const ARCHIVE_KEY = "ortho_patient_image_archives_v1";
 const ARCHIVE_DIR = (FileSystem.documentDirectory || "") + "patient-image-archives/";
@@ -170,25 +171,74 @@ export async function setPatientImageArchiveDriveState(fileName: string, sourceS
   }
   await writeArchives(all);
 }
+async function readPdfHeader(uri: string): Promise<string> {
+  if (!uri.startsWith("file://")) {
+    const temp = ARCHIVE_DIR + "pdf-header-check-" + Date.now() + ".pdf";
+    await FileSystem.copyAsync({ from: uri, to: temp });
+    try { return await readPdfHeader(temp); }
+    finally { await FileSystem.deleteAsync(temp, { idempotent: true }).catch(() => {}); }
+  }
+  const path = decodeURIComponent(uri.replace(/^file:\/\//, ""));
+  const file = new ExpoFile(path);
+  const handle = await file.open();
+  try {
+    const bytes = await handle.readBytes(5);
+    return String.fromCharCode(...bytes);
+  } finally { await handle.close(); }
+}
+
 export async function installPatientImageArchivePdf(
   metadata: Omit<PatientImageArchive, "localUri"> & { localUri?: string },
   sourceUri: string,
 ): Promise<void> {
   if (!FileSystem.documentDirectory) throw new Error("Private phone storage is unavailable for patient image PDFs.");
   await FileSystem.makeDirectoryAsync(ARCHIVE_DIR, { intermediates: true });
-  const target = ARCHIVE_DIR + metadata.fileName;
-  const targetBefore = await FileSystem.getInfoAsync(target);
-  if (targetBefore.exists) await FileSystem.deleteAsync(target, { idempotent: true });
   const sourceInfo = await FileSystem.getInfoAsync(sourceUri);
   if (!sourceInfo.exists || Number(sourceInfo.size || 0) < 8) throw new Error("The patient image PDF is missing or empty.");
-  await FileSystem.copyAsync({ from: sourceUri, to: target });
-  const targetInfo = await FileSystem.getInfoAsync(target);
-  if (!targetInfo.exists || Number(targetInfo.size || 0) !== Number(sourceInfo.size || 0)) {
+  // Read just the 5-byte PDF header; do not load the whole document into RAM.
+  const header = await readPdfHeader(sourceUri);
+  if (header !== "%PDF-") throw new Error("The selected patient archive is not a valid PDF.");
+  const all = await readArchives();
+  const id = String(metadata.patientId || "").trim();
+  if (!id) throw new Error("Patient ID is missing from the PDF archive manifest.");
+  const existing = all[id];
+  // Stable per-patient target: updates replace the same file rather than
+  // accumulating duplicate PDFs. Copy to a temporary file and verify first.
+  const target = ARCHIVE_DIR + metadata.fileName;
+  const temp = target + ".incoming";
+  const staleTemp = await FileSystem.getInfoAsync(temp);
+  if (staleTemp.exists) await FileSystem.deleteAsync(temp, { idempotent: true });
+  await FileSystem.copyAsync({ from: sourceUri, to: temp });
+  const tempInfo = await FileSystem.getInfoAsync(temp);
+  if (!tempInfo.exists || Number(tempInfo.size || 0) !== Number(sourceInfo.size || 0)) {
+    await FileSystem.deleteAsync(temp, { idempotent: true }).catch(() => {});
     throw new Error("The patient image PDF could not be verified after saving to this phone.");
   }
-  const all = await readArchives();
-  all[String(metadata.patientId)] = { ...all[String(metadata.patientId)], ...metadata, localUri: target };
-  await writeArchives(all);
+  // Preserve the last valid archive until the incoming copy is verified.
+  const previous = await FileSystem.getInfoAsync(target + ".previous");
+  if (previous.exists) await FileSystem.deleteAsync(target + ".previous", { idempotent: true });
+  const current = await FileSystem.getInfoAsync(target);
+  if (current.exists) await FileSystem.moveAsync({ from: target, to: target + ".previous" });
+  try {
+    await FileSystem.moveAsync({ from: temp, to: target });
+    const finalInfo = await FileSystem.getInfoAsync(target);
+    if (!finalInfo.exists || Number(finalInfo.size || 0) !== Number(sourceInfo.size || 0)) {
+      throw new Error("The restored patient PDF failed final verification.");
+    }
+    all[id] = { ...existing, ...metadata, patientId: id, localUri: target };
+    await writeArchives(all);
+    if (existing?.localUri && existing.localUri !== target) {
+      try { await FileSystem.deleteAsync(existing.localUri, { idempotent: true }); } catch {}
+    }
+    await FileSystem.deleteAsync(target + ".previous", { idempotent: true }).catch(() => {});
+  } catch (error) {
+    const failed = await FileSystem.getInfoAsync(target);
+    if (failed.exists) await FileSystem.deleteAsync(target, { idempotent: true }).catch(() => {});
+    const backup = await FileSystem.getInfoAsync(target + ".previous");
+    if (backup.exists) await FileSystem.moveAsync({ from: target + ".previous", to: target }).catch(() => {});
+    await FileSystem.deleteAsync(temp, { idempotent: true }).catch(() => {});
+    throw error;
+  }
 }
 export async function archivePatientImagesForPatient(patientId: string, onProgress?: (stage: string) => void, allowEmptyReplacement = false): Promise<PatientImageArchive> {
   initializeDatabase();
@@ -280,6 +330,51 @@ export async function archivePatientImagesForPatient(patientId: string, onProgre
   const saved = await getPatientImageArchive(id);
   if (!saved) throw new Error("The patient PDF was generated but could not be verified in phone storage.");
   return saved;
+}
+
+/**
+ * Manual admin action: build/update one stable PDF per patient that actually has
+ * locally available photos. Existing unchanged PDFs are reused; changed image
+ * sets rebuild the same patient PDF. Empty-photo patients are skipped.
+ */
+export async function buildAllPatientImageArchivesManually(
+  onProgress?: (stage: string) => void,
+): Promise<{ created: number; updated: number; unchanged: number; skippedEmpty: number; total: number }> {
+  initializeDatabase();
+  const patients = db.getAllSync<any>(
+    "SELECT id,name,mr_no FROM patients ORDER BY created_at ASC",
+  );
+  const result = { created: 0, updated: 0, unchanged: 0, skippedEmpty: 0, total: patients.length };
+  for (let index = 0; index < patients.length; index++) {
+    const patient = patients[index];
+    const id = String(patient.id || "").trim();
+    if (!id) continue;
+    let row: { photo_uri: string; photos_json: string };
+    try {
+      row = readPatientPhotoRow(id);
+    } catch (error: any) {
+      const message = String(error?.message || error);
+      if (/CursorWindow|row too big|too big to fit/i.test(message)) {
+        throw new Error("Cannot safely read images for " + String(patient.name || id) + ". " + message);
+      }
+      throw error;
+    }
+    const sources = await deduplicatePhotoSources(getPhotoSources(row));
+    if (!sources.length) {
+      result.skippedEmpty++;
+      onProgress?.("Skipped " + String(patient.name || "patient") + ": no images");
+      continue;
+    }
+    const existing = await getPatientImageArchive(id);
+    const beforeStamp = existing?.sourceStamp || "";
+    onProgress?.("Creating patient PDF " + (index + 1) + "/" + patients.length + ": " + String(patient.name || "Patient"));
+    const saved = await archivePatientImagesForPatient(id, onProgress, false);
+    if (!beforeStamp) result.created++;
+    else if (beforeStamp === saved.sourceStamp) result.unchanged++;
+    else result.updated++;
+    await new Promise<void>(resolve => setTimeout(resolve, 0));
+  }
+  return result;
 }
 
 export async function archiveEligiblePatientImages(onProgress?: (stage: string) => void, patientIds?: string[]): Promise<boolean> {
