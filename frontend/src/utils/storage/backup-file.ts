@@ -2,6 +2,7 @@ import { File, Paths } from "expo-file-system";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
 import * as DocumentPicker from "expo-document-picker";
+import { File as ExpoFile } from "expo-file-system";
 
 import {
   exportBackup,
@@ -88,11 +89,15 @@ export async function buildAndSaveAllPatientImagePdfsToPhone(
     const archive = archives[index];
     const sourceInfo: any = await FileSystem.getInfoAsync(archive.localUri);
     if (!sourceInfo.exists || Number(sourceInfo.size || 0) < 8) throw new Error("Patient PDF is missing or empty: " + archive.fileName);
-    const sourceBase64 = await FileSystem.readAsStringAsync(archive.localUri, { encoding: FileSystem.EncodingType.Base64 });
-    if (!sourceBase64.startsWith("JVBERi0")) throw new Error("Invalid PDF signature for " + archive.fileName);
+      const sourceFile = new ExpoFile(archive.localUri);
+    const headerHandle = await sourceFile.open();
+    let signature = "";
+    try { signature = String.fromCharCode(...await headerHandle.readBytes(5)); }
+    finally { await headerHandle.close(); }
+    if (signature !== "%PDF-") throw new Error("Invalid PDF signature for " + archive.fileName);
     const existing = await findSafChild(folderUri, archive.fileName);
     const target = existing || await FileSystem.StorageAccessFramework.createFileAsync(folderUri, archive.fileName, "application/pdf");
-    await FileSystem.writeAsStringAsync(target, sourceBase64, { encoding: FileSystem.EncodingType.Base64 });
+    await FileSystem.copyAsync({ from: archive.localUri, to: target });
     const verified: any = await FileSystem.getInfoAsync(target);
     if (!verified.exists || (typeof verified.size === "number" && verified.size !== Number(sourceInfo.size || 0))) {
       throw new Error("Could not verify saved patient PDF: " + archive.fileName);
