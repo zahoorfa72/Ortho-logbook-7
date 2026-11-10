@@ -275,6 +275,10 @@ export async function pickPatientImageArchivesForRestore(backup: any): Promise<s
     if (dbPatientIds.size && !dbPatientIds.has(patientId)) {
       throw new Error("The PDF manifest contains patient " + patientId + " which is absent from this backup. Restore patient data first.");
     }
+    const local = await getPatientImageArchive(patientId);
+    if (local && local.sourceStamp === String(entry.sourceStamp || "")) continue;
+    // Skip files already registered at the exact revision, so repeated restores
+    // are idempotent and do not prompt for or duplicate the same PDF.
     const selectedPdf = await DocumentPicker.getDocumentAsync({
       type: ["application/pdf", "application/octet-stream", "*/*"], copyToCacheDirectory: true, multiple: false,
     });
@@ -284,8 +288,8 @@ export async function pickPatientImageArchivesForRestore(backup: any): Promise<s
     }
     const asset = selectedPdf.assets[0];
     const selectedName = String(asset.name || "");
-    if (selectedName && selectedName !== String(entry.fileName)) {
-      throw new Error("Wrong file selected for patient " + patientId + ". Expected " + String(entry.fileName) + " but received " + selectedName + ".");
+    if (!selectedName || selectedName !== String(entry.fileName)) {
+      throw new Error("Wrong file selected for patient " + patientId + ". Expected exactly " + String(entry.fileName) + ".");
     }
     try {
       await installPatientImageArchivePdf({
