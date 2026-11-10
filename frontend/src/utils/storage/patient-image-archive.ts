@@ -173,8 +173,6 @@ export async function setPatientImageArchiveDriveState(fileName: string, sourceS
 }
 async function readPdfHeader(uri: string): Promise<string> {
   if (!uri.startsWith("file://")) {
-    // External document-provider URIs are checked after they are copied to the
-    // app's private temporary path.
     const temp = ARCHIVE_DIR + "pdf-header-check-" + Date.now() + ".pdf";
     await FileSystem.copyAsync({ from: uri, to: temp });
     try { return await readPdfHeader(temp); }
@@ -197,11 +195,7 @@ export async function installPatientImageArchivePdf(
   await FileSystem.makeDirectoryAsync(ARCHIVE_DIR, { intermediates: true });
   const sourceInfo = await FileSystem.getInfoAsync(sourceUri);
   if (!sourceInfo.exists || Number(sourceInfo.size || 0) < 8) throw new Error("The patient image PDF is missing or empty.");
-  // Validate the PDF signature before replacing the patient's current archive.
-  // A PDF starts with "%PDF-" at byte zero. Read only a small prefix so
-  // validating large patient PDFs never allocates a second full base64 copy.
-  // FileSystem readAsStringAsync returns the entire document, so avoid it for
-  // PDF signature validation. Use a bounded read through the PDF's local file.
+  // Read just the 5-byte PDF header; do not load the whole document into RAM.
   const header = await readPdfHeader(sourceUri);
   if (header !== "%PDF-") throw new Error("The selected patient archive is not a valid PDF.");
   const all = await readArchives();
