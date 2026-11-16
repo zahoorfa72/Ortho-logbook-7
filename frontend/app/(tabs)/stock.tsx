@@ -350,7 +350,7 @@ export default function StockScreen(){
         const result=await recognizeText(asset.uri);
         extracted=String(result?.text||"").trim();
         const compressed=await ImageManipulator.manipulateAsync(asset.uri,[{resize:{width:1600}}],{compress:0.5,format:ImageManipulator.SaveFormat.JPEG,base64:true}).catch(()=>null as any);
-        if(compressed?.base64)scannedAttachment={id:Math.random().toString(36).slice(2),name:String(asset.fileName||"invoice-image.jpg"),mimeType:"image/jpeg",dataUri:"data:image/jpeg;base64,"+compressed.base64,size:Math.floor(compressed.base64.length*0.75)};
+        if(compressed?.base64)scannedAttachment={id:Math.random().toString(36).slice(2),name:String(asset.name||"invoice-image.jpg"),mimeType:"image/jpeg",dataUri:"data:image/jpeg;base64,"+compressed.base64,size:Math.floor(compressed.base64.length*0.75)};
       }
       if(extracted.length<5){toast("No readable invoice text found. Try a clearer, brighter photo/PDF with the full invoice visible.","error");return;}
       const suggestions=parseInvoiceOcr(extracted,stockCategories,stockInventory);
