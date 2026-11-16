@@ -999,7 +999,7 @@ function stripPatientPhotosDeep(value: any, key = ""): any {
  return output;
 }
 
-const BACKUP_IMAGE_KEYS = new Set(["photo_uri", "photouri", "photos_json", "photos", "bill_image", "bill_files_json"]);
+const BACKUP_IMAGE_KEYS = new Set(["photo_uri", "photouri", "photos_json", "photos", "bill_image", "bill_files_json", "attachments_json"]);
 const BACKUP_NESTED_JSON_KEYS = new Set(["snapshot_json", "payload_json"]);
 const IMAGE_SIGNATURE_TABLES = new Set(["inventory", "inventoryPurchaseReceipts", "stockReceipts", "implantRecords", "patientHistory", "trash"]);
 
