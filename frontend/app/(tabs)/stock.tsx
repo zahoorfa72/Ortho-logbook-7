@@ -276,76 +276,44 @@ export default function StockScreen(){
 
 
 
-  const addRowAttachment=(rowId:string,attachment:StockAttachment)=>{
-    const row=stockRows.find(item=>item.id===rowId);
-    const current=row?.attachments||[];
-    const currentBytes=current.reduce((sum,item)=>sum+(Number(item.size)||Math.floor(String(item.dataUri||"").length*0.75)),0);
-    if(currentBytes+attachment.size>12*1024*1024){
-      toast("Attachments for one stock item cannot exceed 12 MB in total.","error");
-      return;
-    }
-    updateRow(rowId,{attachments:[...current,attachment]});
+  const addReceiptAttachment=(attachment:StockAttachment)=>{
+    const currentBytes=receiptAttachments.reduce((sum,item)=>sum+(Number(item.size)||Math.floor(String(item.dataUri||"").length*0.75)),0);
+    if(currentBytes+attachment.size>12*1024*1024){toast("Attachments for one receiving entry cannot exceed 12 MB in total.","error");return;}
+    setReceiptAttachments(current=>[...current,attachment]);
   };
+  const removeReceiptAttachment=(attachmentId:string)=>setReceiptAttachments(current=>current.filter(item=>item.id!==attachmentId));
 
-  const removeRowAttachment=(rowId:string,attachmentId:string)=>{
-    const row=stockRows.find(item=>item.id===rowId);
-    updateRow(rowId,{attachments:(row?.attachments||[]).filter(item=>item.id!==attachmentId)});
-  };
-
-  const pickBill=async(id:string)=>{
+  const pickReceiptImage=async()=>{
     const permission=await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if(!permission.granted){toast("Photo permission is required for the bill image.","error");return;}
+    if(!permission.granted){toast("Photo permission is required for the invoice image.","error");return;}
     const picked=await ImagePicker.launchImageLibraryAsync({mediaTypes:["images"],allowsEditing:true,quality:1});
     if(picked.canceled)return;
     const asset=picked.assets[0];
-    if(!asset?.uri){toast("Could not read bill image.","error");return;}
+    if(!asset?.uri){toast("Could not read the invoice image.","error");return;}
     try{
       const actions:any[]=[];
       const width=Number(asset.width||0),height=Number(asset.height||0);
-      if(width>1600||height>1600) actions.push(width>=height?{resize:{width:1600}}:{resize:{height:1600}});
+      if(width>1600||height>1600)actions.push(width>=height?{resize:{width:1600}}:{resize:{height:1600}});
       let result=await ImageManipulator.manipulateAsync(asset.uri,actions,{compress:0.58,format:ImageManipulator.SaveFormat.JPEG,base64:true});
-      if(result.base64&&result.base64.length>1900000){
-        result=await ImageManipulator.manipulateAsync(result.uri,[],{compress:0.42,format:ImageManipulator.SaveFormat.JPEG,base64:true});
-      }
-      if(!result.base64){toast("Could not compress bill image. Please select it again.","error");return;}
-      if(result.base64.length>2000000){toast("This bill image is still too large after compression. Try cropping closer to the bill.","error");return;}
-      const dataUri="data:image/jpeg;base64,"+result.base64;
-      addRowAttachment(id,{
-        id:Math.random().toString(36).slice(2),
-        name:String(asset.fileName||"bill-image.jpg"),
-        mimeType:"image/jpeg",
-        dataUri,
-        size:Math.floor(result.base64.length*0.75),
-      });
-    }catch(error:any){
-      toast("Could not compress bill image: "+String(error?.message||error),"error");
-    }
+      if(result.base64&&result.base64.length>1900000)result=await ImageManipulator.manipulateAsync(result.uri,[],{compress:0.42,format:ImageManipulator.SaveFormat.JPEG,base64:true});
+      if(!result.base64||result.base64.length>2000000){toast("This image is too large after compression. Crop closer to the invoice and try again.","error");return;}
+      addReceiptAttachment({id:Math.random().toString(36).slice(2),name:String(asset.fileName||"invoice-image.jpg"),mimeType:"image/jpeg",dataUri:"data:image/jpeg;base64,"+result.base64,size:Math.floor(result.base64.length*0.75)});
+    }catch(error:any){toast("Could not compress invoice image: "+String(error?.message||error),"error");}
   };
 
-  const pickPdf=async(id:string)=>{
+  const pickReceiptPdf=async()=>{
     try{
       const picked=await DocumentPicker.getDocumentAsync({type:"application/pdf",copyToCacheDirectory:true,multiple:false});
       if(picked.canceled||!picked.assets?.length)return;
       const asset=picked.assets[0];
       if(!asset?.uri){toast("Could not open the selected PDF.","error");return;}
       const size=Number(asset.size||0);
-      if(size>8*1024*1024){toast("Each PDF must be 8 MB or smaller. Compress the PDF and try again.","error");return;}
+      if(size>8*1024*1024){toast("Each invoice PDF must be 8 MB or smaller.","error");return;}
       const base64=await FileSystem.readAsStringAsync(asset.uri,{encoding:FileSystem.EncodingType.Base64});
-      if(!base64){toast("The selected PDF is empty or unreadable.","error");return;}
-      if(base64.length>11_200_000){toast("Each PDF must be 8 MB or smaller. Compress the PDF and try again.","error");return;}
-      addRowAttachment(id,{
-        id:Math.random().toString(36).slice(2),
-        name:String(asset.name||"stock-document.pdf"),
-        mimeType:"application/pdf",
-        dataUri:"data:application/pdf;base64,"+base64,
-        size:size||Math.floor(base64.length*0.75),
-      });
-    }catch(error:any){
-      toast("Could not attach PDF: "+String(error?.message||error),"error");
-    }
+      if(!base64||base64.length>11_200_000){toast("The invoice PDF is empty or larger than 8 MB.","error");return;}
+      addReceiptAttachment({id:Math.random().toString(36).slice(2),name:String(asset.name||"invoice.pdf"),mimeType:"application/pdf",dataUri:"data:application/pdf;base64,"+base64,size:size||Math.floor(base64.length*0.75)});
+    }catch(error:any){toast("Could not attach invoice PDF: "+String(error?.message||error),"error");}
   };
-
-
 
   const scanInvoice=async()=>{
     if(ocrBusy)return;
@@ -357,8 +325,10 @@ export default function StockScreen(){
       if(!asset?.uri){toast("Could not open the selected invoice.","error");return;}
       const isPdf=String(asset.mimeType||"").toLowerCase().includes("pdf")||String(asset.name||"").toLowerCase().endsWith(".pdf");
       let extracted="";
-      let billImage=asset.uri;
+      let scannedAttachment:StockAttachment|null=null;
       if(isPdf){
+        const size=Number(asset.size||0);
+        if(size>8*1024*1024){toast("The invoice PDF must be 8 MB or smaller to attach it to this receipt.","error");return;}
         const info=await getPdfInfo(asset.uri);
         const pageCount=Math.max(0,Number(info?.pageCount)||0);
         if(!pageCount){toast("The selected PDF has no readable pages or is password protected.","error");return;}
@@ -371,21 +341,21 @@ export default function StockScreen(){
           const result=await recognizeText(pageUri);
           const text=String(result?.text||"").trim();
           if(text)pageText.push("Page "+(page+1)+":\n"+text);
-          if(page===0){
-            try{const base64=await FileSystem.readAsStringAsync(pageUri,{encoding:FileSystem.EncodingType.Base64});billImage="data:image/jpeg;base64,"+base64;}catch{billImage=pageUri;}
-          }
         }
         extracted=pageText.join("\n\n");
-        if(pageCount>pagesToScan)toast("Scanned the first 8 pages of this PDF. Check the suggestions before saving.","info");
+        const base64=await FileSystem.readAsStringAsync(asset.uri,{encoding:FileSystem.EncodingType.Base64});
+        if(!base64||base64.length>11_200_000){toast("The invoice PDF is too large to attach. Choose a PDF under 8 MB.","error");return;}
+        scannedAttachment={id:Math.random().toString(36).slice(2),name:String(asset.name||"invoice.pdf"),mimeType:"application/pdf",dataUri:"data:application/pdf;base64,"+base64,size:size||Math.floor(base64.length*0.75)};
       }else{
         const result=await recognizeText(asset.uri);
         extracted=String(result?.text||"").trim();
         const compressed=await ImageManipulator.manipulateAsync(asset.uri,[{resize:{width:1600}}],{compress:0.5,format:ImageManipulator.SaveFormat.JPEG,base64:true}).catch(()=>null as any);
-        billImage=compressed?.base64?"data:image/jpeg;base64,"+compressed.base64:asset.uri;
+        if(compressed?.base64)scannedAttachment={id:Math.random().toString(36).slice(2),name:String(asset.fileName||"invoice-image.jpg"),mimeType:"image/jpeg",dataUri:"data:image/jpeg;base64,"+compressed.base64,size:Math.floor(compressed.base64.length*0.75)};
       }
       if(extracted.length<5){toast("No readable invoice text found. Try a clearer, brighter photo/PDF with the full invoice visible.","error");return;}
       const suggestions=parseInvoiceOcr(extracted,stockCategories,stockInventory);
-      setStockRows(suggestions.length?suggestions.map(r=>({...r,billImage})):[{...newRow(),billImage}]);
+      setStockRows(suggestions.length?suggestions.map(r=>({...r,billImage:""})):[newRow()]);
+      setReceiptAttachments(scannedAttachment?[scannedAttachment]:[]);
       setEditingReceipt(null);
       setDescription("OCR invoice: "+(asset.name||"stock invoice")+"\n\nExtracted text:\n"+extracted);
       setStockDate(new Date().toISOString().slice(0,10));
