@@ -622,7 +622,7 @@ export const api = {
       // can recover the correct deleted record without accidentally matching
       // a different patient. Prefer exact names over fuzzy matches.
       const normalizePatientName = (value: unknown) =>
-        String(value ?? "").trim().toLocaleLowerCase().replace(/\\s+/g, " ");
+        String(value ?? "").trim().toLocaleLowerCase().replace(/\s+/g, " ");
       const editDistance = (a: string, b: string) => {
         const prev = Array.from({ length: b.length + 1 }, (_, i) => i);
         for (let i = 1; i <= a.length; i++) {
@@ -1183,7 +1183,7 @@ export const api = {
       const description=String(body?.description??existing.description??"").trim();
       const uid=await currentUser();
       const receiptUnit=String(existing.unit||oldInventory.unit||"pcs").trim()||"pcs";
-      const normalizeVariant=(value:unknown)=>String(value??"").trim().replace(/\\s+/g," ").toLowerCase();
+      const normalizeVariant=(value:unknown)=>String(value??"").trim().replace(/\s+/g," ").toLowerCase();
 
       db.withTransactionSync(()=>{
         const sameCategory =

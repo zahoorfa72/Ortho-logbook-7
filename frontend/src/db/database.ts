@@ -355,7 +355,7 @@ function mergeDuplicateInventoryRowsOnce() {
       ORDER BY COALESCE(NULLIF(TRIM(i.added_date),''),'9999-12-31'), i.id
     `);
     const normalize = (value: unknown) =>
-      String(value ?? "").trim().replace(/\\s+/g, " ").toLocaleLowerCase();
+      String(value ?? "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
     const groups = new Map<string, any[]>();
 
     for (const row of rows) {
