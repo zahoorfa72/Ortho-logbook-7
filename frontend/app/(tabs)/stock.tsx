@@ -225,7 +225,7 @@ export default function StockScreen(){
   const openReceiptAttachment=async(attachment:any)=>{
     try{
       const dataUri=String(attachment?.dataUri||"");
-      const match=dataUri.match(/^data:([^;,]+);base64,([\\s\\S]+)$/);
+      const match=dataUri.match(/^data:([^;,]+);base64,([\s\S]+)$/);
       if(!match)throw new Error("This saved attachment has no readable file data.");
       const mimeType=String(attachment?.mimeType||match[1]||"application/octet-stream");
       const fallbackExt=mimeType==="application/pdf"?"pdf":mimeType==="image/png"?"png":"jpg";
