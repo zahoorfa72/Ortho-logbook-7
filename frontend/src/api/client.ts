@@ -1217,7 +1217,7 @@ export const api = {
       db.withTransactionSync(()=>{
         rows.forEach((row:any,index:number)=>{
           db.runSync(
-            "UPDATE stock_receipts SET added_date=?,description=?,attachments_json=? WHERE id=?",
+            "UPDATE stock_receipts SET added_date=?,description=?,attachments_json=?,bill_image=CASE WHEN LOWER(COALESCE(bill_image,'')) LIKE 'data:%' THEN '' ELSE bill_image END WHERE id=?",
             [addedDate,description,index===0?attachmentsJson:"[]",row.id],
           );
         });
