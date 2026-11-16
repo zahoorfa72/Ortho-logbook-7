@@ -1261,16 +1261,10 @@ export async function uploadPatientImageArchivesToDrive(
       const folder = await getOrCreatePatientImagePdfFolder();
       folderId = String(folder.id);
     } catch (error: any) {
-      // A master snapshot must not reference a PDF as remotely confirmed if the
-      // verification request itself could not reach Drive. Local image bytes
-      // are embedded into the master for every archive whose confirmation is
-      // cleared below; older Drive PDFs remain untouched.
-      if (verifyExisting) {
-        for (const archive of archives) {
-          try { await setPatientImageArchiveDriveState(archive.fileName, archive.sourceStamp, ""); } catch {}
-        }
-      }
-      onProgress?.("Patient PDF verification deferred: " + String(error?.message || error) + ". The main data backup will continue with available local photo fallbacks.");
+      // A network/auth failure is not proof that the remote file was deleted.
+      // Preserve last-known-good metadata; changed source stamps are already
+      // excluded from the master PDF manifest until a matching upload confirms.
+      onProgress?.("Patient PDF verification deferred: " + String(error?.message || error) + ". Previous Drive copies were left untouched; the main data backup can continue.");
       return;
     }
     onProgress?.("Verifying " + archives.length + " patient PDF(s) in Google Drive…");
@@ -1310,9 +1304,9 @@ export async function uploadPatientImageArchivesToDrive(
         const verified = await uploadPatientPdf(archive, folderId, remote);
         await setPatientImageArchiveDriveState(archive.fileName, archive.sourceStamp, String(verified.id));
       } catch (error: any) {
-        // Do not let a stale cached Drive ID suppress the photo fallback in the
-        // master when a remote verification or PDF upload could not complete.
-        try { await setPatientImageArchiveDriveState(archive.fileName, archive.sourceStamp, ""); } catch {}
+        // A failed request may be temporary; do not treat it as proof the old
+        // remote file disappeared. New photo stamps still cannot enter the
+        // master manifest until their upload has been confirmed.
         onProgress?.("Patient PDF sync deferred for " + archive.patientName + ": " + String(error?.message || error) + ". The main data backup will continue.");
       }
     }
@@ -2755,6 +2749,20 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
       // Process queued deletes even when other patients changed in the same
       // transaction; previously this path could leave deleted PDFs in Drive.
       if (deletedPatientIds.length) await processPendingPatientPdfDeletes(onProgress);
+    }
+  }
+
+  // Patient PDFs are archived/uploaded after the first delta was inspected
+  // for changed patient IDs. Re-export this table now so its manifest reflects
+  // the confirmed upload result, or embeds local photo bytes when the PDF is
+  // still unverified. The local baseline has not been committed yet.
+  if (patientTableChanged) {
+    onProgress?.("Refreshing patient backup data after PDF verification…");
+    if (canStreamIncremental) {
+      delta = await exportIncrementalBackupData(effectiveChangedTables, onProgress, baselineKey);
+    } else {
+      const refreshedText = await exportIncrementalBackup(effectiveChangedTables, onProgress, baselineKey);
+      delta = JSON.parse(refreshedText);
     }
   }
 
