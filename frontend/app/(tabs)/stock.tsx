@@ -565,7 +565,6 @@ export default function StockScreen(){
             </View>
 
           </View>)}
-          </View>)}
 
           {!editingReceipt?<Pressable style={styles.addAnotherStock} onPress={()=>setStockRows(v=>v.concat(newRow()))}>
             <Ionicons name="add-circle-outline" size={20} color={colors.brandPrimary}/><Text style={styles.attachText}>Add another item</Text>
