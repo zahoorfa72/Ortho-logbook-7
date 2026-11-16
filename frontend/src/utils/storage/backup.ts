@@ -426,7 +426,7 @@ function stripDriveOcrText(value: any, parentKey = ""): any {
  return result;
 }
 
-async function createBackupData(filter: BackupFilter = { type: "all" }, onProgress?: (stage: string) => void, changedTables?: string[], previousPatientRows?: any[], previousPhotoSources?: Record<string, string>, includePatientImages = true, includeAttachedImages = true):Promise<BackupData>{
+async function createBackupData(filter: BackupFilter = { type: "all" }, onProgress?: (stage: string) => void, changedTables?: string[], previousPatientRows?: any[], previousPhotoSources?: Record<string, string>, includePatientImages = true, includeAttachedImages = true, includeDriveFallbackForUnverifiedPdfs = false):Promise<BackupData>{
  initializeDatabase();
  if (includePatientImages && filter.type === "all" && (!changedTables || changedTables.includes("patients"))) await archiveEligiblePatientImages(onProgress);
  const localPatientArchives = await getLocalPatientImageArchives(); // metadata only; image PDFs are separate
@@ -499,23 +499,46 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
  for(let i=0;i<patients.length;i++){
    const patient = patients[i];
    const patientId = String(patient.id ?? "");
-   if (!includePatientImages) {
-     // Patient photo bytes live in per-patient PDFs. Do not select huge photo
-     // columns into Android's CursorWindow in metadata-only backups.
-     const archivedImage = archiveByPatientId.get(patientId);
-     const archiveMatchesRevision = !!archivedImage &&
-       String(archivedImage.patientUpdatedAt || "") === String(patient.updated_at || "");
-     embeddedPatients.push({
-       ...patient, photo_uri: "", photos_json: "",
-       ...(archiveMatchesRevision ? {
-         photo_archive_file_name: archivedImage!.fileName,
-         photo_archive_source_stamp: archivedImage!.sourceStamp,
-         photo_archived_at: archivedImage!.archivedAt,
-         photo_archive_image_count: archivedImage!.imageCount,
-       } : {}),
-     });
-     continue;
-   }
+    if (!includePatientImages) {
+      // A separate patient PDF is a backup only after Drive confirmed that exact
+      // source stamp. Otherwise keep current local photo bytes in the rolling
+      // master so a missing/unverified PDF never silently drops patient images.
+      const archivedImage = archiveByPatientId.get(patientId);
+      const archiveConfirmedOnDrive = !!archivedImage &&
+        Number(archivedImage.imageCount || 0) > 0 &&
+        !!archivedImage.driveFileId &&
+        String(archivedImage.driveSourceStamp || "") === String(archivedImage.sourceStamp || "");
+      if (archiveConfirmedOnDrive) {
+        embeddedPatients.push({
+          ...patient, photo_uri: "", photos_json: "",
+          photo_archive_file_name: archivedImage!.fileName,
+          photo_archive_source_stamp: archivedImage!.sourceStamp,
+          photo_archived_at: archivedImage!.archivedAt,
+          photo_archive_image_count: archivedImage!.imageCount,
+          photo_archive_drive_file_id: archivedImage!.driveFileId,
+        });
+      } else if (includeDriveFallbackForUnverifiedPdfs) {
+        const fallbackPhotoRow = db.getFirstSync<any>("SELECT photo_uri,photos_json FROM patients WHERE id=? LIMIT 1", [patientId]) || {};
+        const patientWithFallbackPhotos = { ...patient, ...fallbackPhotoRow };
+        try {
+          const portable = await embedPatientPhotos(patientWithFallbackPhotos, compressedPhotoCache, onProgress, "patient " + (i + 1) + "/" + patients.length);
+          embeddedPatients.push(portable);
+          if (!Array.isArray(portable.photos_json) || !portable.photos_json.length) {
+            onProgress?.("No verified Drive PDF or local photos are available for " + String(patient.name || patientId) + ".");
+          } else {
+            onProgress?.("Patient images included in the master backup because the separate PDF is not yet verified: " + String(patient.name || patientId));
+          }
+        } catch (error: any) {
+          embeddedPatients.push({ ...patient, photo_uri: "", photos_json: [] });
+          onProgress?.("Patient images could not be embedded for " + String(patient.name || patientId) + ": " + String(error?.message || error) + ". Patient details remain included.");
+        }
+      } else {
+        // Encrypted phone/file exports remain metadata-only unless the admin
+        // explicitly selects the include-patient-images option.
+        embeddedPatients.push({ ...patient, photo_uri: "", photos_json: "" });
+      }
+      continue;
+    }
    const photoRow = db.getFirstSync<any>("SELECT photo_uri,photos_json FROM patients WHERE id=?", [patientId]) || {};
    const patientWithPhotos = { ...patient, ...photoRow };
    const sourceSignature = photoSourceSignature(patientWithPhotos);
@@ -808,10 +831,17 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
   trash:trashRows,
   branding,
   appSettings,
-  patientImageArchives: localPatientArchives.filter((archive:any) => selectedPatientIds.has(String(archive.patientId))).map((archive:any) => ({
+  // Only advertise PDFs confirmed on Drive at this exact image source stamp.
+  // Unverified PDFs are represented by photo bytes in patients.photos_json.
+  patientImageArchives: localPatientArchives.filter((archive:any) =>
+    selectedPatientIds.has(String(archive.patientId)) &&
+    Number(archive.imageCount || 0) > 0 &&
+    !!archive.driveFileId &&
+    String(archive.driveSourceStamp || "") === String(archive.sourceStamp || "")
+  ).map((archive:any) => ({
     patientId: archive.patientId, patientName: archive.patientName, mrNo: archive.mrNo,
     fileName: archive.fileName, sourceStamp: archive.sourceStamp, archivedAt: archive.archivedAt,
-    imageCount: archive.imageCount, driveFileId: archive.driveFileId,
+    imageCount: archive.imageCount, driveFileId: archive.driveFileId, driveSourceStamp: archive.driveSourceStamp,
   })),
   photoAssets: includeAttachedImages ? Object.fromEntries(compressedPhotoCache.assets?.entries() || []) : {},
  };
@@ -841,6 +871,8 @@ export async function exportUnencryptedBackupData(filter: BackupFilter = { type:
    cache?.tables?.patients,
    cache?.photoSources,
    false,
+   true,
+   true,
  );
  backup.filter = filter;
  return stripDriveOcrText(backup) as BackupData;
@@ -1117,7 +1149,9 @@ export async function exportIncrementalBackupData(changedTables: string[], onPro
   { type: "all" }, onProgress, tables,
   canDiff ? previous!.tables.patients : undefined,
   canDiff && previous!.photoSources ? previous!.photoSources : undefined,
-  false
+  false,
+  true,
+  true
  );
  // Sanitize before diff/cache generation too, so OCR text is not re-saved in the Drive baseline.
  const sanitizedBackup = stripDriveOcrText(backup) as BackupData;
