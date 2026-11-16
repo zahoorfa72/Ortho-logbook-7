@@ -478,18 +478,26 @@ export default function StockScreen(){
        stockBatches.length?stockBatches.slice(0,100).map(batch=><View key={batch.batchId} style={styles.receivedCard}>
         <Text style={styles.meta}>Date</Text>
         <Text style={styles.receivedTitle}>{batch.addedDate||"—"}</Text>
+        <View style={styles.batchMetaActions}>
+          <Pressable onPress={()=>editBatchMeta(batch)} style={styles.editEntryBtn}>
+            <Ionicons name="create-outline" size={17} color={colors.brandPrimary}/><Text style={styles.attachText}>Edit entry</Text>
+          </Pressable>
+        </View>
         {batch.description?<><Text style={[styles.meta,{marginTop:spacing.sm}]}>Description</Text><Text style={styles.descriptionText}>{batch.description}</Text></>:null}
+        {batch.attachments.length?<View style={styles.batchAttachments}>
+          <Text style={styles.meta}>Invoice attachments for this entry</Text>
+          {batch.attachments.map((attachment:any)=><Pressable key={String(attachment.id)} onPress={()=>void openReceiptAttachment(attachment)} style={styles.savedAttachment}>
+            <Ionicons name={attachment.mimeType==="application/pdf"?"document-text-outline":"image-outline"} size={15} color={colors.brandPrimary}/>
+            <Text numberOfLines={1} style={styles.savedAttachmentName}>{attachment.name||"Open invoice attachment"}</Text>
+            <Ionicons name="share-outline" size={15} color={colors.brandPrimary}/>
+          </Pressable>)}
+        </View>:null}
 
         {batch.items.map((s:any)=><View key={String(s.id)} style={styles.stockItem}>
           <View style={{flex:1}}>
             <Text style={styles.itemTitle}>{s.category||"Inventory item"}{s.size?" · "+s.size:""}</Text>
             <Text style={styles.meta}>Received {Number(s.quantity)||0} {s.unit||"pcs"}</Text>
-            {(Array.isArray(s.attachments)&&s.attachments.length)||s.bill_image?<Text style={styles.attachmentMeta}>{Array.isArray(s.attachments)&&s.attachments.length?s.attachments.length+" item attachment(s)":"Bill image attached"}</Text>:null}
-            {(Array.isArray(s.attachments)?s.attachments:[]).map((attachment:any)=><Pressable key={String(attachment.id)} onPress={()=>void openReceiptAttachment(attachment)} style={styles.savedAttachment}>
-              <Ionicons name={attachment.mimeType==="application/pdf"?"document-text-outline":"image-outline"} size={15} color={colors.brandPrimary}/>
-              <Text numberOfLines={1} style={styles.savedAttachmentName}>{attachment.name||"Open attachment"}</Text>
-              <Ionicons name="share-outline" size={15} color={colors.brandPrimary}/>
-            </Pressable>)}
+
           </View>
           <View style={styles.itemActions}>
             <Pressable onPress={()=>editReceipt(s)} hitSlop={8}><Ionicons name="create-outline" size={20} color={colors.brandPrimary}/></Pressable>
@@ -504,23 +512,37 @@ export default function StockScreen(){
         <View style={styles.sheetHead}>
           <View style={{flex:1}}>
             <Text style={styles.sheetTitle}>{editingReceipt?"Edit Received Stock":"Receive Stock"}</Text>
-            <Text style={styles.stockHint}>Date and Description apply to this entire Receive Stock save.</Text>
+            <Text style={styles.stockHint}>{editingReceipt?"Edit this item only. Use Edit entry on its receipt card to change the transaction date, description or invoice files.":"Date, description and invoice files apply once to this entire receiving entry."}</Text>
           </View>
           <Pressable onPress={()=>setStockModal(false)}><Ionicons name="close" size={24} color={colors.onSurface}/></Pressable>
         </View>
 
         <ScrollView keyboardShouldPersistTaps="handled">
-          <Text style={styles.fieldLabel}>Date</Text>
-          <TextInput value={stockDate} onChangeText={setStockDate} placeholder="YYYY-MM-DD" placeholderTextColor={colors.muted} style={styles.stockInput}/>
-
-          <Text style={styles.fieldLabel}>Description</Text>
-          <TextInput value={description} onChangeText={setDescription} placeholder="Add description for this receiving transaction" placeholderTextColor={colors.muted} multiline textAlignVertical="top" style={[styles.stockInput,{minHeight:88,paddingTop:spacing.md}]}/>
-
-          <Pressable disabled={ocrBusy||saveStock.isPending} style={[styles.attachBtn,(ocrBusy||saveStock.isPending)&&{opacity:0.6}]} onPress={()=>{void scanInvoice();}}>
-            {ocrBusy?<ActivityIndicator size="small" color={colors.brandPrimary}/>:<Ionicons name="document-text-outline" size={19} color={colors.brandPrimary}/>}
-            <Text style={styles.attachText}>{ocrBusy?"Scanning invoice…":"Scan invoice image or PDF (on-device OCR)"}</Text>
-          </Pressable>
-          <Text style={[styles.stockHint,{marginTop:spacing.xs,marginBottom:spacing.sm}]}>On-device OCR runs without an OCR API key. Images and up to 8 PDF pages are scanned locally. Review spelling, size and quantity suggestions before saving.</Text>
+          {!editingReceipt?<>
+            <Text style={styles.fieldLabel}>Date</Text>
+            <TextInput value={stockDate} onChangeText={setStockDate} placeholder="YYYY-MM-DD" placeholderTextColor={colors.muted} style={styles.stockInput}/>
+            <Text style={styles.fieldLabel}>Description</Text>
+            <TextInput value={description} onChangeText={setDescription} placeholder="Add description for this receiving transaction" placeholderTextColor={colors.muted} multiline textAlignVertical="top" style={[styles.stockInput,{minHeight:88,paddingTop:spacing.md}]}/>
+            <Text style={styles.fieldLabel}>Invoice attachments (one set for this entry)</Text>
+            <View style={{flexDirection:"row",gap:spacing.sm}}>
+              <Pressable style={[styles.attachBtn,{flex:1}]} onPress={()=>void pickReceiptImage()}>
+                <Ionicons name="image-outline" size={18} color={colors.brandPrimary}/><Text style={styles.attachText}>Add image</Text>
+              </Pressable>
+              <Pressable style={[styles.attachBtn,{flex:1}]} onPress={()=>void pickReceiptPdf()}>
+                <Ionicons name="document-attach-outline" size={18} color={colors.brandPrimary}/><Text style={styles.attachText}>Add PDF</Text>
+              </Pressable>
+            </View>
+            <Pressable disabled={ocrBusy||saveStock.isPending} style={[styles.attachBtn,(ocrBusy||saveStock.isPending)&&{opacity:0.6}]} onPress={()=>void scanInvoice()}>
+              {ocrBusy?<ActivityIndicator size="small" color={colors.brandPrimary}/>:<Ionicons name="scan-outline" size={19} color={colors.brandPrimary}/>}
+              <Text style={styles.attachText}>{ocrBusy?"Scanning invoice…":"Scan invoice with on-device OCR"}</Text>
+            </Pressable>
+            <Text style={[styles.stockHint,{marginTop:spacing.xs,marginBottom:spacing.sm}]}>Attachments are shared by every item in this receipt. OCR scans images and up to 8 PDF pages locally.</Text>
+            {receiptAttachments.map(attachment=><View key={attachment.id} style={styles.attachmentRow}>
+              <Ionicons name={attachment.mimeType==="application/pdf"?"document-text-outline":"image-outline"} size={17} color={colors.brandPrimary}/>
+              <Text numberOfLines={1} style={styles.attachmentName}>{attachment.name}</Text>
+              <Pressable onPress={()=>removeReceiptAttachment(attachment.id)} hitSlop={8}><Ionicons name="close-circle" size={19} color={colors.error}/></Pressable>
+            </View>)}
+          </>:null}
           {stockRows.map((row,i)=><View key={row.id} style={styles.stockCard}>
             <View style={styles.stockCardHead}>
               <Text style={styles.stockCardTitle}>Stock item {i+1}</Text>
@@ -542,24 +564,7 @@ export default function StockScreen(){
               <TextInput value={row.minimumStock} onChangeText={v=>updateRow(row.id,{minimumStock:v.replace(/[^0-9.]/g,"")})} placeholder="Minimum stock" keyboardType="number-pad" placeholderTextColor={colors.muted} style={[styles.stockInput,{flex:1}]}/>
             </View>
 
-            <View style={{flexDirection:"row",gap:spacing.sm}}>
-              <Pressable style={[styles.attachBtn,{flex:1}]} onPress={()=>void pickBill(row.id)}>
-                <Ionicons name="image-outline" size={18} color={colors.brandPrimary}/>
-                <Text style={styles.attachText}>Add image</Text>
-              </Pressable>
-              <Pressable style={[styles.attachBtn,{flex:1}]} onPress={()=>void pickPdf(row.id)}>
-                <Ionicons name="document-attach-outline" size={18} color={colors.brandPrimary}/>
-                <Text style={styles.attachText}>Add PDF</Text>
-              </Pressable>
-            </View>
-            {row.billImage&&!row.attachments.length?<Text style={styles.attachmentMeta}>Invoice image from OCR attached to this item</Text>:null}
-            {row.attachments.map(attachment=><View key={attachment.id} style={styles.attachmentRow}>
-              <Ionicons name={attachment.mimeType==="application/pdf"?"document-text-outline":"image-outline"} size={17} color={colors.brandPrimary}/>
-              <Text numberOfLines={1} style={styles.attachmentName}>{attachment.name}</Text>
-              <Pressable onPress={()=>removeRowAttachment(row.id,attachment.id)} hitSlop={8}>
-                <Ionicons name="close-circle" size={19} color={colors.error}/>
-              </Pressable>
-            </View>)}
+          </View>)}
           </View>)}
 
           {!editingReceipt?<Pressable style={styles.addAnotherStock} onPress={()=>setStockRows(v=>v.concat(newRow()))}>
@@ -568,6 +573,36 @@ export default function StockScreen(){
 
           <PrimaryButton title={editingReceipt?"Update Received Stock":"Save Receive Stock"} onPress={submit} loading={saveStock.isPending}/>
           <Pressable style={styles.cancel} onPress={()=>setStockModal(false)}><Text style={styles.cancelText}>Cancel</Text></Pressable>
+        </ScrollView>
+      </View></View>
+    </Modal>
+
+    <Modal visible={!!editingBatchMeta} transparent animationType="slide" onRequestClose={()=>setEditingBatchMeta(null)}>
+      <View style={styles.overlay}><View style={[styles.sheet,{paddingBottom:insets.bottom+spacing.lg}]}>
+        <View style={styles.sheetHead}>
+          <View style={{flex:1}}>
+            <Text style={styles.sheetTitle}>Edit receiving entry</Text>
+            <Text style={styles.stockHint}>These changes apply to every item in the transaction.</Text>
+          </View>
+          <Pressable onPress={()=>setEditingBatchMeta(null)}><Ionicons name="close" size={24} color={colors.onSurface}/></Pressable>
+        </View>
+        <ScrollView keyboardShouldPersistTaps="handled">
+          <Text style={styles.fieldLabel}>Receipt date</Text>
+          <TextInput value={stockDate} onChangeText={setStockDate} placeholder="YYYY-MM-DD" placeholderTextColor={colors.muted} style={styles.stockInput}/>
+          <Text style={styles.fieldLabel}>Description</Text>
+          <TextInput value={description} onChangeText={setDescription} multiline textAlignVertical="top" placeholder="Add description for this receiving transaction" placeholderTextColor={colors.muted} style={[styles.stockInput,{minHeight:88,paddingTop:spacing.md}]}/>
+          <Text style={styles.fieldLabel}>Invoice attachments (whole entry)</Text>
+          <View style={{flexDirection:"row",gap:spacing.sm}}>
+            <Pressable style={[styles.attachBtn,{flex:1}]} onPress={()=>void pickReceiptImage()}><Ionicons name="image-outline" size={18} color={colors.brandPrimary}/><Text style={styles.attachText}>Add image</Text></Pressable>
+            <Pressable style={[styles.attachBtn,{flex:1}]} onPress={()=>void pickReceiptPdf()}><Ionicons name="document-attach-outline" size={18} color={colors.brandPrimary}/><Text style={styles.attachText}>Add PDF</Text></Pressable>
+          </View>
+          {receiptAttachments.map(attachment=><View key={attachment.id} style={styles.attachmentRow}>
+            <Ionicons name={attachment.mimeType==="application/pdf"?"document-text-outline":"image-outline"} size={17} color={colors.brandPrimary}/>
+            <Text numberOfLines={1} style={styles.attachmentName}>{attachment.name}</Text>
+            <Pressable onPress={()=>removeReceiptAttachment(attachment.id)} hitSlop={8}><Ionicons name="close-circle" size={19} color={colors.error}/></Pressable>
+          </View>)}
+          <PrimaryButton title="Save entry changes" onPress={()=>void saveBatchMeta()} loading={savingBatchMeta}/>
+          <Pressable style={styles.cancel} onPress={()=>setEditingBatchMeta(null)}><Text style={styles.cancelText}>Cancel</Text></Pressable>
         </ScrollView>
       </View></View>
     </Modal>
@@ -625,6 +660,9 @@ const useStyles=makeStyles(colors=>({
   attachmentName:{flex:1,fontSize:fontSize.xs,color:colors.onSurface},
   savedAttachment:{flexDirection:"row",alignItems:"center",gap:spacing.xs,paddingVertical:spacing.xs,paddingHorizontal:spacing.sm,marginTop:spacing.xs,borderRadius:radius.sm,backgroundColor:colors.surfaceSecondary},
   savedAttachmentName:{flex:1,fontSize:fontSize.xs,color:colors.brandPrimary},
+  batchMetaActions:{flexDirection:"row",justifyContent:"flex-end",marginVertical:spacing.xs},
+  editEntryBtn:{flexDirection:"row",alignItems:"center",gap:spacing.xs,paddingHorizontal:spacing.sm,paddingVertical:spacing.xs,borderRadius:radius.sm,backgroundColor:colors.surfaceSecondary},
+  batchAttachments:{marginTop:spacing.sm,marginBottom:spacing.xs},
   receivedCard:{padding:spacing.md,borderWidth:1,borderColor:colors.border,borderRadius:radius.md,backgroundColor:colors.surface,marginBottom:spacing.sm},
   receivedTitle:{fontFamily:fontFamily.semibold,fontSize:fontSize.base,color:colors.onSurface},
   descriptionText:{fontSize:fontSize.sm,color:colors.onSurface,marginTop:3},
