@@ -38,6 +38,74 @@ class DriveBackgroundUploadService : Service() {
   private var total = 0L
   private val prefs by lazy { getSharedPreferences(PREFS, 0) }
 
+  // OAuth access tokens and Drive resumable-session URLs are credentials.
+  // Encrypt them with an Android Keystore AES/GCM key before persisting so a
+  // process restart can resume an upload without exposing secrets in plaintext.
+  private fun encryptSessionValue(value: String): String {
+    val keyStore = java.security.KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+    val alias = "ortho_drive_upload_session_v1"
+    var secretKey = keyStore.getKey(alias, null) as? javax.crypto.SecretKey
+    if (secretKey == null) {
+      val generator = javax.crypto.KeyGenerator.getInstance(
+        android.security.keystore.KeyProperties.KEY_ALGORITHM_AES,
+        "AndroidKeyStore",
+      )
+      generator.init(
+        android.security.keystore.KeyGenParameterSpec.Builder(
+          alias,
+          android.security.keystore.KeyProperties.PURPOSE_ENCRYPT or android.security.keystore.KeyProperties.PURPOSE_DECRYPT,
+        )
+          .setBlockModes(android.security.keystore.KeyProperties.BLOCK_MODE_GCM)
+          .setEncryptionPaddings(android.security.keystore.KeyProperties.ENCRYPTION_PADDING_NONE)
+          .setRandomizedEncryptionRequired(true)
+          .build(),
+      )
+      secretKey = generator.generateKey()
+    }
+    val cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+    cipher.init(javax.crypto.Cipher.ENCRYPT_MODE, secretKey)
+    val encrypted = cipher.doFinal(value.toByteArray(Charsets.UTF_8))
+    return android.util.Base64.encodeToString(cipher.iv + encrypted, android.util.Base64.NO_WRAP)
+  }
+
+  private fun decryptSessionValue(value: String): String {
+    val bytes = android.util.Base64.decode(value, android.util.Base64.NO_WRAP)
+    if (bytes.size < 29) throw IllegalStateException("Saved Drive upload credentials are damaged.")
+    val iv = bytes.copyOfRange(0, 12)
+    val encrypted = bytes.copyOfRange(12, bytes.size)
+    val keyStore = java.security.KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+    val secretKey = keyStore.getKey("ortho_drive_upload_session_v1", null) as? javax.crypto.SecretKey
+      ?: throw IllegalStateException("Saved Drive upload key is unavailable. Reconnect Google Drive and retry.")
+    val cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+    cipher.init(javax.crypto.Cipher.DECRYPT_MODE, secretKey, javax.crypto.spec.GCMParameterSpec(128, iv))
+    return String(cipher.doFinal(encrypted), Charsets.UTF_8)
+  }
+
+  private fun saveEncryptedSession(key: String, value: String) {
+    val encrypted = encryptSessionValue(value)
+    if (!prefs.edit().putString(key, encrypted).commit()) {
+      throw IllegalStateException("Could not securely save the Drive upload session.")
+    }
+  }
+
+  private fun readEncryptedSession(key: String): String {
+    val encrypted = prefs.getString(key, null) ?: return ""
+    return try { decryptSessionValue(encrypted) } catch (error: Exception) {
+      android.util.Log.e("OrthoDriveUpload", "Could not decrypt saved Drive upload session", error)
+      ""
+    }
+  }
+
+  private fun clearSession(taskId: String, activeKey: String) {
+    prefs.edit()
+      .remove(activeKey)
+      .remove("$taskId.url")
+      .remove("$taskId.token")
+      .remove("$taskId.fileUri")
+      .remove("$taskId.totalBytes")
+      .apply()
+  }
+
   override fun onBind(intent: Intent?): IBinder? = null
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -56,9 +124,9 @@ class DriveBackgroundUploadService : Service() {
       Intent(this, DriveBackgroundUploadService::class.java).apply {
         action = if (isUpload) ACTION_START else ACTION_DOWNLOAD
         putExtra(EXTRA_TASK_ID, savedTask)
-        putExtra(EXTRA_URL, prefs.getString("$savedTask.url", ""))
-        putExtra(EXTRA_TOKEN, prefs.getString("$savedTask.token", ""))
-        putExtra(EXTRA_FILE_URI, prefs.getString("$savedTask.fileUri", ""))
+        putExtra(EXTRA_URL, readEncryptedSession("$savedTask.url"))
+        putExtra(EXTRA_TOKEN, readEncryptedSession("$savedTask.token"))
+        putExtra(EXTRA_FILE_URI, readEncryptedSession("$savedTask.fileUri").ifBlank { prefs.getString("$savedTask.fileUri", "") ?: "" })
         if (isUpload) putExtra(EXTRA_TOTAL_BYTES, prefs.getLong("$savedTask.totalBytes", 0L))
       }
     }
@@ -71,18 +139,18 @@ class DriveBackgroundUploadService : Service() {
       startBackgroundDownload(command, startId)
       return START_STICKY
     }
-    uploadUrl = command.getStringExtra(EXTRA_URL) ?: run { fail("Missing Drive upload session URL"); stopSelf(startId); return START_NOT_STICKY }
-    token = command.getStringExtra(EXTRA_TOKEN) ?: run { fail("Missing Google access token"); stopSelf(startId); return START_NOT_STICKY }
+    uploadUrl = command.getStringExtra(EXTRA_URL)?.takeIf { it.isNotBlank() } ?: run { fail("Missing or unreadable Drive upload session URL. Reconnect Google Drive and retry."); stopSelf(startId); return START_NOT_STICKY }
+    token = command.getStringExtra(EXTRA_TOKEN)?.takeIf { it.isNotBlank() } ?: run { fail("Missing or unreadable Google access token. Reconnect Google Drive and retry."); stopSelf(startId); return START_NOT_STICKY }
     val uri = Uri.parse(command.getStringExtra(EXTRA_FILE_URI) ?: "")
     file = File(uri.path ?: "")
     total = command.getLongExtra(EXTRA_TOTAL_BYTES, 0L)
+    saveEncryptedSession("$taskId.url", uploadUrl)
+    saveEncryptedSession("$taskId.token", token)
+    saveEncryptedSession("$taskId.fileUri", uri.toString())
     prefs.edit()
       .putString("activeUploadTaskId", taskId)
-      .putString("$taskId.url", uploadUrl)
-      .putString("$taskId.token", token)
-      .putString("$taskId.fileUri", uri.toString())
       .putLong("$taskId.totalBytes", total)
-      .apply()
+      .commit()
     if (!file.isFile || total <= 0L || file.length() != total) {
       fail("Backup file is missing or its size changed before upload.")
       stopSelf(startId)
@@ -108,13 +176,7 @@ class DriveBackgroundUploadService : Service() {
         fail(error.message ?: "Google Drive background upload failed.")
         updateNotification(prefs.getInt("$taskId.progress", 0), "Backup failed — open Ortho Logbook to retry")
       } finally {
-        prefs.edit()
-          .remove("activeUploadTaskId")
-          .remove("$taskId.url")
-          .remove("$taskId.token")
-          .remove("$taskId.fileUri")
-          .remove("$taskId.totalBytes")
-          .apply()
+        clearSession(taskId, "activeUploadTaskId")
         stopForeground(STOP_FOREGROUND_DETACH)
         stopSelf()
       }
@@ -133,13 +195,13 @@ class DriveBackgroundUploadService : Service() {
     file.parentFile?.mkdirs()
     // Persist enough private task state for Android to restart this foreground
     // service if the app process is reclaimed during a long restore.
+    saveEncryptedSession("$taskId.url", uploadUrl)
+    saveEncryptedSession("$taskId.token", token)
+    saveEncryptedSession("$taskId.fileUri", uri.toString())
     prefs.edit()
       .putString("activeDownloadTaskId", taskId)
-      .putString("$taskId.url", uploadUrl)
-      .putString("$taskId.token", token)
-      .putString("$taskId.fileUri", uri.toString())
       .putString("$taskId.status", "running")
-      .apply()
+      .commit()
     ensureChannel()
     val notification = notification(0, "Downloading Ortho Logbook backup…")
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -156,7 +218,7 @@ class DriveBackgroundUploadService : Service() {
         fail(error.message ?: "Google Drive background download failed.")
         updateNotification(prefs.getInt("$taskId.progress", 0), "Download failed — open Ortho Logbook to retry")
       } finally {
-        prefs.edit().remove("activeDownloadTaskId").remove("$taskId.token").apply()
+        clearSession(taskId, "activeDownloadTaskId")
         stopForeground(STOP_FOREGROUND_DETACH)
         stopSelf()
       }
@@ -457,6 +519,7 @@ class DriveBackgroundUploadService : Service() {
     if (::taskId.isInitialized) {
       prefs.edit().putString("$taskId.status", "error").putString("$taskId.error", message)
         .remove("activeUploadTaskId")
+        .remove("activeDownloadTaskId")
         .remove("$taskId.url")
         .remove("$taskId.token")
         .remove("$taskId.fileUri")

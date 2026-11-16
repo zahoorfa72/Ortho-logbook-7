@@ -95,8 +95,9 @@ class DriveBackgroundUploadModule(private val context: ReactApplicationContext) 
       // the process, so the URL, token and exact staged file must be recoverable.
       val saved = prefs.edit()
         .putString("activeUploadTaskId", id)
-        .putString("$id.url", url)
-        .putString("$id.token", token)
+        // The service encrypts its resumable URL and OAuth token with Android
+        // Keystore as soon as it starts. Only a private cache-file path and size
+        // are stored here so a credential is never persisted as plaintext.
         .putString("$id.fileUri", fileUri)
         .putLong("$id.totalBytes", totalBytes.toLong())
         .putString("$id.status", "queued")
