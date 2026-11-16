@@ -973,6 +973,11 @@ export const api = {
       // All rows in this save share this batch_id; a later save gets a new one,
       // even on the same date/category/size.
       const batchId = id();
+      // A receipt is one transaction, so its invoice is serialized once on
+      // the first receipt row. Remaining item rows intentionally store [].
+      const transactionAttachments = Array.isArray(body?.attachments) ? body.attachments.slice(0,12) : [];
+      const transactionAttachmentsJson = JSON.stringify(transactionAttachments);
+      if(transactionAttachmentsJson.length>18*1024*1024) throw new Error("Attachments for one receiving entry exceed 18 MB. Compress the files or attach fewer documents.");
       db.withTransactionSync(() => {
         for (const entry of items) {
           let categoryId = String(entry?.categoryId || "").trim();
@@ -994,9 +999,7 @@ export const api = {
           const unit=String(entry?.unit||"pcs").trim()||"pcs";
           const addedDate=String(entry?.addedDate||new Date().toISOString().slice(0,10)).trim();
           const billImage=String(entry?.billImage||"");
-          const attachments=Array.isArray(entry?.attachments)?entry.attachments.slice(0,12):[];
-          const attachmentsJson=JSON.stringify(attachments);
-          if(attachmentsJson.length>18*1024*1024) throw new Error("Attachments for one stock item exceed 18 MB. Compress the files or attach fewer documents.");
+          const attachmentsJson=added===0 ? transactionAttachmentsJson : "[]";
           const description=String(body?.description||"").trim();
           // Match the complete variant, not only category ID + size. Older rows
           // can have a missing/stale category link; the saved label is a safe
@@ -1033,7 +1036,7 @@ export const api = {
             movement(inventoryId,"purchase",quantity,quantity,"Stock received",uid);
           }
           db.runSync("INSERT INTO stock_receipts (id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,attachments_json,description,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            [id(),inventoryId,batchId,categoryId,categoryName,size,quantity,unit,minimumStock,addedDate,billImage,attachmentsJson,description,nowIso(),uid]);
+            [id(),inventoryId,batchId,categoryId,categoryName,size,quantity,unit,minimumStock,addedDate,added===0?billImage:"",attachmentsJson,description,nowIso(),uid]);
           added++;
         }
       });
@@ -1169,6 +1172,37 @@ export const api = {
       await assertRecordAccess(existing.created_by);
       return (await savePatient(body, true)) as any;
     }
+    const receiptBatchMatch=normalizedPath.match(/^\/stock-receipt-batches\/(.+)$/);
+    if(receiptBatchMatch){
+      await requireAdmin();
+      const batchId=decodeURIComponent(receiptBatchMatch[1]);
+      let rows=db.getAllSync<any>(
+        "SELECT id FROM stock_receipts WHERE batch_id=? ORDER BY created_at ASC,id ASC",
+        [batchId],
+      );
+      // Older one-line receipts may predate batch_id; keep them editable.
+      if(!rows.length){
+        const single=db.getFirstSync<any>("SELECT id FROM stock_receipts WHERE id=? LIMIT 1",[batchId]);
+        if(single)rows=[single];
+      }
+      if(!rows.length)throw new Error("Receiving entry not found.");
+      const addedDate=String(body?.addedDate||body?.added_date||"").trim();
+      if(!/^\\d{4}-\\d{2}-\\d{2}$/.test(addedDate))throw new Error("Use YYYY-MM-DD for the receipt date.");
+      const description=String(body?.description||"").trim();
+      const attachments=Array.isArray(body?.attachments)?body.attachments.slice(0,12):[];
+      const attachmentsJson=JSON.stringify(attachments);
+      if(attachmentsJson.length>18*1024*1024)throw new Error("Attachments for one receiving entry exceed 18 MB. Compress the files or attach fewer documents.");
+      db.withTransactionSync(()=>{
+        rows.forEach((row:any,index:number)=>{
+          db.runSync(
+            "UPDATE stock_receipts SET added_date=?,description=?,attachments_json=? WHERE id=?",
+            [addedDate,description,index===0?attachmentsJson:"[]",row.id],
+          );
+        });
+      });
+      return {success:true,updatedRows:rows.length} as any;
+    }
+
     const receiptMatch=normalizedPath.match(/^\/stock-receipts\/(.+)$/);
     if(receiptMatch){
       await requireAdmin();
