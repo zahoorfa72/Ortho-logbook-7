@@ -43,11 +43,12 @@ TaskManager.defineTask(BACKGROUND_SYNC_TASK, async ({ error }) => {
   }
   try {
     await loadPendingTables();
-    // Reconcile every local table against the last confirmed snapshot. Only
-    // actual differences are uploaded by the incremental exporter.
-    ALL_SYNC_TABLES.forEach((name) => pendingTables.add(name));
-    await persistPendingTables();
-    const completed = await runBackup({ verifyPatientPdfs: true });
+    // Run only when real changes are pending. Re-scanning every table and
+    // forcing a full audit of all patient PDFs every 15 minutes made ordinary
+    // navigation feel frozen and repeatedly showed "Checking patient image PDF".
+    // SQLite change events and the durable queue already record changed tables.
+    if (!pendingTables.size) return BackgroundTask.BackgroundTaskResult.Success;
+    const completed = await runBackup();
     return completed
       ? BackgroundTask.BackgroundTaskResult.Success
       : BackgroundTask.BackgroundTaskResult.Failed;

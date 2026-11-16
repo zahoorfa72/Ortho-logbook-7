@@ -30,12 +30,12 @@ type StockAttachment = {
 
 type StockRow = {
   id:string; categoryId:string; category:string; size:string; quantity:string;
-  minimumStock:string; billImage:string; attachments:StockAttachment[];
+  minimumStock:string; billImage:string;
 };
 
 const newRow=():StockRow=>({
   id:Math.random().toString(36).slice(2),
-  categoryId:"",category:"",size:"",quantity:"",minimumStock:"1",billImage:"",attachments:[]
+  categoryId:"",category:"",size:"",quantity:"",minimumStock:"1",billImage:""
 });
 
 
@@ -97,6 +97,10 @@ export default function StockScreen(){
   const [stockRows,setStockRows]=useState<StockRow[]>([]);
   const [stockDate,setStockDate]=useState(new Date().toISOString().slice(0,10));
   const [description,setDescription]=useState("");
+  // Invoice files belong to the complete receipt batch, never to individual lines.
+  const [receiptAttachments,setReceiptAttachments]=useState<StockAttachment[]>([]);
+  const [editingBatchMeta,setEditingBatchMeta]=useState<any>(null);
+  const [savingBatchMeta,setSavingBatchMeta]=useState(false);
   const [stockPicker,setStockPicker]=useState<"category"|"size"|null>(null);
   const [stockPickerRow,setStockPickerRow]=useState("");
   const [stockSearch,setStockSearch]=useState("");
@@ -119,17 +123,24 @@ export default function StockScreen(){
   });
 
   const stockBatches=useMemo(()=>{
-    const groups=new Map<string,{batchId:string;createdAt:string;addedDate:string;description:string;items:any[]}>();
+    const groups=new Map<string,{batchId:string;createdAt:string;addedDate:string;description:string;items:any[];attachments:StockAttachment[]}>();
     for(const r of (Array.isArray(stockReceipts)?stockReceipts:[])){
       const batchId=String(r.batch_id||r.id);
       let g=groups.get(batchId);
       if(!g){
-        g={batchId,createdAt:String(r.created_at||""),addedDate:String(r.added_date||""),description:String(r.description||""),items:[]};
+        g={batchId,createdAt:String(r.created_at||""),addedDate:String(r.added_date||""),description:String(r.description||""),items:[],attachments:[]};
         groups.set(batchId,g);
       }
       g.items.push(r);
       if(!g.description && r.description)g.description=String(r.description);
       if(!g.addedDate && r.added_date)g.addedDate=String(r.added_date);
+      for(const attachment of (Array.isArray(r.attachments)?r.attachments:[])){
+        if(attachment?.dataUri&&!g.attachments.some(x=>x.id===attachment.id||x.dataUri===attachment.dataUri))g.attachments.push(attachment);
+      }
+      const legacyBill=String(r.bill_image||r.billImage||"");
+      if(legacyBill.startsWith("data:")&&!g.attachments.some(x=>x.dataUri===legacyBill)){
+        g.attachments.push({id:"legacy-"+String(r.id),name:"Previous invoice attachment",mimeType:legacyBill.startsWith("data:application/pdf")?"application/pdf":"image/jpeg",dataUri:legacyBill,size:Math.floor(legacyBill.length*0.75)});
+      }
     }
     return [...groups.values()].sort((a,b)=>String(b.createdAt).localeCompare(String(a.createdAt)));
   },[stockReceipts]);
@@ -152,17 +163,18 @@ export default function StockScreen(){
         return api.put("/stock-receipts/"+encodeURIComponent(String(editingReceipt.id)),{
           categoryId:row.categoryId,category:row.category,size:row.size,
           quantity:Number(row.quantity)||0,minimumStock:Number(row.minimumStock)||0,
-          addedDate:stockDate,billImage:row.billImage||"",attachments:row.attachments||[],description:description.trim(),
+          addedDate:stockDate,billImage:row.billImage||"",description:description.trim(),
         });
       }
       return api.post("/inventory-bulk-add",{
         description:description.trim(),
+        attachments:receiptAttachments,
         items:stockRows.map(source=>{
           const row=normalizeRow(source);
           return {
             categoryId:row.categoryId,category:row.category,size:row.size,
             quantity:Number(row.quantity)||0,minimumStock:Number(row.minimumStock)||0,
-            addedDate:stockDate,billImage:row.billImage||"",attachments:row.attachments||[],
+            addedDate:stockDate,billImage:row.billImage||"",
           };
         })
       });
@@ -176,7 +188,7 @@ export default function StockScreen(){
       qc.invalidateQueries({queryKey:["inventory","stock-picker"]});
       qc.invalidateQueries({queryKey:["inventory-purchase-receipts"]});
       qc.invalidateQueries({queryKey:["inventory-categories"]});
-      setStockModal(false);setStockRows([]);setEditingReceipt(null);setDescription("");
+      setStockModal(false);setStockRows([]);setEditingReceipt(null);setDescription("");setReceiptAttachments([]);
       toast(editingReceipt?"Receiving entry updated.":"Stock received successfully.","success");
     },
     onError:(e:any)=>toast(e?.message||"Could not save receiving stock.","error")
@@ -185,7 +197,7 @@ export default function StockScreen(){
   const openStock=()=>{
     setEditingReceipt(null);setStockRows([newRow()]);
     setStockDate(new Date().toISOString().slice(0,10));
-    setDescription("");setStockModal(true);
+    setDescription("");setReceiptAttachments([]);setStockModal(true);
   };
 
   const editReceipt=(r:any)=>{
@@ -198,11 +210,33 @@ export default function StockScreen(){
       quantity:String(Number(r.quantity)||0),
       minimumStock:String(Number(r.minimum_stock??r.minimumStock)||0),
       billImage:String(r.bill_image||r.billImage||""),
-      attachments:Array.isArray(r.attachments)?r.attachments:[]
     }]);
     setStockDate(String(r.added_date||r.addedDate||new Date().toISOString().slice(0,10)));
     setDescription(String(r.description||""));
     setStockModal(true);
+  };
+
+  const editBatchMeta=(batch:any)=>{
+    setEditingBatchMeta(batch);
+    setStockDate(String(batch.addedDate||new Date().toISOString().slice(0,10)));
+    setDescription(String(batch.description||""));
+    setReceiptAttachments(Array.isArray(batch.attachments)?batch.attachments:[]);
+  };
+
+  const saveBatchMeta=async()=>{
+    if(!editingBatchMeta)return;
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(stockDate)){toast("Use YYYY-MM-DD for the date.","error");return;}
+    setSavingBatchMeta(true);
+    try{
+      await api.put("/stock-receipt-batches/"+encodeURIComponent(String(editingBatchMeta.batchId)),{
+        addedDate:stockDate,description:description.trim(),attachments:receiptAttachments,
+      });
+      await qc.invalidateQueries({queryKey:["inventory-purchase-receipts"]});
+      setEditingBatchMeta(null);
+      setReceiptAttachments([]);
+      toast("Receiving entry updated.","success");
+    }catch(error:any){toast(error?.message||"Could not update the receiving entry.","error");}
+    finally{setSavingBatchMeta(false);}
   };
 
   const deleteReceipt=(r:any)=>{
@@ -242,76 +276,44 @@ export default function StockScreen(){
 
 
 
-  const addRowAttachment=(rowId:string,attachment:StockAttachment)=>{
-    const row=stockRows.find(item=>item.id===rowId);
-    const current=row?.attachments||[];
-    const currentBytes=current.reduce((sum,item)=>sum+(Number(item.size)||Math.floor(String(item.dataUri||"").length*0.75)),0);
-    if(currentBytes+attachment.size>12*1024*1024){
-      toast("Attachments for one stock item cannot exceed 12 MB in total.","error");
-      return;
-    }
-    updateRow(rowId,{attachments:[...current,attachment]});
+  const addReceiptAttachment=(attachment:StockAttachment)=>{
+    const currentBytes=receiptAttachments.reduce((sum,item)=>sum+(Number(item.size)||Math.floor(String(item.dataUri||"").length*0.75)),0);
+    if(currentBytes+attachment.size>12*1024*1024){toast("Attachments for one receiving entry cannot exceed 12 MB in total.","error");return;}
+    setReceiptAttachments(current=>[...current,attachment]);
   };
+  const removeReceiptAttachment=(attachmentId:string)=>setReceiptAttachments(current=>current.filter(item=>item.id!==attachmentId));
 
-  const removeRowAttachment=(rowId:string,attachmentId:string)=>{
-    const row=stockRows.find(item=>item.id===rowId);
-    updateRow(rowId,{attachments:(row?.attachments||[]).filter(item=>item.id!==attachmentId)});
-  };
-
-  const pickBill=async(id:string)=>{
+  const pickReceiptImage=async()=>{
     const permission=await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if(!permission.granted){toast("Photo permission is required for the bill image.","error");return;}
+    if(!permission.granted){toast("Photo permission is required for the invoice image.","error");return;}
     const picked=await ImagePicker.launchImageLibraryAsync({mediaTypes:["images"],allowsEditing:true,quality:1});
     if(picked.canceled)return;
     const asset=picked.assets[0];
-    if(!asset?.uri){toast("Could not read bill image.","error");return;}
+    if(!asset?.uri){toast("Could not read the invoice image.","error");return;}
     try{
       const actions:any[]=[];
       const width=Number(asset.width||0),height=Number(asset.height||0);
-      if(width>1600||height>1600) actions.push(width>=height?{resize:{width:1600}}:{resize:{height:1600}});
+      if(width>1600||height>1600)actions.push(width>=height?{resize:{width:1600}}:{resize:{height:1600}});
       let result=await ImageManipulator.manipulateAsync(asset.uri,actions,{compress:0.58,format:ImageManipulator.SaveFormat.JPEG,base64:true});
-      if(result.base64&&result.base64.length>1900000){
-        result=await ImageManipulator.manipulateAsync(result.uri,[],{compress:0.42,format:ImageManipulator.SaveFormat.JPEG,base64:true});
-      }
-      if(!result.base64){toast("Could not compress bill image. Please select it again.","error");return;}
-      if(result.base64.length>2000000){toast("This bill image is still too large after compression. Try cropping closer to the bill.","error");return;}
-      const dataUri="data:image/jpeg;base64,"+result.base64;
-      addRowAttachment(id,{
-        id:Math.random().toString(36).slice(2),
-        name:String(asset.fileName||"bill-image.jpg"),
-        mimeType:"image/jpeg",
-        dataUri,
-        size:Math.floor(result.base64.length*0.75),
-      });
-    }catch(error:any){
-      toast("Could not compress bill image: "+String(error?.message||error),"error");
-    }
+      if(result.base64&&result.base64.length>1900000)result=await ImageManipulator.manipulateAsync(result.uri,[],{compress:0.42,format:ImageManipulator.SaveFormat.JPEG,base64:true});
+      if(!result.base64||result.base64.length>2000000){toast("This image is too large after compression. Crop closer to the invoice and try again.","error");return;}
+      addReceiptAttachment({id:Math.random().toString(36).slice(2),name:String(asset.fileName||"invoice-image.jpg"),mimeType:"image/jpeg",dataUri:"data:image/jpeg;base64,"+result.base64,size:Math.floor(result.base64.length*0.75)});
+    }catch(error:any){toast("Could not compress invoice image: "+String(error?.message||error),"error");}
   };
 
-  const pickPdf=async(id:string)=>{
+  const pickReceiptPdf=async()=>{
     try{
       const picked=await DocumentPicker.getDocumentAsync({type:"application/pdf",copyToCacheDirectory:true,multiple:false});
       if(picked.canceled||!picked.assets?.length)return;
       const asset=picked.assets[0];
       if(!asset?.uri){toast("Could not open the selected PDF.","error");return;}
       const size=Number(asset.size||0);
-      if(size>8*1024*1024){toast("Each PDF must be 8 MB or smaller. Compress the PDF and try again.","error");return;}
+      if(size>8*1024*1024){toast("Each invoice PDF must be 8 MB or smaller.","error");return;}
       const base64=await FileSystem.readAsStringAsync(asset.uri,{encoding:FileSystem.EncodingType.Base64});
-      if(!base64){toast("The selected PDF is empty or unreadable.","error");return;}
-      if(base64.length>11_200_000){toast("Each PDF must be 8 MB or smaller. Compress the PDF and try again.","error");return;}
-      addRowAttachment(id,{
-        id:Math.random().toString(36).slice(2),
-        name:String(asset.name||"stock-document.pdf"),
-        mimeType:"application/pdf",
-        dataUri:"data:application/pdf;base64,"+base64,
-        size:size||Math.floor(base64.length*0.75),
-      });
-    }catch(error:any){
-      toast("Could not attach PDF: "+String(error?.message||error),"error");
-    }
+      if(!base64||base64.length>11_200_000){toast("The invoice PDF is empty or larger than 8 MB.","error");return;}
+      addReceiptAttachment({id:Math.random().toString(36).slice(2),name:String(asset.name||"invoice.pdf"),mimeType:"application/pdf",dataUri:"data:application/pdf;base64,"+base64,size:size||Math.floor(base64.length*0.75)});
+    }catch(error:any){toast("Could not attach invoice PDF: "+String(error?.message||error),"error");}
   };
-
-
 
   const scanInvoice=async()=>{
     if(ocrBusy)return;
@@ -323,8 +325,10 @@ export default function StockScreen(){
       if(!asset?.uri){toast("Could not open the selected invoice.","error");return;}
       const isPdf=String(asset.mimeType||"").toLowerCase().includes("pdf")||String(asset.name||"").toLowerCase().endsWith(".pdf");
       let extracted="";
-      let billImage=asset.uri;
+      let scannedAttachment:StockAttachment|null=null;
       if(isPdf){
+        const size=Number(asset.size||0);
+        if(size>8*1024*1024){toast("The invoice PDF must be 8 MB or smaller to attach it to this receipt.","error");return;}
         const info=await getPdfInfo(asset.uri);
         const pageCount=Math.max(0,Number(info?.pageCount)||0);
         if(!pageCount){toast("The selected PDF has no readable pages or is password protected.","error");return;}
@@ -337,21 +341,21 @@ export default function StockScreen(){
           const result=await recognizeText(pageUri);
           const text=String(result?.text||"").trim();
           if(text)pageText.push("Page "+(page+1)+":\n"+text);
-          if(page===0){
-            try{const base64=await FileSystem.readAsStringAsync(pageUri,{encoding:FileSystem.EncodingType.Base64});billImage="data:image/jpeg;base64,"+base64;}catch{billImage=pageUri;}
-          }
         }
         extracted=pageText.join("\n\n");
-        if(pageCount>pagesToScan)toast("Scanned the first 8 pages of this PDF. Check the suggestions before saving.","info");
+        const base64=await FileSystem.readAsStringAsync(asset.uri,{encoding:FileSystem.EncodingType.Base64});
+        if(!base64||base64.length>11_200_000){toast("The invoice PDF is too large to attach. Choose a PDF under 8 MB.","error");return;}
+        scannedAttachment={id:Math.random().toString(36).slice(2),name:String(asset.name||"invoice.pdf"),mimeType:"application/pdf",dataUri:"data:application/pdf;base64,"+base64,size:size||Math.floor(base64.length*0.75)};
       }else{
         const result=await recognizeText(asset.uri);
         extracted=String(result?.text||"").trim();
         const compressed=await ImageManipulator.manipulateAsync(asset.uri,[{resize:{width:1600}}],{compress:0.5,format:ImageManipulator.SaveFormat.JPEG,base64:true}).catch(()=>null as any);
-        billImage=compressed?.base64?"data:image/jpeg;base64,"+compressed.base64:asset.uri;
+        if(compressed?.base64)scannedAttachment={id:Math.random().toString(36).slice(2),name:String(asset.fileName||"invoice-image.jpg"),mimeType:"image/jpeg",dataUri:"data:image/jpeg;base64,"+compressed.base64,size:Math.floor(compressed.base64.length*0.75)};
       }
       if(extracted.length<5){toast("No readable invoice text found. Try a clearer, brighter photo/PDF with the full invoice visible.","error");return;}
       const suggestions=parseInvoiceOcr(extracted,stockCategories,stockInventory);
-      setStockRows(suggestions.length?suggestions.map(r=>({...r,billImage})):[{...newRow(),billImage}]);
+      setStockRows(suggestions.length?suggestions.map(r=>({...r,billImage:""})):[newRow()]);
+      setReceiptAttachments(scannedAttachment?[scannedAttachment]:[]);
       setEditingReceipt(null);
       setDescription("OCR invoice: "+(asset.name||"stock invoice")+"\n\nExtracted text:\n"+extracted);
       setStockDate(new Date().toISOString().slice(0,10));
@@ -405,7 +409,7 @@ export default function StockScreen(){
       "body{font-family:Arial,sans-serif;color:#18221f;padding:24px}h1{font-size:22px;margin:0 0 6px}p{margin:4px 0 16px;color:#555}.meta{margin-bottom:14px}table{width:100%;border-collapse:collapse;font-size:10px}th,td{border:1px solid #d7ddd9;padding:7px;text-align:left;vertical-align:top}th{background:#edf2ef}.num{text-align:right;white-space:nowrap}tfoot td{font-weight:bold}</style></head><body>"+
       "<h1>Received Stock Report</h1>"+
       "<p class='meta'>Date range: "+escapeHtml(reportFromDate)+" to "+escapeHtml(reportToDate)+"<br>Receipt lines: "+rows.length+"<br>Quantity totals by unit: "+escapeHtml(totals)+"</p>"+
-      "<table><thead><tr><th>Date</th><th>Item</th><th>Size</th><th>Received</th><th>Minimum</th><th>Description</th><th>Item attachments</th></tr></thead><tbody>"+body+"</tbody></table>"+
+      "<table><thead><tr><th>Date</th><th>Item</th><th>Size</th><th>Received</th><th>Minimum</th><th>Description</th><th>Entry invoice files</th></tr></thead><tbody>"+body+"</tbody></table>"+
       "</body></html>";
     setExportingReport(true);
     try{
@@ -474,18 +478,26 @@ export default function StockScreen(){
        stockBatches.length?stockBatches.slice(0,100).map(batch=><View key={batch.batchId} style={styles.receivedCard}>
         <Text style={styles.meta}>Date</Text>
         <Text style={styles.receivedTitle}>{batch.addedDate||"—"}</Text>
+        <View style={styles.batchMetaActions}>
+          <Pressable onPress={()=>editBatchMeta(batch)} style={styles.editEntryBtn}>
+            <Ionicons name="create-outline" size={17} color={colors.brandPrimary}/><Text style={styles.attachText}>Edit entry</Text>
+          </Pressable>
+        </View>
         {batch.description?<><Text style={[styles.meta,{marginTop:spacing.sm}]}>Description</Text><Text style={styles.descriptionText}>{batch.description}</Text></>:null}
+        {batch.attachments.length?<View style={styles.batchAttachments}>
+          <Text style={styles.meta}>Invoice attachments for this entry</Text>
+          {batch.attachments.map((attachment:any)=><Pressable key={String(attachment.id)} onPress={()=>void openReceiptAttachment(attachment)} style={styles.savedAttachment}>
+            <Ionicons name={attachment.mimeType==="application/pdf"?"document-text-outline":"image-outline"} size={15} color={colors.brandPrimary}/>
+            <Text numberOfLines={1} style={styles.savedAttachmentName}>{attachment.name||"Open invoice attachment"}</Text>
+            <Ionicons name="share-outline" size={15} color={colors.brandPrimary}/>
+          </Pressable>)}
+        </View>:null}
 
         {batch.items.map((s:any)=><View key={String(s.id)} style={styles.stockItem}>
           <View style={{flex:1}}>
             <Text style={styles.itemTitle}>{s.category||"Inventory item"}{s.size?" · "+s.size:""}</Text>
             <Text style={styles.meta}>Received {Number(s.quantity)||0} {s.unit||"pcs"}</Text>
-            {(Array.isArray(s.attachments)&&s.attachments.length)||s.bill_image?<Text style={styles.attachmentMeta}>{Array.isArray(s.attachments)&&s.attachments.length?s.attachments.length+" item attachment(s)":"Bill image attached"}</Text>:null}
-            {(Array.isArray(s.attachments)?s.attachments:[]).map((attachment:any)=><Pressable key={String(attachment.id)} onPress={()=>void openReceiptAttachment(attachment)} style={styles.savedAttachment}>
-              <Ionicons name={attachment.mimeType==="application/pdf"?"document-text-outline":"image-outline"} size={15} color={colors.brandPrimary}/>
-              <Text numberOfLines={1} style={styles.savedAttachmentName}>{attachment.name||"Open attachment"}</Text>
-              <Ionicons name="share-outline" size={15} color={colors.brandPrimary}/>
-            </Pressable>)}
+
           </View>
           <View style={styles.itemActions}>
             <Pressable onPress={()=>editReceipt(s)} hitSlop={8}><Ionicons name="create-outline" size={20} color={colors.brandPrimary}/></Pressable>
@@ -500,23 +512,37 @@ export default function StockScreen(){
         <View style={styles.sheetHead}>
           <View style={{flex:1}}>
             <Text style={styles.sheetTitle}>{editingReceipt?"Edit Received Stock":"Receive Stock"}</Text>
-            <Text style={styles.stockHint}>Date and Description apply to this entire Receive Stock save.</Text>
+            <Text style={styles.stockHint}>{editingReceipt?"Edit this item only. Use Edit entry on its receipt card to change the transaction date, description or invoice files.":"Date, description and invoice files apply once to this entire receiving entry."}</Text>
           </View>
           <Pressable onPress={()=>setStockModal(false)}><Ionicons name="close" size={24} color={colors.onSurface}/></Pressable>
         </View>
 
         <ScrollView keyboardShouldPersistTaps="handled">
-          <Text style={styles.fieldLabel}>Date</Text>
-          <TextInput value={stockDate} onChangeText={setStockDate} placeholder="YYYY-MM-DD" placeholderTextColor={colors.muted} style={styles.stockInput}/>
-
-          <Text style={styles.fieldLabel}>Description</Text>
-          <TextInput value={description} onChangeText={setDescription} placeholder="Add description for this receiving transaction" placeholderTextColor={colors.muted} multiline textAlignVertical="top" style={[styles.stockInput,{minHeight:88,paddingTop:spacing.md}]}/>
-
-          <Pressable disabled={ocrBusy||saveStock.isPending} style={[styles.attachBtn,(ocrBusy||saveStock.isPending)&&{opacity:0.6}]} onPress={()=>{void scanInvoice();}}>
-            {ocrBusy?<ActivityIndicator size="small" color={colors.brandPrimary}/>:<Ionicons name="document-text-outline" size={19} color={colors.brandPrimary}/>}
-            <Text style={styles.attachText}>{ocrBusy?"Scanning invoice…":"Scan invoice image or PDF (on-device OCR)"}</Text>
-          </Pressable>
-          <Text style={[styles.stockHint,{marginTop:spacing.xs,marginBottom:spacing.sm}]}>On-device OCR runs without an OCR API key. Images and up to 8 PDF pages are scanned locally. Review spelling, size and quantity suggestions before saving.</Text>
+          {!editingReceipt?<>
+            <Text style={styles.fieldLabel}>Date</Text>
+            <TextInput value={stockDate} onChangeText={setStockDate} placeholder="YYYY-MM-DD" placeholderTextColor={colors.muted} style={styles.stockInput}/>
+            <Text style={styles.fieldLabel}>Description</Text>
+            <TextInput value={description} onChangeText={setDescription} placeholder="Add description for this receiving transaction" placeholderTextColor={colors.muted} multiline textAlignVertical="top" style={[styles.stockInput,{minHeight:88,paddingTop:spacing.md}]}/>
+            <Text style={styles.fieldLabel}>Invoice attachments (one set for this entry)</Text>
+            <View style={{flexDirection:"row",gap:spacing.sm}}>
+              <Pressable style={[styles.attachBtn,{flex:1}]} onPress={()=>void pickReceiptImage()}>
+                <Ionicons name="image-outline" size={18} color={colors.brandPrimary}/><Text style={styles.attachText}>Add image</Text>
+              </Pressable>
+              <Pressable style={[styles.attachBtn,{flex:1}]} onPress={()=>void pickReceiptPdf()}>
+                <Ionicons name="document-attach-outline" size={18} color={colors.brandPrimary}/><Text style={styles.attachText}>Add PDF</Text>
+              </Pressable>
+            </View>
+            <Pressable disabled={ocrBusy||saveStock.isPending} style={[styles.attachBtn,(ocrBusy||saveStock.isPending)&&{opacity:0.6}]} onPress={()=>void scanInvoice()}>
+              {ocrBusy?<ActivityIndicator size="small" color={colors.brandPrimary}/>:<Ionicons name="scan-outline" size={19} color={colors.brandPrimary}/>}
+              <Text style={styles.attachText}>{ocrBusy?"Scanning invoice…":"Scan invoice with on-device OCR"}</Text>
+            </Pressable>
+            <Text style={[styles.stockHint,{marginTop:spacing.xs,marginBottom:spacing.sm}]}>Attachments are shared by every item in this receipt. OCR scans images and up to 8 PDF pages locally.</Text>
+            {receiptAttachments.map(attachment=><View key={attachment.id} style={styles.attachmentRow}>
+              <Ionicons name={attachment.mimeType==="application/pdf"?"document-text-outline":"image-outline"} size={17} color={colors.brandPrimary}/>
+              <Text numberOfLines={1} style={styles.attachmentName}>{attachment.name}</Text>
+              <Pressable onPress={()=>removeReceiptAttachment(attachment.id)} hitSlop={8}><Ionicons name="close-circle" size={19} color={colors.error}/></Pressable>
+            </View>)}
+          </>:null}
           {stockRows.map((row,i)=><View key={row.id} style={styles.stockCard}>
             <View style={styles.stockCardHead}>
               <Text style={styles.stockCardTitle}>Stock item {i+1}</Text>
@@ -538,24 +564,6 @@ export default function StockScreen(){
               <TextInput value={row.minimumStock} onChangeText={v=>updateRow(row.id,{minimumStock:v.replace(/[^0-9.]/g,"")})} placeholder="Minimum stock" keyboardType="number-pad" placeholderTextColor={colors.muted} style={[styles.stockInput,{flex:1}]}/>
             </View>
 
-            <View style={{flexDirection:"row",gap:spacing.sm}}>
-              <Pressable style={[styles.attachBtn,{flex:1}]} onPress={()=>void pickBill(row.id)}>
-                <Ionicons name="image-outline" size={18} color={colors.brandPrimary}/>
-                <Text style={styles.attachText}>Add image</Text>
-              </Pressable>
-              <Pressable style={[styles.attachBtn,{flex:1}]} onPress={()=>void pickPdf(row.id)}>
-                <Ionicons name="document-attach-outline" size={18} color={colors.brandPrimary}/>
-                <Text style={styles.attachText}>Add PDF</Text>
-              </Pressable>
-            </View>
-            {row.billImage&&!row.attachments.length?<Text style={styles.attachmentMeta}>Invoice image from OCR attached to this item</Text>:null}
-            {row.attachments.map(attachment=><View key={attachment.id} style={styles.attachmentRow}>
-              <Ionicons name={attachment.mimeType==="application/pdf"?"document-text-outline":"image-outline"} size={17} color={colors.brandPrimary}/>
-              <Text numberOfLines={1} style={styles.attachmentName}>{attachment.name}</Text>
-              <Pressable onPress={()=>removeRowAttachment(row.id,attachment.id)} hitSlop={8}>
-                <Ionicons name="close-circle" size={19} color={colors.error}/>
-              </Pressable>
-            </View>)}
           </View>)}
 
           {!editingReceipt?<Pressable style={styles.addAnotherStock} onPress={()=>setStockRows(v=>v.concat(newRow()))}>
@@ -564,6 +572,36 @@ export default function StockScreen(){
 
           <PrimaryButton title={editingReceipt?"Update Received Stock":"Save Receive Stock"} onPress={submit} loading={saveStock.isPending}/>
           <Pressable style={styles.cancel} onPress={()=>setStockModal(false)}><Text style={styles.cancelText}>Cancel</Text></Pressable>
+        </ScrollView>
+      </View></View>
+    </Modal>
+
+    <Modal visible={!!editingBatchMeta} transparent animationType="slide" onRequestClose={()=>setEditingBatchMeta(null)}>
+      <View style={styles.overlay}><View style={[styles.sheet,{paddingBottom:insets.bottom+spacing.lg}]}>
+        <View style={styles.sheetHead}>
+          <View style={{flex:1}}>
+            <Text style={styles.sheetTitle}>Edit receiving entry</Text>
+            <Text style={styles.stockHint}>These changes apply to every item in the transaction.</Text>
+          </View>
+          <Pressable onPress={()=>setEditingBatchMeta(null)}><Ionicons name="close" size={24} color={colors.onSurface}/></Pressable>
+        </View>
+        <ScrollView keyboardShouldPersistTaps="handled">
+          <Text style={styles.fieldLabel}>Receipt date</Text>
+          <TextInput value={stockDate} onChangeText={setStockDate} placeholder="YYYY-MM-DD" placeholderTextColor={colors.muted} style={styles.stockInput}/>
+          <Text style={styles.fieldLabel}>Description</Text>
+          <TextInput value={description} onChangeText={setDescription} multiline textAlignVertical="top" placeholder="Add description for this receiving transaction" placeholderTextColor={colors.muted} style={[styles.stockInput,{minHeight:88,paddingTop:spacing.md}]}/>
+          <Text style={styles.fieldLabel}>Invoice attachments (whole entry)</Text>
+          <View style={{flexDirection:"row",gap:spacing.sm}}>
+            <Pressable style={[styles.attachBtn,{flex:1}]} onPress={()=>void pickReceiptImage()}><Ionicons name="image-outline" size={18} color={colors.brandPrimary}/><Text style={styles.attachText}>Add image</Text></Pressable>
+            <Pressable style={[styles.attachBtn,{flex:1}]} onPress={()=>void pickReceiptPdf()}><Ionicons name="document-attach-outline" size={18} color={colors.brandPrimary}/><Text style={styles.attachText}>Add PDF</Text></Pressable>
+          </View>
+          {receiptAttachments.map(attachment=><View key={attachment.id} style={styles.attachmentRow}>
+            <Ionicons name={attachment.mimeType==="application/pdf"?"document-text-outline":"image-outline"} size={17} color={colors.brandPrimary}/>
+            <Text numberOfLines={1} style={styles.attachmentName}>{attachment.name}</Text>
+            <Pressable onPress={()=>removeReceiptAttachment(attachment.id)} hitSlop={8}><Ionicons name="close-circle" size={19} color={colors.error}/></Pressable>
+          </View>)}
+          <PrimaryButton title="Save entry changes" onPress={()=>void saveBatchMeta()} loading={savingBatchMeta}/>
+          <Pressable style={styles.cancel} onPress={()=>setEditingBatchMeta(null)}><Text style={styles.cancelText}>Cancel</Text></Pressable>
         </ScrollView>
       </View></View>
     </Modal>
@@ -621,6 +659,9 @@ const useStyles=makeStyles(colors=>({
   attachmentName:{flex:1,fontSize:fontSize.xs,color:colors.onSurface},
   savedAttachment:{flexDirection:"row",alignItems:"center",gap:spacing.xs,paddingVertical:spacing.xs,paddingHorizontal:spacing.sm,marginTop:spacing.xs,borderRadius:radius.sm,backgroundColor:colors.surfaceSecondary},
   savedAttachmentName:{flex:1,fontSize:fontSize.xs,color:colors.brandPrimary},
+  batchMetaActions:{flexDirection:"row",justifyContent:"flex-end",marginVertical:spacing.xs},
+  editEntryBtn:{flexDirection:"row",alignItems:"center",gap:spacing.xs,paddingHorizontal:spacing.sm,paddingVertical:spacing.xs,borderRadius:radius.sm,backgroundColor:colors.surfaceSecondary},
+  batchAttachments:{marginTop:spacing.sm,marginBottom:spacing.xs},
   receivedCard:{padding:spacing.md,borderWidth:1,borderColor:colors.border,borderRadius:radius.md,backgroundColor:colors.surface,marginBottom:spacing.sm},
   receivedTitle:{fontFamily:fontFamily.semibold,fontSize:fontSize.base,color:colors.onSurface},
   descriptionText:{fontSize:fontSize.sm,color:colors.onSurface,marginTop:3},

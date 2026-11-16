@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
+import { useFocusEffect } from "expo-router";
 import { ActivityIndicator, Alert, BackHandler, FlatList, Modal, Pressable, RefreshControl, Text, TextInput, View } from "react-native";
 import { router } from "expo-router";
 import Ionicons from "@react-native-vector-icons/ionicons";
@@ -29,17 +30,18 @@ export default function InventoryCategories() {
   const [editCategory, setEditCategory] = useState<Category | null>(null);
 
   const returnToInventory = () => {
-    router.replace("/(tabs)/inventory" as any);
+    // Dismiss back to the tab route instead of depending on a stale route stack.
+    router.dismissTo("/(tabs)/inventory" as any);
   };
 
-  // Android's hardware Back button must leave the Categories route in one step.
-  useEffect(() => {
+  // Register Android Back only while Categories is the focused screen.
+  useFocusEffect(useCallback(() => {
     const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
       returnToInventory();
       return true;
     });
     return () => subscription.remove();
-  }, []);
+  }, []));
 
   const q = useQuery<Category[]>({
     queryKey: ["inventory-categories"],
@@ -57,7 +59,7 @@ export default function InventoryCategories() {
       setName("");
       setShowAdd(false);
       toast("Category added.", "success");
-      router.navigate({ pathname: "/(tabs)/inventory", params: { categoryId: category.id, categoryName: category.name } } as any);
+      router.dismissTo({ pathname: "/(tabs)/inventory", params: { categoryId: category.id, categoryName: category.name } } as any);
     },
     onError: (e: any) => toast(e?.message || "Could not add category.", "error"),
   });
@@ -195,7 +197,7 @@ export default function InventoryCategories() {
               </Pressable>
               <Pressable
                 testID={`open-category-${item.id}`}
-                onPress={() => router.navigate({ pathname: "/(tabs)/inventory", params: { categoryId: item.id, categoryName: item.name } } as any)}
+                onPress={() => router.dismissTo({ pathname: "/(tabs)/inventory", params: { categoryId: item.id, categoryName: item.name } } as any)}
                 style={styles.openBtn}
               >
                 <Ionicons name="chevron-forward" size={20} color={colors.brandPrimary} />
