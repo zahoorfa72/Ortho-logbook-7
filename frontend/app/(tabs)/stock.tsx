@@ -409,7 +409,7 @@ export default function StockScreen(){
       "body{font-family:Arial,sans-serif;color:#18221f;padding:24px}h1{font-size:22px;margin:0 0 6px}p{margin:4px 0 16px;color:#555}.meta{margin-bottom:14px}table{width:100%;border-collapse:collapse;font-size:10px}th,td{border:1px solid #d7ddd9;padding:7px;text-align:left;vertical-align:top}th{background:#edf2ef}.num{text-align:right;white-space:nowrap}tfoot td{font-weight:bold}</style></head><body>"+
       "<h1>Received Stock Report</h1>"+
       "<p class='meta'>Date range: "+escapeHtml(reportFromDate)+" to "+escapeHtml(reportToDate)+"<br>Receipt lines: "+rows.length+"<br>Quantity totals by unit: "+escapeHtml(totals)+"</p>"+
-      "<table><thead><tr><th>Date</th><th>Item</th><th>Size</th><th>Received</th><th>Minimum</th><th>Description</th><th>Item attachments</th></tr></thead><tbody>"+body+"</tbody></table>"+
+      "<table><thead><tr><th>Date</th><th>Item</th><th>Size</th><th>Received</th><th>Minimum</th><th>Description</th><th>Entry invoice files</th></tr></thead><tbody>"+body+"</tbody></table>"+
       "</body></html>";
     setExportingReport(true);
     try{
