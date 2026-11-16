@@ -992,13 +992,33 @@ export const api = {
           const addedDate=String(entry?.addedDate||new Date().toISOString().slice(0,10)).trim();
           const billImage=String(entry?.billImage||"");
           const description=String(body?.description||"").trim();
-          const existing=db.getFirstSync<any>("SELECT * FROM inventory WHERE category_id=? AND LOWER(COALESCE(size,''))=LOWER(?) LIMIT 1",[categoryId,size]);
+          // Match the complete variant, not only category ID + size. Older rows
+          // can have a missing/stale category link; the saved label is a safe
+          // fallback. Units must match so boxes and pieces are never combined.
+          const existing=db.getFirstSync<any>(`
+            SELECT i.* FROM inventory i
+            LEFT JOIN inventory_categories c ON c.id=i.category_id
+            WHERE LOWER(TRIM(COALESCE(i.size,'')))=LOWER(TRIM(?))
+              AND LOWER(TRIM(COALESCE(i.unit,'pcs')))=LOWER(TRIM(?))
+              AND (LOWER(TRIM(COALESCE(i.name,'')))=LOWER(TRIM(?))
+                   OR LOWER(TRIM(COALESCE(i.category,'')))=LOWER(TRIM(?)))
+              AND (i.category_id=? OR LOWER(TRIM(COALESCE(NULLIF(i.category,''),c.name,'')))=LOWER(TRIM(?)))
+            ORDER BY CASE WHEN i.category_id=? THEN 0 ELSE 1 END,
+              COALESCE(NULLIF(TRIM(i.added_date),''),'9999-12-31'), i.id
+            LIMIT 1
+          `,[size,unit,categoryName,categoryName,categoryId,categoryName,categoryId]);
           let inventoryId: string = "";
           if(existing){
             const next=Number(existing.quantity||0)+quantity;
+            const nextMinimumStock=Math.max(Number(existing.minimum_stock||0),minimumStock);
+            const existingName=String(existing.name||"").trim()||categoryName;
+            const existingUnit=String(existing.unit||unit).trim()||unit;
             inventoryId=existing.id;
-            db.runSync("UPDATE inventory SET name=?,category_id=?,category=?,size=?,quantity=?,unit=?,minimum_stock=? WHERE id=?",[categoryName,categoryId,categoryName,size,next,unit,minimumStock,existing.id]);
-            syncLowStockState(existing.id, next, minimumStock);
+            db.runSync(
+              "UPDATE inventory SET name=?,category_id=?,category=?,size=?,quantity=?,unit=?,minimum_stock=? WHERE id=?",
+              [existingName,categoryId,categoryName,size,next,existingUnit,nextMinimumStock,existing.id],
+            );
+            syncLowStockState(existing.id, next, nextMinimumStock);
             movement(existing.id,"purchase",quantity,next,"Stock received",uid);
           } else {
             inventoryId=id();
@@ -1162,11 +1182,20 @@ export const api = {
       const billImage=String(body?.billImage??existing.bill_image??"");
       const description=String(body?.description??existing.description??"").trim();
       const uid=await currentUser();
+      const receiptUnit=String(existing.unit||oldInventory.unit||"pcs").trim()||"pcs";
+      const normalizeVariant=(value:unknown)=>String(value??"").trim().replace(/\\s+/g," ").toLowerCase();
 
       db.withTransactionSync(()=>{
+        const sameCategory =
+          String(oldInventory.category_id||"")===categoryId ||
+          normalizeVariant(oldInventory.category)===normalizeVariant(categoryName);
+        const sameName =
+          normalizeVariant(oldInventory.name)===normalizeVariant(categoryName) ||
+          normalizeVariant(oldInventory.category)===normalizeVariant(categoryName);
         const sameInventory =
-          String(oldInventory.category_id||"")===categoryId &&
-          String(oldInventory.size||"").trim().toLowerCase()===size.toLowerCase();
+          sameCategory && sameName &&
+          normalizeVariant(oldInventory.size)===normalizeVariant(size) &&
+          normalizeVariant(oldInventory.unit||"pcs")===normalizeVariant(receiptUnit);
 
         if(sameInventory){
           const nextQty=Number(oldInventory.quantity||0)-oldQty+quantity;
@@ -1203,23 +1232,33 @@ export const api = {
         syncLowStockState(oldInventory.id, oldNext, oldMin);
 
         let target=db.getFirstSync<any>(
-          "SELECT * FROM inventory WHERE category_id=? AND LOWER(COALESCE(size,''))=LOWER(?) LIMIT 1",
-          [categoryId,size],
+          `SELECT i.* FROM inventory i
+           LEFT JOIN inventory_categories c ON c.id=i.category_id
+           WHERE LOWER(TRIM(COALESCE(i.size,'')))=LOWER(TRIM(?))
+             AND LOWER(TRIM(COALESCE(i.unit,'pcs')))=LOWER(TRIM(?))
+             AND (LOWER(TRIM(COALESCE(i.name,'')))=LOWER(TRIM(?))
+                  OR LOWER(TRIM(COALESCE(i.category,'')))=LOWER(TRIM(?)))
+             AND (i.category_id=? OR LOWER(TRIM(COALESCE(NULLIF(i.category,''),c.name,'')))=LOWER(TRIM(?)))
+           ORDER BY CASE WHEN i.category_id=? THEN 0 ELSE 1 END,
+             COALESCE(NULLIF(TRIM(i.added_date),''),'9999-12-31'), i.id
+           LIMIT 1`,
+          [size,receiptUnit,categoryName,categoryName,categoryId,categoryName,categoryId],
         );
         if(target && target.id===oldInventory.id) target=null;
 
         if(target){
           const targetNext=Number(target.quantity||0)+quantity;
+          const targetMinimum=Math.max(Number(target.minimum_stock||0),minimumStock);
           db.runSync(
-            "UPDATE inventory SET name=?,category=?,quantity=?,unit=?,minimum_stock=? WHERE id=?",
-            [categoryName,categoryName,targetNext,String(existing.unit||target.unit||"pcs"),minimumStock,target.id],
+            "UPDATE inventory SET category_id=?,category=?,quantity=?,minimum_stock=? WHERE id=?",
+            [categoryId,categoryName,targetNext,targetMinimum,target.id],
           );
-          syncLowStockState(target.id, targetNext, minimumStock);
+          syncLowStockState(target.id, targetNext, targetMinimum);
         }else{
           const targetId=id();
           db.runSync(
             "INSERT INTO inventory (id,name,quantity,unit,minimum_stock,category_id,category,size,added_date,bill_image,low_stock_triggered_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            [targetId,categoryName,quantity,String(existing.unit||"pcs"),minimumStock,categoryId||null,categoryName,size,addedDate,billImage,null],
+            [targetId,categoryName,quantity,receiptUnit,minimumStock,categoryId||null,categoryName,size,addedDate,billImage,null],
           );
 syncLowStockState(targetId, quantity, minimumStock);
           target=db.getFirstSync<any>("SELECT * FROM inventory WHERE id=? LIMIT 1",[targetId]);
@@ -1234,8 +1273,9 @@ syncLowStockState(targetId, quantity, minimumStock);
           [target.id],
         )?.n||0);
         db.runSync("UPDATE inventory SET minimum_stock=? WHERE id=?",[targetMin,target.id]);
+        const targetQuantityAfter=Number(db.getFirstSync<any>("SELECT quantity FROM inventory WHERE id=? LIMIT 1",[target.id])?.quantity||0);
         movement(oldInventory.id,"purchase_adjustment",-oldQty,oldNext,"Received stock moved during edit",uid);
-        movement(target.id,"purchase_adjustment",quantity,Number(target.quantity||0),"Received stock moved during edit",uid);
+        movement(target.id,"purchase_adjustment",quantity,targetQuantityAfter,"Received stock moved during edit",uid);
       });
       return {success:true} as any;
     }
