@@ -1209,7 +1209,7 @@ export const api = {
       }
       if(!rows.length)throw new Error("Receiving entry not found.");
       const addedDate=String(body?.addedDate||body?.added_date||"").trim();
-      if(!/^\\d{4}-\\d{2}-\\d{2}$/.test(addedDate))throw new Error("Use YYYY-MM-DD for the receipt date.");
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(addedDate))throw new Error("Use YYYY-MM-DD for the receipt date.");
       const description=String(body?.description||"").trim();
       const attachments=Array.isArray(body?.attachments)?body.attachments.slice(0,12):[];
       const attachmentsJson=JSON.stringify(attachments);

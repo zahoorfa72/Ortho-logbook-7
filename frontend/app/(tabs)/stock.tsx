@@ -225,7 +225,7 @@ export default function StockScreen(){
 
   const saveBatchMeta=async()=>{
     if(!editingBatchMeta)return;
-    if(!/^\\d{4}-\\d{2}-\\d{2}$/.test(stockDate)){toast("Use YYYY-MM-DD for the date.","error");return;}
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(stockDate)){toast("Use YYYY-MM-DD for the date.","error");return;}
     setSavingBatchMeta(true);
     try{
       await api.put("/stock-receipt-batches/"+encodeURIComponent(String(editingBatchMeta.batchId)),{

@@ -1982,7 +1982,10 @@ async function backupToGoogleDriveUnlocked(
   const isMasterBackup = filter.type === "all";
   if (isMasterBackup) {
     await archiveEligiblePatientImages(options.onProgress);
-    await uploadPatientImageArchivesToDrive(options.onProgress, undefined, true);
+    // Verify/upload only new or changed patient PDFs. A full remote audit of
+    // every existing patient PDF on each master save was blocking the UI (e.g. 9/117).
+    // Existing verified Drive copies are retained; incremental sync checks changed IDs.
+    await uploadPatientImageArchivesToDrive(options.onProgress);
   }
   const migrationMarker = String((await storage.secureGet(MASTER_MIGRATION_KEY, "")) || "");
   const canStream = isMasterBackup && Platform.OS === "android" &&
