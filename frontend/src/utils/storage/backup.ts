@@ -999,7 +999,11 @@ function stripPatientPhotosDeep(value: any, key = ""): any {
  return output;
 }
 
-const BACKUP_IMAGE_KEYS = new Set(["photo_uri", "photouri", "photos_json", "photos", "bill_image", "bill_files_json", "attachments_json"]);
+const BACKUP_IMAGE_KEYS = new Set(["photo_uri", "photouri", "photos_json", "photos", "bill_image", "bill_files_json"]);
+// Receipt invoice attachments are real backup data, not disposable patient-photo
+// caches. Keep them in exported backups while excluding the large JSON from the
+// local diff cache and hashing it for incremental change detection.
+const BACKUP_CACHE_ONLY_KEYS = new Set([...BACKUP_IMAGE_KEYS, "attachments_json"]);
 const BACKUP_NESTED_JSON_KEYS = new Set(["snapshot_json", "payload_json"]);
 const IMAGE_SIGNATURE_TABLES = new Set(["inventory", "inventoryPurchaseReceipts", "stockReceipts", "implantRecords", "patientHistory", "trash"]);
 
@@ -1031,7 +1035,7 @@ function stripBackupCacheRow(value: any): any {
  const output: Record<string, any> = {};
  for (const [key, child] of Object.entries(value)) {
   const normalized = key.toLowerCase();
-  if (BACKUP_IMAGE_KEYS.has(normalized) || BACKUP_NESTED_JSON_KEYS.has(normalized)) continue;
+  if (BACKUP_CACHE_ONLY_KEYS.has(normalized) || BACKUP_NESTED_JSON_KEYS.has(normalized)) continue;
   output[key] = stripBackupCacheRow(child);
  }
  return output;
@@ -1114,7 +1118,7 @@ function rowImageSignature(row: any): string {
  };
  const visit = (value: any, key = ""): void => {
   const normalized = key.toLowerCase();
-  if (BACKUP_IMAGE_KEYS.has(normalized)) {
+  if (BACKUP_CACHE_ONLY_KEYS.has(normalized)) {
    if (value === null || value === undefined || value === "") return;
    add(normalized);
    addImageValue(value);
