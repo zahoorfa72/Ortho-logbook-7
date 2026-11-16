@@ -3,6 +3,7 @@ import { db, initializeDatabase } from "@/src/db/database";
 import { storage } from "@/src/utils/storage";
 import { triggerAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-backup";
 import { removeDuplicateProcedureAliases } from "@/src/utils/procedure-names";
+import { removeCachedRowsById } from "@/src/query-client";
 
 const id = () => Crypto.randomUUID();
 const nowIso = () => new Date().toISOString();
@@ -574,7 +575,7 @@ async function listPatients(options?: { includePhotos?: boolean; date?: string }
 
 const inventoryCategories = () =>
   db.getAllSync<any>(
-    "SELECT c.id,c.name,c.created_at,COUNT(i.id) AS item_count FROM inventory_categories c LEFT JOIN inventory i ON i.category_id=c.id GROUP BY c.id,c.name,c.created_at ORDER BY c.name COLLATE NOCASE",
+    "SELECT c.id,c.name,c.created_at,COUNT(i.id) AS item_count FROM inventory_categories c LEFT JOIN inventory i ON (i.category_id=c.id OR LOWER(TRIM(COALESCE(i.category,'')))=LOWER(TRIM(c.name))) GROUP BY c.id,c.name,c.created_at ORDER BY c.name COLLATE NOCASE",
   ).map((r) => ({ id: r.id, name: r.name, createdAt: r.created_at, itemCount: Number(r.item_count) }));
 
 const inventory = (categoryId?: string, term?: string) => {
@@ -909,6 +910,7 @@ export const api = {
         syncLowStockState(inventory.id, next, aggregateMin);
         movement(inventory.id,"purchase_delete",-qty,next,"Received stock deleted",uid);
       });
+      removeCachedRowsById([rid], [["inventory-purchase-receipts"], ["inventory"], ["inventory-categories"], ["inventory", "stock-picker"]]);
       return {success:true} as any;
     }
 
@@ -1074,6 +1076,7 @@ export const api = {
       await requireAdmin();
       const ids = Array.isArray(body?.ids) ? body.ids.map((value: unknown) => String(value)).filter((value: string) => Boolean(value)) : [];
       const deleted = deleteInventoryRows(ids);
+      removeCachedRowsById(ids, [["inventory"], ["inventory-categories"], ["inventory", "stock-picker"]]);
       return { success: true, deleted } as any;
     }
     if (normalizedPath === "/patients") return (await savePatient(body, false)) as any;
@@ -1082,6 +1085,7 @@ export const api = {
       if (!me) throw new Error("Not signed in.");
       const ids = Array.isArray(body?.ids) ? body.ids.map((value: unknown) => String(value)).filter((value: string) => Boolean(value)) : [];
       const deleted = deletePatientRows(ids, me);
+      removeCachedRowsById(ids, [["patients"]]);
       return { success: true, deleted } as any;
     }
     if (normalizedPath === "/users") {
@@ -1320,10 +1324,15 @@ syncLowStockState(targetId, quantity, minimumStock);
       if (!name) throw new Error("Category name is required.");
       const existing = db.getFirstSync<any>("SELECT id FROM inventory_categories WHERE LOWER(name)=LOWER(?) AND id<>? LIMIT 1",[name,cm[1]]);
       if (existing) throw new Error("This inventory category already exists.");
-      const cat = db.getFirstSync<any>("SELECT id FROM inventory_categories WHERE id=? LIMIT 1",[cm[1]]);
+      const cat = db.getFirstSync<any>("SELECT id,name FROM inventory_categories WHERE id=? LIMIT 1",[cm[1]]);
       if (!cat) throw new Error("Category not found.");
       db.runSync("UPDATE inventory_categories SET name=? WHERE id=?",[name,cm[1]]);
-      db.runSync("UPDATE inventory SET name=?,category=? WHERE category_id=?",[name,name,cm[1]]);
+      // Rename the category label without replacing the actual inventory item names.
+      // Also repair legacy rows whose category_id is missing but whose label matches.
+      db.runSync(
+        "UPDATE inventory SET category_id=?,category=? WHERE category_id=? OR LOWER(TRIM(COALESCE(category,'')))=LOWER(TRIM(?))",
+        [cm[1], name, cm[1], String(cat.name || "")],
+      );
       return { id:cm[1], name } as any;
     }
     const im = normalizedPath.match(/^\/inventory\/(.+)$/);
@@ -1392,7 +1401,11 @@ syncLowStockState(targetId, quantity, minimumStock);
       await requireAdmin();
       const trashId = decodeURIComponent(trashMatch[1]);
       const existing = db.getFirstSync<any>("SELECT id FROM deleted_records WHERE id=? LIMIT 1", [trashId]);
-      if (existing) db.runSync("DELETE FROM deleted_records WHERE id=?", [trashId]);
+      if (existing) {
+        db.runSync("DELETE FROM deleted_records WHERE id=?", [trashId]);
+        db.runSync("DELETE FROM deleted_patient_photos WHERE trash_id=?", [trashId]);
+      }
+      removeCachedRowsById([trashId], [["trash"]]);
       return { success: true, deleted: !!existing } as any;
     }
     const pm = normalizedPath.match(/^\/patients\/(.+)$/);
@@ -1405,6 +1418,7 @@ syncLowStockState(targetId, quantity, minimumStock);
         const deleted = deletePatientRows([pm[1]], { ...(await currentUserRow()), id: uid });
         if (deleted !== 1) throw new Error("Patient deletion did not complete.");
       }
+      removeCachedRowsById([pm[1]], [["patients"]]);
       return { success: true } as any;
     }
     const pcf=normalizedPath.match(/^\/patient-custom-fields\/(.+)$/);
@@ -1413,6 +1427,7 @@ syncLowStockState(targetId, quantity, minimumStock);
       const row=db.getFirstSync<any>("SELECT * FROM patient_custom_fields WHERE id=?",[pcf[1]]);
       if(row) addTrashEntry("patient-field","Patient field: "+row.label,{patient_custom_fields:[row]});
       db.runSync("DELETE FROM patient_custom_fields WHERE id=?",[pcf[1]]);
+      removeCachedRowsById([pcf[1]], [["patient-custom-fields"]]);
       return {success:true} as any;
     }
     const ir=normalizedPath.match(/^\/implant-records\/(.+)$/);
@@ -1421,16 +1436,23 @@ syncLowStockState(targetId, quantity, minimumStock);
       const row=db.getFirstSync<any>("SELECT * FROM implant_records WHERE id=?",[ir[1]]);
       if(row) addTrashEntry("implant-record","Implant record: "+row.name,{implant_records:[row]});
       db.runSync("DELETE FROM implant_records WHERE id=?",[ir[1]]);
+      removeCachedRowsById([ir[1]], [["implant-records"]]);
       return {success:true} as any;
     }
     const cat = normalizedPath.match(/^\/inventory-categories\/(.+)$/);
     if (cat) {
       await requireAdmin();
-      const count = db.getFirstSync<any>("SELECT COUNT(*) AS n FROM inventory WHERE category_id=?",[cat[1]]);
+      const row = db.getFirstSync<any>("SELECT * FROM inventory_categories WHERE id=? LIMIT 1", [cat[1]]);
+      if (!row) throw new Error("Category not found.");
+      // Count legacy rows that have a category label but no valid category_id too.
+      const count = db.getFirstSync<any>(
+        "SELECT COUNT(*) AS n FROM inventory WHERE category_id=? OR LOWER(TRIM(COALESCE(category,'')))=LOWER(TRIM(?))",
+        [cat[1], String(row.name || "")],
+      );
       if (Number(count?.n) > 0) throw new Error("Cannot delete a category that still contains items. Move or delete its items first.");
-      const row=db.getFirstSync<any>("SELECT * FROM inventory_categories WHERE id=?",[cat[1]]);
-      if(row) addTrashEntry("inventory-category","Inventory category: "+row.name,{inventory_categories:[row]});
+      addTrashEntry("inventory-category","Inventory category: "+row.name,{inventory_categories:[row]});
       db.runSync("DELETE FROM inventory_categories WHERE id=?",[cat[1]]);
+      removeCachedRowsById([cat[1]], [["inventory-categories"], ["inventory"]]);
       return {success:true} as any;
     }
     const proc = normalizedPath.match(/^\/procedures\/(.+)$/);
@@ -1439,13 +1461,17 @@ syncLowStockState(targetId, quantity, minimumStock);
       const row=db.getFirstSync<any>("SELECT * FROM procedures WHERE id=?", [proc[1]]);
       if(row) addTrashEntry("procedure","Procedure: "+row.name,{procedures:[row]});
       db.runSync("DELETE FROM procedures WHERE id=?", [proc[1]]);
+      removeCachedRowsById([proc[1]], [["procedures"]]);
       return { success: true } as any;
     }
     const inv = normalizedPath.match(/^\/inventory\/(.+)$/);
     if (inv) {
       await requireAdmin();
       const deleted = deleteInventoryRows([inv[1]]);
-      if (deleted > 0) return { success: true, deleted } as any;
+      if (deleted > 0) {
+        removeCachedRowsById([inv[1]], [["inventory"], ["inventory-categories"], ["inventory", "stock-picker"]]);
+        return { success: true, deleted } as any;
+      }
       return { success: true, deleted: 0 } as any;
     }
     throw new Error(`Offline API endpoint not implemented: ${path}`);

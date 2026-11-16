@@ -81,7 +81,8 @@ export default function Inventory() {
   });
 
   const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: ["inventory"] });
+    void queryClient.invalidateQueries({ queryKey: ["inventory"] });
+    void queryClient.invalidateQueries({ queryKey: ["inventory-categories"] });
   };
   const resolveCategory = (item: InventoryItem) => {
     const itemCategoryId = String(item.categoryId || "").trim();
@@ -208,6 +209,13 @@ export default function Inventory() {
     });
     return items;
   }, [data, tab, search, inventorySort, isNewLowStock, selectedCategoryId, categories]);
+
+  // Memoize once per inventory update. Computing this inside renderItem made
+  // every visible row scan the entire list, causing quadratic work on large lists.
+  const newLowStockCount = useMemo(
+    () => list.reduce((count, item) => count + (isNewLowStock(item) ? 1 : 0), 0),
+    [list, isNewLowStock],
+  );
 
   const changeQty = (item: InventoryItem, delta: number) => {
     const next = Math.max(0, item.quantity + delta);
@@ -362,7 +370,7 @@ export default function Inventory() {
               </Pressable>
             ) : null}
             {isAdmin ? (
-              <Pressable testID="categories-button" style={styles.iconBtn} onPress={() => router.push("/categories" as any)}>
+              <Pressable testID="categories-button" style={styles.iconBtn} onPress={() => router.navigate("/categories" as any)}>
                 <Ionicons name="layers-outline" size={20} color={colors.brandPrimary} />
               </Pressable>
             ) : null}
@@ -424,10 +432,9 @@ export default function Inventory() {
           renderItem={({ item, index }) => {
             const low = item.quantity <= item.minimumStock;
             const newLow = isNewLowStock(item);
-            const newLowCount = list.filter(isNewLowStock).length;
             const showLowSectionHeader = tab === "Low Stock" && (
               (index === 0) ||
-              (index === newLowCount && newLowCount > 0)
+              (index === newLowStockCount && newLowStockCount > 0)
             );
             const prevCategory = index > 0 ? String(list[index - 1]?.category || "Uncategorized") : "";
             const thisCategory = String(item.category || "Uncategorized");
