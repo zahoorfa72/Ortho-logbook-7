@@ -305,7 +305,20 @@ export async function archivePatientImagesForPatient(patientId: string, onProgre
   const stamp = await stampFor(id, name, mrNo, String(patient.created_at || patient.date || ""), sources);
   if (existing?.sourceStamp === stamp) {
     const info = await FileSystem.getInfoAsync(existing.localUri);
-    if (info.exists && Number(info.size || 0) > 8) return existing;
+    if (info.exists && Number(info.size || 0) > 8) {
+      const updated = {
+        ...existing,
+        patientName: name,
+        mrNo,
+        patientUpdatedAt: String(patient.updated_at || ""),
+      };
+      if (updated.patientUpdatedAt !== existing.patientUpdatedAt ||
+          updated.patientName !== existing.patientName || updated.mrNo !== existing.mrNo) {
+        all[id] = updated;
+        await writeArchives(all);
+      }
+      return updated;
+    }
   }
   onProgress?.("Creating this patient's image PDF…");
   await FileSystem.makeDirectoryAsync(ARCHIVE_DIR, { intermediates: true });
@@ -404,7 +417,17 @@ export async function archiveEligiblePatientImages(onProgress?: (stage: string) 
     const name = String(patient.name || "Patient");
     const mrNo = String(patient.mr_no || "");
     const existing = archives[id];
-    // Re-read sources even when a PDF already exists. A changed photo set
+    // The saved patient revision is a cheap change detector: every patient
+    // save increments updated_at. If the revision/name/MR are unchanged, the
+    // PDF's source stamp cannot have changed and its large photo row need not
+    // be read again during every background sync.
+    if (existing &&
+        String(existing.patientUpdatedAt || "") === String(patient.updated_at || "") &&
+        String(existing.patientName || "") === name &&
+        String(existing.mrNo || "") === mrNo) {
+      continue;
+    }
+    // Re-read sources when this patient was edited. A changed photo set
     // rebuilds the same patient PDF and preserves the existing Drive file ID.
     let row: any;
     try {

@@ -518,9 +518,9 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
           photo_archive_drive_file_id: archivedImage!.driveFileId,
         });
       } else if (includeDriveFallbackForUnverifiedPdfs) {
-        const fallbackPhotoRow = db.getFirstSync<any>("SELECT photo_uri,photos_json FROM patients WHERE id=? LIMIT 1", [patientId]) || {};
-        const patientWithFallbackPhotos = { ...patient, ...fallbackPhotoRow };
         try {
+          const fallbackPhotoRow = db.getFirstSync<any>("SELECT photo_uri,photos_json FROM patients WHERE id=? LIMIT 1", [patientId]) || {};
+          const patientWithFallbackPhotos = { ...patient, ...fallbackPhotoRow };
           const portable = await embedPatientPhotos(patientWithFallbackPhotos, compressedPhotoCache, onProgress, "patient " + (i + 1) + "/" + patients.length);
           embeddedPatients.push(portable);
           if (!Array.isArray(portable.photos_json) || !portable.photos_json.length) {
