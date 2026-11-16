@@ -172,10 +172,6 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
   // categories are persistent local data and must never be seeded, cleaned,
   // or deleted during an app update.
   ensureInventoryCategoryLinks();
-  // One-time, lossless consolidation of duplicate product variants created by
-  // older Receive Stock saves. Receipt rows, movement history and patient links
-  // are reassigned before duplicate inventory rows are removed.
-  mergeDuplicateInventoryRowsOnce();
   // Definitive fresh Stock portal cutover. Stock reads only stock_receipts.
   // Never import, copy, or display records from the old Implant Portal or legacy receipt table.
   const stockPortalFreshStart=db.getFirstSync<any>("SELECT value FROM app_meta WHERE key=? LIMIT 1",[STOCK_PORTAL_FRESH_START_MARKER]);
@@ -225,6 +221,9 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
   // Clean sidecar image rows only after their corresponding Trash entry expires.
   db.runSync("DELETE FROM deleted_patient_photos WHERE trash_id NOT IN (SELECT id FROM deleted_records)");
   if (!options?.skipInventoryReset) applyHoldInventoryResetOnce();
+  // Run after schema/category setup and any one-time seed handling so the same
+  // repair also covers newly restored inventory snapshots.
+  mergeDuplicateInventoryRowsOnce();
 }
 
 const INVENTORY_RESET_MARKER = "hold-inventory-reset-available-v5";
