@@ -1261,7 +1261,16 @@ export async function uploadPatientImageArchivesToDrive(
       const folder = await getOrCreatePatientImagePdfFolder();
       folderId = String(folder.id);
     } catch (error: any) {
-      onProgress?.("Patient PDF upload deferred: " + String(error?.message || error) + ". The main data backup will continue.");
+      // A master snapshot must not reference a PDF as remotely confirmed if the
+      // verification request itself could not reach Drive. Local image bytes
+      // are embedded into the master for every archive whose confirmation is
+      // cleared below; older Drive PDFs remain untouched.
+      if (verifyExisting) {
+        for (const archive of archives) {
+          try { await setPatientImageArchiveDriveState(archive.fileName, archive.sourceStamp, ""); } catch {}
+        }
+      }
+      onProgress?.("Patient PDF verification deferred: " + String(error?.message || error) + ". The main data backup will continue with available local photo fallbacks.");
       return;
     }
     onProgress?.("Verifying " + archives.length + " patient PDF(s) in Google Drive…");
@@ -1290,6 +1299,10 @@ export async function uploadPatientImageArchivesToDrive(
           continue;
         }
         if (!localExists) {
+          // Clear the cached remote-confirmation flag. The following master
+          // export will then embed available local patient photos instead of
+          // writing a manifest reference to a Drive file that was not verified.
+          await setPatientImageArchiveDriveState(archive.fileName, archive.sourceStamp, "");
           onProgress?.("Patient PDF not verified on Drive and no local PDF is available to upload: " + archive.fileName + ". The main patient data backup will continue.");
           continue;
         }
@@ -1297,6 +1310,9 @@ export async function uploadPatientImageArchivesToDrive(
         const verified = await uploadPatientPdf(archive, folderId, remote);
         await setPatientImageArchiveDriveState(archive.fileName, archive.sourceStamp, String(verified.id));
       } catch (error: any) {
+        // Do not let a stale cached Drive ID suppress the photo fallback in the
+        // master when a remote verification or PDF upload could not complete.
+        try { await setPatientImageArchiveDriveState(archive.fileName, archive.sourceStamp, ""); } catch {}
         onProgress?.("Patient PDF sync deferred for " + archive.patientName + ": " + String(error?.message || error) + ". The main data backup will continue.");
       }
     }
