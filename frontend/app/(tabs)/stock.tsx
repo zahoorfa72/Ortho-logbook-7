@@ -222,12 +222,32 @@ export default function StockScreen(){
 
   const updateRow=(id:string,patch:Partial<StockRow>)=>setStockRows(rows=>rows.map(r=>r.id===id?{...r,...patch}:r));
 
+  const openReceiptAttachment=async(attachment:any)=>{
+    try{
+      const dataUri=String(attachment?.dataUri||"");
+      const match=dataUri.match(/^data:([^;,]+);base64,([\\s\\S]+)$/);
+      if(!match)throw new Error("This saved attachment has no readable file data.");
+      const mimeType=String(attachment?.mimeType||match[1]||"application/octet-stream");
+      const fallbackExt=mimeType==="application/pdf"?"pdf":mimeType==="image/png"?"png":"jpg";
+      const safeName=String(attachment?.name||("stock-attachment."+fallbackExt)).replace(/[^a-zA-Z0-9._-]+/g,"_").slice(0,90);
+      const baseDir=FileSystem.cacheDirectory||FileSystem.documentDirectory;
+      if(!baseDir)throw new Error("Private phone storage is not available.");
+      const target=baseDir+"stock-"+Date.now()+"-"+safeName;
+      await FileSystem.writeAsStringAsync(target,match[2],{encoding:FileSystem.EncodingType.Base64});
+      await Sharing.shareAsync(target,{mimeType,dialogTitle:"Open stock attachment"});
+    }catch(error:any){
+      toast("Could not open attachment: "+String(error?.message||error),"error");
+    }
+  };
+
+
+
   const addRowAttachment=(rowId:string,attachment:StockAttachment)=>{
     const row=stockRows.find(item=>item.id===rowId);
     const current=row?.attachments||[];
     const currentBytes=current.reduce((sum,item)=>sum+(Number(item.size)||Math.floor(String(item.dataUri||"").length*0.75)),0);
     if(currentBytes+attachment.size>12*1024*1024){
-      toast("Attachments for one stock item cannot exceed 15 MB in total.","error");
+      toast("Attachments for one stock item cannot exceed 12 MB in total.","error");
       return;
     }
     updateRow(rowId,{attachments:[...current,attachment]});
@@ -461,6 +481,11 @@ export default function StockScreen(){
             <Text style={styles.itemTitle}>{s.category||"Inventory item"}{s.size?" · "+s.size:""}</Text>
             <Text style={styles.meta}>Received {Number(s.quantity)||0} {s.unit||"pcs"}</Text>
             {(Array.isArray(s.attachments)&&s.attachments.length)||s.bill_image?<Text style={styles.attachmentMeta}>{Array.isArray(s.attachments)&&s.attachments.length?s.attachments.length+" item attachment(s)":"Bill image attached"}</Text>:null}
+            {(Array.isArray(s.attachments)?s.attachments:[]).map((attachment:any)=><Pressable key={String(attachment.id)} onPress={()=>void openReceiptAttachment(attachment)} style={styles.savedAttachment}>
+              <Ionicons name={attachment.mimeType==="application/pdf"?"document-text-outline":"image-outline"} size={15} color={colors.brandPrimary}/>
+              <Text numberOfLines={1} style={styles.savedAttachmentName}>{attachment.name||"Open attachment"}</Text>
+              <Ionicons name="share-outline" size={15} color={colors.brandPrimary}/>
+            </Pressable>)}
           </View>
           <View style={styles.itemActions}>
             <Pressable onPress={()=>editReceipt(s)} hitSlop={8}><Ionicons name="create-outline" size={20} color={colors.brandPrimary}/></Pressable>
@@ -594,6 +619,8 @@ const useStyles=makeStyles(colors=>({
   attachmentMeta:{fontSize:fontSize.xs,color:colors.brandPrimary,marginTop:4},
   attachmentRow:{flexDirection:"row",alignItems:"center",gap:spacing.xs,paddingVertical:spacing.xs,paddingHorizontal:spacing.sm,backgroundColor:colors.surface,borderRadius:radius.sm,marginBottom:spacing.xs},
   attachmentName:{flex:1,fontSize:fontSize.xs,color:colors.onSurface},
+  savedAttachment:{flexDirection:"row",alignItems:"center",gap:spacing.xs,paddingVertical:spacing.xs,paddingHorizontal:spacing.sm,marginTop:spacing.xs,borderRadius:radius.sm,backgroundColor:colors.surfaceSecondary},
+  savedAttachmentName:{flex:1,fontSize:fontSize.xs,color:colors.brandPrimary},
   receivedCard:{padding:spacing.md,borderWidth:1,borderColor:colors.border,borderRadius:radius.md,backgroundColor:colors.surface,marginBottom:spacing.sm},
   receivedTitle:{fontFamily:fontFamily.semibold,fontSize:fontSize.base,color:colors.onSurface},
   descriptionText:{fontSize:fontSize.sm,color:colors.onSurface,marginTop:3},
