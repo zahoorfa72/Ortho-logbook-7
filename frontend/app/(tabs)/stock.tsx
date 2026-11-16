@@ -30,12 +30,12 @@ type StockAttachment = {
 
 type StockRow = {
   id:string; categoryId:string; category:string; size:string; quantity:string;
-  minimumStock:string; billImage:string; attachments:StockAttachment[];
+  minimumStock:string; billImage:string;
 };
 
 const newRow=():StockRow=>({
   id:Math.random().toString(36).slice(2),
-  categoryId:"",category:"",size:"",quantity:"",minimumStock:"1",billImage:"",attachments:[]
+  categoryId:"",category:"",size:"",quantity:"",minimumStock:"1",billImage:""
 });
 
 
@@ -97,6 +97,10 @@ export default function StockScreen(){
   const [stockRows,setStockRows]=useState<StockRow[]>([]);
   const [stockDate,setStockDate]=useState(new Date().toISOString().slice(0,10));
   const [description,setDescription]=useState("");
+  // Invoice files belong to the complete receipt batch, never to individual lines.
+  const [receiptAttachments,setReceiptAttachments]=useState<StockAttachment[]>([]);
+  const [editingBatchMeta,setEditingBatchMeta]=useState<any>(null);
+  const [savingBatchMeta,setSavingBatchMeta]=useState(false);
   const [stockPicker,setStockPicker]=useState<"category"|"size"|null>(null);
   const [stockPickerRow,setStockPickerRow]=useState("");
   const [stockSearch,setStockSearch]=useState("");
@@ -119,17 +123,24 @@ export default function StockScreen(){
   });
 
   const stockBatches=useMemo(()=>{
-    const groups=new Map<string,{batchId:string;createdAt:string;addedDate:string;description:string;items:any[]}>();
+    const groups=new Map<string,{batchId:string;createdAt:string;addedDate:string;description:string;items:any[];attachments:StockAttachment[]}>();
     for(const r of (Array.isArray(stockReceipts)?stockReceipts:[])){
       const batchId=String(r.batch_id||r.id);
       let g=groups.get(batchId);
       if(!g){
-        g={batchId,createdAt:String(r.created_at||""),addedDate:String(r.added_date||""),description:String(r.description||""),items:[]};
+        g={batchId,createdAt:String(r.created_at||""),addedDate:String(r.added_date||""),description:String(r.description||""),items:[],attachments:[]};
         groups.set(batchId,g);
       }
       g.items.push(r);
       if(!g.description && r.description)g.description=String(r.description);
       if(!g.addedDate && r.added_date)g.addedDate=String(r.added_date);
+      for(const attachment of (Array.isArray(r.attachments)?r.attachments:[])){
+        if(attachment?.dataUri&&!g.attachments.some(x=>x.id===attachment.id||x.dataUri===attachment.dataUri))g.attachments.push(attachment);
+      }
+      const legacyBill=String(r.bill_image||r.billImage||"");
+      if(legacyBill.startsWith("data:")&&!g.attachments.some(x=>x.dataUri===legacyBill)){
+        g.attachments.push({id:"legacy-"+String(r.id),name:"Previous invoice attachment",mimeType:legacyBill.startsWith("data:application/pdf")?"application/pdf":"image/jpeg",dataUri:legacyBill,size:Math.floor(legacyBill.length*0.75)});
+      }
     }
     return [...groups.values()].sort((a,b)=>String(b.createdAt).localeCompare(String(a.createdAt)));
   },[stockReceipts]);
@@ -152,17 +163,18 @@ export default function StockScreen(){
         return api.put("/stock-receipts/"+encodeURIComponent(String(editingReceipt.id)),{
           categoryId:row.categoryId,category:row.category,size:row.size,
           quantity:Number(row.quantity)||0,minimumStock:Number(row.minimumStock)||0,
-          addedDate:stockDate,billImage:row.billImage||"",attachments:row.attachments||[],description:description.trim(),
+          addedDate:stockDate,billImage:row.billImage||"",description:description.trim(),
         });
       }
       return api.post("/inventory-bulk-add",{
         description:description.trim(),
+        attachments:receiptAttachments,
         items:stockRows.map(source=>{
           const row=normalizeRow(source);
           return {
             categoryId:row.categoryId,category:row.category,size:row.size,
             quantity:Number(row.quantity)||0,minimumStock:Number(row.minimumStock)||0,
-            addedDate:stockDate,billImage:row.billImage||"",attachments:row.attachments||[],
+            addedDate:stockDate,billImage:row.billImage||"",
           };
         })
       });
@@ -176,7 +188,7 @@ export default function StockScreen(){
       qc.invalidateQueries({queryKey:["inventory","stock-picker"]});
       qc.invalidateQueries({queryKey:["inventory-purchase-receipts"]});
       qc.invalidateQueries({queryKey:["inventory-categories"]});
-      setStockModal(false);setStockRows([]);setEditingReceipt(null);setDescription("");
+      setStockModal(false);setStockRows([]);setEditingReceipt(null);setDescription("");setReceiptAttachments([]);
       toast(editingReceipt?"Receiving entry updated.":"Stock received successfully.","success");
     },
     onError:(e:any)=>toast(e?.message||"Could not save receiving stock.","error")
@@ -185,7 +197,7 @@ export default function StockScreen(){
   const openStock=()=>{
     setEditingReceipt(null);setStockRows([newRow()]);
     setStockDate(new Date().toISOString().slice(0,10));
-    setDescription("");setStockModal(true);
+    setDescription("");setReceiptAttachments([]);setStockModal(true);
   };
 
   const editReceipt=(r:any)=>{
@@ -198,11 +210,33 @@ export default function StockScreen(){
       quantity:String(Number(r.quantity)||0),
       minimumStock:String(Number(r.minimum_stock??r.minimumStock)||0),
       billImage:String(r.bill_image||r.billImage||""),
-      attachments:Array.isArray(r.attachments)?r.attachments:[]
     }]);
     setStockDate(String(r.added_date||r.addedDate||new Date().toISOString().slice(0,10)));
     setDescription(String(r.description||""));
     setStockModal(true);
+  };
+
+  const editBatchMeta=(batch:any)=>{
+    setEditingBatchMeta(batch);
+    setStockDate(String(batch.addedDate||new Date().toISOString().slice(0,10)));
+    setDescription(String(batch.description||""));
+    setReceiptAttachments(Array.isArray(batch.attachments)?batch.attachments:[]);
+  };
+
+  const saveBatchMeta=async()=>{
+    if(!editingBatchMeta)return;
+    if(!/^\\d{4}-\\d{2}-\\d{2}$/.test(stockDate)){toast("Use YYYY-MM-DD for the date.","error");return;}
+    setSavingBatchMeta(true);
+    try{
+      await api.put("/stock-receipt-batches/"+encodeURIComponent(String(editingBatchMeta.batchId)),{
+        addedDate:stockDate,description:description.trim(),attachments:receiptAttachments,
+      });
+      await qc.invalidateQueries({queryKey:["inventory-purchase-receipts"]});
+      setEditingBatchMeta(null);
+      setReceiptAttachments([]);
+      toast("Receiving entry updated.","success");
+    }catch(error:any){toast(error?.message||"Could not update the receiving entry.","error");}
+    finally{setSavingBatchMeta(false);}
   };
 
   const deleteReceipt=(r:any)=>{
