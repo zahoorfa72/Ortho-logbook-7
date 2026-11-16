@@ -1201,8 +1201,8 @@ export const api = {
           const nextQty=Number(oldInventory.quantity||0)-oldQty+quantity;
           if(nextQty<0) throw new Error("This receipt cannot be edited because available stock is already lower than its original quantity.");
           db.runSync(
-            "UPDATE inventory SET quantity=?,minimum_stock=? WHERE id=?",
-            [nextQty,minimumStock,oldInventory.id],
+            "UPDATE inventory SET category_id=?,category=?,quantity=?,minimum_stock=? WHERE id=?",
+            [categoryId,categoryName,nextQty,minimumStock,oldInventory.id],
           );
           db.runSync(
             "UPDATE stock_receipts SET category_id=?,category=?,size=?,quantity=?,minimum_stock=?,added_date=?,bill_image=?,description=? WHERE id=?",
