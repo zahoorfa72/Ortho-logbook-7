@@ -1284,7 +1284,7 @@ syncLowStockState(targetId, quantity, minimumStock);
       if (!name) throw new Error("Category name is required.");
       const existing = db.getFirstSync<any>("SELECT id FROM inventory_categories WHERE LOWER(name)=LOWER(?) AND id<>? LIMIT 1",[name,cm[1]]);
       if (existing) throw new Error("This inventory category already exists.");
-      const cat = db.getFirstSync<any>("SELECT id FROM inventory_categories WHERE id=? LIMIT 1",[cm[1]]);
+      const cat = db.getFirstSync<any>("SELECT id,name FROM inventory_categories WHERE id=? LIMIT 1",[cm[1]]);
       if (!cat) throw new Error("Category not found.");
       db.runSync("UPDATE inventory_categories SET name=? WHERE id=?",[name,cm[1]]);
       // Rename the category label without replacing the actual inventory item names.
