@@ -2083,14 +2083,13 @@ async function backupToGoogleDriveUnlocked(
       try { await FileSystem.deleteAsync(stagedFileUri, { idempotent: true }); } catch {}
     }
   }
-  await markBackupTaken();
-  const completedAt = new Date().toISOString();
-  await storage.secureSet(LAST_DRIVE_BACKUP_KEY, completedAt);
-  await storage.setItem(LAST_DRIVE_CONTENT_HASH_KEY + ":" + fileName, contentHash);
+  if (!result?.id) {
+    throw new Error("Google Drive did not return a file ID. The backup is not marked successful; local records remain unchanged.");
+  }
   const cleanupFailures: string[] = [];
   const backupFolder = await getOrCreateBackupFolder();
-  if (result?.id) await ensureDriveFileInFolder(String(result.id), String(backupFolder.id));
-  if (isMasterBackup && result?.id) {
+  await ensureDriveFileInFolder(String(result.id), String(backupFolder.id));
+  if (isMasterBackup) {
     if (stagedFileUri) {
       await verifyStreamedDriveFile(String(result.id), fileName, stagedFileSize);
     } else {
@@ -2102,6 +2101,13 @@ async function backupToGoogleDriveUnlocked(
     await storage.secureSet(MASTER_MIGRATION_KEY, "1");
     await storage.secureSet(MASTER_LOCAL_SNAPSHOT_VERSION_KEY, "1");
   }
+  // Record success only after Drive has confirmed the uploaded file and, for a
+  // master backup, its required content/metadata. A failed verification must
+  // remain retryable and must never advance the last-successful timestamp/hash.
+  const completedAt = new Date().toISOString();
+  await markBackupTaken();
+  await storage.secureSet(LAST_DRIVE_BACKUP_KEY, completedAt);
+  await storage.setItem(LAST_DRIVE_CONTENT_HASH_KEY + ":" + fileName, contentHash);
   // Legacy backup files are retained as recovery copies; no history-wide cleanup.
   if (isMasterBackup && seededCacheForLocalSnapshot && result?.id) {
     await commitIncrementalSnapshotCache(String(result.id) + ":" + String(result.modifiedTime || ""));
