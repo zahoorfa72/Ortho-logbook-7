@@ -221,6 +221,9 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
   // Clean sidecar image rows only after their corresponding Trash entry expires.
   db.runSync("DELETE FROM deleted_patient_photos WHERE trash_id NOT IN (SELECT id FROM deleted_records)");
   if (!options?.skipInventoryReset) applyHoldInventoryResetOnce();
+  // Run after schema/category setup and any one-time seed handling so the same
+  // repair also covers newly restored inventory snapshots.
+  mergeDuplicateInventoryRowsOnce();
 }
 
 const INVENTORY_RESET_MARKER = "hold-inventory-reset-available-v5";
@@ -229,6 +232,7 @@ const IMPLANT_PORTAL_CLEANUP_MARKER = "implant-portal-cleanup-v4";
 const LEGACY_RECEIPT_CLEANUP_MARKER = "legacy-receipt-cleanup-v2";
 const RECEIVE_STOCK_FRESH_START_MARKER = "receive-stock-fresh-start-v1";
 const STOCK_PORTAL_FRESH_START_MARKER = "stock-portal-fresh-start-v1";
+const INVENTORY_DUPLICATE_MERGE_MARKER = "inventory-duplicate-variants-merged-v1";
 
 export function markInventoryResetDone() {
   db.runSync("INSERT OR REPLACE INTO app_meta (key,value) VALUES (?,?)", [INVENTORY_RESET_MARKER, "done"]);
@@ -327,4 +331,121 @@ function ensureInventoryCategoryLinks() {
       [categoryRow.id, categoryName],
     );
   }
+}
+
+/**
+ * Merge only exact inventory variants. The visible product name, category,
+ * size and unit must all match (ignoring case and repeated whitespace). This
+ * repair sums current stock, keeps the most conservative minimum-stock level,
+ * and rehomes receipt, movement and patient-implant references before deleting
+ * duplicate inventory rows. Receipt transactions themselves are never deleted.
+ */
+function mergeDuplicateInventoryRowsOnce() {
+  const completed = db.getFirstSync<any>(
+    "SELECT value FROM app_meta WHERE key=? LIMIT 1",
+    [INVENTORY_DUPLICATE_MERGE_MARKER],
+  );
+  if (completed?.value === "done") return;
+
+  db.withTransactionSync(() => {
+    const rows = db.getAllSync<any>(`
+      SELECT i.*, c.name AS linked_category_name
+      FROM inventory i
+      LEFT JOIN inventory_categories c ON c.id=i.category_id
+      ORDER BY COALESCE(NULLIF(TRIM(i.added_date),''),'9999-12-31'), i.id
+    `);
+    const normalize = (value: unknown) =>
+      String(value ?? "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+    const groups = new Map<string, any[]>();
+
+    for (const row of rows) {
+      const itemName = normalize(row.name);
+      const categoryName = normalize(row.category || row.linked_category_name);
+      const size = normalize(row.size);
+      const unit = normalize(row.unit || "pcs");
+      // Do not guess a product's category when both the text and category link
+      // are absent; those rows are left untouched for manual review.
+      if (!itemName || !categoryName) continue;
+      const key = JSON.stringify([itemName, categoryName, size, unit]);
+      const group = groups.get(key) || [];
+      group.push(row);
+      groups.set(key, group);
+    }
+
+    let mergedRows = 0;
+    for (const group of groups.values()) {
+      if (group.length < 2) continue;
+      const canonical = group[0];
+      const canonicalId = String(canonical.id);
+      const duplicateIds = group.slice(1).map((row) => String(row.id)).filter(Boolean);
+      const allIds = [canonicalId, ...duplicateIds];
+      const placeholders = allIds.map(() => "?").join(",");
+      const quantity = group.reduce((sum, row) => sum + (Number(row.quantity) || 0), 0);
+      const receiptMinimum = Number(db.getFirstSync<any>(
+        "SELECT COALESCE(MAX(minimum_stock),0) AS n FROM stock_receipts WHERE inventory_id IN (" + placeholders + ")",
+        allIds,
+      )?.n || 0);
+      const legacyReceiptMinimum = Number(db.getFirstSync<any>(
+        "SELECT COALESCE(MAX(minimum_stock),0) AS n FROM inventory_purchase_receipts WHERE inventory_id IN (" + placeholders + ")",
+        allIds,
+      )?.n || 0);
+      const minimumStock = Math.max(
+        receiptMinimum,
+        legacyReceiptMinimum,
+        ...group.map((row) => Number(row.minimum_stock) || 0),
+      );
+      const categoryName = String(canonical.category || canonical.linked_category_name || "").trim();
+      const category = db.getFirstSync<any>(
+        "SELECT id,name FROM inventory_categories WHERE LOWER(TRIM(name))=LOWER(TRIM(?)) LIMIT 1",
+        [categoryName],
+      );
+      const categoryId = String(category?.id || canonical.category_id || "");
+      const billImage = String(canonical.bill_image || group.find((row) => String(row.bill_image || "").trim())?.bill_image || "");
+      const addedDates = group.map((row) => String(row.added_date || "").trim()).filter(Boolean).sort();
+      const lowStockSince = quantity <= minimumStock
+        ? group.map((row) => String(row.low_stock_since || "").trim()).filter(Boolean).sort()[0] || new Date().toISOString()
+        : null;
+      const lowStockTriggeredAt = quantity <= minimumStock
+        ? group.map((row) => String(row.low_stock_triggered_at || "").trim()).filter(Boolean).sort()[0] || new Date().toISOString()
+        : null;
+
+      db.runSync(
+        "UPDATE inventory SET quantity=?,minimum_stock=?,category_id=?,category=?,added_date=?,bill_image=?,low_stock_since=?,low_stock_triggered_at=? WHERE id=?",
+        [quantity, minimumStock, categoryId || null, categoryName, canonical.added_date || addedDates[0] || null, billImage, lowStockSince, lowStockTriggeredAt, canonicalId],
+      );
+
+      // Keep each Receive Stock transaction and all its metadata; only redirect
+      // its inventory foreign key to the canonical product row.
+      for (const duplicateId of duplicateIds) {
+        db.runSync("UPDATE stock_receipts SET inventory_id=?,category_id=? WHERE inventory_id=?", [canonicalId, categoryId || null, duplicateId]);
+        db.runSync("UPDATE inventory_purchase_receipts SET inventory_id=?,category_id=? WHERE inventory_id=?", [canonicalId, categoryId || null, duplicateId]);
+        db.runSync("UPDATE inventory_movements SET inventory_id=? WHERE inventory_id=?", [canonicalId, duplicateId]);
+        db.runSync("UPDATE patient_implants SET inventory_id=? WHERE inventory_id=?", [canonicalId, duplicateId]);
+      }
+      db.runSync("DELETE FROM inventory WHERE id IN (" + duplicateIds.map(() => "?").join(",") + ")", duplicateIds);
+
+      // Movement amounts are signed changes. Recalculate their running balance
+      // from the consolidated final quantity so the history remains meaningful
+      // after the duplicate ledgers are combined.
+      const movements = db.getAllSync<any>(
+        "SELECT id,amount FROM inventory_movements WHERE inventory_id=? ORDER BY created_at ASC,id ASC",
+        [canonicalId],
+      );
+      const movementTotal = movements.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
+      let balance = quantity - movementTotal;
+      for (const movement of movements) {
+        balance += Number(movement.amount) || 0;
+        db.runSync("UPDATE inventory_movements SET quantity_after=? WHERE id=?", [balance, movement.id]);
+      }
+      mergedRows += duplicateIds.length;
+    }
+
+    db.runSync(
+      "INSERT OR REPLACE INTO app_meta (key,value) VALUES (?,?)",
+      [INVENTORY_DUPLICATE_MERGE_MARKER, "done"],
+    );
+    if (mergedRows > 0) {
+      console.info("[database] merged " + mergedRows + " duplicate inventory variant row(s); receipt and movement history preserved.");
+    }
+  });
 }

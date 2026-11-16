@@ -1,4 +1,6 @@
 import * as SQLite from "expo-sqlite";
+import * as BackgroundTask from "expo-background-task";
+import * as TaskManager from "expo-task-manager";
 import {
   backupIncrementalToGoogleDrive,
   getLastDriveBackupStatus,
@@ -28,6 +30,49 @@ let initialized = false;
 const pendingTables = new Set<string>();
 let pendingWriteQueue: Promise<void> = Promise.resolve();
 let retryAttempt = 0;
+// OS-managed periodic sync is a reconciliation safety net. A native foreground
+// service continues an already-started large Drive upload while the UI is closed.
+const BACKGROUND_SYNC_TASK = "ortho-logbook-drive-backup";
+const inFlightTables = new Set<string>();
+let backgroundTaskRegistered = false;
+
+TaskManager.defineTask(BACKGROUND_SYNC_TASK, async ({ error }) => {
+  if (error) {
+    console.warn("[drive-auto-backup] background task error:", error.message);
+    return BackgroundTask.BackgroundTaskResult.Failed;
+  }
+  try {
+    await loadPendingTables();
+    // Reconcile every local table against the last confirmed snapshot. Only
+    // actual differences are uploaded by the incremental exporter.
+    ALL_SYNC_TABLES.forEach((name) => pendingTables.add(name));
+    await persistPendingTables();
+    const completed = await runBackup({ verifyPatientPdfs: true });
+    return completed
+      ? BackgroundTask.BackgroundTaskResult.Success
+      : BackgroundTask.BackgroundTaskResult.Failed;
+  } catch (taskError) {
+    console.warn("[drive-auto-backup] scheduled background sync failed:", taskError);
+    return BackgroundTask.BackgroundTaskResult.Failed;
+  }
+});
+
+async function registerBackgroundSyncTask() {
+  if (backgroundTaskRegistered) return;
+  backgroundTaskRegistered = true;
+  try {
+    const status = await BackgroundTask.getStatusAsync();
+    if (status !== BackgroundTask.BackgroundTaskStatus.Available) return;
+    const registered = await TaskManager.isTaskRegisteredAsync(BACKGROUND_SYNC_TASK);
+    if (!registered) {
+      await BackgroundTask.registerTaskAsync(BACKGROUND_SYNC_TASK, { minimumInterval: 15 });
+    }
+  } catch (error) {
+    backgroundTaskRegistered = false;
+    console.warn("[drive-auto-backup] could not register scheduled background sync:", error);
+  }
+}
+
 const tableMap: Record<string, string> = {
   patients: "patients",
   procedures: "procedures",
@@ -46,9 +91,9 @@ const tableMap: Record<string, string> = {
 };
 
 function persistPendingTables(): Promise<void> {
-  // Serialize writes so a slower older AsyncStorage write cannot overwrite a
-  // newer pending-table snapshot and silently lose a queued table.
-  const snapshot = JSON.stringify(Array.from(pendingTables));
+  // Persist queued and in-flight work together. The upload is not acknowledged
+  // until the Drive master and the delta cache have both been confirmed.
+  const snapshot = JSON.stringify(Array.from(new Set([...pendingTables, ...inFlightTables])));
   pendingWriteQueue = pendingWriteQueue.then(async () => {
     try {
       await storage.setItem(DIRTY_TABLES_KEY, snapshot);
@@ -93,10 +138,10 @@ function scheduleBackup(tableName?: string) {
   }, DEBOUNCE_MS);
 }
 
-async function runBackup() {
-  if (disposed || uploading || backupPaused) return;
+async function runBackup(options: { verifyPatientPdfs?: boolean } = {}): Promise<boolean> {
+  if (disposed || uploading || backupPaused) return false;
   await loadPendingTables();
-  if (!pendingTables.size) return;
+  if (!pendingTables.size) return true;
   if (!getConnectedGoogleAccount()) await restoreGoogleAccountSilently();
   if (!getConnectedGoogleAccount()) {
     setDriveSyncState({
@@ -104,13 +149,17 @@ async function runBackup() {
       updates: pendingTables.size,
       message: "Backup pending: changes are safe on this phone · connect Google to upload",
     });
-    return;
+    return false;
   }
 
   uploading = true;
-  // Remove only this batch. Changes arriving during upload remain queued.
+  // Keep the batch persisted until Drive confirms the update. Writes arriving
+  // during the upload re-enter pendingTables and are sent in the next pass.
   const batch = Array.from(pendingTables);
-  batch.forEach((name) => pendingTables.delete(name));
+  batch.forEach((name) => {
+    pendingTables.delete(name);
+    inFlightTables.add(name);
+  });
   await persistPendingTables();
   setDriveSyncState({
     phase: "uploading",
@@ -128,7 +177,7 @@ async function runBackup() {
       try {
         return await backupIncrementalToGoogleDrive(tables, (message) => {
           setDriveSyncState({ phase: "uploading", updates: batch.length, message });
-        });
+        }, { verifyPatientPdfs: options.verifyPatientPdfs === true });
       } catch (error) {
         const details = error instanceof Error ? error.message : String(error || "");
         if (!/String length exceeds limit/i.test(details) || tables.length <= 1) {
@@ -156,6 +205,10 @@ async function runBackup() {
     };
     const result = await syncBatch(batch);
     retryAttempt = 0;
+    // Only acknowledge this batch after Drive and the comparison baseline are
+    // confirmed. Any newer edits remain queued separately.
+    batch.forEach((name) => inFlightTables.delete(name));
+    await persistPendingTables();
     const completedAt = result.completedAt
       ? new Date(result.completedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
       : "";
@@ -179,11 +232,16 @@ async function runBackup() {
       ? " · " + pendingTables.size + " newer change group(s) queued"
       : "";
     setDriveSyncState({ phase: "success", updates: 0, message: successMessage + queuedMessage });
+    return true;
   } catch (error) {
+    // Keep unconfirmed work queued for the next launch/background retry.
+    batch.forEach((name) => {
+      inFlightTables.delete(name);
+      pendingTables.add(name);
+    });
     // Retain failed table names. Use backoff rather than rebuilding a large
     // photo backup every seven seconds while the network is unavailable.
     retryAttempt = Math.min(retryAttempt + 1, 6);
-    batch.forEach((name) => pendingTables.add(name));
     await persistPendingTables();
     const details = error instanceof Error ? error.message : String(error || "Unknown error");
     console.warn("[drive-auto-backup] sync failed:", details);
@@ -192,6 +250,7 @@ async function runBackup() {
       updates: pendingTables.size,
       message: "Drive sync failed: " + details + " · local data remains on this phone",
     });
+    return false;
   } finally {
     uploading = false;
     if (pendingTables.size && !disposed && !backupPaused) {
@@ -261,6 +320,7 @@ export function startAutomaticDriveBackup() {
   disposed = false;
   setDriveSyncRefreshHandler(refreshAutomaticDriveBackup);
   const unregisterRefresh = () => setDriveSyncRefreshHandler(null);
+  void registerBackgroundSyncTask();
   void loadPendingTables().then(async () => {
     // Only do a complete initial scan if Drive has never confirmed a backup.
     // Re-queuing all tables at every app launch re-read all report/history images
@@ -295,11 +355,10 @@ export function startAutomaticDriveBackup() {
         scheduleBackup();
         return;
       }
-      if ((state === "background" || state === "inactive") && timer) {
-        // Keep pending edits queued for the next foreground session. Do not
-        // start a new Drive transfer as the app is leaving the foreground.
-        clearTimeout(timer);
-        timer = null;
+      if (state === "background" || state === "inactive") {
+        // Keep pending work durable when the JS runtime is suspended.
+        // A started Android transfer continues in its native foreground service.
+        void persistPendingTables();
       }
     });
   } catch {}

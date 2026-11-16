@@ -2,14 +2,20 @@
   "expo": {
     "name": "Ortho Logbook",
     "slug": "frontend",
-    "version": "1.0.8",
+    "version": "1.0.9",
     "orientation": "portrait",
     "icon": "./assets/images/ortho-logo-app.png",
     "scheme": "frontend",
     "userInterfaceStyle": "automatic",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.emergent.androidnobackend.vm3pwn"
+      "bundleIdentifier": "com.emergent.androidnobackend.vm3pwn",
+      "infoPlist": {
+        "UIBackgroundModes": ["fetch", "processing"],
+        "BGTaskSchedulerPermittedIdentifiers": [
+          "com.expo.modules.backgroundtask.processing"
+        ]
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -18,7 +24,7 @@
       },
       "package": "com.emergent.androidnobackend.vm3pwn",
       "softwareKeyboardLayoutMode": "resize",
-      "versionCode": 3
+      "versionCode": 4
     },
     "web": {
       "bundler": "metro",

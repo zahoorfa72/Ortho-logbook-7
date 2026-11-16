@@ -305,7 +305,20 @@ export async function archivePatientImagesForPatient(patientId: string, onProgre
   const stamp = await stampFor(id, name, mrNo, String(patient.created_at || patient.date || ""), sources);
   if (existing?.sourceStamp === stamp) {
     const info = await FileSystem.getInfoAsync(existing.localUri);
-    if (info.exists && Number(info.size || 0) > 8) return existing;
+    if (info.exists && Number(info.size || 0) > 8) {
+      const updated = {
+        ...existing,
+        patientName: name,
+        mrNo,
+        patientUpdatedAt: String(patient.updated_at || ""),
+      };
+      if (updated.patientUpdatedAt !== existing.patientUpdatedAt ||
+          updated.patientName !== existing.patientName || updated.mrNo !== existing.mrNo) {
+        all[id] = updated;
+        await writeArchives(all);
+      }
+      return updated;
+    }
   }
   onProgress?.("Creating this patient's image PDF…");
   await FileSystem.makeDirectoryAsync(ARCHIVE_DIR, { intermediates: true });
@@ -382,8 +395,16 @@ export async function buildAllPatientImageArchivesManually(
 
 export async function archiveEligiblePatientImages(onProgress?: (stage: string) => void, patientIds?: string[]): Promise<boolean> {
   initializeDatabase();
-  if (!FileSystem.documentDirectory) throw new Error("Private phone storage is unavailable for patient image archives.");
-  await FileSystem.makeDirectoryAsync(ARCHIVE_DIR, { intermediates: true });
+  if (!FileSystem.documentDirectory) {
+    onProgress?.("Patient PDF creation deferred: private phone storage is unavailable. Core patient and inventory data can still sync.");
+    return false;
+  }
+  try {
+    await FileSystem.makeDirectoryAsync(ARCHIVE_DIR, { intermediates: true });
+  } catch (error: any) {
+    onProgress?.("Patient PDF creation deferred: " + String(error?.message || error) + ". Core patient and inventory data can still sync.");
+    return false;
+  }
   const allPatients = db.getAllSync<any>("SELECT id,name,mr_no,date,created_at,updated_at FROM patients ORDER BY created_at ASC");
   const requestedIds = patientIds === undefined ? null : new Set(patientIds.map(String));
   const patients = requestedIds ? allPatients.filter((patient: any) => requestedIds.has(String(patient.id))) : allPatients;
@@ -396,70 +417,57 @@ export async function archiveEligiblePatientImages(onProgress?: (stage: string) 
     const name = String(patient.name || "Patient");
     const mrNo = String(patient.mr_no || "");
     const existing = archives[id];
-    // Never rewrite an already registered patient PDF automatically. A patient
-    // image can be removed/changed in the record, but the Drive PDF is changed
-    // only after an administrator explicitly approves it inside that patient.
-    // This also prevents unrelated patient edits from triggering PDF rebuilds.
-    if (existing) {
-      const cached = await FileSystem.getInfoAsync(existing.localUri);
-      if (cached.exists && Number(cached.size || 0) > 8) continue;
+    // The saved patient revision is a cheap change detector: every patient
+    // save increments updated_at. If the revision/name/MR are unchanged, the
+    // PDF's source stamp cannot have changed and its large photo row need not
+    // be read again during every background sync.
+    if (existing &&
+        String(existing.patientUpdatedAt || "") === String(patient.updated_at || "") &&
+        String(existing.patientName || "") === name &&
+        String(existing.mrNo || "") === mrNo) {
+      continue;
     }
-    // A single legacy patient can have a multi-megabyte base64 photo row.
-    // Android CursorWindow cannot always return that row to JavaScript. Never let
-    // this optional background PDF archive block the independent data backup.
+    // Re-read sources when this patient was edited. A changed photo set
+    // rebuilds the same patient PDF and preserves the existing Drive file ID.
     let row: any;
     try {
       row = readPatientPhotoRow(id);
     } catch (error: any) {
       const message = String(error?.message || error);
-      if (/CursorWindow|row too big|too big to fit/i.test(message)) {
-        onProgress?.("Patient image PDF deferred for " + name + " because its saved image row exceeds Android's database read limit. Other backup data can still sync.");
-        continue;
-      }
-      throw error;
-    }
-    const sources = await deduplicatePhotoSources(getPhotoSources(row));
-    // Data-only restores intentionally omit photos. An empty photo field is
-    // not an instruction to replace or delete the patient's existing PDF.
-    // Only an explicit admin delete action may remove the Drive archive.
-    if (!sources.length) {
-      onProgress?.("Skipped patient PDF for " + name + ": no local images are available; any existing Drive PDF was preserved.");
+      onProgress?.("Patient PDF check deferred for " + name + ": " + message + ". The main record backup can still continue.");
       continue;
     }
-    const stamp = await stampFor(id, name, mrNo, String(patient.created_at || patient.date || ""), sources);
-    if (existing?.sourceStamp === stamp) {
-      const info = await FileSystem.getInfoAsync(existing.localUri);
-      if (info.exists && Number(info.size || 0) > 8) {
-        if (existing.patientUpdatedAt !== String(patient.updated_at || "")) {
-          archives[id] = { ...existing, patientName: name, mrNo, patientUpdatedAt: String(patient.updated_at || "") };
-          await writeArchives(archives);
-        }
-        continue;
-      }
+    let sources: string[];
+    try {
+      sources = await deduplicatePhotoSources(getPhotoSources(row));
+    } catch (error: any) {
+      onProgress?.("Patient PDF check deferred for " + name + ": " + String(error?.message || error) + ". The main record backup can still continue.");
+      continue;
     }
-    onProgress?.("Preparing patient image PDF " + (i + 1) + "/" + patients.length + ": " + name);
-    const embedded: string[] = [];
-    for (const source of sources) embedded.push(await toEmbeddableImage(source));
-    const html = makeHtml(name, mrNo, embedded);
-    const generated = await Print.printToFileAsync({ html, base64: false });
-    const fileName = fileNameFor(name, mrNo, id);
-    const target = ARCHIVE_DIR + fileName;
-    const oldTarget = await FileSystem.getInfoAsync(target);
-    if (oldTarget.exists) await FileSystem.deleteAsync(target, { idempotent: true });
-    await FileSystem.copyAsync({ from: generated.uri, to: target });
-    const info = await FileSystem.getInfoAsync(target);
-    if (!info.exists || Number(info.size || 0) < 8) throw new Error("Could not verify patient image PDF for " + name + ". The master backup was not advanced.");
-    archives[id] = {
-      patientId: id, patientName: name, mrNo, fileName, localUri: target,
-      sourceStamp: stamp, archivedAt: new Date().toISOString(), imageCount: embedded.length,
-      patientUpdatedAt: String(patient.updated_at || ""),
-      // Preserve this patient's remote file ID so the uploader updates the same Drive file.
-      driveFileId: existing?.driveFileId,
-      driveSourceStamp: existing?.driveSourceStamp,
-    };
-    await writeArchives(archives);
-    changed = true;
-    try { await FileSystem.deleteAsync(generated.uri, { idempotent: true }); } catch {}
+    // Missing local images are not permission to replace an existing PDF with
+    // an empty one. The Drive uploader separately verifies the remote copy.
+    if (!sources.length) {
+      const localInfo = existing?.localUri ? await FileSystem.getInfoAsync(existing.localUri) : null;
+      const hasLocalPdf = !!localInfo?.exists && Number(localInfo?.size || 0) > 8;
+      const remoteWasConfirmed = !!existing?.driveFileId &&
+        String(existing.driveSourceStamp || "") === String(existing.sourceStamp || "");
+      onProgress?.(remoteWasConfirmed
+        ? "No local images to rebuild for " + name + "; the previously verified Google Drive PDF is preserved."
+        : hasLocalPdf
+          ? "No current local images to rebuild for " + name + "; the existing phone PDF was preserved for Drive verification."
+          : "Patient PDF pending for " + name + ": there are no local images available to create it; other patient data can still sync.");
+      continue;
+    }
+    const beforeStamp = String(existing?.sourceStamp || "");
+    try {
+      onProgress?.("Checking patient PDF " + (i + 1) + "/" + patients.length + ": " + name);
+      const saved = await archivePatientImagesForPatient(id, onProgress, false);
+      if (!existing || beforeStamp !== String(saved.sourceStamp || "")) changed = true;
+    } catch (error: any) {
+      // Keep PDF conversion isolated from core patient, inventory and settings
+      // backup. Unverified photos remain in the master JSON fallback.
+      onProgress?.("Patient PDF deferred for " + name + ": " + String(error?.message || error) + ". Patient data backup will continue.");
+    }
     await new Promise<void>(resolve => setTimeout(resolve, 0));
   }
   return changed;

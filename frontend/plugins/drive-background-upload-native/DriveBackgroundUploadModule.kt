@@ -85,19 +85,47 @@ class DriveBackgroundUploadModule(private val context: ReactApplicationContext) 
 
   @ReactMethod
   fun startUpload(url: String, token: String, fileUri: String, totalBytes: Double, promise: Promise) {
+    var taskId: String? = null
     try {
-      val taskId = java.util.UUID.randomUUID().toString()
+      val id = java.util.UUID.randomUUID().toString()
+      taskId = id
+      val prefs = context.getSharedPreferences(DriveBackgroundUploadService.PREFS, 0)
+      // Persist the upload session before starting the service. Android can
+      // recreate the foreground service with a null Intent after reclaiming
+      // the process, so the URL, token and exact staged file must be recoverable.
+      val saved = prefs.edit()
+        .putString("activeUploadTaskId", id)
+        // The service encrypts its resumable URL and OAuth token with Android
+        // Keystore as soon as it starts. Only a private cache-file path and size
+        // are stored here so a credential is never persisted as plaintext.
+        .putString("$id.fileUri", fileUri)
+        .putLong("$id.totalBytes", totalBytes.toLong())
+        .putString("$id.status", "queued")
+        .putInt("$id.progress", 0)
+        .commit()
+      if (!saved) throw IllegalStateException("Could not persist the Drive upload session.")
       val intent = Intent(context, DriveBackgroundUploadService::class.java).apply {
         action = DriveBackgroundUploadService.ACTION_START
-        putExtra(DriveBackgroundUploadService.EXTRA_TASK_ID, taskId)
+        putExtra(DriveBackgroundUploadService.EXTRA_TASK_ID, id)
         putExtra(DriveBackgroundUploadService.EXTRA_URL, url)
         putExtra(DriveBackgroundUploadService.EXTRA_TOKEN, token)
         putExtra(DriveBackgroundUploadService.EXTRA_FILE_URI, fileUri)
         putExtra(DriveBackgroundUploadService.EXTRA_TOTAL_BYTES, totalBytes.toLong())
       }
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent)
-      else context.startService(intent)
-      promise.resolve(taskId)
+      try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent)
+        else context.startService(intent)
+      } catch (error: Exception) {
+        prefs.edit()
+          .remove("activeUploadTaskId")
+          .remove("$id.url")
+          .remove("$id.token")
+          .remove("$id.fileUri")
+          .remove("$id.totalBytes")
+          .apply()
+        throw error
+      }
+      promise.resolve(id)
     } catch (error: Exception) {
       promise.reject("DRIVE_UPLOAD_START_FAILED", error.message, error)
     }

@@ -1235,65 +1235,83 @@ export async function deletePatientImagePdfFromDrive(patientId: string): Promise
   }
 }
 
-export async function uploadPatientImageArchivesToDrive(onProgress?: (stage: string) => void, patientIds?: string[]): Promise<void> {
-  await processPendingPatientPdfDeletes(onProgress);
-  const allArchives = await getLocalPatientImageArchives();
-  const requestedPatientIds = patientIds === undefined ? null : new Set(patientIds.map(String));
-  const selectedArchives = requestedPatientIds
-    ? allArchives.filter((archive) => requestedPatientIds.has(String(archive.patientId)))
-    : allArchives;
-  // Do not make a Drive request for every existing PDF on every sync. Archive
-  // metadata records the last verified uploaded source stamp; only new PDFs,
-  // legacy entries without a Drive ID and locally changed PDFs need remote work.
-  // Queued deletes were processed above independently of this upload filter.
-  const archives = selectedArchives.filter((archive) =>
-    // Never upload an image-less/legacy empty archive after restoring a
-    // data-only backup. PDF deletion is handled only by the explicit delete flow.
-    Number(archive.imageCount || 0) > 0 &&
-    (!archive.driveFileId || String(archive.driveSourceStamp || "") !== String(archive.sourceStamp || ""))
-  );
-  if (!archives.length) {
-    onProgress?.("Patient PDFs unchanged; skipped remote checks. Main backup can continue.");
-    return;
-  }
-  onProgress?.("Checking Drive for " + archives.length + " new or changed patient PDF(s)…");
-  const folder = await getOrCreatePatientImagePdfFolder();
-  const folderId = String(folder.id);
-  for (let i = 0; i < archives.length; i++) {
-    const archive = archives[i];
-    onProgress?.("Checking patient image PDF " + (i + 1) + "/" + archives.length + ": " + archive.patientName);
-    // Check Drive first: a previously uploaded, verified PDF remains usable even
-    // if Android has since removed its local cache file.
-    let remote: any = null;
-    if (archive.driveFileId) {
+export async function uploadPatientImageArchivesToDrive(
+  onProgress?: (stage: string) => void,
+  patientIds?: string[],
+  verifyExisting = false,
+): Promise<void> {
+  try {
+    await processPendingPatientPdfDeletes(onProgress);
+    const allArchives = await getLocalPatientImageArchives();
+    const requestedPatientIds = patientIds === undefined ? null : new Set(patientIds.map(String));
+    const selectedArchives = requestedPatientIds
+      ? allArchives.filter((archive) => requestedPatientIds.has(String(archive.patientId)))
+      : allArchives;
+    const archives = selectedArchives.filter((archive) =>
+      Number(archive.imageCount || 0) > 0 &&
+      (verifyExisting || !archive.driveFileId ||
+        String(archive.driveSourceStamp || "") !== String(archive.sourceStamp || ""))
+    );
+    if (!archives.length) {
+      onProgress?.("Patient PDFs unchanged; the main backup can continue.");
+      return;
+    }
+    let folderId = "";
+    try {
+      const folder = await getOrCreatePatientImagePdfFolder();
+      folderId = String(folder.id);
+    } catch (error: any) {
+      // A network/auth failure is not proof that the remote file was deleted.
+      // Preserve last-known-good metadata; changed source stamps are already
+      // excluded from the master PDF manifest until a matching upload confirms.
+      onProgress?.("Patient PDF verification deferred: " + String(error?.message || error) + ". Previous Drive copies were left untouched; the main data backup can continue.");
+      return;
+    }
+    onProgress?.("Verifying " + archives.length + " patient PDF(s) in Google Drive…");
+    for (let i = 0; i < archives.length; i++) {
+      const archive = archives[i];
       try {
-        const verified = await verifyPatientPdf(archive.driveFileId);
-        if (String(verified.appProperties?.orthoPatientId || "") === archive.patientId &&
-            (Array.isArray(verified.parents) ? verified.parents : []).includes(folderId)) remote = verified;
-      } catch { remote = null; }
+        onProgress?.("Checking patient image PDF " + (i + 1) + "/" + archives.length + ": " + archive.patientName);
+        let remote: any = null;
+        if (archive.driveFileId) {
+          try {
+            const verified = await verifyPatientPdf(archive.driveFileId);
+            if (String(verified.appProperties?.orthoPatientId || "") === archive.patientId &&
+                (Array.isArray(verified.parents) ? verified.parents : []).includes(folderId)) remote = verified;
+          } catch { remote = null; }
+        }
+        if (!remote) remote = await findPatientPdfInFolder(archive.fileName, folderId);
+        const local = archive.localUri ? await FileSystem.getInfoAsync(archive.localUri) : null;
+        const localExists = !!local?.exists && Number(local?.size || 0) >= 8;
+        const remoteMatchesArchive = !!remote &&
+          remote.mimeType === "application/pdf" &&
+          String(remote.appProperties?.orthoSourceStamp || "") === archive.sourceStamp &&
+          String(remote.appProperties?.orthoPatientId || "") === archive.patientId &&
+          (Array.isArray(remote.parents) ? remote.parents : []).includes(folderId);
+        if (remoteMatchesArchive && (!localExists || Number(remote.size || 0) === Number(local?.size || 0))) {
+          await setPatientImageArchiveDriveState(archive.fileName, archive.sourceStamp, String(remote.id));
+          continue;
+        }
+        if (!localExists) {
+          // Clear the cached remote-confirmation flag. The following master
+          // export will then embed available local patient photos instead of
+          // writing a manifest reference to a Drive file that was not verified.
+          await setPatientImageArchiveDriveState(archive.fileName, archive.sourceStamp, "");
+          onProgress?.("Patient PDF not verified on Drive and no local PDF is available to upload: " + archive.fileName + ". The main patient data backup will continue.");
+          continue;
+        }
+        onProgress?.("Uploading patient PDF " + (i + 1) + "/" + archives.length + ": " + archive.fileName);
+        const verified = await uploadPatientPdf(archive, folderId, remote);
+        await setPatientImageArchiveDriveState(archive.fileName, archive.sourceStamp, String(verified.id));
+      } catch (error: any) {
+        // A failed request may be temporary; do not treat it as proof the old
+        // remote file disappeared. New photo stamps still cannot enter the
+        // master manifest until their upload has been confirmed.
+        onProgress?.("Patient PDF sync deferred for " + archive.patientName + ": " + String(error?.message || error) + ". The main data backup will continue.");
+      }
     }
-    if (!remote) remote = await findPatientPdfInFolder(archive.fileName, folderId);
-    const local = await FileSystem.getInfoAsync(archive.localUri);
-    const localExists = local.exists && Number(local.size || 0) >= 8;
-    const remoteMatchesArchive = !!remote &&
-      remote.mimeType === "application/pdf" &&
-      String(remote.appProperties?.orthoSourceStamp || "") === archive.sourceStamp &&
-      String(remote.appProperties?.orthoPatientId || "") === archive.patientId &&
-      (Array.isArray(remote.parents) ? remote.parents : []).includes(folderId);
-    if (remoteMatchesArchive && (!localExists || Number(remote.size || 0) === Number(local.size || 0))) {
-      await setPatientImageArchiveDriveState(archive.fileName, archive.sourceStamp, String(remote.id));
-      continue;
-    }
-    if (!localExists) {
-      // A missing local PDF must never abort the main patient/settings/inventory
-      // backup. Keep any existing Drive copy untouched and report the skipped
-      // media asset so it can be recovered separately.
-      onProgress?.("Skipped missing local patient PDF (main backup will continue): " + archive.fileName);
-      continue;
-    }
-    onProgress?.("Uploading patient PDF " + (i + 1) + "/" + archives.length + ": " + archive.fileName);
-    const verified = await uploadPatientPdf(archive, folderId, remote);
-    await setPatientImageArchiveDriveState(archive.fileName, archive.sourceStamp, String(verified.id));
+  } catch (error: any) {
+    onProgress?.("Patient PDF sync deferred: " + String(error?.message || error) + ". The main data backup will continue.");
   }
 }
 async function downloadPatientImageArchivesFromDrive(backup: any, onProgress?: (stage: string) => void): Promise<void> {
@@ -1892,6 +1910,22 @@ async function cleanupLegacyNonMonthlyBackups(_keepFileId: string): Promise<stri
 }
 type DriveBackupOptions = { skipIfUnchanged?: boolean; onProgress?: (stage: string) => void; preferDriveOnMigration?: boolean; backupTextOverride?: string; backupDataOverride?: any; localChanges?: any };
 
+const REQUIRED_MASTER_TABLES = [
+  "patients", "procedures", "inventoryCategories", "inventory", "patientImplants",
+  "patientCustomFields", "implantRecords", "expenses", "users", "patientHistory",
+  "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts", "trash",
+] as const;
+
+function hasCompleteMasterSnapshot(value: any): boolean {
+  return !!value &&
+    value.app === "Ortho Logbook" &&
+    REQUIRED_MASTER_TABLES.every((table) => Array.isArray(value[table])) &&
+    Array.isArray(value.patientImageArchives) &&
+    !!value.photoAssets && typeof value.photoAssets === "object" &&
+    !!value.appSettings && typeof value.appSettings === "object" &&
+    Object.prototype.hasOwnProperty.call(value, "branding");
+}
+
 async function mergeLegacyIntoFirstMaster(localSnapshot: any, onProgress?: (stage: string) => void): Promise<any> {
   const targetName = driveBackupName({ type: "all" });
   let legacyFile = await findBackupByName("Ortho Logbook Backup - All Time.orbackup");
@@ -1932,7 +1966,7 @@ async function backupToGoogleDriveUnlocked(
   const isMasterBackup = filter.type === "all";
   if (isMasterBackup) {
     await archiveEligiblePatientImages(options.onProgress);
-    await uploadPatientImageArchivesToDrive(options.onProgress);
+    await uploadPatientImageArchivesToDrive(options.onProgress, undefined, true);
   }
   const migrationMarker = String((await storage.secureGet(MASTER_MIGRATION_KEY, "")) || "");
   const canStream = isMasterBackup && Platform.OS === "android" &&
@@ -1962,8 +1996,8 @@ async function backupToGoogleDriveUnlocked(
       migrationAttempted = true;
       migrationComplete = true;
       cleanupSafe = true;
-      if (!Array.isArray(backupData.users)) {
-        throw new Error("The first full backup is missing user credentials; no Drive master was changed.");
+      if (!hasCompleteMasterSnapshot(backupData)) {
+        throw new Error("The first full backup is missing one or more required tables, settings, or patient PDF references; no Drive master was changed.");
       }
       backupData = await mergeLegacyIntoFirstMaster(backupData, options.onProgress);
       backupData.version = Math.max(Number(backupData.version || 0), 8);
@@ -2002,10 +2036,8 @@ async function backupToGoogleDriveUnlocked(
       migrationComplete = true;
       cleanupSafe = true;
       let initialMaster = parseDownloadedBackup(backupText);
-      if (!initialMaster || initialMaster.app !== "Ortho Logbook" ||
-          !Array.isArray(initialMaster.patients) || !Array.isArray(initialMaster.inventory) ||
-          !Array.isArray(initialMaster.users)) {
-        throw new Error("The first full local backup is incomplete (patients, inventory, or user credentials are missing); existing Drive files were not changed.");
+      if (!hasCompleteMasterSnapshot(initialMaster)) {
+        throw new Error("The first full local backup is incomplete (one or more required tables, settings, or patient PDF references are missing); existing Drive files were not changed.");
       }
       initialMaster = await mergeLegacyIntoFirstMaster(initialMaster, options.onProgress);
       initialMaster.version = Math.max(Number(initialMaster.version || 0), 8);
@@ -2051,26 +2083,31 @@ async function backupToGoogleDriveUnlocked(
       try { await FileSystem.deleteAsync(stagedFileUri, { idempotent: true }); } catch {}
     }
   }
-  await markBackupTaken();
-  const completedAt = new Date().toISOString();
-  await storage.secureSet(LAST_DRIVE_BACKUP_KEY, completedAt);
-  await storage.setItem(LAST_DRIVE_CONTENT_HASH_KEY + ":" + fileName, contentHash);
+  if (!result?.id) {
+    throw new Error("Google Drive did not return a file ID. The backup is not marked successful; local records remain unchanged.");
+  }
   const cleanupFailures: string[] = [];
   const backupFolder = await getOrCreateBackupFolder();
-  if (result?.id) await ensureDriveFileInFolder(String(result.id), String(backupFolder.id));
-  if (isMasterBackup && result?.id) {
+  await ensureDriveFileInFolder(String(result.id), String(backupFolder.id));
+  if (isMasterBackup) {
     if (stagedFileUri) {
       await verifyStreamedDriveFile(String(result.id), fileName, stagedFileSize);
     } else {
       const verifiedMaster = await downloadDriveJsonValidated(String(result.id));
-      if (!verifiedMaster || verifiedMaster.app !== "Ortho Logbook" ||
-          !Array.isArray(verifiedMaster.patients) || !Array.isArray(verifiedMaster.inventory)) {
-        throw new Error("The all-time backup could not be verified. Older Drive backups were kept; retry backup after checking the connection.");
+      if (!hasCompleteMasterSnapshot(verifiedMaster)) {
+        throw new Error("The master backup did not contain all required tables and settings after upload. Older Drive backups were kept; retry backup.");
       }
     }
     await storage.secureSet(MASTER_MIGRATION_KEY, "1");
     await storage.secureSet(MASTER_LOCAL_SNAPSHOT_VERSION_KEY, "1");
   }
+  // Record success only after Drive has confirmed the uploaded file and, for a
+  // master backup, its required content/metadata. A failed verification must
+  // remain retryable and must never advance the last-successful timestamp/hash.
+  const completedAt = new Date().toISOString();
+  await markBackupTaken();
+  await storage.secureSet(LAST_DRIVE_BACKUP_KEY, completedAt);
+  await storage.setItem(LAST_DRIVE_CONTENT_HASH_KEY + ":" + fileName, contentHash);
   // Legacy backup files are retained as recovery copies; no history-wide cleanup.
   if (isMasterBackup && seededCacheForLocalSnapshot && result?.id) {
     await commitIncrementalSnapshotCache(String(result.id) + ":" + String(result.modifiedTime || ""));
@@ -2667,7 +2704,7 @@ async function archiveCompletedMonths(onProgress?: (stage: string) => void) {
   }
 }
 
-async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], onProgress?: (stage: string) => void) {
+async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], onProgress?: (stage: string) => void, verifyPatientPdfs = false) {
   onProgress?.("Checking whether saved records changed…");
   // Export the row-level delta first. This identifies the exact patient IDs
   // changed since the last confirmed snapshot, so routine edits do not scan
@@ -2707,9 +2744,9 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
       ? delta.deletedIds.patients.map((id: any) => String(id)).filter((id: string) => Boolean(id))
       : [];
     for (const deletedId of deletedPatientIds) await queuePatientPdfDeletion(deletedId);
-    if (fullPatientTable || delta._rowDelta !== true) {
+    if (fullPatientTable || delta._rowDelta !== true || verifyPatientPdfs) {
       await archiveEligiblePatientImages(onProgress);
-      await uploadPatientImageArchivesToDrive(onProgress);
+      await uploadPatientImageArchivesToDrive(onProgress, undefined, verifyPatientPdfs);
     } else {
       if (changedPatientIds.length) {
         await archiveEligiblePatientImages(onProgress, changedPatientIds);
@@ -2718,6 +2755,20 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
       // Process queued deletes even when other patients changed in the same
       // transaction; previously this path could leave deleted PDFs in Drive.
       if (deletedPatientIds.length) await processPendingPatientPdfDeletes(onProgress);
+    }
+  }
+
+  // Patient PDFs are archived/uploaded after the first delta was inspected
+  // for changed patient IDs. Re-export this table now so its manifest reflects
+  // the confirmed upload result, or embeds local photo bytes when the PDF is
+  // still unverified. The local baseline has not been committed yet.
+  if (patientTableChanged) {
+    onProgress?.("Refreshing patient backup data after PDF verification…");
+    if (canStreamIncremental) {
+      delta = await exportIncrementalBackupData(effectiveChangedTables, onProgress, baselineKey);
+    } else {
+      const refreshedText = await exportIncrementalBackup(effectiveChangedTables, onProgress, baselineKey);
+      delta = JSON.parse(refreshedText);
     }
   }
 
@@ -2770,9 +2821,8 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
   // earlier app version is merged once and removed only after verification.
   onProgress?.("Updating the existing six-month master with changed records…");
   const master = await downloadDriveJsonValidated(String(base.id), onProgress);
-  if (!master || master.app !== "Ortho Logbook" || !Array.isArray(master.patients) ||
-      !Array.isArray(master.inventory) || !Array.isArray(master.users)) {
-    throw new Error("The current six-month master is incomplete or unreadable. No change was marked as backed up.");
+  if (!master || master.app !== "Ortho Logbook") {
+    throw new Error("The current six-month master is unreadable. No change was marked as backed up.");
   }
 
   // Compare settings semantically with sorted object keys. Settings are stored
@@ -2811,7 +2861,10 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
     ["inventoryPurchaseReceipts", "inventory_purchase_receipts"], ["stockReceipts", "stock_receipts"],
     ["trash", "deleted_records"],
   ];
-  const missingLocalRows: string[] = [];
+  const missingLocalRows: string[] = REQUIRED_MASTER_TABLES.filter((table) => !Array.isArray(master[table]));
+  if (!Array.isArray(master.patientImageArchives) || !master.photoAssets || typeof master.photoAssets !== "object") {
+    missingLocalRows.push("patientImageArchives/photoAssets");
+  }
   for (const [backupTable, sqlTable] of localTableNames) {
     const localIds = db.getAllSync<any>("SELECT id FROM " + sqlTable).map((row: any) => String(row.id ?? "")).filter(Boolean);
     const masterIds = new Set<string>((Array.isArray(master[backupTable]) ? master[backupTable] : [])
@@ -2823,11 +2876,13 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
   if (missingLocalRows.length || missingSettings) {
     onProgress?.("Repairing incomplete master: checking all local records, accounts, inventory and settings…");
     const completeLocal = await exportUnencryptedBackupData({ type: "all" }, onProgress);
-    if (!Array.isArray(completeLocal.patients) || !Array.isArray(completeLocal.inventory) ||
-        !Array.isArray(completeLocal.users) || !completeLocal.appSettings) {
-      throw new Error("The full local backup failed its completeness check. The existing Drive master was not changed.");
+    if (!hasCompleteMasterSnapshot(completeLocal)) {
+      throw new Error("The full local backup failed its all-table completeness check. The existing Drive master was not changed.");
     }
     const repairedMaster = mergeFullBackupSnapshots(master, completeLocal);
+    if (!hasCompleteMasterSnapshot(repairedMaster)) {
+      throw new Error("The repaired master still lacks required tables or settings. The existing Drive backup was not changed.");
+    }
     repairedMaster.version = Math.max(Number(repairedMaster.version || 0), 11);
     repairedMaster.createdAt = new Date().toISOString();
     repairedMaster.filter = { type: "all" };
@@ -2867,6 +2922,9 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
   }
   const allChanges = legacyJournal ? mergeIncrementalPayloads(legacyJournal, delta) : delta;
   applyIncrementalToMaster(master, allChanges, allChanges._rowDelta !== true);
+  if (!hasCompleteMasterSnapshot(master)) {
+    throw new Error("The incremental update did not produce a complete master backup. The previous Drive master was not overwritten.");
+  }
   pruneBackupPhotoAssets(master);
   master.version = Math.max(Number(master.version || 0), 8);
   master.app = "Ortho Logbook";
@@ -2892,10 +2950,8 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
       const masterText = JSON.stringify(master);
       masterResult = await uploadContent(masterText, String(base.id), onProgress, String(base.name || currentMonthName));
       const verified = await downloadDriveJsonValidated(String(base.id), onProgress);
-      if (!verified || verified.app !== "Ortho Logbook" ||
-          !Array.isArray(verified.patients) || !Array.isArray(verified.inventory) ||
-          !Array.isArray(verified.users)) {
-        throw new Error("The updated six-month master could not be verified.");
+      if (!hasCompleteMasterSnapshot(verified)) {
+        throw new Error("The updated six-month master is missing one or more required tables or settings.");
       }
     }
   } finally {
@@ -2923,9 +2979,13 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
   };
 }
 
-export function backupIncrementalToGoogleDrive(changedTables: string[], onProgress?: (stage: string) => void): Promise<any> {
+export function backupIncrementalToGoogleDrive(
+  changedTables: string[],
+  onProgress?: (stage: string) => void,
+  options: { verifyPatientPdfs?: boolean } = {},
+): Promise<any> {
   return queueDriveOperation(async () => {
-    const result = await backupIncrementalToGoogleDriveUnlocked(changedTables, onProgress);
+    const result = await backupIncrementalToGoogleDriveUnlocked(changedTables, onProgress, options.verifyPatientPdfs === true);
     // Keep the complete rolling master for compatibility. When a half-year closes,
     // create its independent scoped archive after successful sync.
     const archive = await ensurePreviousHalfYearArchive(onProgress);
