@@ -116,7 +116,13 @@ class DriveBackgroundUploadModule(private val context: ReactApplicationContext) 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent)
         else context.startService(intent)
       } catch (error: Exception) {
-        prefs.edit().remove("activeUploadTaskId").remove("$id.token").apply()
+        prefs.edit()
+          .remove("activeUploadTaskId")
+          .remove("$id.url")
+          .remove("$id.token")
+          .remove("$id.fileUri")
+          .remove("$id.totalBytes")
+          .apply()
         throw error
       }
       promise.resolve(id)

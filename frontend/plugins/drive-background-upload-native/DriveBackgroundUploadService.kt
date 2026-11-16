@@ -144,13 +144,18 @@ class DriveBackgroundUploadService : Service() {
     val uri = Uri.parse(command.getStringExtra(EXTRA_FILE_URI) ?: "")
     file = File(uri.path ?: "")
     total = command.getLongExtra(EXTRA_TOTAL_BYTES, 0L)
-    saveEncryptedSession("$taskId.url", uploadUrl)
-    saveEncryptedSession("$taskId.token", token)
-    saveEncryptedSession("$taskId.fileUri", uri.toString())
-    prefs.edit()
-      .putString("activeUploadTaskId", taskId)
-      .putLong("$taskId.totalBytes", total)
-      .commit()
+    try {
+      saveEncryptedSession("$taskId.url", uploadUrl)
+      saveEncryptedSession("$taskId.token", token)
+      saveEncryptedSession("$taskId.fileUri", uri.toString())
+      if (!prefs.edit().putString("activeUploadTaskId", taskId).putLong("$taskId.totalBytes", total).commit()) {
+        throw IllegalStateException("Could not save the active Drive upload task.")
+      }
+    } catch (error: Exception) {
+      fail("Could not securely save the Drive upload session: " + (error.message ?: "unknown error"))
+      stopSelf(startId)
+      return START_NOT_STICKY
+    }
     if (!file.isFile || total <= 0L || file.length() != total) {
       fail("Backup file is missing or its size changed before upload.")
       stopSelf(startId)
@@ -188,20 +193,25 @@ class DriveBackgroundUploadService : Service() {
 
 
   private fun startBackgroundDownload(intent: Intent, startId: Int) {
-    uploadUrl = intent.getStringExtra(EXTRA_URL) ?: run { fail("Missing Google Drive download URL"); stopSelf(startId); return }
-    token = intent.getStringExtra(EXTRA_TOKEN) ?: run { fail("Missing Google access token"); stopSelf(startId); return }
+    uploadUrl = intent.getStringExtra(EXTRA_URL)?.takeIf { it.isNotBlank() } ?: run { fail("Missing or unreadable Google Drive download URL. Reconnect Google Drive and retry."); stopSelf(startId); return }
+    token = intent.getStringExtra(EXTRA_TOKEN)?.takeIf { it.isNotBlank() } ?: run { fail("Missing or unreadable Google access token. Reconnect Google Drive and retry."); stopSelf(startId); return }
     val uri = Uri.parse(intent.getStringExtra(EXTRA_FILE_URI) ?: "")
     file = File(uri.path ?: "")
     file.parentFile?.mkdirs()
     // Persist enough private task state for Android to restart this foreground
     // service if the app process is reclaimed during a long restore.
-    saveEncryptedSession("$taskId.url", uploadUrl)
-    saveEncryptedSession("$taskId.token", token)
-    saveEncryptedSession("$taskId.fileUri", uri.toString())
-    prefs.edit()
-      .putString("activeDownloadTaskId", taskId)
-      .putString("$taskId.status", "running")
-      .commit()
+    try {
+      saveEncryptedSession("$taskId.url", uploadUrl)
+      saveEncryptedSession("$taskId.token", token)
+      saveEncryptedSession("$taskId.fileUri", uri.toString())
+      if (!prefs.edit().putString("activeDownloadTaskId", taskId).putString("$taskId.status", "running").commit()) {
+        throw IllegalStateException("Could not save the active Drive download task.")
+      }
+    } catch (error: Exception) {
+      fail("Could not securely save the Drive download session: " + (error.message ?: "unknown error"))
+      stopSelf(startId)
+      return
+    }
     ensureChannel()
     val notification = notification(0, "Downloading Ortho Logbook backup…")
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
