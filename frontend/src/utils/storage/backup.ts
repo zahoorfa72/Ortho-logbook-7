@@ -827,7 +827,15 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
   patientHistory:embeddedHistory,
   inventoryMovements:include("inventoryMovements") ? (()=>{if(filter.type==="all") return db.getAllSync<any>("SELECT * FROM inventory_movements ORDER BY created_at ASC"); const f=filter.type==="date" ? {sql:" WHERE date(created_at)=?",args:[filter.value||""]} : filter.type==="month" ? {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]} : filter.type==="halfyear" ? (()=>{const bounds=halfYearMonthBounds(filter.value);return {sql:" WHERE substr(created_at,1,7) BETWEEN ? AND ?",args:[bounds.start,bounds.end]};})() : {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]}; return db.getAllSync<any>(`SELECT * FROM inventory_movements${f.sql} ORDER BY created_at ASC`,f.args);})() : [],
   inventoryPurchaseReceipts:include("inventoryPurchaseReceipts") ? await (async()=>{const f=whereForFilter(filter,"created_at");const rows=db.getAllSync<any>(`SELECT id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,description,created_at,created_by FROM inventory_purchase_receipts${f.sql} ORDER BY created_at ASC`,f.args);return await mapWithConcurrency(rows, 2, async (row:any)=>{const billRow=db.getFirstSync<any>("SELECT bill_image FROM inventory_purchase_receipts WHERE id=?",[row.id]);const source=billRow?.bill_image;const billImage=!includeAttachedImages ? "" : typeof source==="string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(source) ? await embedOptionalPhoto(source,compressedPhotoCache) : source; if(billRow)billRow.bill_image=""; return {...row,bill_image:billImage};});})() : [],
-  stockReceipts:include("stockReceipts") ? await (async()=>{const f=whereForFilter(filter,"created_at");const rows=db.getAllSync<any>(`SELECT id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,description,created_at,created_by FROM stock_receipts${f.sql} ORDER BY created_at ASC`,f.args);return await mapWithConcurrency(rows, 2, async (row:any)=>{const billRow=db.getFirstSync<any>("SELECT bill_image FROM stock_receipts WHERE id=?",[row.id]);const source=billRow?.bill_image;const billImage=!includeAttachedImages ? "" : typeof source==="string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(source) ? await embedOptionalPhoto(source,compressedPhotoCache) : source; if(billRow)billRow.bill_image=""; return {...row,bill_image:billImage};});})() : [],
+  stockReceipts:include("stockReceipts") ? await (async()=>{
+    const f=whereForFilter(filter,"created_at");
+    const rows=db.getAllSync<any>(`SELECT id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,attachments_json,description,created_at,created_by FROM stock_receipts${f.sql} ORDER BY created_at ASC`,f.args);
+    return await mapWithConcurrency(rows, 2, async (row:any)=>{
+      const source=row.bill_image;
+      const billImage=!includeAttachedImages ? "" : typeof source==="string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(source) ? await embedOptionalPhoto(source,compressedPhotoCache) : source;
+      return {...row,bill_image:billImage,attachments_json:includeAttachedImages ? String(row.attachments_json||"[]") : "[]"};
+    });
+  })() : [],
   trash:trashRows,
   branding,
   appSettings,
@@ -991,7 +999,7 @@ function stripPatientPhotosDeep(value: any, key = ""): any {
  return output;
 }
 
-const BACKUP_IMAGE_KEYS = new Set(["photo_uri", "photouri", "photos_json", "photos", "bill_image", "bill_files_json"]);
+const BACKUP_IMAGE_KEYS = new Set(["photo_uri", "photouri", "photos_json", "photos", "bill_image", "bill_files_json", "attachments_json"]);
 const BACKUP_NESTED_JSON_KEYS = new Set(["snapshot_json", "payload_json"]);
 const IMAGE_SIGNATURE_TABLES = new Set(["inventory", "inventoryPurchaseReceipts", "stockReceipts", "implantRecords", "patientHistory", "trash"]);
 
@@ -1579,7 +1587,7 @@ export async function restoreBackup(backup:BackupData){
   for(const r of stockReceipts){
     const inventoryId=inventoryIdMap.get(String(r.inventory_id||""));
     if(!inventoryId) continue;
-    db.runSync("INSERT INTO stock_receipts (id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,description,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",[
+    db.runSync("INSERT INTO stock_receipts (id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,attachments_json,description,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",[
       restoreRowId(r.id,"stock-receipt",usedStockReceiptIds),
       inventoryId,
       restoreText(r.batch_id)||null,
@@ -1591,6 +1599,7 @@ export async function restoreBackup(backup:BackupData){
       restoreReal(r.minimum_stock,0,0),
       restoreText(r.added_date)||null,
       restoreText(r.bill_image)||null,
+      restoreText(r.attachments_json,"[]"),
       restoreText(r.description)||null,
       restoreText(r.created_at,new Date().toISOString()),
       restoreText(r.created_by)||null
@@ -1789,10 +1798,10 @@ export async function mergeBackup(backup: BackupData) {
   }
   for (const r of backup.stockReceipts || []) {
    if (has("stock_receipts", r.id)) continue;
-   db.runSync("INSERT INTO stock_receipts (id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,description,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
+   db.runSync("INSERT INTO stock_receipts (id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,attachments_json,description,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
      r.id,r.inventory_id,r.batch_id||null,r.category_id||null,r.category||"",r.size||"",
      Number(r.quantity||0),r.unit||"pcs",Number(r.minimum_stock||0),r.added_date||null,
-     r.bill_image||null,r.description||null,r.created_at||new Date().toISOString(),r.created_by||null
+     r.bill_image||null,r.attachments_json||"[]",r.description||null,r.created_at||new Date().toISOString(),r.created_by||null
    ]);
    stats.stockReceipts++;
   }

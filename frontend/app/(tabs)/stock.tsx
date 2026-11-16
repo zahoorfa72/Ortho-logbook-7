@@ -4,6 +4,8 @@ import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
+import * as Print from "expo-print";
+import * as Sharing from "expo-sharing";
 import { recognizeText } from "expo-ocr-kit";
 import { convertPage, getPdfInfo } from "@uzimandias/react-native-pdf-to-image";
 import Ionicons from "@react-native-vector-icons/ionicons";
@@ -18,14 +20,22 @@ import { useToast } from "@/src/components/toast";
 import { storage } from "@/src/utils/storage";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 
+type StockAttachment = {
+  id: string;
+  name: string;
+  mimeType: string;
+  dataUri: string;
+  size: number;
+};
+
 type StockRow = {
   id:string; categoryId:string; category:string; size:string; quantity:string;
-  minimumStock:string; billImage:string;
+  minimumStock:string; billImage:string; attachments:StockAttachment[];
 };
 
 const newRow=():StockRow=>({
   id:Math.random().toString(36).slice(2),
-  categoryId:"",category:"",size:"",quantity:"",minimumStock:"1",billImage:""
+  categoryId:"",category:"",size:"",quantity:"",minimumStock:"1",billImage:"",attachments:[]
 });
 
 
@@ -91,6 +101,9 @@ export default function StockScreen(){
   const [stockPickerRow,setStockPickerRow]=useState("");
   const [stockSearch,setStockSearch]=useState("");
   const [ocrBusy,setOcrBusy]=useState(false);
+  const [reportFromDate,setReportFromDate]=useState(new Date().toISOString().slice(0,7)+"-01");
+  const [reportToDate,setReportToDate]=useState(new Date().toISOString().slice(0,10));
+  const [exportingReport,setExportingReport]=useState(false);
 
   const {data:stockCategories=[]}=useQuery<any[]>({
     queryKey:["inventory-categories"],
@@ -139,7 +152,7 @@ export default function StockScreen(){
         return api.put("/stock-receipts/"+encodeURIComponent(String(editingReceipt.id)),{
           categoryId:row.categoryId,category:row.category,size:row.size,
           quantity:Number(row.quantity)||0,minimumStock:Number(row.minimumStock)||0,
-          addedDate:stockDate,billImage:row.billImage||"",description:description.trim(),
+          addedDate:stockDate,billImage:row.billImage||"",attachments:row.attachments||[],description:description.trim(),
         });
       }
       return api.post("/inventory-bulk-add",{
@@ -149,7 +162,7 @@ export default function StockScreen(){
           return {
             categoryId:row.categoryId,category:row.category,size:row.size,
             quantity:Number(row.quantity)||0,minimumStock:Number(row.minimumStock)||0,
-            addedDate:stockDate,billImage:row.billImage||"",
+            addedDate:stockDate,billImage:row.billImage||"",attachments:row.attachments||[],
           };
         })
       });
@@ -184,7 +197,8 @@ export default function StockScreen(){
       size:String(r.size||""),
       quantity:String(Number(r.quantity)||0),
       minimumStock:String(Number(r.minimum_stock??r.minimumStock)||0),
-      billImage:String(r.bill_image||r.billImage||"")
+      billImage:String(r.bill_image||r.billImage||""),
+      attachments:Array.isArray(r.attachments)?r.attachments:[]
     }]);
     setStockDate(String(r.added_date||r.addedDate||new Date().toISOString().slice(0,10)));
     setDescription(String(r.description||""));
@@ -208,40 +222,92 @@ export default function StockScreen(){
 
   const updateRow=(id:string,patch:Partial<StockRow>)=>setStockRows(rows=>rows.map(r=>r.id===id?{...r,...patch}:r));
 
-  const pickBill=async(id:string)=>{
-    const p=await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if(!p.granted){toast("Photo permission is required for the bill image.","error");return;}
-    const x=await ImagePicker.launchImageLibraryAsync({mediaTypes:["images"],allowsEditing:true,quality:1});
-    if(x.canceled)return;
-    const a=x.assets[0];
-    if(!a?.uri){toast("Could not read bill image.","error");return;}
+  const openReceiptAttachment=async(attachment:any)=>{
     try{
-      // Compress bills before storing them in the offline database. Keep enough
-      // resolution for printed totals, small text and handwritten notes to remain legible.
+      const dataUri=String(attachment?.dataUri||"");
+      const match=dataUri.match(/^data:([^;,]+);base64,([\s\S]+)$/);
+      if(!match)throw new Error("This saved attachment has no readable file data.");
+      const mimeType=String(attachment?.mimeType||match[1]||"application/octet-stream");
+      const fallbackExt=mimeType==="application/pdf"?"pdf":mimeType==="image/png"?"png":"jpg";
+      const safeName=String(attachment?.name||("stock-attachment."+fallbackExt)).replace(/[^a-zA-Z0-9._-]+/g,"_").slice(0,90);
+      const baseDir=FileSystem.cacheDirectory||FileSystem.documentDirectory;
+      if(!baseDir)throw new Error("Private phone storage is not available.");
+      const target=baseDir+"stock-"+Date.now()+"-"+safeName;
+      await FileSystem.writeAsStringAsync(target,match[2],{encoding:FileSystem.EncodingType.Base64});
+      await Sharing.shareAsync(target,{mimeType,dialogTitle:"Open stock attachment"});
+    }catch(error:any){
+      toast("Could not open attachment: "+String(error?.message||error),"error");
+    }
+  };
+
+
+
+  const addRowAttachment=(rowId:string,attachment:StockAttachment)=>{
+    const row=stockRows.find(item=>item.id===rowId);
+    const current=row?.attachments||[];
+    const currentBytes=current.reduce((sum,item)=>sum+(Number(item.size)||Math.floor(String(item.dataUri||"").length*0.75)),0);
+    if(currentBytes+attachment.size>12*1024*1024){
+      toast("Attachments for one stock item cannot exceed 12 MB in total.","error");
+      return;
+    }
+    updateRow(rowId,{attachments:[...current,attachment]});
+  };
+
+  const removeRowAttachment=(rowId:string,attachmentId:string)=>{
+    const row=stockRows.find(item=>item.id===rowId);
+    updateRow(rowId,{attachments:(row?.attachments||[]).filter(item=>item.id!==attachmentId)});
+  };
+
+  const pickBill=async(id:string)=>{
+    const permission=await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if(!permission.granted){toast("Photo permission is required for the bill image.","error");return;}
+    const picked=await ImagePicker.launchImageLibraryAsync({mediaTypes:["images"],allowsEditing:true,quality:1});
+    if(picked.canceled)return;
+    const asset=picked.assets[0];
+    if(!asset?.uri){toast("Could not read bill image.","error");return;}
+    try{
       const actions:any[]=[];
-      const width=Number(a.width||0),height=Number(a.height||0);
-      if(width>1600||height>1600){
-        actions.push(width>=height?{resize:{width:1600}}:{resize:{height:1600}});
-      }
-      let result=await ImageManipulator.manipulateAsync(a.uri,actions,{
-        compress:0.58,
-        format:ImageManipulator.SaveFormat.JPEG,
-        base64:true
-      });
-      // If the bill is still large, use a second quality step rather than rejecting
-      // a normal camera photo. Do not repeatedly recompress already-compressed data.
+      const width=Number(asset.width||0),height=Number(asset.height||0);
+      if(width>1600||height>1600) actions.push(width>=height?{resize:{width:1600}}:{resize:{height:1600}});
+      let result=await ImageManipulator.manipulateAsync(asset.uri,actions,{compress:0.58,format:ImageManipulator.SaveFormat.JPEG,base64:true});
       if(result.base64&&result.base64.length>1900000){
-        result=await ImageManipulator.manipulateAsync(result.uri,[],{
-          compress:0.42,
-          format:ImageManipulator.SaveFormat.JPEG,
-          base64:true
-        });
+        result=await ImageManipulator.manipulateAsync(result.uri,[],{compress:0.42,format:ImageManipulator.SaveFormat.JPEG,base64:true});
       }
       if(!result.base64){toast("Could not compress bill image. Please select it again.","error");return;}
       if(result.base64.length>2000000){toast("This bill image is still too large after compression. Try cropping closer to the bill.","error");return;}
-      updateRow(id,{billImage:"data:image/jpeg;base64,"+result.base64});
-    }catch{
-      toast("Could not compress bill image. Please select it again.","error");
+      const dataUri="data:image/jpeg;base64,"+result.base64;
+      addRowAttachment(id,{
+        id:Math.random().toString(36).slice(2),
+        name:String(asset.fileName||"bill-image.jpg"),
+        mimeType:"image/jpeg",
+        dataUri,
+        size:Math.floor(result.base64.length*0.75),
+      });
+    }catch(error:any){
+      toast("Could not compress bill image: "+String(error?.message||error),"error");
+    }
+  };
+
+  const pickPdf=async(id:string)=>{
+    try{
+      const picked=await DocumentPicker.getDocumentAsync({type:"application/pdf",copyToCacheDirectory:true,multiple:false});
+      if(picked.canceled||!picked.assets?.length)return;
+      const asset=picked.assets[0];
+      if(!asset?.uri){toast("Could not open the selected PDF.","error");return;}
+      const size=Number(asset.size||0);
+      if(size>8*1024*1024){toast("Each PDF must be 8 MB or smaller. Compress the PDF and try again.","error");return;}
+      const base64=await FileSystem.readAsStringAsync(asset.uri,{encoding:FileSystem.EncodingType.Base64});
+      if(!base64){toast("The selected PDF is empty or unreadable.","error");return;}
+      if(base64.length>11_200_000){toast("Each PDF must be 8 MB or smaller. Compress the PDF and try again.","error");return;}
+      addRowAttachment(id,{
+        id:Math.random().toString(36).slice(2),
+        name:String(asset.name||"stock-document.pdf"),
+        mimeType:"application/pdf",
+        dataUri:"data:application/pdf;base64,"+base64,
+        size:size||Math.floor(base64.length*0.75),
+      });
+    }catch(error:any){
+      toast("Could not attach PDF: "+String(error?.message||error),"error");
     }
   };
 
@@ -306,6 +372,53 @@ export default function StockScreen(){
   const openPicker=(rowId:string,type:"category"|"size")=>{setStockPickerRow(rowId);setStockPicker(type);setStockSearch("");};
   const closePicker=()=>{setStockPicker(null);setStockSearch("");};
 
+  const exportStockReportPdf=async()=>{
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(reportFromDate)||!/^\d{4}-\d{2}-\d{2}$/.test(reportToDate)){
+      toast("Enter both dates in YYYY-MM-DD format.","error");return;
+    }
+    if(reportFromDate>reportToDate){toast("From date must be before or equal to the To date.","error");return;}
+    const rows=(Array.isArray(stockReceipts)?stockReceipts:[]).filter((row:any)=>{
+      const day=String(row.added_date||row.addedDate||"").slice(0,10);
+      return day>=reportFromDate && day<=reportToDate;
+    }).sort((a:any,b:any)=>String(a.added_date||"").localeCompare(String(b.added_date||""))||String(a.created_at||"").localeCompare(String(b.created_at||"")));
+    if(!rows.length){toast("No received-stock entries were found in this date range.","info");return;}
+    const escapeHtml=(value:any)=>String(value??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+    const totalByUnit=new Map<string,number>();
+    for(const row of rows){const unit=String(row.unit||"pcs");totalByUnit.set(unit,(totalByUnit.get(unit)||0)+(Number(row.quantity)||0));}
+    const totals=[...totalByUnit.entries()].map(([unit,qty])=>qty+" "+unit).join(" · ");
+    const body=rows.map((row:any)=>{
+      const attachments=Array.isArray(row.attachments)?row.attachments:[];
+      const names=attachments.map((item:any)=>String(item.name||"attachment")).concat(
+        !attachments.length&&row.bill_image?["Legacy bill image"]:[]
+      );
+      return "<tr>"+
+        "<td>"+escapeHtml(String(row.added_date||"").slice(0,10))+"</td>"+
+        "<td>"+escapeHtml(row.category||row.name||"Inventory item")+"</td>"+
+        "<td>"+escapeHtml(row.size||"—")+"</td>"+
+        "<td class='num'>"+escapeHtml(Number(row.quantity)||0)+" "+escapeHtml(row.unit||"pcs")+"</td>"+
+        "<td class='num'>"+escapeHtml(Number(row.minimum_stock)||0)+"</td>"+
+        "<td>"+escapeHtml(row.description||"")+"</td>"+
+        "<td>"+escapeHtml(names.join(", ")||"—")+"</td>"+
+        "</tr>";
+    }).join("");
+    const html="<!doctype html><html><head><meta charset='utf-8'><style>"+
+      "body{font-family:Arial,sans-serif;color:#18221f;padding:24px}h1{font-size:22px;margin:0 0 6px}p{margin:4px 0 16px;color:#555}.meta{margin-bottom:14px}table{width:100%;border-collapse:collapse;font-size:10px}th,td{border:1px solid #d7ddd9;padding:7px;text-align:left;vertical-align:top}th{background:#edf2ef}.num{text-align:right;white-space:nowrap}tfoot td{font-weight:bold}</style></head><body>"+
+      "<h1>Received Stock Report</h1>"+
+      "<p class='meta'>Date range: "+escapeHtml(reportFromDate)+" to "+escapeHtml(reportToDate)+"<br>Receipt lines: "+rows.length+"<br>Quantity totals by unit: "+escapeHtml(totals)+"</p>"+
+      "<table><thead><tr><th>Date</th><th>Item</th><th>Size</th><th>Received</th><th>Minimum</th><th>Description</th><th>Item attachments</th></tr></thead><tbody>"+body+"</tbody></table>"+
+      "</body></html>";
+    setExportingReport(true);
+    try{
+      const file=await Print.printToFileAsync({html});
+      await Sharing.shareAsync(file.uri,{mimeType:"application/pdf",dialogTitle:"Received Stock Report"});
+      toast("Received-stock PDF is ready to save or share.","success");
+    }catch(error:any){
+      toast("Could not create the received-stock PDF: "+String(error?.message||error),"error");
+    }finally{
+      setExportingReport(false);
+    }
+  };
+
   const submit=()=>{
     if(!/^\d{4}-\d{2}-\d{2}$/.test(stockDate)){toast("Use YYYY-MM-DD for the date.","error");return;}
     if(!stockRows.length){toast("Add at least one stock item.","error");return;}
@@ -338,6 +451,25 @@ export default function StockScreen(){
       <Text style={styles.sectionTitle}>Received Stock</Text>
       <Text style={[styles.stockHint,{marginBottom:spacing.md}]}>Each Save in Receive Stock creates a separate transaction. Only items saved together are grouped together.</Text>
 
+      <View style={styles.exportCard}>
+        <Text style={styles.exportTitle}>Download received-stock PDF</Text>
+        <Text style={styles.stockHint}>Choose the receipt date range to include in the report.</Text>
+        <View style={styles.reportDateRow}>
+          <View style={{flex:1}}>
+            <Text style={styles.fieldLabel}>From date</Text>
+            <TextInput value={reportFromDate} onChangeText={setReportFromDate} placeholder="YYYY-MM-DD" placeholderTextColor={colors.muted} style={styles.stockInput}/>
+          </View>
+          <View style={{flex:1}}>
+            <Text style={styles.fieldLabel}>To date</Text>
+            <TextInput value={reportToDate} onChangeText={setReportToDate} placeholder="YYYY-MM-DD" placeholderTextColor={colors.muted} style={styles.stockInput}/>
+          </View>
+        </View>
+        <Pressable disabled={exportingReport||isLoading} onPress={()=>void exportStockReportPdf()} style={[styles.exportButton,(exportingReport||isLoading)&&{opacity:0.6}]}>
+          {exportingReport?<ActivityIndicator size="small" color={colors.onBrandPrimary}/>:<Ionicons name="document-text-outline" size={19} color={colors.onBrandPrimary}/>}
+          <Text style={styles.exportButtonText}>{exportingReport?"Preparing PDF…":"Create PDF report"}</Text>
+        </Pressable>
+      </View>
+
       {isLoading?<View style={styles.centerBox}><ActivityIndicator size="large" color={colors.brandPrimary}/></View>:
        stockBatches.length?stockBatches.slice(0,100).map(batch=><View key={batch.batchId} style={styles.receivedCard}>
         <Text style={styles.meta}>Date</Text>
@@ -348,6 +480,12 @@ export default function StockScreen(){
           <View style={{flex:1}}>
             <Text style={styles.itemTitle}>{s.category||"Inventory item"}{s.size?" · "+s.size:""}</Text>
             <Text style={styles.meta}>Received {Number(s.quantity)||0} {s.unit||"pcs"}</Text>
+            {(Array.isArray(s.attachments)&&s.attachments.length)||s.bill_image?<Text style={styles.attachmentMeta}>{Array.isArray(s.attachments)&&s.attachments.length?s.attachments.length+" item attachment(s)":"Bill image attached"}</Text>:null}
+            {(Array.isArray(s.attachments)?s.attachments:[]).map((attachment:any)=><Pressable key={String(attachment.id)} onPress={()=>void openReceiptAttachment(attachment)} style={styles.savedAttachment}>
+              <Ionicons name={attachment.mimeType==="application/pdf"?"document-text-outline":"image-outline"} size={15} color={colors.brandPrimary}/>
+              <Text numberOfLines={1} style={styles.savedAttachmentName}>{attachment.name||"Open attachment"}</Text>
+              <Ionicons name="share-outline" size={15} color={colors.brandPrimary}/>
+            </Pressable>)}
           </View>
           <View style={styles.itemActions}>
             <Pressable onPress={()=>editReceipt(s)} hitSlop={8}><Ionicons name="create-outline" size={20} color={colors.brandPrimary}/></Pressable>
@@ -400,10 +538,24 @@ export default function StockScreen(){
               <TextInput value={row.minimumStock} onChangeText={v=>updateRow(row.id,{minimumStock:v.replace(/[^0-9.]/g,"")})} placeholder="Minimum stock" keyboardType="number-pad" placeholderTextColor={colors.muted} style={[styles.stockInput,{flex:1}]}/>
             </View>
 
-            <Pressable style={styles.attachBtn} onPress={()=>pickBill(row.id)}>
-              <Ionicons name={row.billImage?"checkmark-circle":"image-outline"} size={18} color={colors.brandPrimary}/>
-              <Text style={styles.attachText}>{row.billImage?"Bill image selected":"Add bill image"}</Text>
-            </Pressable>
+            <View style={{flexDirection:"row",gap:spacing.sm}}>
+              <Pressable style={[styles.attachBtn,{flex:1}]} onPress={()=>void pickBill(row.id)}>
+                <Ionicons name="image-outline" size={18} color={colors.brandPrimary}/>
+                <Text style={styles.attachText}>Add image</Text>
+              </Pressable>
+              <Pressable style={[styles.attachBtn,{flex:1}]} onPress={()=>void pickPdf(row.id)}>
+                <Ionicons name="document-attach-outline" size={18} color={colors.brandPrimary}/>
+                <Text style={styles.attachText}>Add PDF</Text>
+              </Pressable>
+            </View>
+            {row.billImage&&!row.attachments.length?<Text style={styles.attachmentMeta}>Invoice image from OCR attached to this item</Text>:null}
+            {row.attachments.map(attachment=><View key={attachment.id} style={styles.attachmentRow}>
+              <Ionicons name={attachment.mimeType==="application/pdf"?"document-text-outline":"image-outline"} size={17} color={colors.brandPrimary}/>
+              <Text numberOfLines={1} style={styles.attachmentName}>{attachment.name}</Text>
+              <Pressable onPress={()=>removeRowAttachment(row.id,attachment.id)} hitSlop={8}>
+                <Ionicons name="close-circle" size={19} color={colors.error}/>
+              </Pressable>
+            </View>)}
           </View>)}
 
           {!editingReceipt?<Pressable style={styles.addAnotherStock} onPress={()=>setStockRows(v=>v.concat(newRow()))}>
@@ -459,6 +611,16 @@ const useStyles=makeStyles(colors=>({
   stockBtn:{height:40,borderRadius:radius.md,paddingHorizontal:spacing.sm,borderWidth:1,borderColor:colors.border,backgroundColor:colors.surfaceSecondary,flexDirection:"row",alignItems:"center",gap:spacing.xs},
   stockBtnText:{fontFamily:fontFamily.semibold,color:colors.brandPrimary,fontSize:fontSize.xs},
   sectionTitle:{fontFamily:fontFamily.bold,fontSize:fontSize.lg,color:colors.onSurface},
+  exportCard:{padding:spacing.md,borderWidth:1,borderColor:colors.border,borderRadius:radius.md,backgroundColor:colors.surface,marginBottom:spacing.md},
+  exportTitle:{fontFamily:fontFamily.semibold,fontSize:fontSize.base,color:colors.onSurface,marginBottom:3},
+  reportDateRow:{flexDirection:"row",gap:spacing.sm,marginTop:spacing.sm},
+  exportButton:{minHeight:46,borderRadius:radius.md,backgroundColor:colors.brandPrimary,flexDirection:"row",alignItems:"center",justifyContent:"center",gap:spacing.sm,paddingHorizontal:spacing.md},
+  exportButtonText:{fontFamily:fontFamily.semibold,color:colors.onBrandPrimary},
+  attachmentMeta:{fontSize:fontSize.xs,color:colors.brandPrimary,marginTop:4},
+  attachmentRow:{flexDirection:"row",alignItems:"center",gap:spacing.xs,paddingVertical:spacing.xs,paddingHorizontal:spacing.sm,backgroundColor:colors.surface,borderRadius:radius.sm,marginBottom:spacing.xs},
+  attachmentName:{flex:1,fontSize:fontSize.xs,color:colors.onSurface},
+  savedAttachment:{flexDirection:"row",alignItems:"center",gap:spacing.xs,paddingVertical:spacing.xs,paddingHorizontal:spacing.sm,marginTop:spacing.xs,borderRadius:radius.sm,backgroundColor:colors.surfaceSecondary},
+  savedAttachmentName:{flex:1,fontSize:fontSize.xs,color:colors.brandPrimary},
   receivedCard:{padding:spacing.md,borderWidth:1,borderColor:colors.border,borderRadius:radius.md,backgroundColor:colors.surface,marginBottom:spacing.sm},
   receivedTitle:{fontFamily:fontFamily.semibold,fontSize:fontSize.base,color:colors.onSurface},
   descriptionText:{fontSize:fontSize.sm,color:colors.onSurface,marginTop:3},

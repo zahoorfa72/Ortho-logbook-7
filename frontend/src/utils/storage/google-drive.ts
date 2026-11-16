@@ -1767,6 +1767,14 @@ function mergeFullBackupSnapshots(legacy: any, local: any): any {
   return merged;
 }
 
+function mergeRowPreservingStockAttachments(table: string, previous: any, incoming: any): any {
+  if (table !== "stockReceipts" || !previous || !incoming) return incoming;
+  const merged = { ...previous, ...incoming };
+  if (!Object.prototype.hasOwnProperty.call(incoming, "bill_image")) merged.bill_image = previous.bill_image;
+  if (!Object.prototype.hasOwnProperty.call(incoming, "attachments_json")) merged.attachments_json = previous.attachments_json;
+  return merged;
+}
+
 function mergeRowsByRecency(currentRows: any[], incomingRows: any[], table: string): any[] {
   const rows = new Map<string, any>();
   const keyFor = (row: any) => {
@@ -1869,6 +1877,10 @@ function applyIncrementalToMaster(local: any, incoming: any, preserveCurrent = f
               !Object.prototype.hasOwnProperty.call(row, "photo_uri") &&
               !Object.prototype.hasOwnProperty.call(row, "photos_json")) {
             rows.set(key, { ...old, ...row });
+          } else if (table === "stockReceipts" &&
+              (!Object.prototype.hasOwnProperty.call(row, "bill_image") ||
+               !Object.prototype.hasOwnProperty.call(row, "attachments_json"))) {
+            rows.set(key, mergeRowPreservingStockAttachments(table, old, row));
           } else {
             rows.set(key, row);
           }
@@ -1879,6 +1891,10 @@ function applyIncrementalToMaster(local: any, incoming: any, preserveCurrent = f
           !Object.prototype.hasOwnProperty.call(row, "photo_uri") &&
           !Object.prototype.hasOwnProperty.call(row, "photos_json")) {
         rows.set(key, { ...old, ...row });
+      } else if (table === "stockReceipts" && old &&
+          (!Object.prototype.hasOwnProperty.call(row, "bill_image") ||
+           !Object.prototype.hasOwnProperty.call(row, "attachments_json"))) {
+        rows.set(key, mergeRowPreservingStockAttachments(table, old, row));
       } else {
         rows.set(key, row);
       }
@@ -2551,6 +2567,10 @@ function mergeIncrementalPayloads(previous: any, incoming: any): any {
           !Object.prototype.hasOwnProperty.call(row, "photo_uri") &&
           !Object.prototype.hasOwnProperty.call(row, "photos_json")) {
         rows.set(key, { ...old, ...row });
+      } else if (table === "stockReceipts" && old &&
+          (!Object.prototype.hasOwnProperty.call(row, "bill_image") ||
+           !Object.prototype.hasOwnProperty.call(row, "attachments_json"))) {
+        rows.set(key, mergeRowPreservingStockAttachments(table, old, row));
       } else {
         rows.set(key, row);
       }
@@ -3111,6 +3131,10 @@ export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) 
                   !Object.prototype.hasOwnProperty.call(row, "photo_uri") &&
                   !Object.prototype.hasOwnProperty.call(row, "photos_json")) {
                 merged.set(key, { ...existing, ...row });
+              } else if (table === "stockReceipts" && existing &&
+                  (!Object.prototype.hasOwnProperty.call(row, "bill_image") ||
+                   !Object.prototype.hasOwnProperty.call(row, "attachments_json"))) {
+                merged.set(key, mergeRowPreservingStockAttachments(table, existing, row));
               } else {
                 merged.set(key, row);
               }
@@ -3131,6 +3155,10 @@ export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) 
                   !Object.prototype.hasOwnProperty.call(row, "photo_uri") &&
                   !Object.prototype.hasOwnProperty.call(row, "photos_json")) {
                 merged.set(key, { ...existing, ...row });
+              } else if (table === "stockReceipts" && existing &&
+                  (!Object.prototype.hasOwnProperty.call(row, "bill_image") ||
+                   !Object.prototype.hasOwnProperty.call(row, "attachments_json"))) {
+                merged.set(key, mergeRowPreservingStockAttachments(table, existing, row));
               } else {
                 merged.set(key, row);
               }

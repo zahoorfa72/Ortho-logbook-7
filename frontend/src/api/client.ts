@@ -742,6 +742,7 @@ export const api = {
         description:r.description||"",
         addedDate:r.added_date||"",
         billImage:r.bill_image||"",
+        attachments:(()=>{try{const parsed=JSON.parse(String(r.attachments_json||"[]"));return Array.isArray(parsed)?parsed:[];}catch{return [];}})(),
         category:r.category||"",
         size:r.size||"",
       })) as any;
@@ -993,6 +994,9 @@ export const api = {
           const unit=String(entry?.unit||"pcs").trim()||"pcs";
           const addedDate=String(entry?.addedDate||new Date().toISOString().slice(0,10)).trim();
           const billImage=String(entry?.billImage||"");
+          const attachments=Array.isArray(entry?.attachments)?entry.attachments.slice(0,12):[];
+          const attachmentsJson=JSON.stringify(attachments);
+          if(attachmentsJson.length>18*1024*1024) throw new Error("Attachments for one stock item exceed 18 MB. Compress the files or attach fewer documents.");
           const description=String(body?.description||"").trim();
           // Match the complete variant, not only category ID + size. Older rows
           // can have a missing/stale category link; the saved label is a safe
@@ -1028,8 +1032,8 @@ export const api = {
             syncLowStockState(inventoryId, quantity, minimumStock);
             movement(inventoryId,"purchase",quantity,quantity,"Stock received",uid);
           }
-          db.runSync("INSERT INTO stock_receipts (id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,description,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            [id(),inventoryId,batchId,categoryId,categoryName,size,quantity,unit,minimumStock,addedDate,billImage,description,nowIso(),uid]);
+          db.runSync("INSERT INTO stock_receipts (id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,attachments_json,description,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            [id(),inventoryId,batchId,categoryId,categoryName,size,quantity,unit,minimumStock,addedDate,billImage,attachmentsJson,description,nowIso(),uid]);
           added++;
         }
       });
@@ -1184,6 +1188,11 @@ export const api = {
       const minimumStock=Math.max(0,Number(body?.minimumStock)||0);
       const addedDate=String(body?.addedDate||existing.added_date||new Date().toISOString().slice(0,10)).trim();
       const billImage=String(body?.billImage??existing.bill_image??"");
+      const attachments=Array.isArray(body?.attachments)
+        ? body.attachments.slice(0,12)
+        : (()=>{try{const parsed=JSON.parse(String(existing.attachments_json||"[]"));return Array.isArray(parsed)?parsed:[];}catch{return [];}})();
+      const attachmentsJson=JSON.stringify(attachments);
+      if(attachmentsJson.length>18*1024*1024) throw new Error("Attachments for one stock item exceed 18 MB. Compress the files or attach fewer documents.");
       const description=String(body?.description??existing.description??"").trim();
       const uid=await currentUser();
       const receiptUnit=String(existing.unit||oldInventory.unit||"pcs").trim()||"pcs";
@@ -1209,8 +1218,8 @@ export const api = {
             [categoryId,categoryName,nextQty,minimumStock,oldInventory.id],
           );
           db.runSync(
-            "UPDATE stock_receipts SET category_id=?,category=?,size=?,quantity=?,minimum_stock=?,added_date=?,bill_image=?,description=? WHERE id=?",
-            [categoryId,categoryName,size,quantity,minimumStock,addedDate,billImage,description,rid],
+            "UPDATE stock_receipts SET category_id=?,category=?,size=?,quantity=?,minimum_stock=?,added_date=?,bill_image=?,attachments_json=?,description=? WHERE id=?",
+            [categoryId,categoryName,size,quantity,minimumStock,addedDate,billImage,attachmentsJson,description,rid],
           );
           const aggregateMin=Number(db.getFirstSync<any>(
             "SELECT COALESCE(MAX(minimum_stock),0) AS n FROM stock_receipts WHERE inventory_id=?",
@@ -1269,8 +1278,8 @@ syncLowStockState(targetId, quantity, minimumStock);
         }
 
         db.runSync(
-          "UPDATE stock_receipts SET inventory_id=?,category_id=?,category=?,size=?,quantity=?,minimum_stock=?,added_date=?,bill_image=?,description=? WHERE id=?",
-          [target.id,categoryId,categoryName,size,quantity,minimumStock,addedDate,billImage,description,rid],
+          "UPDATE stock_receipts SET inventory_id=?,category_id=?,category=?,size=?,quantity=?,minimum_stock=?,added_date=?,bill_image=?,attachments_json=?,description=? WHERE id=?",
+          [target.id,categoryId,categoryName,size,quantity,minimumStock,addedDate,billImage,attachmentsJson,description,rid],
         );
         const targetMin=Number(db.getFirstSync<any>(
           "SELECT COALESCE(MAX(minimum_stock),0) AS n FROM stock_receipts WHERE inventory_id=?",
