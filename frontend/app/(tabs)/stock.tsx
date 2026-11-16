@@ -226,7 +226,7 @@ export default function StockScreen(){
     const row=stockRows.find(item=>item.id===rowId);
     const current=row?.attachments||[];
     const currentBytes=current.reduce((sum,item)=>sum+(Number(item.size)||Math.floor(String(item.dataUri||"").length*0.75)),0);
-    if(currentBytes+attachment.size>15*1024*1024){
+    if(currentBytes+attachment.size>12*1024*1024){
       toast("Attachments for one stock item cannot exceed 15 MB in total.","error");
       return;
     }
@@ -353,7 +353,7 @@ export default function StockScreen(){
   const closePicker=()=>{setStockPicker(null);setStockSearch("");};
 
   const exportStockReportPdf=async()=>{
-    if(!/^\\d{4}-\\d{2}-\\d{2}$/.test(reportFromDate)||!/^\\d{4}-\\d{2}-\\d{2}$/.test(reportToDate)){
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(reportFromDate)||!/^\d{4}-\d{2}-\d{2}$/.test(reportToDate)){
       toast("Enter both dates in YYYY-MM-DD format.","error");return;
     }
     if(reportFromDate>reportToDate){toast("From date must be before or equal to the To date.","error");return;}

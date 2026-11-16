@@ -473,6 +473,7 @@ export default function Logbook() {
   } = useQuery<Patient[]>({
     queryKey: ["patients"],
     queryFn: () => api.get("/patients"),
+    staleTime: 30_000,
   });
 
   latestPatientsRef.current = data || [];
@@ -512,6 +513,9 @@ export default function Logbook() {
       }
       labScanStatesRef.current = normalized;
       setLabScanStates(normalized);
+      // Persist the recovery of interrupted/old waiting scans so they do not
+      // reappear as WAITING after every app restart.
+      AsyncStorage.setItem(LAB_SCAN_STATUS_STORAGE_KEY, JSON.stringify(normalized)).catch(() => {});
       setLabScanStateLoaded(true);
     }).catch(() => { if (!cancelled) setLabScanStateLoaded(true); });
     return () => { cancelled = true; };
