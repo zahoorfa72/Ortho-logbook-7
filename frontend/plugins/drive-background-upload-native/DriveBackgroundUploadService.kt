@@ -41,21 +41,25 @@ class DriveBackgroundUploadService : Service() {
   override fun onBind(intent: Intent?): IBinder? = null
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-    // Android may recreate a foreground service after reclaiming the app process.
-    // Rehydrate an active download from private preferences so the partial file
-    // can resume rather than leaving a dead "running" task behind.
+    // Android may recreate the foreground service with a null Intent after
+    // reclaiming the process. Rehydrate either upload or download from durable
+    // private preferences so the saved resumable transfer can continue.
     val command = intent ?: run {
-      val savedTask = prefs.getString("activeDownloadTaskId", null)
+      val savedUpload = prefs.getString("activeUploadTaskId", null)
+      val savedDownload = prefs.getString("activeDownloadTaskId", null)
+      val savedTask = savedUpload ?: savedDownload
       if (savedTask.isNullOrBlank()) {
         stopSelf(startId)
         return START_NOT_STICKY
       }
+      val isUpload = !savedUpload.isNullOrBlank()
       Intent(this, DriveBackgroundUploadService::class.java).apply {
-        action = ACTION_DOWNLOAD
+        action = if (isUpload) ACTION_START else ACTION_DOWNLOAD
         putExtra(EXTRA_TASK_ID, savedTask)
         putExtra(EXTRA_URL, prefs.getString("$savedTask.url", ""))
         putExtra(EXTRA_TOKEN, prefs.getString("$savedTask.token", ""))
         putExtra(EXTRA_FILE_URI, prefs.getString("$savedTask.fileUri", ""))
+        if (isUpload) putExtra(EXTRA_TOTAL_BYTES, prefs.getLong("$savedTask.totalBytes", 0L))
       }
     }
     if (command.action != ACTION_START && command.action != ACTION_DOWNLOAD) {
@@ -72,6 +76,13 @@ class DriveBackgroundUploadService : Service() {
     val uri = Uri.parse(command.getStringExtra(EXTRA_FILE_URI) ?: "")
     file = File(uri.path ?: "")
     total = command.getLongExtra(EXTRA_TOTAL_BYTES, 0L)
+    prefs.edit()
+      .putString("activeUploadTaskId", taskId)
+      .putString("$taskId.url", uploadUrl)
+      .putString("$taskId.token", token)
+      .putString("$taskId.fileUri", uri.toString())
+      .putLong("$taskId.totalBytes", total)
+      .apply()
     if (!file.isFile || total <= 0L || file.length() != total) {
       fail("Backup file is missing or its size changed before upload.")
       stopSelf(startId)
@@ -97,11 +108,20 @@ class DriveBackgroundUploadService : Service() {
         fail(error.message ?: "Google Drive background upload failed.")
         updateNotification(prefs.getInt("$taskId.progress", 0), "Backup failed — open Ortho Logbook to retry")
       } finally {
+        prefs.edit()
+          .remove("activeUploadTaskId")
+          .remove("$taskId.url")
+          .remove("$taskId.token")
+          .remove("$taskId.fileUri")
+          .remove("$taskId.totalBytes")
+          .apply()
         stopForeground(STOP_FOREGROUND_DETACH)
         stopSelf()
       }
     }.start()
-    return START_NOT_STICKY
+    // START_STICKY allows Android to recreate the service with a null Intent;
+    // onStartCommand then resumes this exact upload using the saved session URL.
+    return START_STICKY
   }
 
 
@@ -434,7 +454,15 @@ class DriveBackgroundUploadService : Service() {
   }
 
   private fun fail(message: String) {
-    if (::taskId.isInitialized) prefs.edit().putString("$taskId.status", "error").putString("$taskId.error", message).apply()
+    if (::taskId.isInitialized) {
+      prefs.edit().putString("$taskId.status", "error").putString("$taskId.error", message)
+        .remove("activeUploadTaskId")
+        .remove("$taskId.url")
+        .remove("$taskId.token")
+        .remove("$taskId.fileUri")
+        .remove("$taskId.totalBytes")
+        .apply()
+    }
   }
 
   private fun ensureChannel() {
