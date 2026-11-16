@@ -2767,10 +2767,16 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
       ? delta.deletedIds.patients.map((id: any) => String(id)).filter((id: string) => Boolean(id))
       : [];
     for (const deletedId of deletedPatientIds) await queuePatientPdfDeletion(deletedId);
-    if (fullPatientTable || delta._rowDelta !== true || verifyPatientPdfs) {
+    if (fullPatientTable || verifyPatientPdfs) {
+      // A full table archive is required only when the delta explicitly marks
+      // the patient table as full, or when an explicit PDF audit is requested.
+      // A non-row-delta serialization fallback is not itself a reason to walk
+      // every patient's PDF on each ordinary update.
       await archiveEligiblePatientImages(onProgress);
       await uploadPatientImageArchivesToDrive(onProgress, undefined, verifyPatientPdfs);
     } else {
+      // Use the patient IDs actually present in the changed-row delta, even if
+      // this platform serializes the delta without the _rowDelta optimization.
       if (changedPatientIds.length) {
         await archiveEligiblePatientImages(onProgress, changedPatientIds);
         await uploadPatientImageArchivesToDrive(onProgress, changedPatientIds);
