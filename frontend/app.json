@@ -9,7 +9,13 @@
     "userInterfaceStyle": "automatic",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.emergent.androidnobackend.vm3pwn"
+      "bundleIdentifier": "com.emergent.androidnobackend.vm3pwn",
+      "infoPlist": {
+        "UIBackgroundModes": ["fetch", "processing"],
+        "BGTaskSchedulerPermittedIdentifiers": [
+          "com.expo.modules.backgroundtask.processing"
+        ]
+      }
     },
     "android": {
       "adaptiveIcon": {
