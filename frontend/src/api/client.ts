@@ -901,6 +901,28 @@ export const api = {
         const trashReceipt = db.getFirstSync<any>("SELECT * FROM stock_receipts WHERE id=? LIMIT 1",[rid]);
         if (trashReceipt) addTrashEntry("stock-receipt", "Received stock: " + (trashReceipt.category || trashReceipt.name || trashReceipt.size || rid),
           { stock_receipts: [trashReceipt], _stockAdjustment: { inventoryId: String(trashReceipt.inventory_id), quantity: qty } }, uid);
+        // The shared invoice is stored once on the first row of a batch. If that
+        // item line is removed while other lines remain, move the files to the
+        // next line before deleting it so the entry-level invoice is preserved.
+        const batchId=String(trashReceipt?.batch_id||"");
+        if(batchId){
+          const nextReceipt=db.getFirstSync<any>(
+            "SELECT id,attachments_json,bill_image FROM stock_receipts WHERE batch_id=? AND id<>? ORDER BY created_at ASC,id ASC LIMIT 1",
+            [batchId,rid],
+          );
+          if(nextReceipt){
+            const parseAttachments=(value:any)=>{
+              try{const parsed=JSON.parse(String(value||"[]"));return Array.isArray(parsed)?parsed:[];}catch{return [];}
+            };
+            const sourceAttachments=parseAttachments(trashReceipt?.attachments_json);
+            const targetAttachments=parseAttachments(nextReceipt.attachments_json);
+            const combined=[...targetAttachments,...sourceAttachments].filter((item,index,array)=>
+              item&&array.findIndex(other=>String(other?.id||"")===String(item?.id||"")||String(other?.dataUri||"")===String(item?.dataUri||""))===index
+            );
+            if(sourceAttachments.length)db.runSync("UPDATE stock_receipts SET attachments_json=? WHERE id=?",[JSON.stringify(combined),nextReceipt.id]);
+            if(trashReceipt?.bill_image&&!nextReceipt.bill_image)db.runSync("UPDATE stock_receipts SET bill_image=? WHERE id=?",[trashReceipt.bill_image,nextReceipt.id]);
+          }
+        }
         db.runSync("DELETE FROM stock_receipts WHERE id=?",[rid]);
         db.runSync("UPDATE inventory SET quantity=? WHERE id=?",[next,inventory.id]);
         const aggregateMin=Number(db.getFirstSync<any>(
