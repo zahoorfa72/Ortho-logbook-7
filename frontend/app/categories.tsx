@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { ActivityIndicator, Alert, FlatList, Modal, Pressable, RefreshControl, Text, TextInput, View } from "react-native";
+import { useEffect, useMemo, useState } from "react";
+import { ActivityIndicator, Alert, BackHandler, FlatList, Modal, Pressable, RefreshControl, Text, TextInput, View } from "react-native";
 import { router } from "expo-router";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -27,6 +27,19 @@ export default function InventoryCategories() {
   const [name, setName] = useState("");
   const [showAdd, setShowAdd] = useState(false);
   const [editCategory, setEditCategory] = useState<Category | null>(null);
+
+  const returnToInventory = () => {
+    router.replace("/(tabs)/inventory" as any);
+  };
+
+  // Android's hardware Back button must leave the Categories route in one step.
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
+      returnToInventory();
+      return true;
+    });
+    return () => subscription.remove();
+  }, []);
 
   const q = useQuery<Category[]>({
     queryKey: ["inventory-categories"],
@@ -97,7 +110,7 @@ export default function InventoryCategories() {
     <View style={styles.container}>
       <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
         <View style={styles.headerTop}>
-          <Pressable testID="categories-back" onPress={() => router.navigate("/(tabs)/inventory" as any)} style={styles.iconBtn}>
+          <Pressable testID="categories-back" onPress={returnToInventory} style={styles.iconBtn}>
             <Ionicons name="arrow-back" size={21} color={colors.onSurface} />
           </Pressable>
           <View style={{ flex: 1 }}>

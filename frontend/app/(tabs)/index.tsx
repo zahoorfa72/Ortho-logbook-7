@@ -723,8 +723,15 @@ export default function Logbook() {
             labOcrDateNeedsAdmin: reportDateNeedsAdmin ? "true" : "false",
           },
         });
-        void updated;
-        queryClient.invalidateQueries({ queryKey: ["patients"] });
+        // Update the in-memory list with the saved patient instead of forcing a
+        // full 554-record SQLite reload after every OCR scan. Repeated invalidation
+        // made the whole list show a loading spinner while queued scans ran.
+        const cachedPatients = queryClient.getQueryData<Patient[]>(["patients"]) || latestPatientsRef.current;
+        const nextPatients = cachedPatients.map(value =>
+          value.id === patientId ? (updated as Patient) : value
+        );
+        latestPatientsRef.current = nextPatients;
+        queryClient.setQueryData<Patient[]>(["patients"], nextPatients);
       } catch (error: any) {
         saveLabScanState(patientId, { status: "failed", message: "OCR read the report, but results could not be saved automatically. Retry or save the results from Patient Form.", reportDate: reportDateSummary, resultCount: uniqueFlags.length, updatedAt: new Date().toISOString() });
         await removeNewPatientQueueEntry(patientId);
@@ -842,18 +849,11 @@ export default function Logbook() {
         requestLabScanRef.current(patientId, true);
       }
 
-      // Upgrade existing records that were already scanned under the old parser.
-      // They have a saved photo signature; rescan each once so the new row-aware
-      // extractor replaces stale/manual-review-only results. The queue is serial.
-      for (const patient of (data || []) as Patient[]) {
-        const priorPhotoSignature = String(patient.customData?.labOcrPhotoSignature || "").trim();
-        const currentVersion = String(patient.customData?.labOcrPipelineVersion || "");
-        if (!priorPhotoSignature || currentVersion === LAB_OCR_PIPELINE_VERSION) continue;
-        if (autoQueuedPatientIdsRef.current.has(patient.id) ||
-            runningLabScansRef.current.has(patient.id) ||
-            pendingLabScansRef.current.includes(patient.id)) continue;
-        requestLabScanRef.current(patient.id, true);
-      }
+      // Existing records are never bulk-rescanned just because the OCR parser
+      // version changed. A hospital can have hundreds of historical patients;
+      // running OCR against all of them when Logbook opens made the app appear
+      // frozen and filled the list with WAITING states. Use the patient's Retry
+      // control for an old record. Only the saved new-patient queue is automatic.
     }).catch(() => {});
   }, [labScanStateLoaded, labOcrEnabled, isLoading, data]);
 
