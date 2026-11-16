@@ -112,7 +112,7 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
     CREATE TABLE IF NOT EXISTS stock_receipts (
       id TEXT PRIMARY KEY NOT NULL, inventory_id TEXT NOT NULL, batch_id TEXT,
       category_id TEXT, category TEXT, size TEXT, quantity REAL NOT NULL DEFAULT 0, unit TEXT NOT NULL DEFAULT 'pcs',
-      minimum_stock REAL NOT NULL DEFAULT 0, added_date TEXT, bill_image TEXT,
+      minimum_stock REAL NOT NULL DEFAULT 0, added_date TEXT, bill_image TEXT, attachments_json TEXT,
       description TEXT, created_at TEXT NOT NULL, created_by TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_stock_receipts_item ON stock_receipts(inventory_id, created_at);
@@ -160,6 +160,7 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
   addColumn("inventory", "low_stock_triggered_at", "TEXT");
   addColumn("inventory_purchase_receipts", "batch_id", "TEXT");
   addColumn("inventory_purchase_receipts", "description", "TEXT");
+  addColumn("stock_receipts", "attachments_json", "TEXT");
   // IMPORTANT: older local databases do not have batch_id. Add the column
   // before creating any index that references it.
   db.execSync(`CREATE INDEX IF NOT EXISTS idx_inventory_purchase_receipts_batch ON inventory_purchase_receipts(batch_id, created_at)`);
