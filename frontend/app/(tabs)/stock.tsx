@@ -256,6 +256,20 @@ export default function StockScreen(){
 
   const updateRow=(id:string,patch:Partial<StockRow>)=>setStockRows(rows=>rows.map(r=>r.id===id?{...r,...patch}:r));
 
+  const applyReceiptCategory=(category:{id:string;name:string})=>{
+    setStockRows(rows=>rows.map(row=>{
+      const unchanged=String(row.categoryId||"")===category.id ||
+        String(row.category||"").trim().toLowerCase()===category.name.trim().toLowerCase();
+      return {...row,categoryId:category.id,category:category.name,size:unchanged?row.size:""};
+    }));
+  };
+
+  const addAnotherSize=()=>{
+    const first=stockRows[0];
+    if(!first?.categoryId||!first?.category){toast("Select a category before adding sizes.","error");return;}
+    setStockRows(rows=>rows.concat({...newRow(),categoryId:first.categoryId,category:first.category}));
+  };
+
   const openReceiptAttachment=async(attachment:any)=>{
     try{
       const dataUri=String(attachment?.dataUri||"");
@@ -366,14 +380,28 @@ export default function StockScreen(){
     finally{setOcrBusy(false);}
   };
 
+  const activePickerRow=stockRows.find(row=>row.id===stockPickerRow)||stockRows[0];
+  const pickerCategoryId=String(activePickerRow?.categoryId||"");
+  const pickerCategoryName=String(activePickerRow?.category||"").trim().toLowerCase();
+  const categorySizes=(Array.isArray(stockInventory)?stockInventory:[]).filter((item:any)=>{
+    const sameId=pickerCategoryId && String(item?.category_id||item?.categoryId||"")===pickerCategoryId;
+    const sameName=pickerCategoryName && String(item?.category||"").trim().toLowerCase()===pickerCategoryName;
+    return Boolean(sameId||sameName);
+  });
   const pickerValues=stockPicker==="category"
     ? (Array.isArray(stockCategories)?stockCategories:[]).map(x=>({id:String(x?.id||""),label:String(x?.name||"").trim()})).filter(x=>x.id&&x.label)
-    : [...new Set((Array.isArray(stockInventory)?stockInventory:[]).map(x=>String(x?.size||"").trim()).filter(Boolean))]
+    : [...new Set(categorySizes.map((x:any)=>String(x?.size||"").trim()).filter(Boolean))]
       .sort((a,b)=>a.localeCompare(b,undefined,{numeric:true,sensitivity:"base"}))
       .map(x=>({id:x,label:x}));
 
   const filteredPicker=pickerValues.filter(x=>x.label.toLowerCase().includes(stockSearch.trim().toLowerCase()));
-  const openPicker=(rowId:string,type:"category"|"size")=>{setStockPickerRow(rowId);setStockPicker(type);setStockSearch("");};
+  const openPicker=(rowId:string,type:"category"|"size")=>{
+    if(type==="size"){
+      const row=stockRows.find(item=>item.id===rowId);
+      if(!row?.categoryId){toast("Select the category first, then choose or add its sizes.","error");return;}
+    }
+    setStockPickerRow(rowId);setStockPicker(type);setStockSearch("");
+  };
   const closePicker=()=>{setStockPicker(null);setStockSearch("");};
 
   const exportStockReportPdf=async()=>{
@@ -543,16 +571,21 @@ export default function StockScreen(){
               <Pressable onPress={()=>removeReceiptAttachment(attachment.id)} hitSlop={8}><Ionicons name="close-circle" size={19} color={colors.error}/></Pressable>
             </View>)}
           </>:null}
-          {stockRows.map((row,i)=><View key={row.id} style={styles.stockCard}>
-            <View style={styles.stockCardHead}>
-              <Text style={styles.stockCardTitle}>Stock item {i+1}</Text>
-              {stockRows.length>1?<Pressable onPress={()=>setStockRows(v=>v.filter(x=>x.id!==row.id))}><Ionicons name="trash-outline" size={18} color={colors.error}/></Pressable>:null}
-            </View>
-
-            <Pressable style={styles.stockDrop} onPress={()=>openPicker(row.id,"category")}>
-              <Text style={row.category?styles.stockDropText:styles.stockDropPlaceholder}>{row.category||"Select category"}</Text>
+          {stockRows.length?<>
+            <Text style={styles.fieldLabel}>Category (select once for all sizes)</Text>
+            <Pressable style={styles.stockDrop} onPress={()=>openPicker(stockRows[0]?.id||"","category")}>
+              <Text style={stockRows.every(row=>row.categoryId===stockRows[0]?.categoryId)?(stockRows[0]?.category?styles.stockDropText:styles.stockDropPlaceholder):styles.stockDropText}>
+                {stockRows.every(row=>row.categoryId===stockRows[0]?.categoryId)?(stockRows[0]?.category||"Select category"):"Multiple categories from invoice — select to use one category"}
+              </Text>
               <Ionicons name="chevron-down" size={18} color={colors.muted}/>
             </Pressable>
+            <Text style={[styles.stockHint,{marginBottom:spacing.sm}]}>Choose a category once. Every size below will be added under this category.</Text>
+          </>:null}
+          {stockRows.map((row,i)=><View key={row.id} style={styles.stockCard}>
+            <View style={styles.stockCardHead}>
+              <Text style={styles.stockCardTitle}>Size {i+1}</Text>
+              {stockRows.length>1?<Pressable onPress={()=>setStockRows(v=>v.filter(x=>x.id!==row.id))}><Ionicons name="trash-outline" size={18} color={colors.error}/></Pressable>:null}
+            </View>
 
             <Pressable style={styles.stockDrop} onPress={()=>openPicker(row.id,"size")}>
               <Text style={row.size?styles.stockDropText:styles.stockDropPlaceholder}>{row.size||"Select size or search/new size"}</Text>
@@ -566,8 +599,8 @@ export default function StockScreen(){
 
           </View>)}
 
-          {!editingReceipt?<Pressable style={styles.addAnotherStock} onPress={()=>setStockRows(v=>v.concat(newRow()))}>
-            <Ionicons name="add-circle-outline" size={20} color={colors.brandPrimary}/><Text style={styles.attachText}>Add another item</Text>
+          {!editingReceipt?<Pressable style={styles.addAnotherStock} onPress={addAnotherSize}>
+            <Ionicons name="add-circle-outline" size={20} color={colors.brandPrimary}/><Text style={styles.attachText}>Add another size</Text>
           </Pressable>:null}
 
           <PrimaryButton title={editingReceipt?"Update Received Stock":"Save Receive Stock"} onPress={submit} loading={saveStock.isPending}/>
@@ -621,20 +654,33 @@ export default function StockScreen(){
           if(stockPicker==="category"){
             try{
               const cat=await api.post<any>("/inventory-categories",{name:term});
-              updateRow(stockPickerRow,{categoryId:cat.id,category:cat.name});
-              qc.invalidateQueries({queryKey:["inventory-categories"]});closePicker();
+              applyReceiptCategory({id:String(cat.id),name:String(cat.name)});
+              qc.invalidateQueries({queryKey:["inventory-categories"]});
+              closePicker();
             }catch(e:any){toast(e?.message||"Could not create category.","error");}
-          }else{updateRow(stockPickerRow,{size:term});closePicker();}
+          }else{
+            const duplicate=stockRows.some(row=>row.id!==stockPickerRow&&String(row.size||"").trim().toLowerCase()===term.toLowerCase());
+            if(duplicate){toast("This size is already in the receiving list.","error");return;}
+            updateRow(stockPickerRow,{size:term});
+            closePicker();
+          }
         }}>
           <Ionicons name="add-circle-outline" size={19} color={colors.brandPrimary}/>
-          <Text style={styles.newOptionText}>Use “\${stockSearch.trim()}” as new {stockPicker}</Text>
+          <Text style={styles.newOptionText}>{stockPicker==="category"?"Create new category":"Add \""+stockSearch.trim()+"\" as a new size in "+(activePickerRow?.category||"this category")}</Text>
         </Pressable>:null}
         <ScrollView keyboardShouldPersistTaps="handled" style={{maxHeight:360}}>
           {filteredPicker.length?filteredPicker.map(item=><Pressable key={String(item.id)} style={styles.pickerOption} onPress={()=>{
-            updateRow(stockPickerRow,stockPicker==="category"?{categoryId:item.id,category:item.label}:{size:item.label});closePicker();
+            if(stockPicker==="category"){
+              applyReceiptCategory({id:item.id,name:item.label});
+            }else{
+              const duplicate=stockRows.some(row=>row.id!==stockPickerRow&&String(row.size||"").trim().toLowerCase()===item.label.toLowerCase());
+              if(duplicate){toast("This size is already in the receiving list.","error");return;}
+              updateRow(stockPickerRow,{size:item.label});
+            }
+            closePicker();
           }}>
             <Text style={styles.pickerOptionText}>{item.label}</Text><Ionicons name="chevron-forward" size={17} color={colors.muted}/>
-          </Pressable>):<Text style={styles.pickerEmpty}>No saved {stockPicker} found.</Text>}
+          </Pressable>):<Text style={styles.pickerEmpty}>{stockPicker==="size"?(activePickerRow?.category?"No saved sizes for this category yet. Search above to add a new size.":"Select a category before choosing a size."):"No saved categories found."}</Text>}
         </ScrollView>
       </View></View>
     </Modal>
