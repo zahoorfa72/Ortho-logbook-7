@@ -550,7 +550,7 @@ export default function IntelligenceHubScreen() {
           </Pressable>
           <Pressable style={styles.smallAction} onPress={() => restoreArchivedEntry(record)}><Text style={styles.smallActionText}>Restore</Text></Pressable>
         </View>
-      ))
+      ))}
       {selectedRecordId ? (
         <View style={styles.revisionPanel}>
           <Text style={styles.sectionTitle}>Saved versions ({revisions.length})</Text>
@@ -813,7 +813,7 @@ export default function IntelligenceHubScreen() {
         <View style={styles.overlay}><View style={[styles.pickerCard,{paddingBottom:insets.bottom+spacing.lg}]}>
           <View style={styles.rowBetween}><Text style={styles.modalTitle}>Module controls</Text><Pressable onPress={() => setModuleSettingsOpen(false)}><Ionicons name="close" size={22} color={colors.onSurface}/></Pressable></View>
           <Text style={styles.description}>Administrators can hide modules without deleting their saved records.</Text>
-          <ScrollView>{INTELLIGENCE_MODULES.map((module) => <View key={module.id} style={styles.toggleRow}><View style={styles.flexOne}><Text style={styles.recordTitle}>{module.title}</Text><Text style={styles.meta}>{module.subtitle}</Text></View><Switch value={moduleSettings[module.id] !== false} onValueChange={(value) => toggleModule(module.id,value)} trackColor={{false:colors.border,true:colors.brandPrimary}/></View>)}</ScrollView>
+          <ScrollView>{INTELLIGENCE_MODULES.map((module) => <View key={module.id} style={styles.toggleRow}><View style={styles.flexOne}><Text style={styles.recordTitle}>{module.title}</Text><Text style={styles.meta}>{module.subtitle}</Text></View><Switch value={moduleSettings[module.id] !== false} onValueChange={(value) => toggleModule(module.id,value)} trackColor={{false:colors.border,true:colors.brandPrimary}}</View>)}</ScrollView>
         </View></View>
       </Modal>
 
