@@ -180,11 +180,6 @@ export default function Inventory() {
         { numeric: true, sensitivity: "base" },
       );
       if (catCmp !== 0) return catCmp;
-      if (tab === "Low Stock") {
-        const an = isNewLowStock(a);
-        const bn = isNewLowStock(b);
-        if (an !== bn) return an ? -1 : 1;
-      }
       if (inventorySort === "name-desc") return formatInventoryLabel(b.category, b.name, b.size).localeCompare(formatInventoryLabel(a.category, a.name, a.size), undefined, { numeric: true, sensitivity: "base" });
       if (inventorySort === "size-asc" || inventorySort === "size-desc") {
         const sizeNumber = (value: string) => {
@@ -426,31 +421,17 @@ export default function Inventory() {
             <EmptyState
               icon="cube-outline"
               title={tab === "New Low Stock" ? "No new low-stock items" : tab === "Low Stock" ? "No low-stock items" : "Inventory is empty"}
-              subtitle={tab === "New Low Stock" ? "No item has newly reached minimum stock in the last 15 days." : tab === "Low Stock" ? "Items that remain at or below minimum stock are shown here after the 15-day new period." : "Use Receive Stock to add stock."}
+              subtitle={tab === "New Low Stock" ? "No item has newly reached minimum stock in the last 15 days." : tab === "Low Stock" ? "All items currently at or below their minimum stock quantity are shown here, regardless of how long they have been low." : "Use Receive Stock to add stock."}
             />
           }
           renderItem={({ item, index }) => {
             const low = item.quantity <= item.minimumStock;
             const newLow = isNewLowStock(item);
-            const showLowSectionHeader = tab === "Low Stock" && (
-              (index === 0) ||
-              (index === newLowStockCount && newLowStockCount > 0)
-            );
             const prevCategory = index > 0 ? String(list[index - 1]?.category || "Uncategorized") : "";
             const thisCategory = String(item.category || "Uncategorized");
             const showCategoryHeader = index === 0 || prevCategory !== thisCategory;
             return (
               <>
-                {showLowSectionHeader ? (
-                  <View style={{ marginBottom: spacing.sm, marginTop: index === 0 ? 0 : spacing.base }}>
-                    <Text style={{ fontFamily: fontFamily.bold, fontSize: fontSize.lg, color: colors.onSurface }}>
-                      {index === 0 && newLow ? "New Low Stock — First 15 Days" : "Other Low Stock"}
-                    </Text>
-                    <Text style={{ fontFamily: fontFamily.regular, fontSize: fontSize.sm, color: colors.muted }}>
-                      {index === 0 && newLow ? "Items that reached minimum stock within the last 15 days." : "Items that have been low stock for 15 days or longer."}
-                    </Text>
-                  </View>
-                ) : null}
                 {showCategoryHeader ? (
                   <View style={{ marginBottom: spacing.sm, marginTop: index === 0 ? 0 : spacing.base }}>
                     <Text style={{ fontFamily: fontFamily.bold, fontSize: fontSize.base, color: colors.brandPrimary }}>
@@ -474,7 +455,7 @@ export default function Inventory() {
                     {low && (
                       <View style={styles.lowBadge}>
                         <Ionicons name="alert-circle" size={12} color={colors.onWarning} />
-                        <Text style={styles.lowText}>{newLow ? "NEW • 15 DAYS" : "LOW"}</Text>
+                        <Text style={styles.lowText}>{tab === "New Low Stock" ? "NEW • 15 DAYS" : "LOW"}</Text>
                       </View>
                     )}
                   </View>
