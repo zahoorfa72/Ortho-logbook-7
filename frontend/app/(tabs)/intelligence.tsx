@@ -17,12 +17,12 @@ import { useToast } from "@/src/components/toast";
 import { EmptyState } from "@/src/components/EmptyState";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 import {
-  deleteKnowledgeArticle, getIntelligenceRecordsForResearch, initializeIntelligenceStore,
+  deleteKnowledgeArticle, getIntelligenceRecordsForResearch, getPatientJourney, initializeIntelligenceStore,
   INTELLIGENCE_MODULES, listIntelligenceModuleSettings, listIntelligencePatients,
   listIntelligenceRecords, listIntelligenceRevisions, listKnowledgeArticles, listArchivedIntelligenceRecords,
   restoreArchivedIntelligenceRecord, restoreIntelligenceRevision, saveIntelligenceRecord, saveKnowledgeArticle,
   setIntelligenceModuleEnabled, softDeleteIntelligenceRecord,
-  type IntelligenceModuleId, type IntelligenceRecord, type KnowledgeArticle, type PatientOption,
+  type IntelligenceModuleId, type IntelligenceRecord, type KnowledgeArticle, type PatientOption, type PatientJourneyItem,
 } from "@/src/intelligence/store";
 
 type FieldDefinition = { key: string; label: string; placeholder?: string; multiline?: boolean };
@@ -53,6 +53,11 @@ const FIELD_DEFINITIONS: Record<IntelligenceModuleId, FieldDefinition[]> = {
     { key: "expiryDate", label: "Expiry date (YYYY-MM-DD)" },
     { key: "supplier", label: "Supplier" },
     { key: "dimensions", label: "Dimensions / size" },
+    { key: "compatibilityGroup", label: "Implant system / compatibility group" },
+    { key: "compatibleWith", label: "Compatible components (catalogue-confirmed)", multiline: true },
+    { key: "instrumentSet", label: "Required instrument set" },
+    { key: "compatibilityVerifiedBy", label: "Compatibility checked by" },
+    { key: "compatibilityVerifiedDate", label: "Compatibility verification date (YYYY-MM-DD)" },
     { key: "barcode", label: "Barcode / QR content" },
     { key: "procedure", label: "Procedure / operation reference" },
   ],
@@ -150,6 +155,7 @@ export default function IntelligenceHubScreen() {
 
   const [moduleId, setModuleId] = useState<IntelligenceModuleId>("body_map");
   const [records, setRecords] = useState<IntelligenceRecord[]>([]);
+  const [journeyItems, setJourneyItems] = useState<PatientJourneyItem[]>([]);
   const [archivedRecords, setArchivedRecords] = useState<IntelligenceRecord[]>([]);
   const [patients, setPatients] = useState<PatientOption[]>([]);
   const [moduleSettings, setModuleSettings] = useState<Record<string, boolean>>({});
@@ -203,6 +209,11 @@ export default function IntelligenceHubScreen() {
   }, [userId, isAdmin, knowledgeSearch, toast]);
 
   useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => {
+    if (!selectedPatientId || !userId) { setJourneyItems([]); return; }
+    try { setJourneyItems(getPatientJourney(selectedPatientId, userId, isAdmin)); }
+    catch (error: any) { setJourneyItems([]); toast(error?.message || "Could not load patient journey.", "error"); }
+  }, [selectedPatientId, userId, isAdmin, records, toast]);
 
   const visibleModules = INTELLIGENCE_MODULES.filter((module) => moduleSettings[module.id] !== false);
   const activeModule = INTELLIGENCE_MODULES.find((module) => module.id === moduleId) || INTELLIGENCE_MODULES[0];
@@ -432,6 +443,15 @@ export default function IntelligenceHubScreen() {
     ]);
   };
 
+  const toggleChecklistLine = (line: string) => {
+    const checked = line.startsWith("[x] ") || line.startsWith("[X] ");
+    const next = line.replace(/^\[[ xX]\]\s*/, checked ? "[ ] " : "[x] ");
+    setFormFields((current) => ({
+      ...current,
+      checklist: (current.checklist || CHECKLIST_TEMPLATE).split("\n").map((item) => item === line ? next : item).join("\n"),
+    }));
+  };
+
   const followUpStatus = (record: IntelligenceRecord) => {
     const payload = safePayload(record);
     const due = payload.dueDate || record.event_date;
@@ -478,7 +498,7 @@ export default function IntelligenceHubScreen() {
           <Text style={styles.sectionTitle}>{selectedArticle.title}</Text>
           <Text style={styles.meta}>{selectedArticle.category}</Text>
           <Text selectable style={styles.articleBody}>{selectedArticle.body}</Text>
-          {isAdmin ? <View style={styles.actionRow}><Pressable onPress={() => openArticleEditor(selectedArticle)} style={styles.smallAction}><Ionicons name="create-outline" size={17} color={colors.brandPrimary}/><Text style={styles.smallActionText}>Edit</Text></Pressable><Pressable onPress={() => Alert.alert("Delete reference?", "This permanently deletes this knowledge article.", [{text:"Cancel",style:"cancel"},{text:"Delete",style:"destructive",onPress:()=>{deleteKnowledgeArticle(selectedArticle.id);setSelectedArticle(null);reloadKnowledge();}}])} style={styles.smallAction}><Ionicons name="trash-outline" size={17} color={colors.danger}/><Text style={[styles.smallActionText,{color:colors.danger}]}>Delete</Text></Pressable></View> : null}
+          {isAdmin ? <View style={styles.actionRow}><Pressable onPress={() => openArticleEditor(selectedArticle)} style={styles.smallAction}><Ionicons name="create-outline" size={17} color={colors.brandPrimary}/><Text style={styles.smallActionText}>Edit</Text></Pressable><Pressable onPress={() => Alert.alert("Delete reference?", "This permanently deletes this knowledge article.", [{text:"Cancel",style:"cancel"},{text:"Delete",style:"destructive",onPress:()=>{deleteKnowledgeArticle(selectedArticle.id);setSelectedArticle(null);reloadKnowledge();}}])} style={styles.smallAction}><Ionicons name="trash-outline" size={17} color={colors.error}/><Text style={[styles.smallActionText,{color:colors.error}]}>Delete</Text></Pressable></View> : null}
         </View>
       ) : knowledgeArticles.map((article) => (
         <Pressable key={article.id} style={styles.articleListItem} onPress={() => setSelectedArticle(article)}>
@@ -529,6 +549,20 @@ export default function IntelligenceHubScreen() {
     </View>
   );
 
+  const renderJourneyItem = (item: PatientJourneyItem) => (
+    <View key={item.id} style={styles.recordCard}>
+      <View style={styles.rowBetween}>
+        <View style={styles.flexOne}>
+          <Text style={styles.recordTitle}>{item.title}</Text>
+          <Text style={styles.meta}>{String(item.date || "").slice(0, 16).replace("T", " ")} · {item.source.replace(/_/g, " ")}</Text>
+        </View>
+        <Ionicons name={item.source === "implant" ? "hardware-chip-outline" : item.source === "history" ? "document-text-outline" : item.source === "patient" ? "person-outline" : "medical-outline"} size={19} color={colors.brandPrimary}/>
+      </View>
+      {item.description ? <Text style={styles.summaryText}>{item.description}</Text> : null}
+      {item.mediaUri ? <Image source={{uri:item.mediaUri}} resizeMode="contain" style={styles.recordImage}/> : null}
+    </View>
+  );
+
   const renderRecordCard = (record: IntelligenceRecord) => {
     const payload = safePayload(record);
     const patient = record.patient_id ? patientById.get(record.patient_id) : null;
@@ -549,7 +583,7 @@ export default function IntelligenceHubScreen() {
         <View style={styles.actionRow}>
           <Pressable style={styles.smallAction} onPress={() => openEditRecord(record)}><Ionicons name="create-outline" size={17} color={colors.brandPrimary}/><Text style={styles.smallActionText}>Edit</Text></Pressable>
           <Pressable style={styles.smallAction} onPress={() => showRevisions(record)}><Ionicons name="time-outline" size={17} color={colors.brandPrimary}/><Text style={styles.smallActionText}>Versions</Text></Pressable>
-          <Pressable style={styles.smallAction} onPress={() => deleteRecord(record)}><Ionicons name="archive-outline" size={17} color={colors.danger}/><Text style={[styles.smallActionText,{color:colors.danger}]}>Archive</Text></Pressable>
+          <Pressable style={styles.smallAction} onPress={() => deleteRecord(record)}><Ionicons name="archive-outline" size={17} color={colors.error}/><Text style={[styles.smallActionText,{color:colors.error}]}>Archive</Text></Pressable>
         </View>
       </View>
     );
@@ -593,7 +627,7 @@ export default function IntelligenceHubScreen() {
         <View style={styles.pageIntro}>
           <View style={styles.rowBetween}>
             <Text style={styles.pageTitle}>{activeModule.title}</Text>
-            {moduleId === "xray" && compareRecords.length >= 2 ? <Pressable onPress={() => setCompareOpen(true)} style={styles.smallAction}><Ionicons name="git-compare-outline" size={17} color={colors.brandPrimary}/><Text style={styles.smallActionText}>Compare</Text></Pressable> : null}
+            {moduleId === "xray" && compareRecords.length >= 2 ? <Pressable onPress={() => setCompareOpen(true)} style={styles.smallAction}><Ionicons name="swap-horizontal-outline" size={17} color={colors.brandPrimary}/><Text style={styles.smallActionText}>Compare</Text></Pressable> : null}
           </View>
           {renderModuleDescription()}
         </View>
@@ -618,8 +652,8 @@ export default function IntelligenceHubScreen() {
                 <View style={styles.metric}><Text style={styles.metricValue}>{visibleRecords.filter((record) => followUpStatus(record) === "Scheduled").length}</Text><Text style={styles.metricLabel}>Scheduled</Text></View>
               </View>
             ) : null}
-            {visibleRecords.map(renderRecordCard)}
-            {visibleRecords.length === 0 ? <EmptyState icon="file-tray-outline" title="No entries yet" subtitle={moduleId === "digital_twin" ? "Select a patient with linked clinical records." : "Add the first entry. Your data stays on this device until backed up."}/> : null}
+            {moduleId === "digital_twin" ? journeyItems.map(renderJourneyItem) : visibleRecords.map(renderRecordCard)}
+            {(moduleId === "digital_twin" ? journeyItems.length === 0 && !!selectedPatientId : visibleRecords.length === 0) ? <EmptyState icon="file-tray-outline" title="No entries yet" subtitle={moduleId === "digital_twin" ? "This patient has no dated clinical history or intelligence entries." : "Add the first entry. Your data stays on this device until backed up."}/> : null}
             {moduleId === "xray_review" ? <View style={styles.notice}><Text style={styles.noticeTitle}>AI and diagnosis limitations</Text><Text style={styles.description}>This screen stores clinician-entered observations and measurements only. It does not detect fractures, measure radiographs automatically, diagnose or recommend treatment. A validated medical imaging model and clinical governance are required for those functions.</Text></View> : null}
           </>
         ) : null}
@@ -666,15 +700,39 @@ export default function IntelligenceHubScreen() {
             {FIELD_DEFINITIONS[moduleId].map((field) => (
               <View key={field.key}>
                 <Text style={styles.inputLabel}>{field.label}</Text>
-                <TextInput
-                  value={formFields[field.key] || ""}
-                  onChangeText={(value) => setFormFields((current) => ({ ...current, [field.key]: value }))}
-                  placeholder={field.placeholder || field.label}
-                  placeholderTextColor={colors.muted}
-                  multiline={!!field.multiline}
-                  autoCapitalize="sentences"
-                  style={[styles.formInput, field.multiline && styles.multilineInput]}
-                />
+                {moduleId === "surgery_checklist" && field.key === "checklist" ? (
+                  <View style={styles.checklistBox}>
+                    {(formFields.checklist || CHECKLIST_TEMPLATE).split("\n").filter(Boolean).map((line, index) => {
+                      const checked = /^\[[xX]\]/.test(line);
+                      const label = line.replace(/^\[[ xX]\]\s*/, "");
+                      return <Pressable key={String(index) + label} onPress={() => toggleChecklistLine(line)} style={styles.checklistItem}>
+                        <Ionicons name={checked ? "checkbox" : "square-outline"} size={21} color={checked ? colors.success : colors.muted}/>
+                        <Text style={styles.checklistText}>{label}</Text>
+                      </Pressable>;
+                    })}
+                    <TextInput
+                      value={(formFields.checklist || "").split("\n").filter((line) => !/^\s*\[[xX ]\]/.test(line)).join("\n")}
+                      onChangeText={(value) => setFormFields((current) => ({
+                        ...current,
+                        checklist: (current.checklist || CHECKLIST_TEMPLATE).split("\n").filter((line) => /^\s*\[[xX ]\]/.test(line)).concat(value.split("\n").filter(Boolean)).join("\n"),
+                      }))}
+                      placeholder="Add a custom checklist item on a new line"
+                      placeholderTextColor={colors.muted}
+                      multiline
+                      style={[styles.formInput,styles.multilineInput]}
+                    />
+                  </View>
+                ) : (
+                  <TextInput
+                    value={formFields[field.key] || ""}
+                    onChangeText={(value) => setFormFields((current) => ({ ...current, [field.key]: value }))}
+                    placeholder={field.placeholder || field.label}
+                    placeholderTextColor={colors.muted}
+                    multiline={!!field.multiline}
+                    autoCapitalize="sentences"
+                    style={[styles.formInput, field.multiline && styles.multilineInput]}
+                  />
+                )}
               </View>
             ))}
             {moduleId === "implant_passport" ? <Pressable onPress={startBarcodeScan} style={styles.secondaryButton}><Ionicons name="scan-outline" size={18} color={colors.brandPrimary}/><Text style={styles.secondaryButtonText}>Scan barcode / QR code</Text></Pressable> : null}
@@ -750,6 +808,9 @@ const useStyles = makeStyles((colors) => ({
   headerSubtitle:{fontFamily:fontFamily.regular,fontSize:fontSize.xs,color:colors.muted,marginTop:2},
   flexOne:{flex:1},
   moduleStrip:{gap:spacing.sm,paddingBottom:spacing.md},
+  checklistBox:{padding:spacing.md,backgroundColor:colors.surface,borderWidth:1,borderColor:colors.border,borderRadius:radius.md},
+  checklistItem:{flexDirection:"row",alignItems:"center",gap:spacing.sm,paddingVertical:spacing.sm},
+  checklistText:{fontFamily:fontFamily.regular,fontSize:fontSize.sm,color:colors.onSurface,flex:1},
   moduleChip:{flexDirection:"row",alignItems:"center",gap:6,paddingHorizontal:12,paddingVertical:10,borderRadius:radius.pill,backgroundColor:colors.surface,borderWidth:1,borderColor:colors.border},
   moduleChipActive:{backgroundColor:colors.brandPrimary,borderColor:colors.brandPrimary},
   moduleChipText:{fontFamily:fontFamily.semibold,fontSize:fontSize.xs,color:colors.onSurface},
