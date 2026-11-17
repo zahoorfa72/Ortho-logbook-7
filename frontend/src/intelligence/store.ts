@@ -65,7 +65,7 @@ export function initializeIntelligenceStore() {
 function serializeRevision(row: IntelligenceRecord) {
   return JSON.stringify({
     id: row.id, patient_id: row.patient_id, kind: row.kind, title: row.title,
-    event_date: row.event_date, summary: row.summary, payload_json: row.payload_json,
+    event_date: row.event_date, summary: row.summary, payload_json: row.payload_json, media_uri: row.media_uri,
     updated_at: row.updated_at, updated_by: row.updated_by,
   });
 }
@@ -216,6 +216,9 @@ export function saveIntelligenceRecord(input: SaveIntelligenceInput): Intelligen
   if (input.kind === "implant_passport" && payloadValues.expiryDate && !isValidDate(cleanText(payloadValues.expiryDate, 20))) {
     throw new Error("Enter the implant expiry date as YYYY-MM-DD.");
   }
+  if (input.kind === "implant_passport" && payloadValues.compatibilityVerifiedDate && !isValidDate(cleanText(payloadValues.compatibilityVerifiedDate, 20))) {
+    throw new Error("Enter the compatibility verification date as YYYY-MM-DD.");
+  }
   if (input.kind === "rehab" && payloadValues.painScore !== undefined && payloadValues.painScore !== "") {
     const pain = Number(payloadValues.painScore);
     if (!Number.isFinite(pain) || pain < 0 || pain > 10) throw new Error("Pain score must be between 0 and 10.");
@@ -304,9 +307,9 @@ export function restoreIntelligenceRevision(recordId: string, revisionId: string
   db.withTransactionSync(() => {
     addRevision(current, userId, "Before recovery restore");
     db.runSync(
-      "UPDATE ortho_intelligence_records SET patient_id=?,kind=?,title=?,event_date=?,summary=?,payload_json=?,updated_at=?,updated_by=?,deleted_at=NULL WHERE id=?",
+      "UPDATE ortho_intelligence_records SET patient_id=?,kind=?,title=?,event_date=?,summary=?,payload_json=?,media_uri=?,updated_at=?,updated_by=?,deleted_at=NULL WHERE id=?",
       [snapshot.patient_id || null, snapshot.kind, cleanText(snapshot.title, 180), cleanText(snapshot.event_date, 30),
-       cleanText(snapshot.summary, 1000), validatePayload(payload), timestamp, userId, recordId],
+       cleanText(snapshot.summary, 1000), validatePayload(payload), cleanText(snapshot.media_uri, 24000000), timestamp, userId, recordId],
     );
   });
 }
