@@ -84,6 +84,16 @@ export default function Inventory() {
     void queryClient.invalidateQueries({ queryKey: ["inventory"] });
     void queryClient.invalidateQueries({ queryKey: ["inventory-categories"] });
   };
+  const updateCachedInventoryItem = (item: InventoryItem) => {
+    queryClient.setQueryData<InventoryItem[]>(["inventory"], (current) =>
+      current?.map((row) => row.id === item.id ? { ...row, ...item } : row) ?? current
+    );
+  };
+  const isLowStock = useCallback((item: InventoryItem) => {
+    const quantity = Number(item.quantity);
+    const minimum = Number(item.minimumStock);
+    return Number.isFinite(quantity) && Number.isFinite(minimum) && quantity <= minimum;
+  }, []);
   const resolveCategory = (item: InventoryItem) => {
     const itemCategoryId = String(item.categoryId || "").trim();
     const itemCategoryName = String(item.category || "").trim();
@@ -110,7 +120,10 @@ export default function Inventory() {
         minimumStock: item.minimumStock,
       });
     },
-    onSuccess: () => {
+    onSuccess: (_result, item) => {
+      // Update the visible inventory cache immediately so a restocked item
+      // disappears from Low Stock without waiting for a screen restart.
+      updateCachedInventoryItem(item);
       invalidate();
       void checkAndSendImmediateLowStockAlerts().then(result => {
         if (/FAILED|failed|error|could not|missing/i.test(result) && !/disabled/i.test(result)) toast("Immediate low-stock alert failed. " + result.slice(0, 100), "error");
@@ -144,7 +157,7 @@ export default function Inventory() {
         minimumStock: item.minimumStock,
       });
     },
-    onSuccess: () => { invalidate(); void checkAndSendImmediateLowStockAlerts().then(result => {
+    onSuccess: (_result, item) => { updateCachedInventoryItem(item); invalidate(); void checkAndSendImmediateLowStockAlerts().then(result => {
         if (/FAILED|failed|error|could not|missing/i.test(result) && !/disabled/i.test(result)) toast("Immediate low-stock alert failed. " + result.slice(0, 100), "error");
         else if (result.includes("sent")) toast("Immediate low-stock alert sent successfully.", "success");
       }).catch(() => toast("Immediate low-stock alert failed. Admin can retry it in Automatic Low Stock Reports.", "error")); },
@@ -152,11 +165,11 @@ export default function Inventory() {
   });
 
   const isNewLowStock = useCallback((item: InventoryItem) => {
-    if (item.quantity > item.minimumStock || !item.lowStockTriggeredAt) return false;
+    if (!isLowStock(item) || !item.lowStockTriggeredAt) return false;
     const t = new Date(item.lowStockTriggeredAt).getTime();
     if (!Number.isFinite(t)) return false;
     return Date.now() - t < 15 * 24 * 60 * 60 * 1000;
-  }, []);
+  }, [isLowStock]);
 
   const list = useMemo(() => {
     let items = (data || []).filter((i) => {
@@ -172,7 +185,7 @@ export default function Inventory() {
       return !s || String(i.name || "").toLowerCase().includes(s) || String(i.size || "").toLowerCase().includes(s) || String(i.category || "").toLowerCase().includes(s);
     });
     if (tab === "New Low Stock") items = items.filter(isNewLowStock);
-    else if (tab === "Low Stock") items = items.filter((i) => i.quantity <= i.minimumStock);
+    else if (tab === "Low Stock") items = items.filter(isLowStock);
     items = [...items].sort((a, b) => {
       const catCmp = String(a.category || "Uncategorized").localeCompare(
         String(b.category || "Uncategorized"),
@@ -203,7 +216,7 @@ export default function Inventory() {
       return formatInventoryLabel(a.category, a.name, a.size).localeCompare(formatInventoryLabel(b.category, b.name, b.size), undefined, { numeric: true, sensitivity: "base" });
     });
     return items;
-  }, [data, tab, search, inventorySort, isNewLowStock, selectedCategoryId, categories]);
+  }, [data, tab, search, inventorySort, isLowStock, isNewLowStock, selectedCategoryId, categories]);
 
   // Memoize once per inventory update. Computing this inside renderItem made
   // every visible row scan the entire list, causing quadratic work on large lists.
@@ -425,7 +438,7 @@ export default function Inventory() {
             />
           }
           renderItem={({ item, index }) => {
-            const low = item.quantity <= item.minimumStock;
+            const low = isLowStock(item);
             const newLow = isNewLowStock(item);
             const prevCategory = index > 0 ? String(list[index - 1]?.category || "Uncategorized") : "";
             const thisCategory = String(item.category || "Uncategorized");
