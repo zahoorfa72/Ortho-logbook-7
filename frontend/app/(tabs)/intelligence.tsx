@@ -237,6 +237,17 @@ export default function IntelligenceHubScreen() {
     return rows;
   }, [records, moduleId, selectedPatientId, search]);
 
+  const rehabTrend = useMemo(() => {
+    if (!selectedPatientId) return [];
+    return records.filter((record) => record.kind === "rehab" && record.patient_id === selectedPatientId)
+      .slice().sort((a,b) => a.event_date.localeCompare(b.event_date)).slice(-8)
+      .map((record) => {
+        const payload = safePayload(record);
+        const pain = Number(payload.painScore);
+        return { id: record.id, date: record.event_date, pain: Number.isFinite(pain) && payload.painScore !== "" ? pain : null, flexion: payload.flexionDegrees || "" };
+      });
+  }, [records, selectedPatientId]);
+
   const compareRecords = useMemo(
     () => records.filter((record) => record.kind === "xray" && !!selectedPatientId && record.patient_id === selectedPatientId).slice(0, 2).reverse(),
     [records, selectedPatientId],
@@ -654,6 +665,20 @@ export default function IntelligenceHubScreen() {
             <TextInput value={search} onChangeText={setSearch} placeholder="Search entries" placeholderTextColor={colors.muted} style={styles.searchInput}/>
             {moduleId !== "digital_twin" ? <Pressable onPress={openNewRecord} style={styles.primaryButton}><Ionicons name="add" size={19} color="#FFFFFF"/><Text style={styles.primaryButtonText}>Add {activeModule.title.toLowerCase()} entry</Text></Pressable> : null}
             {moduleId === "digital_twin" && !selectedPatientId ? <Text style={styles.warningText}>Choose a patient to open their complete clinical journey.</Text> : null}
+            {moduleId === "rehab" ? (
+              <View style={styles.panel}>
+                <Text style={styles.panelTitle}>Recovery trend</Text>
+                <Text style={styles.description}>Pain scores are patient-reported or clinician-recorded values entered for this patient. This chart does not predict recovery.</Text>
+                {!selectedPatientId ? <Text style={styles.caption}>Select a patient to view their trend.</Text> : rehabTrend.filter((item) => item.pain !== null).length ? rehabTrend.filter((item) => item.pain !== null).map((item) => (
+                  <View key={item.id} style={styles.trendRow}>
+                    <Text style={styles.trendDate}>{item.date.slice(5)}</Text>
+                    <View style={styles.trendTrack}><View style={[styles.trendFill,{width:String((item.pain || 0)*10)+"%"}]}/></View>
+                    <Text style={styles.trendValue}>{item.pain}/10</Text>
+                    {item.flexion ? <Text style={styles.trendMeta}>Flexion {item.flexion}°</Text> : null}
+                  </View>
+                )) : <Text style={styles.caption}>No pain-score measurements are recorded yet.</Text>}
+              </View>
+            ) : null}
             {moduleId === "follow_up" ? (
               <View style={styles.metricRow}>
                 <View style={styles.metric}><Text style={styles.metricValue}>{visibleRecords.filter((record) => followUpStatus(record) === "Overdue").length}</Text><Text style={styles.metricLabel}>Overdue</Text></View>
@@ -842,6 +867,12 @@ const useStyles = makeStyles((colors) => ({
   panelTitle:{fontFamily:fontFamily.bold,fontSize:fontSize.lg,color:colors.onSurface,marginBottom:spacing.xs},
   sectionTitle:{fontFamily:fontFamily.bold,fontSize:fontSize.base,color:colors.onSurface,marginTop:spacing.md,marginBottom:spacing.sm},
   metricRow:{flexDirection:"row",gap:spacing.sm,marginVertical:spacing.md},
+  trendRow:{flexDirection:"row",alignItems:"center",gap:spacing.sm,paddingVertical:spacing.xs,flexWrap:"wrap"},
+  trendDate:{fontFamily:fontFamily.medium,fontSize:fontSize.xs,color:colors.muted,width:42},
+  trendTrack:{height:10,flex:1,minWidth:70,backgroundColor:colors.surfaceTertiary,borderRadius:99,overflow:"hidden"},
+  trendFill:{height:10,backgroundColor:colors.brandPrimary,borderRadius:99},
+  trendValue:{fontFamily:fontFamily.bold,fontSize:fontSize.xs,color:colors.onSurface,width:36,textAlign:"right"},
+  trendMeta:{fontFamily:fontFamily.regular,fontSize:fontSize.xs,color:colors.muted,width:"100%",marginLeft:42},
   metric:{flex:1,padding:spacing.md,borderWidth:1,borderColor:colors.border,borderRadius:radius.md,backgroundColor:colors.surfaceSecondary},
   metricValue:{fontFamily:fontFamily.bold,fontSize:fontSize.xl,color:colors.brandPrimary},
   metricLabel:{fontFamily:fontFamily.semibold,fontSize:fontSize.xs,color:colors.muted,marginTop:3},
