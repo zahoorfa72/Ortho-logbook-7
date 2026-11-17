@@ -620,7 +620,6 @@ export default function IntelligenceHubScreen() {
     if (moduleId === "surgery_checklist") return <Text style={styles.description}>Use the editable checklist for local sign-off. It does not replace your hospital's approved surgical safety checklist.</Text>;
     if (moduleId === "clinical_note") return <Text style={styles.description}>Use the microphone on your phone keyboard to dictate into the structured fields, then review and correct every field before saving.</Text>;
     if (moduleId === "follow_up") return <Text style={styles.description}>The radar flags overdue and upcoming appointments from saved due dates and statuses. It is a reminder list, not a clinical risk prediction.</Text>;
-    if (moduleId === "digital_twin") return <Text style={styles.description}>Chronological patient journey from all linked entries.</Text>;
     return null;
   };
 
@@ -673,7 +672,7 @@ export default function IntelligenceHubScreen() {
                 {!selectedPatientId ? <Text style={styles.caption}>Select a patient to view their trend.</Text> : rehabTrend.filter((item) => item.pain !== null).length ? rehabTrend.filter((item) => item.pain !== null).map((item) => (
                   <View key={item.id} style={styles.trendRow}>
                     <Text style={styles.trendDate}>{item.date.slice(5)}</Text>
-                    <View style={styles.trendTrack}><View style={[styles.trendFill,{width:String((item.pain || 0)*10)+"%"}]}/></View>
+                    <View style={styles.trendTrack}><View style={[styles.trendFill,{width:(String((item.pain || 0)*10)+"%") as `${number}%`}]}/></View>
                     <Text style={styles.trendValue}>{item.pain}/10</Text>
                     {item.flexion ? <Text style={styles.trendMeta}>Flexion {item.flexion}°</Text> : null}
                   </View>
