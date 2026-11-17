@@ -123,7 +123,7 @@ export default function TabsLayout() {
         options={{
           title: "Intelligence",
           tabBarIcon: ({ color, size, focused }) => (
-            <Ionicons name={focused ? "brain" : "brain-outline"} size={size} color={color} />
+            <Ionicons name={focused ? "medkit" : "medkit-outline"} size={size} color={color} />
           ),
         }}
       />
