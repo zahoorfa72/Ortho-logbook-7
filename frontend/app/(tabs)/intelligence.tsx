@@ -238,7 +238,7 @@ export default function IntelligenceHubScreen() {
   }, [records, moduleId, selectedPatientId, search]);
 
   const compareRecords = useMemo(
-    () => records.filter((record) => record.kind === "xray" && (!selectedPatientId || record.patient_id === selectedPatientId)).slice(0, 2).reverse(),
+    () => records.filter((record) => record.kind === "xray" && !!selectedPatientId && record.patient_id === selectedPatientId).slice(0, 2).reverse(),
     [records, selectedPatientId],
   );
 
@@ -313,7 +313,16 @@ export default function IntelligenceHubScreen() {
   const pickXray = async () => {
     try {
       const result = await launchImageLibraryAsync({ mediaTypes: ["images"], quality: 0.88, allowsEditing: false });
-      if (!result.canceled && result.assets[0]?.uri) setMediaUri(result.assets[0].uri);
+      if (!result.canceled && result.assets[0]?.uri) {
+        const base = FileSystem.documentDirectory || FileSystem.cacheDirectory;
+        if (!base) throw new Error("Secure app storage is unavailable for this image.");
+        const sourceUri = result.assets[0].uri;
+        const path = sourceUri.split(/[?#]/)[0];
+        const extension = (path.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 5) || "jpg";
+        const destination = base + "ortho-intelligence-xray-" + Date.now() + "-" + Math.random().toString(36).slice(2) + "." + extension;
+        await FileSystem.copyAsync({ from: sourceUri, to: destination });
+        setMediaUri(destination);
+      }
     } catch (error: any) {
       toast(error?.message || "Could not open image library.", "error");
     }
@@ -627,7 +636,7 @@ export default function IntelligenceHubScreen() {
         <View style={styles.pageIntro}>
           <View style={styles.rowBetween}>
             <Text style={styles.pageTitle}>{activeModule.title}</Text>
-            {moduleId === "xray" && compareRecords.length >= 2 ? <Pressable onPress={() => setCompareOpen(true)} style={styles.smallAction}><Ionicons name="swap-horizontal-outline" size={17} color={colors.brandPrimary}/><Text style={styles.smallActionText}>Compare</Text></Pressable> : null}
+            {moduleId === "xray" && !!selectedPatientId && compareRecords.length >= 2 ? <Pressable onPress={() => setCompareOpen(true)} style={styles.smallAction}><Ionicons name="swap-horizontal-outline" size={17} color={colors.brandPrimary}/><Text style={styles.smallActionText}>Compare</Text></Pressable> : null}
           </View>
           {renderModuleDescription()}
         </View>
