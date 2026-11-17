@@ -40,6 +40,10 @@ export default function TabsLayout() {
           <NativeTabs.Trigger.Icon sf="chart.xyaxis.line" />
           <NativeTabs.Trigger.Label>Lab Trends</NativeTabs.Trigger.Label>
         </NativeTabs.Trigger>
+        <NativeTabs.Trigger name="intelligence">
+          <NativeTabs.Trigger.Icon sf="brain.head.profile" />
+          <NativeTabs.Trigger.Label>Intelligence</NativeTabs.Trigger.Label>
+        </NativeTabs.Trigger>
       </NativeTabs>
     );
   }
@@ -111,6 +115,15 @@ export default function TabsLayout() {
           title: "Lab Trends",
           tabBarIcon: ({ color, size, focused }) => (
             <Ionicons name={focused ? "analytics" : "analytics-outline"} size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="intelligence"
+        options={{
+          title: "Intelligence",
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons name={focused ? "brain" : "brain-outline"} size={size} color={color} />
           ),
         }}
       />
