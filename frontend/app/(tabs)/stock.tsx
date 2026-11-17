@@ -29,12 +29,13 @@ type StockAttachment = {
 };
 
 type StockRow = {
-  id:string; categoryId:string; category:string; size:string; quantity:string;
+  id:string; groupId:string; categoryId:string; category:string; size:string; quantity:string;
   minimumStock:string; billImage:string;
 };
 
-const newRow=():StockRow=>({
+const newRow=(groupId?:string):StockRow=>({
   id:Math.random().toString(36).slice(2),
+  groupId:groupId||Math.random().toString(36).slice(2),
   categoryId:"",category:"",size:"",quantity:"",minimumStock:"1",billImage:""
 });
 
@@ -79,7 +80,7 @@ function parseInvoiceOcr(text:string,categories:any[],inventory:any[]){
    if(!category){const m=bestOcrMatch(line,(Array.isArray(inventory)?inventory:[]).map((x:any)=>String(x?.category||x?.name||"")).filter(Boolean));if(m.score>=.52)category=m.value;}
    if(!category&&!sizes.length)continue;
    if(!sizes.length)sizes=[""];
-   for(const size of sizes){const key=normalizeOcr(category+"|"+size+"|"+line);if(seen.has(key))continue;seen.add(key);const cat=(Array.isArray(categories)?categories:[]).find((x:any)=>normalizeOcr(x?.name)===normalizeOcr(category));out.push({...newRow(),category,categoryId:String(cat?.id||""),size,quantity:multiSizes?"":quantity,minimumStock:"1"});}
+   for(const size of sizes){const key=normalizeOcr(category+"|"+size+"|"+line);if(seen.has(key))continue;seen.add(key);const cat=(Array.isArray(categories)?categories:[]).find((x:any)=>normalizeOcr(x?.name)===normalizeOcr(category));out.push({...newRow("ocr-"+String(cat?.id||normalizeOcr(category))),category,categoryId:String(cat?.id||""),size,quantity:multiSizes?"":quantity,minimumStock:"1"});}
  }
  return out;
 }
@@ -103,6 +104,7 @@ export default function StockScreen(){
   const [savingBatchMeta,setSavingBatchMeta]=useState(false);
   const [stockPicker,setStockPicker]=useState<"category"|"size"|null>(null);
   const [stockPickerRow,setStockPickerRow]=useState("");
+  const [selectedSizeValues,setSelectedSizeValues]=useState<string[]>([]);
   const [stockSearch,setStockSearch]=useState("");
   const [ocrBusy,setOcrBusy]=useState(false);
   const [reportFromDate,setReportFromDate]=useState(new Date().toISOString().slice(0,7)+"-01");
@@ -121,6 +123,19 @@ export default function StockScreen(){
     queryKey:["inventory-purchase-receipts"],
     queryFn:()=>api.get("/stock-receipts"),
   });
+
+  const stockGroups=useMemo(()=>{
+    const groups=new Map<string,{groupId:string;categoryId:string;category:string;rows:StockRow[]}>();
+    for(const row of stockRows){
+      const groupId=String(row.groupId||row.id);
+      let group=groups.get(groupId);
+      if(!group){group={groupId,categoryId:String(row.categoryId||""),category:String(row.category||""),rows:[]};groups.set(groupId,group);}
+      if(!group.categoryId&&row.categoryId)group.categoryId=String(row.categoryId);
+      if(!group.category&&row.category)group.category=String(row.category);
+      group.rows.push(row);
+    }
+    return [...groups.values()];
+  },[stockRows]);
 
   const stockBatches=useMemo(()=>{
     const groups=new Map<string,{batchId:string;createdAt:string;addedDate:string;description:string;items:any[];attachments:StockAttachment[]}>();
@@ -203,11 +218,9 @@ export default function StockScreen(){
   const editReceipt=(r:any)=>{
     setEditingReceipt(r);
     setStockRows([{
-      id:String(r.id),
-      categoryId:String(r.category_id||""),
-      category:String(r.category||""),
-      size:String(r.size||""),
-      quantity:String(Number(r.quantity)||0),
+      id:String(r.id),groupId:"edit-"+String(r.id),
+      categoryId:String(r.category_id||""),category:String(r.category||""),
+      size:String(r.size||""),quantity:String(Number(r.quantity)||0),
       minimumStock:String(Number(r.minimum_stock??r.minimumStock)||0),
       billImage:String(r.bill_image||r.billImage||""),
     }]);
@@ -256,18 +269,46 @@ export default function StockScreen(){
 
   const updateRow=(id:string,patch:Partial<StockRow>)=>setStockRows(rows=>rows.map(r=>r.id===id?{...r,...patch}:r));
 
-  const applyReceiptCategory=(category:{id:string;name:string})=>{
+  const applyReceiptCategory=(groupId:string,category:{id:string;name:string})=>{
     setStockRows(rows=>rows.map(row=>{
+      if(String(row.groupId||row.id)!==groupId)return row;
       const unchanged=String(row.categoryId||"")===category.id ||
         String(row.category||"").trim().toLowerCase()===category.name.trim().toLowerCase();
-      return {...row,categoryId:category.id,category:category.name,size:unchanged?row.size:""};
+      return {...row,categoryId:category.id,category:category.name,size:unchanged?row.size:"",quantity:unchanged?row.quantity:""};
     }));
+    setSelectedSizeValues([]);
   };
 
-  const addAnotherSize=()=>{
-    const first=stockRows[0];
-    if(!first?.categoryId||!first?.category){toast("Select a category before adding sizes.","error");return;}
-    setStockRows(rows=>rows.concat({...newRow(),categoryId:first.categoryId,category:first.category}));
+  const addAnotherItem=()=>{
+    if(editingReceipt)return;
+    setStockRows(rows=>rows.concat(newRow("group-"+Math.random().toString(36).slice(2))));
+  };
+
+  const removeSizeRow=(groupId:string,rowId:string)=>{
+    setStockRows(rows=>{
+      const groupRows=rows.filter(row=>String(row.groupId||row.id)===groupId);
+      if(groupRows.length<=1)return rows.map(row=>row.id===rowId?{...row,size:"",quantity:""}:row);
+      return rows.filter(row=>row.id!==rowId);
+    });
+  };
+
+  const applySelectedSizes=()=>{
+    const group=stockGroups.find(item=>item.groupId===stockPickerRow);
+    if(!group?.categoryId||!group.category){toast("Select a category first.","error");return;}
+    const selected=[...new Map(selectedSizeValues.map(size=>[String(size).trim().toLowerCase(),String(size).trim()])).values()].filter(Boolean);
+    if(!selected.length){toast("Select at least one size.","error");return;}
+    const existing=new Map(group.rows.filter(row=>row.size.trim()).map(row=>[row.size.trim().toLowerCase(),row]));
+    const nextRows=selected.map(size=>{
+      const old=existing.get(size.toLowerCase());
+      return old?old:{...newRow(group.groupId),categoryId:group.categoryId,category:group.category,size,quantity:"",minimumStock:"1"};
+    });
+    setStockRows(rows=>{
+      const firstIndex=rows.findIndex(row=>String(row.groupId||row.id)===group.groupId);
+      const rest=rows.filter(row=>String(row.groupId||row.id)!==group.groupId);
+      rest.splice(Math.max(0,Math.min(firstIndex,rest.length)),0,...nextRows);
+      return rest;
+    });
+    closePicker();
   };
 
   const openReceiptAttachment=async(attachment:any)=>{
@@ -380,9 +421,9 @@ export default function StockScreen(){
     finally{setOcrBusy(false);}
   };
 
-  const activePickerRow=stockRows.find(row=>row.id===stockPickerRow)||stockRows[0];
-  const pickerCategoryId=String(activePickerRow?.categoryId||"");
-  const pickerCategoryName=String(activePickerRow?.category||"").trim().toLowerCase();
+  const activePickerGroup=stockGroups.find(group=>group.groupId===stockPickerRow);
+  const pickerCategoryId=String(activePickerGroup?.categoryId||"");
+  const pickerCategoryName=String(activePickerGroup?.category||"").trim().toLowerCase();
   const categorySizes=(Array.isArray(stockInventory)?stockInventory:[]).filter((item:any)=>{
     const sameId=pickerCategoryId && String(item?.category_id||item?.categoryId||"")===pickerCategoryId;
     const sameName=pickerCategoryName && String(item?.category||"").trim().toLowerCase()===pickerCategoryName;
@@ -390,19 +431,20 @@ export default function StockScreen(){
   });
   const pickerValues=stockPicker==="category"
     ? (Array.isArray(stockCategories)?stockCategories:[]).map(x=>({id:String(x?.id||""),label:String(x?.name||"").trim()})).filter(x=>x.id&&x.label)
-    : [...new Set(categorySizes.map((x:any)=>String(x?.size||"").trim()).filter(Boolean))]
+    : [...new Set([...categorySizes.map((x:any)=>String(x?.size||"").trim()),...(activePickerGroup?.rows||[]).map(row=>row.size.trim())].filter(Boolean))]
       .sort((a,b)=>a.localeCompare(b,undefined,{numeric:true,sensitivity:"base"}))
       .map(x=>({id:x,label:x}));
-
   const filteredPicker=pickerValues.filter(x=>x.label.toLowerCase().includes(stockSearch.trim().toLowerCase()));
-  const openPicker=(rowId:string,type:"category"|"size")=>{
-    if(type==="size"){
-      const row=stockRows.find(item=>item.id===rowId);
-      if(!row?.categoryId){toast("Select the category first, then choose or add its sizes.","error");return;}
-    }
-    setStockPickerRow(rowId);setStockPicker(type);setStockSearch("");
+
+  const openPicker=(groupId:string,type:"category"|"size")=>{
+    const group=stockGroups.find(item=>item.groupId===groupId);
+    if(!group){toast("Receiving category group not found.","error");return;}
+    if(type==="size"&&!group.categoryId){toast("Select this item's category first, then choose its sizes.","error");return;}
+    setStockPickerRow(groupId);
+    setSelectedSizeValues(type==="size"?group.rows.map(row=>row.size.trim()).filter(Boolean):[]);
+    setStockPicker(type);setStockSearch("");
   };
-  const closePicker=()=>{setStockPicker(null);setStockSearch("");};
+  const closePicker=()=>{setStockPicker(null);setStockSearch("");setSelectedSizeValues([]);};
 
   const exportStockReportPdf=async()=>{
     if(!/^\d{4}-\d{2}-\d{2}$/.test(reportFromDate)||!/^\d{4}-\d{2}-\d{2}$/.test(reportToDate)){
