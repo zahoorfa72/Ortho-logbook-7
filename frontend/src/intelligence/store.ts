@@ -29,6 +29,16 @@ export type KnowledgeArticle = {
   created_at: string; updated_at: string; updated_by: string | null;
 };
 export type PatientOption = { id: string; mrNo: string; name: string; diagnosis: string; procedure: string; date: string };
+export type PatientJourneyItem = {
+  id: string;
+  date: string;
+  title: string;
+  description: string;
+  source: "patient" | "history" | "implant" | "intelligence";
+  kind?: IntelligenceModuleId;
+  mediaUri?: string;
+};
+
 export type SaveIntelligenceInput = {
   id?: string; expectedUpdatedAt?: string; patientId?: string | null; kind: IntelligenceModuleId;
   title: string; eventDate: string; summary?: string; payload: Record<string, string>;
@@ -69,6 +79,77 @@ export function listIntelligencePatients(userId: string, isAdmin: boolean): Pati
     id: String(row.id), mrNo: String(row.mr_no || ""), name: String(row.name || ""),
     diagnosis: String(row.diagnosis || ""), procedure: String(row.procedure || ""), date: String(row.date || ""),
   }));
+}
+
+
+export function getPatientJourney(patientId: string, userId: string, isAdmin: boolean): PatientJourneyItem[] {
+  initializeIntelligenceStore();
+  const patient = db.getFirstSync<any>(
+    "SELECT id,mr_no,name,diagnosis,procedure,procedure_ii,implant,implant_ii,date,created_at FROM patients WHERE id=? AND (?=1 OR created_by=?) LIMIT 1",
+    [patientId, isAdmin ? 1 : 0, userId],
+  );
+  if (!patient) throw new Error("Patient not found or access denied.");
+  const items: PatientJourneyItem[] = [];
+  const patientTitle = [patient.diagnosis, patient.procedure, patient.procedure_ii].filter(Boolean).join(" · ");
+  items.push({
+    id: "patient:" + String(patient.id),
+    date: String(patient.date || patient.created_at || ""),
+    title: "Patient record",
+    description: [patient.mr_no, patient.name, patientTitle, [patient.implant, patient.implant_ii].filter(Boolean).join(" · ")].filter(Boolean).join(" · "),
+    source: "patient",
+  });
+  const history = db.getAllSync<any>(
+    "SELECT id,action,snapshot_json,created_at FROM patient_history WHERE patient_id=? ORDER BY created_at DESC LIMIT 500",
+    [patientId],
+  );
+  history.forEach((row) => {
+    let description = "";
+    try {
+      const snapshot = JSON.parse(String(row.snapshot_json || "{}"));
+      description = [snapshot.diagnosis, snapshot.procedure, snapshot.implant, snapshot.notes].filter(Boolean).join(" · ");
+    } catch {}
+    items.push({
+      id: "history:" + String(row.id),
+      date: String(row.created_at || ""),
+      title: String(row.action || "Patient history"),
+      description,
+      source: "history",
+    });
+  });
+  const implants = db.getAllSync<any>(
+    "SELECT id,name,category,size,quantity,created_at FROM patient_implants WHERE patient_id=? ORDER BY created_at DESC LIMIT 500",
+    [patientId],
+  );
+  implants.forEach((row) => items.push({
+    id: "implant:" + String(row.id),
+    date: String(row.created_at || ""),
+    title: "Implant used: " + String(row.name || "Unnamed implant"),
+    description: [row.category, row.size, row.quantity ? "Qty " + row.quantity : ""].filter(Boolean).join(" · "),
+    source: "implant",
+  }));
+  const clinical = db.getAllSync<IntelligenceRecord>(
+    "SELECT * FROM ortho_intelligence_records WHERE patient_id=? AND deleted_at IS NULL ORDER BY event_date DESC,created_at DESC LIMIT 1000",
+    [patientId],
+  );
+  clinical.forEach((row) => {
+    let description = row.summary || "";
+    try {
+      const payload = JSON.parse(row.payload_json || "{}");
+      const useful = Object.entries(payload).filter(([, value]) => String(value || "").trim()).slice(0, 4)
+        .map(([key, value]) => key.replace(/([A-Z])/g, " $1") + ": " + String(value));
+      if (useful.length) description = [description, useful.join(" · ")].filter(Boolean).join(" — ");
+    } catch {}
+    items.push({
+      id: "intelligence:" + row.id,
+      date: row.event_date || row.created_at,
+      title: row.title,
+      description,
+      source: "intelligence",
+      kind: row.kind,
+      mediaUri: row.media_uri || "",
+    });
+  });
+  return items.sort((a, b) => String(b.date).localeCompare(String(a.date)));
 }
 
 export function listIntelligenceRecords(options: { userId: string; isAdmin: boolean; kind?: IntelligenceModuleId; patientId?: string }): IntelligenceRecord[] {
@@ -127,7 +208,25 @@ export function saveIntelligenceRecord(input: SaveIntelligenceInput): Intelligen
   const eventDate = cleanText(input.eventDate, 30);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(eventDate) || Number.isNaN(Date.parse(eventDate + "T12:00:00"))) throw new Error("Enter a valid event date.");
   const summary = cleanText(input.summary, 1000);
-  const payloadJson = validatePayload(input.payload);
+  const payloadValues = input.payload || {};
+  const isValidDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value + "T12:00:00"));
+  if (input.kind === "follow_up" && payloadValues.dueDate && !isValidDate(cleanText(payloadValues.dueDate, 20))) {
+    throw new Error("Enter the follow-up due date as YYYY-MM-DD.");
+  }
+  if (input.kind === "implant_passport" && payloadValues.expiryDate && !isValidDate(cleanText(payloadValues.expiryDate, 20))) {
+    throw new Error("Enter the implant expiry date as YYYY-MM-DD.");
+  }
+  if (input.kind === "rehab" && payloadValues.painScore !== undefined && payloadValues.painScore !== "") {
+    const pain = Number(payloadValues.painScore);
+    if (!Number.isFinite(pain) || pain < 0 || pain > 10) throw new Error("Pain score must be between 0 and 10.");
+  }
+  for (const key of ["flexionDegrees","extensionDegrees"]) {
+    if (payloadValues[key] !== undefined && payloadValues[key] !== "") {
+      const angle = Number(payloadValues[key]);
+      if (!Number.isFinite(angle) || angle < 0 || angle > 360) throw new Error("Range-of-motion measurements must be between 0 and 360 degrees.");
+    }
+  }
+  const payloadJson = validatePayload(payloadValues);
   const mediaUri = cleanText(input.mediaUri, 24000000);
   const patientId = input.patientId ? cleanText(input.patientId, 100) : null;
   if (patientId && !db.getFirstSync<any>("SELECT id FROM patients WHERE id=? LIMIT 1", [patientId])) {
