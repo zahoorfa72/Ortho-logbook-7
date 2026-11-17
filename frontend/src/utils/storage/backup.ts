@@ -1493,7 +1493,17 @@ export async function restoreBackup(backup:BackupData){
  const inventoryPurchaseReceipts=restoreArray((backup as any).inventoryPurchaseReceipts);
  const stockReceipts=restoreArray((backup as any).stockReceipts);
  const trash=restoreArray((backup as any).trash);
- db.withTransactionSync(()=>{
+ 
+ const intelligenceRecords=restoreArray((backup as any).intelligenceRecords);
+ const intelligenceRevisions=restoreArray((backup as any).intelligenceRevisions);
+ const knowledgeArticles=restoreArray((backup as any).knowledgeArticles);
+ const intelligenceSettings=restoreArray((backup as any).intelligenceSettings);
+db.withTransactionSync(()=>{
+  
+  db.runSync("DELETE FROM ortho_intelligence_revisions");
+  db.runSync("DELETE FROM ortho_intelligence_records");
+  db.runSync("DELETE FROM ortho_knowledge_articles");
+  db.runSync("DELETE FROM ortho_intelligence_settings");
   db.runSync("DELETE FROM inventory_movements"); db.runSync("DELETE FROM inventory_purchase_receipts"); db.runSync("DELETE FROM stock_receipts"); db.runSync("DELETE FROM patient_implants"); db.runSync("DELETE FROM patient_history"); db.runSync("DELETE FROM expenses"); db.runSync("DELETE FROM patients"); db.runSync("DELETE FROM patient_custom_fields"); db.runSync("DELETE FROM implant_records"); db.runSync("DELETE FROM procedures"); db.runSync("DELETE FROM inventory"); db.runSync("DELETE FROM inventory_categories"); db.runSync("DELETE FROM users"); db.runSync("DELETE FROM deleted_records");
   const usedPatientIds=new Set<string>();
   const patientIdMap=new Map<string,string>();
@@ -1599,7 +1609,53 @@ export async function restoreBackup(backup:BackupData){
     const role=["admin","doctor","staff"].includes(String(u.role)) ? String(u.role) : "doctor";
     db.runSync("INSERT INTO users (id,email,name,password_hash,recovery_code,role,can_edit_patients,disabled,created_at) VALUES (?,?,?,?,?,?,?,?,?)",[restoredUserId,email,restoreText(u.name,"User"),restoreText(u.password_hash),restoreText(u.recovery_code)||null,role,restoreReal(u.can_edit_patients,1,0)>0?1:0,restoreReal(u.disabled,0,0)>0?1:0,restoreText(u.created_at,new Date().toISOString())]);
   }
-  const usedExpenseIds=new Set<string>();
+  
+  const allowedIntelligenceKinds = new Set(["body_map","xray","implant_passport","digital_twin","xray_review","rehab","surgery_checklist","clinical_note","follow_up"]);
+  const usedIntelligenceIds=new Set<string>();
+  const intelligenceIdMap=new Map<string,string>();
+  for(const record of intelligenceRecords){
+    const kind=restoreText(record.kind), title=restoreText(record.title), eventDate=restoreText(record.event_date);
+    if(!allowedIntelligenceKinds.has(kind)||!title||!/^\d{4}-\d{2}-\d{2}$/.test(eventDate)) continue;
+    const restoredId=restoreRowId(record.id,"intelligence-record",usedIntelligenceIds);
+    if(record.id) intelligenceIdMap.set(String(record.id),restoredId);
+    const rawPatientId=restoreText(record.patient_id);
+    const patientId=rawPatientId ? (patientIdMap.get(rawPatientId)||null) : null;
+    db.runSync(
+      "INSERT INTO ortho_intelligence_records (id,patient_id,kind,title,event_date,summary,payload_json,media_uri,created_at,created_by,updated_at,updated_by,deleted_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+      [restoredId,patientId,kind,title,eventDate,restoreText(record.summary),restoreJsonObject(record.payload_json),restoreText(record.media_uri),
+       restoreText(record.created_at,new Date().toISOString()),userIdMap.get(String(record.created_by||""))||null,
+       restoreText(record.updated_at,restoreText(record.created_at,new Date().toISOString())),userIdMap.get(String(record.updated_by||""))||null,
+       restoreText(record.deleted_at)||null]
+    );
+  }
+  const usedIntelligenceRevisionIds=new Set<string>();
+  for(const revision of intelligenceRevisions){
+    const recordId=intelligenceIdMap.get(String(revision.record_id||""));
+    if(!recordId) continue;
+    db.runSync(
+      "INSERT INTO ortho_intelligence_revisions (id,record_id,snapshot_json,change_note,created_at,created_by) VALUES (?,?,?,?,?,?)",
+      [restoreRowId(revision.id,"intelligence-revision",usedIntelligenceRevisionIds),recordId,restoreText(revision.snapshot_json,"{}"),restoreText(revision.change_note),
+       restoreText(revision.created_at,new Date().toISOString()),userIdMap.get(String(revision.created_by||""))||null]
+    );
+  }
+  const usedKnowledgeIds=new Set<string>();
+  for(const article of knowledgeArticles){
+    const title=restoreText(article.title), body=restoreText(article.body);
+    if(!title||!body) continue;
+    db.runSync(
+      "INSERT INTO ortho_knowledge_articles (id,title,category,body,tags_json,created_at,updated_at,updated_by) VALUES (?,?,?,?,?,?,?,?)",
+      [restoreRowId(article.id,"knowledge-article",usedKnowledgeIds),title,restoreText(article.category),body,restoreJsonArray(article.tags_json),
+       restoreText(article.created_at,new Date().toISOString()),restoreText(article.updated_at,new Date().toISOString()),
+       userIdMap.get(String(article.updated_by||""))||null]
+    );
+  }
+  for(const setting of intelligenceSettings){
+    const moduleId=restoreText(setting.module_id);
+    if(!/^(body_map|xray|implant_passport|digital_twin|xray_review|rehab|surgery_checklist|clinical_note|follow_up|research|knowledge|recovery)$/.test(moduleId)) continue;
+    db.runSync("INSERT OR REPLACE INTO ortho_intelligence_settings (module_id,enabled,updated_at,updated_by) VALUES (?,?,?,?)",
+      [moduleId,restoreReal(setting.enabled,1,0)>0?1:0,restoreText(setting.updated_at,new Date().toISOString()),userIdMap.get(String(setting.updated_by||""))||null]);
+  }
+const usedExpenseIds=new Set<string>();
   for(const e of expenses) db.runSync("INSERT INTO expenses (id,description,amount,belongs_to,doctor_id,date,created_at) VALUES (?,?,?,?,?,?,?)",[restoreRowId(e.id,"expense",usedExpenseIds),restoreText(e.description),restoreReal(e.amount,0,0),restoreText(e.belongs_to,"hospital"),userIdMap.get(String(e.doctor_id||""))||null,restoreText(e.date,new Date().toISOString().slice(0,10)),restoreText(e.created_at,new Date().toISOString())]);
   const usedHistoryIds=new Set<string>();
   for(const h of patientHistory){
@@ -1696,7 +1752,7 @@ export async function mergeBackup(backup: BackupData) {
  initializeDatabase({ skipInventoryReset: true });
  if(!backup||![2,3,4,5,6,7,8,9,10,11].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
  backup = materializeBackupPhotoReferences(backup);
- const stats = { patients: 0, procedures: 0, inventory: 0, inventoryCategories: 0, patientImplants: 0, expenses: 0, users: 0, patientHistory: 0, inventoryMovements: 0, stockReceipts: 0 };
+ const stats = { patients: 0, procedures: 0, inventory: 0, inventoryCategories: 0, patientImplants: 0, expenses: 0, users: 0, patientHistory: 0, inventoryMovements: 0, stockReceipts: 0, intelligenceRecords: 0, knowledgeArticles: 0 };
  db.withTransactionSync(() => {
   const has = (table: string, id: string) => !!db.getFirstSync<any>(`SELECT id FROM ${table} WHERE id=?`, [id]);
   for (const p of backup.patients) {
@@ -1817,7 +1873,36 @@ export async function mergeBackup(backup: BackupData) {
    db.runSync("INSERT INTO users (id,email,name,password_hash,recovery_code,role,can_edit_patients,disabled,created_at) VALUES (?,?,?,?,?,?,?,?,?)", [u.id, u.email, u.name, u.password_hash, u.recovery_code||null, u.role||"doctor", Number(u.can_edit_patients??1), Number(u.disabled??0), u.created_at]);
    stats.users++;
   }
-  for (const h of backup.patientHistory) {
+  
+   const allowedIntelligenceKinds = new Set(["body_map","xray","implant_passport","digital_twin","xray_review","rehab","surgery_checklist","clinical_note","follow_up"]);
+   for (const record of backup.intelligenceRecords || []) {
+    if (!record.id || has("ortho_intelligence_records", record.id) || !allowedIntelligenceKinds.has(String(record.kind||""))) continue;
+    if (!String(record.title||"").trim() || !/^\d{4}-\d{2}-\d{2}$/.test(String(record.event_date||""))) continue;
+    const patientId = record.patient_id && has("patients", String(record.patient_id)) ? String(record.patient_id) : null;
+    db.runSync(
+      "INSERT INTO ortho_intelligence_records (id,patient_id,kind,title,event_date,summary,payload_json,media_uri,created_at,created_by,updated_at,updated_by,deleted_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+      [record.id,patientId,record.kind,String(record.title).trim(),record.event_date,record.summary||"",restoreJsonObject(record.payload_json),record.media_uri||"",
+       record.created_at||new Date().toISOString(),record.created_by||null,record.updated_at||record.created_at||new Date().toISOString(),record.updated_by||null,record.deleted_at||null]
+    );
+    stats.intelligenceRecords++;
+   }
+   for (const revision of backup.intelligenceRevisions || []) {
+    if (!revision.id || has("ortho_intelligence_revisions", revision.id) || !has("ortho_intelligence_records", String(revision.record_id||""))) continue;
+    db.runSync("INSERT INTO ortho_intelligence_revisions (id,record_id,snapshot_json,change_note,created_at,created_by) VALUES (?,?,?,?,?,?)",
+      [revision.id,revision.record_id,revision.snapshot_json||"{}",revision.change_note||"",revision.created_at||new Date().toISOString(),revision.created_by||null]);
+   }
+   for (const article of backup.knowledgeArticles || []) {
+    if (!article.id || has("ortho_knowledge_articles", article.id) || !String(article.title||"").trim() || !String(article.body||"").trim()) continue;
+    db.runSync("INSERT INTO ortho_knowledge_articles (id,title,category,body,tags_json,created_at,updated_at,updated_by) VALUES (?,?,?,?,?,?,?,?)",
+      [article.id,String(article.title).trim(),article.category||"",String(article.body),restoreJsonArray(article.tags_json),article.created_at||new Date().toISOString(),article.updated_at||article.created_at||new Date().toISOString(),article.updated_by||null]);
+    stats.knowledgeArticles++;
+   }
+   for (const setting of backup.intelligenceSettings || []) {
+    if (!/^(body_map|xray|implant_passport|digital_twin|xray_review|rehab|surgery_checklist|clinical_note|follow_up|research|knowledge|recovery)$/.test(String(setting.module_id||""))) continue;
+    db.runSync("INSERT OR IGNORE INTO ortho_intelligence_settings (module_id,enabled,updated_at,updated_by) VALUES (?,?,?,?)",
+      [setting.module_id,Number(setting.enabled)>0?1:0,setting.updated_at||new Date().toISOString(),setting.updated_by||null]);
+   }
+for (const h of backup.patientHistory) {
    if (has("patient_history", h.id)) continue;
    db.runSync("INSERT INTO patient_history (id,patient_id,user_id,action,snapshot_json,created_at) VALUES (?,?,?,?,?,?)", [h.id, h.patient_id, h.user_id||null, h.action, h.snapshot_json, h.created_at]);
    stats.patientHistory++;
