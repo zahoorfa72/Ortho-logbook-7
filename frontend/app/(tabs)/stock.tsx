@@ -29,12 +29,13 @@ type StockAttachment = {
 };
 
 type StockRow = {
-  id:string; categoryId:string; category:string; size:string; quantity:string;
+  id:string; groupId:string; categoryId:string; category:string; size:string; quantity:string;
   minimumStock:string; billImage:string;
 };
 
-const newRow=():StockRow=>({
+const newRow=(groupId?:string):StockRow=>({
   id:Math.random().toString(36).slice(2),
+  groupId:groupId||Math.random().toString(36).slice(2),
   categoryId:"",category:"",size:"",quantity:"",minimumStock:"1",billImage:""
 });
 
@@ -79,7 +80,7 @@ function parseInvoiceOcr(text:string,categories:any[],inventory:any[]){
    if(!category){const m=bestOcrMatch(line,(Array.isArray(inventory)?inventory:[]).map((x:any)=>String(x?.category||x?.name||"")).filter(Boolean));if(m.score>=.52)category=m.value;}
    if(!category&&!sizes.length)continue;
    if(!sizes.length)sizes=[""];
-   for(const size of sizes){const key=normalizeOcr(category+"|"+size+"|"+line);if(seen.has(key))continue;seen.add(key);const cat=(Array.isArray(categories)?categories:[]).find((x:any)=>normalizeOcr(x?.name)===normalizeOcr(category));out.push({...newRow(),category,categoryId:String(cat?.id||""),size,quantity:multiSizes?"":quantity,minimumStock:"1"});}
+   for(const size of sizes){const key=normalizeOcr(category+"|"+size+"|"+line);if(seen.has(key))continue;seen.add(key);const cat=(Array.isArray(categories)?categories:[]).find((x:any)=>normalizeOcr(x?.name)===normalizeOcr(category));out.push({...newRow("ocr-"+String(cat?.id||normalizeOcr(category))),category,categoryId:String(cat?.id||""),size,quantity:multiSizes?"":quantity,minimumStock:"1"});}
  }
  return out;
 }
@@ -103,6 +104,7 @@ export default function StockScreen(){
   const [savingBatchMeta,setSavingBatchMeta]=useState(false);
   const [stockPicker,setStockPicker]=useState<"category"|"size"|null>(null);
   const [stockPickerRow,setStockPickerRow]=useState("");
+  const [selectedSizeValues,setSelectedSizeValues]=useState<string[]>([]);
   const [stockSearch,setStockSearch]=useState("");
   const [ocrBusy,setOcrBusy]=useState(false);
   const [reportFromDate,setReportFromDate]=useState(new Date().toISOString().slice(0,7)+"-01");
@@ -121,6 +123,19 @@ export default function StockScreen(){
     queryKey:["inventory-purchase-receipts"],
     queryFn:()=>api.get("/stock-receipts"),
   });
+
+  const stockGroups=useMemo(()=>{
+    const groups=new Map<string,{groupId:string;categoryId:string;category:string;rows:StockRow[]}>();
+    for(const row of stockRows){
+      const groupId=String(row.groupId||row.id);
+      let group=groups.get(groupId);
+      if(!group){group={groupId,categoryId:String(row.categoryId||""),category:String(row.category||""),rows:[]};groups.set(groupId,group);}
+      if(!group.categoryId&&row.categoryId)group.categoryId=String(row.categoryId);
+      if(!group.category&&row.category)group.category=String(row.category);
+      group.rows.push(row);
+    }
+    return [...groups.values()];
+  },[stockRows]);
 
   const stockBatches=useMemo(()=>{
     const groups=new Map<string,{batchId:string;createdAt:string;addedDate:string;description:string;items:any[];attachments:StockAttachment[]}>();
@@ -203,11 +218,9 @@ export default function StockScreen(){
   const editReceipt=(r:any)=>{
     setEditingReceipt(r);
     setStockRows([{
-      id:String(r.id),
-      categoryId:String(r.category_id||""),
-      category:String(r.category||""),
-      size:String(r.size||""),
-      quantity:String(Number(r.quantity)||0),
+      id:String(r.id),groupId:"edit-"+String(r.id),
+      categoryId:String(r.category_id||""),category:String(r.category||""),
+      size:String(r.size||""),quantity:String(Number(r.quantity)||0),
       minimumStock:String(Number(r.minimum_stock??r.minimumStock)||0),
       billImage:String(r.bill_image||r.billImage||""),
     }]);
@@ -256,18 +269,55 @@ export default function StockScreen(){
 
   const updateRow=(id:string,patch:Partial<StockRow>)=>setStockRows(rows=>rows.map(r=>r.id===id?{...r,...patch}:r));
 
-  const applyReceiptCategory=(category:{id:string;name:string})=>{
+  const applyReceiptCategory=(groupId:string,category:{id:string;name:string})=>{
     setStockRows(rows=>rows.map(row=>{
+      if(String(row.groupId||row.id)!==groupId)return row;
       const unchanged=String(row.categoryId||"")===category.id ||
         String(row.category||"").trim().toLowerCase()===category.name.trim().toLowerCase();
-      return {...row,categoryId:category.id,category:category.name,size:unchanged?row.size:""};
+      return {...row,categoryId:category.id,category:category.name,size:unchanged?row.size:"",quantity:unchanged?row.quantity:""};
     }));
+    setSelectedSizeValues([]);
   };
 
-  const addAnotherSize=()=>{
-    const first=stockRows[0];
-    if(!first?.categoryId||!first?.category){toast("Select a category before adding sizes.","error");return;}
-    setStockRows(rows=>rows.concat({...newRow(),categoryId:first.categoryId,category:first.category}));
+  const addAnotherItem=()=>{
+    if(editingReceipt)return;
+    setStockRows(rows=>rows.concat(newRow("group-"+Math.random().toString(36).slice(2))));
+  };
+
+  const removeSizeRow=(groupId:string,rowId:string)=>{
+    setStockRows(rows=>{
+      const groupRows=rows.filter(row=>String(row.groupId||row.id)===groupId);
+      if(groupRows.length<=1)return rows.map(row=>row.id===rowId?{...row,size:"",quantity:""}:row);
+      return rows.filter(row=>row.id!==rowId);
+    });
+  };
+
+  const applySelectedSizes=()=>{
+    const group=stockGroups.find(item=>item.groupId===stockPickerRow);
+    if(!group?.categoryId||!group.category){toast("Select a category first.","error");return;}
+    const selectedByKey=new Map<string,string>();
+    selectedSizeValues.forEach(value=>{
+      const size=String(value||"").trim();
+      if(size)selectedByKey.set(size.toLowerCase(),size);
+    });
+    const selected=Array.from(selectedByKey.values());
+    if(!selected.length){toast("Select at least one size.","error");return;}
+    const existing=new Map<string,StockRow>();
+    group.rows.forEach(row=>{
+      const key=row.size.trim().toLowerCase();
+      if(key)existing.set(key,row);
+    });
+    const nextRows=selected.map(size=>{
+      const old=existing.get(size.toLowerCase());
+      return old?old:{...newRow(group.groupId),categoryId:group.categoryId,category:group.category,size,quantity:"",minimumStock:"1"};
+    });
+    setStockRows(rows=>{
+      const firstIndex=rows.findIndex(row=>String(row.groupId||row.id)===group.groupId);
+      const rest=rows.filter(row=>String(row.groupId||row.id)!==group.groupId);
+      rest.splice(Math.max(0,Math.min(firstIndex,rest.length)),0,...nextRows);
+      return rest;
+    });
+    closePicker();
   };
 
   const openReceiptAttachment=async(attachment:any)=>{
@@ -380,9 +430,9 @@ export default function StockScreen(){
     finally{setOcrBusy(false);}
   };
 
-  const activePickerRow=stockRows.find(row=>row.id===stockPickerRow)||stockRows[0];
-  const pickerCategoryId=String(activePickerRow?.categoryId||"");
-  const pickerCategoryName=String(activePickerRow?.category||"").trim().toLowerCase();
+  const activePickerGroup=stockGroups.find(group=>group.groupId===stockPickerRow);
+  const pickerCategoryId=String(activePickerGroup?.categoryId||"");
+  const pickerCategoryName=String(activePickerGroup?.category||"").trim().toLowerCase();
   const categorySizes=(Array.isArray(stockInventory)?stockInventory:[]).filter((item:any)=>{
     const sameId=pickerCategoryId && String(item?.category_id||item?.categoryId||"")===pickerCategoryId;
     const sameName=pickerCategoryName && String(item?.category||"").trim().toLowerCase()===pickerCategoryName;
@@ -390,19 +440,20 @@ export default function StockScreen(){
   });
   const pickerValues=stockPicker==="category"
     ? (Array.isArray(stockCategories)?stockCategories:[]).map(x=>({id:String(x?.id||""),label:String(x?.name||"").trim()})).filter(x=>x.id&&x.label)
-    : [...new Set(categorySizes.map((x:any)=>String(x?.size||"").trim()).filter(Boolean))]
+    : [...new Set([...categorySizes.map((x:any)=>String(x?.size||"").trim()),...(activePickerGroup?.rows||[]).map(row=>row.size.trim())].filter(Boolean))]
       .sort((a,b)=>a.localeCompare(b,undefined,{numeric:true,sensitivity:"base"}))
       .map(x=>({id:x,label:x}));
-
   const filteredPicker=pickerValues.filter(x=>x.label.toLowerCase().includes(stockSearch.trim().toLowerCase()));
-  const openPicker=(rowId:string,type:"category"|"size")=>{
-    if(type==="size"){
-      const row=stockRows.find(item=>item.id===rowId);
-      if(!row?.categoryId){toast("Select the category first, then choose or add its sizes.","error");return;}
-    }
-    setStockPickerRow(rowId);setStockPicker(type);setStockSearch("");
+
+  const openPicker=(groupId:string,type:"category"|"size")=>{
+    const group=stockGroups.find(item=>item.groupId===groupId);
+    if(!group){toast("Receiving category group not found.","error");return;}
+    if(type==="size"&&!group.categoryId){toast("Select this item's category first, then choose its sizes.","error");return;}
+    setStockPickerRow(groupId);
+    setSelectedSizeValues(type==="size"?group.rows.map(row=>row.size.trim()).filter(Boolean):[]);
+    setStockPicker(type);setStockSearch("");
   };
-  const closePicker=()=>{setStockPicker(null);setStockSearch("");};
+  const closePicker=()=>{setStockPicker(null);setStockSearch("");setSelectedSizeValues([]);};
 
   const exportStockReportPdf=async()=>{
     if(!/^\d{4}-\d{2}-\d{2}$/.test(reportFromDate)||!/^\d{4}-\d{2}-\d{2}$/.test(reportToDate)){
@@ -456,7 +507,8 @@ export default function StockScreen(){
     if(!stockRows.length){toast("Add at least one stock item.","error");return;}
     for(const row of stockRows){
       if(!row.category.trim()){toast("Select a category for every item.","error");return;}
-      if(Number(row.quantity)<=0){toast("Enter quantity above 0 for every item.","error");return;}
+      if(!row.size.trim()){toast("Select at least one size for every category group.","error");return;}
+      if(Number(row.quantity)<=0){toast("Enter a quantity above 0 for every selected size.","error");return;}
     }
     saveStock.mutate();
   };
@@ -571,36 +623,35 @@ export default function StockScreen(){
               <Pressable onPress={()=>removeReceiptAttachment(attachment.id)} hitSlop={8}><Ionicons name="close-circle" size={19} color={colors.error}/></Pressable>
             </View>)}
           </>:null}
-          {stockRows.length?<>
-            <Text style={styles.fieldLabel}>Category (select once for all sizes)</Text>
-            <Pressable style={styles.stockDrop} onPress={()=>openPicker(stockRows[0]?.id||"","category")}>
-              <Text style={stockRows.every(row=>row.categoryId===stockRows[0]?.categoryId)?(stockRows[0]?.category?styles.stockDropText:styles.stockDropPlaceholder):styles.stockDropText}>
-                {stockRows.every(row=>row.categoryId===stockRows[0]?.categoryId)?(stockRows[0]?.category||"Select category"):"Multiple categories from invoice — select to use one category"}
-              </Text>
+          {stockGroups.map((group,index)=><View key={group.groupId} style={styles.categoryGroupCard}>
+            <View style={styles.stockCardHead}>
+              <Text style={styles.stockCardTitle}>Item {index+1}</Text>
+              {!editingReceipt&&stockGroups.length>1?<Pressable onPress={()=>setStockRows(rows=>rows.filter(row=>String(row.groupId||row.id)!==group.groupId))}><Ionicons name="trash-outline" size={19} color={colors.error}/></Pressable>:null}
+            </View>
+            <Text style={styles.fieldLabel}>Category</Text>
+            <Pressable style={styles.stockDrop} onPress={()=>openPicker(group.groupId,"category")}>
+              <Text style={group.category?styles.stockDropText:styles.stockDropPlaceholder}>{group.category||"Select category"}</Text>
               <Ionicons name="chevron-down" size={18} color={colors.muted}/>
             </Pressable>
-            <Text style={[styles.stockHint,{marginBottom:spacing.sm}]}>Choose a category once. Every size below will be added under this category.</Text>
-          </>:null}
-          {stockRows.map((row,i)=><View key={row.id} style={styles.stockCard}>
-            <View style={styles.stockCardHead}>
-              <Text style={styles.stockCardTitle}>Size {i+1}</Text>
-              {stockRows.length>1?<Pressable onPress={()=>setStockRows(v=>v.filter(x=>x.id!==row.id))}><Ionicons name="trash-outline" size={18} color={colors.error}/></Pressable>:null}
-            </View>
-
-            <Pressable style={styles.stockDrop} onPress={()=>openPicker(row.id,"size")}>
-              <Text style={row.size?styles.stockDropText:styles.stockDropPlaceholder}>{row.size||"Select size or search/new size"}</Text>
-              <Ionicons name="search" size={17} color={colors.muted}/>
+            <Pressable disabled={!group.categoryId} style={[styles.selectSizesButton,!group.categoryId&&{opacity:0.55}]} onPress={()=>openPicker(group.groupId,"size")}>
+              <Ionicons name="list-outline" size={18} color={colors.brandPrimary}/>
+              <Text style={styles.attachText}>{group.rows.filter(row=>row.size.trim()).length?"Select sizes ("+group.rows.filter(row=>row.size.trim()).length+" selected)":"Select multiple sizes"}</Text>
             </Pressable>
-
-            <View style={{flexDirection:"row",gap:spacing.sm}}>
-              <TextInput value={row.quantity} onChangeText={v=>updateRow(row.id,{quantity:v.replace(/[^0-9.]/g,"")})} placeholder="Quantity" keyboardType="number-pad" placeholderTextColor={colors.muted} style={[styles.stockInput,{flex:1}]}/>
-              <TextInput value={row.minimumStock} onChangeText={v=>updateRow(row.id,{minimumStock:v.replace(/[^0-9.]/g,"")})} placeholder="Minimum stock" keyboardType="number-pad" placeholderTextColor={colors.muted} style={[styles.stockInput,{flex:1}]}/>
-            </View>
-
+            {group.rows.filter(row=>row.size.trim()).map(row=><View key={row.id} style={styles.stockCard}>
+              <View style={styles.stockCardHead}>
+                <Text style={styles.stockCardTitle}>{row.size}</Text>
+                <Pressable onPress={()=>removeSizeRow(group.groupId,row.id)}><Ionicons name="trash-outline" size={18} color={colors.error}/></Pressable>
+              </View>
+              <View style={{flexDirection:"row",gap:spacing.sm}}>
+                <TextInput value={row.quantity} onChangeText={v=>updateRow(row.id,{quantity:v.replace(/[^0-9.]/g,"")})} placeholder="Quantity received" keyboardType="number-pad" placeholderTextColor={colors.muted} style={[styles.stockInput,{flex:1}]}/>
+                <TextInput value={row.minimumStock} onChangeText={v=>updateRow(row.id,{minimumStock:v.replace(/[^0-9.]/g,"")})} placeholder="Minimum stock" keyboardType="number-pad" placeholderTextColor={colors.muted} style={[styles.stockInput,{flex:1}]}/>
+              </View>
+            </View>)}
+            {!group.rows.some(row=>row.size.trim())?<Text style={[styles.stockHint,{marginBottom:spacing.sm}]}>Select one or more sizes. Each size has its own quantity.</Text>:null}
           </View>)}
 
-          {!editingReceipt?<Pressable style={styles.addAnotherStock} onPress={addAnotherSize}>
-            <Ionicons name="add-circle-outline" size={20} color={colors.brandPrimary}/><Text style={styles.attachText}>Add another size</Text>
+          {!editingReceipt?<Pressable style={styles.addAnotherStock} onPress={addAnotherItem}>
+            <Ionicons name="add-circle-outline" size={20} color={colors.brandPrimary}/><Text style={styles.attachText}>Add another item</Text>
           </Pressable>:null}
 
           <PrimaryButton title={editingReceipt?"Update Received Stock":"Save Receive Stock"} onPress={submit} loading={saveStock.isPending}/>
@@ -654,34 +705,43 @@ export default function StockScreen(){
           if(stockPicker==="category"){
             try{
               const cat=await api.post<any>("/inventory-categories",{name:term});
-              applyReceiptCategory({id:String(cat.id),name:String(cat.name)});
+              applyReceiptCategory(stockPickerRow,{id:String(cat.id),name:String(cat.name)});
               qc.invalidateQueries({queryKey:["inventory-categories"]});
               closePicker();
             }catch(e:any){toast(e?.message||"Could not create category.","error");}
+          }else if(editingReceipt){
+            setSelectedSizeValues([term]);
           }else{
-            const duplicate=stockRows.some(row=>row.id!==stockPickerRow&&String(row.size||"").trim().toLowerCase()===term.toLowerCase());
-            if(duplicate){toast("This size is already in the receiving list.","error");return;}
-            updateRow(stockPickerRow,{size:term});
-            closePicker();
+            const exists=selectedSizeValues.some(size=>size.toLowerCase()===term.toLowerCase());
+            if(!exists)setSelectedSizeValues(current=>[...current,term]);
           }
         }}>
           <Ionicons name="add-circle-outline" size={19} color={colors.brandPrimary}/>
-          <Text style={styles.newOptionText}>{stockPicker==="category"?"Create new category":"Add \""+stockSearch.trim()+"\" as a new size in "+(activePickerRow?.category||"this category")}</Text>
+          <Text style={styles.newOptionText}>{stockPicker==="category"?"Create new category":"Add \""+stockSearch.trim()+"\" as a new size in "+(activePickerGroup?.category||"this category")}</Text>
         </Pressable>:null}
         <ScrollView keyboardShouldPersistTaps="handled" style={{maxHeight:360}}>
-          {filteredPicker.length?filteredPicker.map(item=><Pressable key={String(item.id)} style={styles.pickerOption} onPress={()=>{
-            if(stockPicker==="category"){
-              applyReceiptCategory({id:item.id,name:item.label});
-            }else{
-              const duplicate=stockRows.some(row=>row.id!==stockPickerRow&&String(row.size||"").trim().toLowerCase()===item.label.toLowerCase());
-              if(duplicate){toast("This size is already in the receiving list.","error");return;}
-              updateRow(stockPickerRow,{size:item.label});
-            }
-            closePicker();
-          }}>
-            <Text style={styles.pickerOptionText}>{item.label}</Text><Ionicons name="chevron-forward" size={17} color={colors.muted}/>
-          </Pressable>):<Text style={styles.pickerEmpty}>{stockPicker==="size"?(activePickerRow?.category?"No saved sizes for this category yet. Search above to add a new size.":"Select a category before choosing a size."):"No saved categories found."}</Text>}
+          {filteredPicker.length?filteredPicker.map(item=>{
+            const selected=selectedSizeValues.some(size=>size.toLowerCase()===item.label.toLowerCase());
+            return <Pressable key={String(item.id)} style={styles.pickerOption} onPress={()=>{
+              if(stockPicker==="category"){
+                applyReceiptCategory(stockPickerRow,{id:item.id,name:item.label});
+                closePicker();
+              }else if(editingReceipt){
+                setSelectedSizeValues([item.label]);
+              }else{
+                setSelectedSizeValues(current=>selected
+                  ? current.filter(size=>size.toLowerCase()!==item.label.toLowerCase())
+                  : [...current,item.label]);
+              }
+            }}>
+              <Text style={styles.pickerOptionText}>{item.label}</Text>
+              {stockPicker==="size"?<Ionicons name={selected?"checkbox":"square-outline"} size={21} color={selected?colors.brandPrimary:colors.muted}/>:<Ionicons name="chevron-forward" size={17} color={colors.muted}/>}
+            </Pressable>;
+          }):<Text style={styles.pickerEmpty}>{stockPicker==="size"?(activePickerGroup?.category?"No saved sizes for this category yet. Search above to add a new size.":"Select a category before choosing a size."):"No saved categories found."}</Text>}
         </ScrollView>
+        {stockPicker==="size"?<Pressable style={styles.applySizesButton} onPress={applySelectedSizes}>
+          <Text style={styles.applySizesText}>{editingReceipt?"Use selected size":"Add selected sizes"} ({selectedSizeValues.length})</Text>
+        </Pressable>:null}
       </View></View>
     </Modal>
   </View>;
@@ -722,7 +782,11 @@ const useStyles=makeStyles(colors=>({
   sheetTitle:{fontFamily:fontFamily.bold,fontSize:fontSize.xl,color:colors.onSurface},
   stockHint:{fontSize:fontSize.xs,color:colors.muted,marginTop:2},
   fieldLabel:{fontFamily:fontFamily.semibold,fontSize:fontSize.sm,color:colors.onSurface,marginBottom:spacing.xs},
-  stockCard:{padding:spacing.md,borderWidth:1,borderColor:colors.border,borderRadius:radius.md,backgroundColor:colors.surfaceSecondary,marginBottom:spacing.sm},
+  categoryGroupCard:{padding:spacing.md,borderWidth:1,borderColor:colors.border,borderRadius:radius.md,backgroundColor:colors.surfaceSecondary,marginBottom:spacing.md},
+  selectSizesButton:{minHeight:46,borderWidth:1,borderColor:colors.border,borderRadius:radius.md,backgroundColor:colors.surface,flexDirection:"row",alignItems:"center",justifyContent:"center",gap:spacing.xs,marginBottom:spacing.sm},
+  applySizesButton:{minHeight:48,backgroundColor:colors.brandPrimary,borderRadius:radius.md,alignItems:"center",justifyContent:"center",marginTop:spacing.md},
+  applySizesText:{fontFamily:fontFamily.semibold,color:colors.onBrandPrimary},
+  stockCard:{padding:spacing.md,borderWidth:1,borderColor:colors.border,borderRadius:radius.md,backgroundColor:colors.surface,marginBottom:spacing.sm},
   stockCardHead:{flexDirection:"row",justifyContent:"space-between",alignItems:"center",marginBottom:spacing.sm},
   stockCardTitle:{fontFamily:fontFamily.semibold,color:colors.onSurface},
   stockDrop:{minHeight:48,borderWidth:1,borderColor:colors.border,borderRadius:radius.md,backgroundColor:colors.surface,paddingHorizontal:spacing.md,marginBottom:spacing.sm,flexDirection:"row",alignItems:"center",justifyContent:"space-between"},
