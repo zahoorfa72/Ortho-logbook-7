@@ -240,6 +240,7 @@ export function saveIntelligenceRecord(input: SaveIntelligenceInput): Intelligen
   }
   const timestamp = now();
   if (input.id) {
+    const existingId = input.id;
     const existing = db.getFirstSync<IntelligenceRecord>("SELECT * FROM ortho_intelligence_records WHERE id=? AND deleted_at IS NULL AND (?=1 OR created_by=? OR patient_id IN (SELECT id FROM patients WHERE created_by=?)) LIMIT 1", [input.id, input.isAdmin ? 1 : 0, input.userId, input.userId]);
     if (!existing) throw new Error("This record is no longer available. Refresh and try again.");
     if (input.expectedUpdatedAt && existing.updated_at !== input.expectedUpdatedAt) {
@@ -249,10 +250,10 @@ export function saveIntelligenceRecord(input: SaveIntelligenceInput): Intelligen
       addRevision(existing, input.userId, input.changeNote || "Before edit");
       db.runSync(
         "UPDATE ortho_intelligence_records SET patient_id=?,kind=?,title=?,event_date=?,summary=?,payload_json=?,media_uri=?,updated_at=?,updated_by=? WHERE id=?",
-        [patientId, input.kind, title, eventDate, summary, payloadJson, mediaUri, timestamp, input.userId, input.id],
+        [patientId, input.kind, title, eventDate, summary, payloadJson, mediaUri, timestamp, input.userId, existingId],
       );
     });
-    return db.getFirstSync<IntelligenceRecord>("SELECT * FROM ortho_intelligence_records WHERE id=?", [input.id])!;
+    return db.getFirstSync<IntelligenceRecord>("SELECT * FROM ortho_intelligence_records WHERE id=?", [existingId])!;
   }
   const recordId = Crypto.randomUUID();
   db.runSync(
