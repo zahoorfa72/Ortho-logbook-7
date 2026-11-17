@@ -836,10 +836,21 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
       return {...row,media_uri:mediaUri};
     });
   })() : [],
-  intelligenceRevisions:include("intelligenceRevisions") ? db.getAllSync<any>(
-    "SELECT * FROM ortho_intelligence_revisions"+whereForFilter(filter,"created_at").sql+" ORDER BY created_at ASC",
-    whereForFilter(filter,"created_at").args
-  ) : [],
+  intelligenceRevisions:include("intelligenceRevisions") ? await (async()=>{
+    const f=whereForFilter(filter,"created_at");
+    const rows=db.getAllSync<any>("SELECT * FROM ortho_intelligence_revisions"+f.sql+" ORDER BY created_at ASC",f.args);
+    return await mapWithConcurrency(rows,2,async(row:any)=>{
+      let snapshot:any=null;
+      try { snapshot=JSON.parse(String(row.snapshot_json||"{}")); } catch {}
+      if (snapshot && typeof snapshot==="object" && typeof snapshot.media_uri==="string") {
+        const source=snapshot.media_uri;
+        if (includeAttachedImages && /^(data:image\/|file:\/\/|content:\/\/)/i.test(source)) {
+          snapshot.media_uri=await embedOptionalPhoto(source,compressedPhotoCache,"document");
+        } else if (!includeAttachedImages) snapshot.media_uri="";
+      }
+      return {...row,snapshot_json:snapshot ? JSON.stringify(snapshot) : String(row.snapshot_json||"{}")};
+    });
+  })() : [],
   knowledgeArticles:include("knowledgeArticles") ? db.getAllSync<any>("SELECT * FROM ortho_knowledge_articles ORDER BY category COLLATE NOCASE,title COLLATE NOCASE") : [],
   intelligenceSettings:include("intelligenceSettings") ? db.getAllSync<any>("SELECT * FROM ortho_intelligence_settings ORDER BY module_id") : [],
   inventoryMovements:include("inventoryMovements") ? (()=>{if(filter.type==="all") return db.getAllSync<any>("SELECT * FROM inventory_movements ORDER BY created_at ASC"); const f=filter.type==="date" ? {sql:" WHERE date(created_at)=?",args:[filter.value||""]} : filter.type==="month" ? {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]} : filter.type==="halfyear" ? (()=>{const bounds=halfYearMonthBounds(filter.value);return {sql:" WHERE substr(created_at,1,7) BETWEEN ? AND ?",args:[bounds.start,bounds.end]};})() : {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]}; return db.getAllSync<any>(`SELECT * FROM inventory_movements${f.sql} ORDER BY created_at ASC`,f.args);})() : [],
@@ -1022,7 +1033,7 @@ const BACKUP_IMAGE_KEYS = new Set(["photo_uri", "photouri", "photos_json", "phot
 // local diff cache and hashing it for incremental change detection.
 const BACKUP_CACHE_ONLY_KEYS = new Set([...BACKUP_IMAGE_KEYS, "attachments_json"]);
 const BACKUP_NESTED_JSON_KEYS = new Set(["snapshot_json", "payload_json"]);
-const IMAGE_SIGNATURE_TABLES = new Set(["inventory", "inventoryPurchaseReceipts", "stockReceipts", "implantRecords", "patientHistory", "trash", "intelligenceRecords"]);
+const IMAGE_SIGNATURE_TABLES = new Set(["inventory", "inventoryPurchaseReceipts", "stockReceipts", "implantRecords", "patientHistory", "trash", "intelligenceRecords", "intelligenceRevisions"]);
 
 function stripBackupImages(value: any, key = ""): any {
  if (Array.isArray(value)) return value.map((item) => stripBackupImages(item));
