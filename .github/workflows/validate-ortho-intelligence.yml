@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ortho-intelligence-\${{ github.ref }}
+  group: ortho-intelligence-validation
   cancel-in-progress: true
 
 jobs:
