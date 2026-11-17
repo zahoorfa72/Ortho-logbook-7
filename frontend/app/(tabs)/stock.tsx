@@ -302,7 +302,11 @@ export default function StockScreen(){
     });
     const selected=Array.from(selectedByKey.values());
     if(!selected.length){toast("Select at least one size.","error");return;}
-    const existing=new Map(group.rows.filter(row=>row.size.trim()).map(row=>[row.size.trim().toLowerCase(),row]));
+    const existing=new Map<string,StockRow>();
+    group.rows.forEach(row=>{
+      const key=row.size.trim().toLowerCase();
+      if(key)existing.set(key,row);
+    });
     const nextRows=selected.map(size=>{
       const old=existing.get(size.toLowerCase());
       return old?old:{...newRow(group.groupId),categoryId:group.categoryId,category:group.category,size,quantity:"",minimumStock:"1"};
