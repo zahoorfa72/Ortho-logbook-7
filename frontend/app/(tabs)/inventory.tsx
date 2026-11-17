@@ -151,12 +151,21 @@ export default function Inventory() {
     onError: (e: any) => toast(e?.message || "Update failed.", "error"),
   });
 
+  // Low Stock is a live status, not a 15-day history window. An item stays
+  // here while quantity is at/below its minimum and leaves after restocking above it.
+  const isLowStock = useCallback((item: InventoryItem) => {
+    const quantity = Number(item.quantity);
+    const minimum = Number(item.minimumStock);
+    return Number.isFinite(quantity) && Number.isFinite(minimum) && quantity <= minimum;
+  }, []);
+
+  // The separate New Low Stock tab intentionally keeps the 15-day window.
   const isNewLowStock = useCallback((item: InventoryItem) => {
-    if (item.quantity > item.minimumStock || !item.lowStockTriggeredAt) return false;
+    if (!isLowStock(item) || !item.lowStockTriggeredAt) return false;
     const t = new Date(item.lowStockTriggeredAt).getTime();
     if (!Number.isFinite(t)) return false;
     return Date.now() - t < 15 * 24 * 60 * 60 * 1000;
-  }, []);
+  }, [isLowStock]);
 
   const list = useMemo(() => {
     let items = (data || []).filter((i) => {
@@ -172,7 +181,7 @@ export default function Inventory() {
       return !s || String(i.name || "").toLowerCase().includes(s) || String(i.size || "").toLowerCase().includes(s) || String(i.category || "").toLowerCase().includes(s);
     });
     if (tab === "New Low Stock") items = items.filter(isNewLowStock);
-    else if (tab === "Low Stock") items = items.filter((i) => i.quantity <= i.minimumStock);
+    else if (tab === "Low Stock") items = items.filter(isLowStock);
     items = [...items].sort((a, b) => {
       const catCmp = String(a.category || "Uncategorized").localeCompare(
         String(b.category || "Uncategorized"),
@@ -180,11 +189,6 @@ export default function Inventory() {
         { numeric: true, sensitivity: "base" },
       );
       if (catCmp !== 0) return catCmp;
-      if (tab === "Low Stock") {
-        const an = isNewLowStock(a);
-        const bn = isNewLowStock(b);
-        if (an !== bn) return an ? -1 : 1;
-      }
       if (inventorySort === "name-desc") return formatInventoryLabel(b.category, b.name, b.size).localeCompare(formatInventoryLabel(a.category, a.name, a.size), undefined, { numeric: true, sensitivity: "base" });
       if (inventorySort === "size-asc" || inventorySort === "size-desc") {
         const sizeNumber = (value: string) => {
@@ -208,14 +212,7 @@ export default function Inventory() {
       return formatInventoryLabel(a.category, a.name, a.size).localeCompare(formatInventoryLabel(b.category, b.name, b.size), undefined, { numeric: true, sensitivity: "base" });
     });
     return items;
-  }, [data, tab, search, inventorySort, isNewLowStock, selectedCategoryId, categories]);
-
-  // Memoize once per inventory update. Computing this inside renderItem made
-  // every visible row scan the entire list, causing quadratic work on large lists.
-  const newLowStockCount = useMemo(
-    () => list.reduce((count, item) => count + (isNewLowStock(item) ? 1 : 0), 0),
-    [list, isNewLowStock],
-  );
+  }, [data, tab, search, inventorySort, isLowStock, isNewLowStock, selectedCategoryId, categories]);
 
   const changeQty = (item: InventoryItem, delta: number) => {
     const next = Math.max(0, item.quantity + delta);
@@ -426,31 +423,17 @@ export default function Inventory() {
             <EmptyState
               icon="cube-outline"
               title={tab === "New Low Stock" ? "No new low-stock items" : tab === "Low Stock" ? "No low-stock items" : "Inventory is empty"}
-              subtitle={tab === "New Low Stock" ? "No item has newly reached minimum stock in the last 15 days." : tab === "Low Stock" ? "Items that remain at or below minimum stock are shown here after the 15-day new period." : "Use Receive Stock to add stock."}
+              subtitle={tab === "New Low Stock" ? "No item has newly reached minimum stock in the last 15 days." : tab === "Low Stock" ? "All items currently at or below minimum stock appear here, regardless of how long they have been low. Restock above the minimum to remove an item." : "Use Receive Stock to add stock."}
             />
           }
           renderItem={({ item, index }) => {
-            const low = item.quantity <= item.minimumStock;
-            const newLow = isNewLowStock(item);
-            const showLowSectionHeader = tab === "Low Stock" && (
-              (index === 0) ||
-              (index === newLowStockCount && newLowStockCount > 0)
-            );
+            const low = isLowStock(item);
+            const newLow = tab === "New Low Stock" && isNewLowStock(item);
             const prevCategory = index > 0 ? String(list[index - 1]?.category || "Uncategorized") : "";
             const thisCategory = String(item.category || "Uncategorized");
             const showCategoryHeader = index === 0 || prevCategory !== thisCategory;
             return (
               <>
-                {showLowSectionHeader ? (
-                  <View style={{ marginBottom: spacing.sm, marginTop: index === 0 ? 0 : spacing.base }}>
-                    <Text style={{ fontFamily: fontFamily.bold, fontSize: fontSize.lg, color: colors.onSurface }}>
-                      {index === 0 && newLow ? "New Low Stock — First 15 Days" : "Other Low Stock"}
-                    </Text>
-                    <Text style={{ fontFamily: fontFamily.regular, fontSize: fontSize.sm, color: colors.muted }}>
-                      {index === 0 && newLow ? "Items that reached minimum stock within the last 15 days." : "Items that have been low stock for 15 days or longer."}
-                    </Text>
-                  </View>
-                ) : null}
                 {showCategoryHeader ? (
                   <View style={{ marginBottom: spacing.sm, marginTop: index === 0 ? 0 : spacing.base }}>
                     <Text style={{ fontFamily: fontFamily.bold, fontSize: fontSize.base, color: colors.brandPrimary }}>
