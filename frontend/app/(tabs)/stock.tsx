@@ -295,7 +295,12 @@ export default function StockScreen(){
   const applySelectedSizes=()=>{
     const group=stockGroups.find(item=>item.groupId===stockPickerRow);
     if(!group?.categoryId||!group.category){toast("Select a category first.","error");return;}
-    const selected=[...new Map(selectedSizeValues.map(size=>[String(size).trim().toLowerCase(),String(size).trim()])).values()].filter(Boolean);
+    const selectedByKey=new Map<string,string>();
+    selectedSizeValues.forEach(value=>{
+      const size=String(value||"").trim();
+      if(size)selectedByKey.set(size.toLowerCase(),size);
+    });
+    const selected=Array.from(selectedByKey.values());
     if(!selected.length){toast("Select at least one size.","error");return;}
     const existing=new Map(group.rows.filter(row=>row.size.trim()).map(row=>[row.size.trim().toLowerCase(),row]));
     const nextRows=selected.map(size=>{
@@ -700,6 +705,8 @@ export default function StockScreen(){
               qc.invalidateQueries({queryKey:["inventory-categories"]});
               closePicker();
             }catch(e:any){toast(e?.message||"Could not create category.","error");}
+          }else if(editingReceipt){
+            setSelectedSizeValues([term]);
           }else{
             const exists=selectedSizeValues.some(size=>size.toLowerCase()===term.toLowerCase());
             if(!exists)setSelectedSizeValues(current=>[...current,term]);
