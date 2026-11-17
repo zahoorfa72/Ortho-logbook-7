@@ -19,8 +19,8 @@ import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/s
 import {
   deleteKnowledgeArticle, getIntelligenceRecordsForResearch, initializeIntelligenceStore,
   INTELLIGENCE_MODULES, listIntelligenceModuleSettings, listIntelligencePatients,
-  listIntelligenceRecords, listIntelligenceRevisions, listKnowledgeArticles,
-  restoreIntelligenceRevision, saveIntelligenceRecord, saveKnowledgeArticle,
+  listIntelligenceRecords, listIntelligenceRevisions, listKnowledgeArticles, listArchivedIntelligenceRecords,
+  restoreArchivedIntelligenceRecord, restoreIntelligenceRevision, saveIntelligenceRecord, saveKnowledgeArticle,
   setIntelligenceModuleEnabled, softDeleteIntelligenceRecord,
   type IntelligenceModuleId, type IntelligenceRecord, type KnowledgeArticle, type PatientOption,
 } from "@/src/intelligence/store";
@@ -150,6 +150,7 @@ export default function IntelligenceHubScreen() {
 
   const [moduleId, setModuleId] = useState<IntelligenceModuleId>("body_map");
   const [records, setRecords] = useState<IntelligenceRecord[]>([]);
+  const [archivedRecords, setArchivedRecords] = useState<IntelligenceRecord[]>([]);
   const [patients, setPatients] = useState<PatientOption[]>([]);
   const [moduleSettings, setModuleSettings] = useState<Record<string, boolean>>({});
   const [knowledgeArticles, setKnowledgeArticles] = useState<KnowledgeArticle[]>([]);
@@ -192,6 +193,7 @@ export default function IntelligenceHubScreen() {
     try {
       initializeIntelligenceStore();
       setRecords(listIntelligenceRecords({ userId, isAdmin }));
+      setArchivedRecords(listArchivedIntelligenceRecords({ userId, isAdmin }));
       setPatients(listIntelligencePatients(userId, isAdmin));
       setModuleSettings(listIntelligenceModuleSettings());
       setKnowledgeArticles(listKnowledgeArticles(knowledgeSearch));
@@ -341,14 +343,12 @@ export default function IntelligenceHubScreen() {
         try {
           restoreIntelligenceRevision(selectedRecordId, revisionId, userId, isAdmin);
           toast("Saved version restored.", "success");
-          showRevisions(getIntelligenceRecordSafe(selectedRecordId));
+          setRevisions(listIntelligenceRevisions(selectedRecordId, userId, isAdmin));
           refresh();
         } catch (error: any) { toast(error?.message || "Could not restore version.", "error"); }
       } },
     ]);
   };
-  const getIntelligenceRecordSafe = (id: string) => records.find((record) => record.id === id) || records[0];
-
   const saveArticle = () => {
     try {
       saveKnowledgeArticle({
@@ -375,7 +375,7 @@ export default function IntelligenceHubScreen() {
 
   const exportResearch = async () => {
     try {
-      const summary = getIntelligenceRecordsForResearch();
+      const summary = getIntelligenceRecordsForResearch(userId, isAdmin);
       const rows: string[][] = [["Dataset", "Category", "Count", "Disclosure"]];
       const append = (label: string, values: any[]) => values.forEach((row) => {
         const count = Number(row.count || 0);
@@ -417,6 +417,21 @@ export default function IntelligenceHubScreen() {
     } catch (error: any) { toast(error?.message || "Could not update module settings.", "error"); }
   };
 
+  const restoreArchivedEntry = (record: IntelligenceRecord) => {
+    Alert.alert("Restore archived entry?", "This entry will return to the active timeline. Its previous versions remain available.", [
+      { text: "Cancel", style: "cancel" },
+      { text: "Restore entry", onPress: () => {
+        try {
+          restoreArchivedIntelligenceRecord(record.id, userId, isAdmin);
+          setSelectedRecordId(record.id);
+          setRevisions(listIntelligenceRevisions(record.id, userId, isAdmin));
+          toast("Entry restored.", "success");
+          refresh();
+        } catch (error: any) { toast(error?.message || "Could not restore entry.", "error"); }
+      } },
+    ]);
+  };
+
   const followUpStatus = (record: IntelligenceRecord) => {
     const payload = safePayload(record);
     const due = payload.dueDate || record.event_date;
@@ -429,7 +444,7 @@ export default function IntelligenceHubScreen() {
   };
 
   const renderResearchPanel = () => {
-    const stats = getIntelligenceRecordsForResearch();
+    const stats = getIntelligenceRecordsForResearch(userId, isAdmin);
     return (
       <View style={styles.panel}>
         <Text style={styles.panelTitle}>Anonymized aggregate report</Text>
@@ -479,12 +494,23 @@ export default function IntelligenceHubScreen() {
     <View style={styles.panel}>
       <Text style={styles.panelTitle}>Record recovery</Text>
       <Text style={styles.description}>Every edit and removal creates a retained snapshot. Select an entry to inspect its previous versions. Restore creates another snapshot before changing the current entry.</Text>
+      <Text style={styles.sectionTitle}>Active entries</Text>
       {records.map((record) => (
         <Pressable key={record.id} style={[styles.articleListItem, selectedRecordId === record.id && styles.selectedRow]} onPress={() => showRevisions(record)}>
           <View style={styles.flexOne}><Text style={styles.recordTitle}>{record.title}</Text><Text style={styles.meta}>{record.kind.replace(/_/g," ")} · {record.event_date}</Text></View>
           <Ionicons name="time-outline" size={19} color={colors.muted}/>
         </Pressable>
       ))}
+      <Text style={styles.sectionTitle}>Archived entries</Text>
+      {archivedRecords.map((record) => (
+        <View key={record.id} style={[styles.articleListItem, selectedRecordId === record.id && styles.selectedRow]}>
+          <Pressable style={styles.flexOne} onPress={() => showRevisions(record)}>
+            <Text style={styles.recordTitle}>{record.title}</Text>
+            <Text style={styles.meta}>Archived · {record.kind.replace(/_/g," ")} · {record.event_date}</Text>
+          </Pressable>
+          <Pressable style={styles.smallAction} onPress={() => restoreArchivedEntry(record)}><Text style={styles.smallActionText}>Restore</Text></Pressable>
+        </View>
+      ))
       {selectedRecordId ? (
         <View style={styles.revisionPanel}>
           <Text style={styles.sectionTitle}>Saved versions ({revisions.length})</Text>
@@ -499,7 +525,7 @@ export default function IntelligenceHubScreen() {
           {!revisions.length ? <Text style={styles.caption}>No earlier edit snapshots are available.</Text> : null}
         </View>
       ) : null}
-      {!records.length ? <EmptyState icon="time-outline" title="No records to recover" subtitle="New and edited entries will appear here."/> : null}
+      {!records.length && !archivedRecords.length ? <EmptyState icon="time-outline" title="No records to recover" subtitle="New and edited entries will appear here."/> : null}
     </View>
   );
 
@@ -724,7 +750,7 @@ const useStyles = makeStyles((colors) => ({
   headerSubtitle:{fontFamily:fontFamily.regular,fontSize:fontSize.xs,color:colors.muted,marginTop:2},
   flexOne:{flex:1},
   moduleStrip:{gap:spacing.sm,paddingBottom:spacing.md},
-  moduleChip:{flexDirection:"row",alignItems:"center",gap:6,paddingHorizontal:12,paddingVertical:10,borderRadius:radius.full,backgroundColor:colors.surface,borderWidth:1,borderColor:colors.border},
+  moduleChip:{flexDirection:"row",alignItems:"center",gap:6,paddingHorizontal:12,paddingVertical:10,borderRadius:radius.pill,backgroundColor:colors.surface,borderWidth:1,borderColor:colors.border},
   moduleChipActive:{backgroundColor:colors.brandPrimary,borderColor:colors.brandPrimary},
   moduleChipText:{fontFamily:fontFamily.semibold,fontSize:fontSize.xs,color:colors.onSurface},
   moduleChipTextActive:{color:colors.onBrandPrimary},
