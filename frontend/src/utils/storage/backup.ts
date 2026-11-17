@@ -10,13 +10,14 @@ import { storage } from "@/src/utils/storage";
 import type { BrandingConfig } from "@/src/theme";
 import { archiveEligiblePatientImages, getLocalPatientImageArchives } from "@/src/utils/storage/patient-image-archive";
 
-const BACKUP_VERSION = 11;
+const BACKUP_VERSION = 12;
 const BACKUP_APP = "Ortho Logbook";
 
 type BackupData = {
   version:number; app:string; createdAt:string;
   patients:any[]; procedures:any[]; inventoryCategories:any[]; inventory:any[]; patientImplants:any[]; patientCustomFields:any[]; implantRecords:any[]; expenses:any[]; users:any[];
   patientHistory:any[]; inventoryMovements:any[]; inventoryPurchaseReceipts:any[]; stockReceipts:any[]; trash?:any[];
+  intelligenceRecords:any[]; intelligenceRevisions:any[]; knowledgeArticles:any[]; intelligenceSettings:any[];
   // Each unique compressed image is stored once and referenced by its rows.
   photoAssets?: Record<string, string>;
   patientImageArchives?: Array<{patientId:string;patientName:string;mrNo:string;fileName:string;sourceStamp:string;archivedAt:string;imageCount:number;driveFileId?:string}>;
@@ -825,6 +826,22 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
   // Live access/session tokens are deliberately excluded from settings backups.
   users:include("users") ? db.getAllSync<any>("SELECT * FROM users ORDER BY created_at ASC") : [],
   patientHistory:embeddedHistory,
+  intelligenceRecords:include("intelligenceRecords") ? await (async()=>{
+    const f=whereForFilter(filter,"event_date");
+    const rows=db.getAllSync<any>("SELECT * FROM ortho_intelligence_records"+f.sql+" ORDER BY event_date ASC,created_at ASC",f.args);
+    return await mapWithConcurrency(rows,2,async(row:any)=>{
+      const source=String(row.media_uri||"");
+      const mediaUri=!includeAttachedImages ? "" :
+        /^(data:image\/|file:\/\/|content:\/\/)/i.test(source) ? await embedOptionalPhoto(source,compressedPhotoCache,"document") : source;
+      return {...row,media_uri:mediaUri};
+    });
+  })() : [],
+  intelligenceRevisions:include("intelligenceRevisions") ? db.getAllSync<any>(
+    "SELECT * FROM ortho_intelligence_revisions"+whereForFilter(filter,"created_at").sql+" ORDER BY created_at ASC",
+    whereForFilter(filter,"created_at").args
+  ) : [],
+  knowledgeArticles:include("knowledgeArticles") ? db.getAllSync<any>("SELECT * FROM ortho_knowledge_articles ORDER BY category COLLATE NOCASE,title COLLATE NOCASE") : [],
+  intelligenceSettings:include("intelligenceSettings") ? db.getAllSync<any>("SELECT * FROM ortho_intelligence_settings ORDER BY module_id") : [],
   inventoryMovements:include("inventoryMovements") ? (()=>{if(filter.type==="all") return db.getAllSync<any>("SELECT * FROM inventory_movements ORDER BY created_at ASC"); const f=filter.type==="date" ? {sql:" WHERE date(created_at)=?",args:[filter.value||""]} : filter.type==="month" ? {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]} : filter.type==="halfyear" ? (()=>{const bounds=halfYearMonthBounds(filter.value);return {sql:" WHERE substr(created_at,1,7) BETWEEN ? AND ?",args:[bounds.start,bounds.end]};})() : {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]}; return db.getAllSync<any>(`SELECT * FROM inventory_movements${f.sql} ORDER BY created_at ASC`,f.args);})() : [],
   inventoryPurchaseReceipts:include("inventoryPurchaseReceipts") ? await (async()=>{const f=whereForFilter(filter,"created_at");const rows=db.getAllSync<any>(`SELECT id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,description,created_at,created_by FROM inventory_purchase_receipts${f.sql} ORDER BY created_at ASC`,f.args);return await mapWithConcurrency(rows, 2, async (row:any)=>{const billRow=db.getFirstSync<any>("SELECT bill_image FROM inventory_purchase_receipts WHERE id=?",[row.id]);const source=billRow?.bill_image;const billImage=!includeAttachedImages ? "" : typeof source==="string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(source) ? await embedOptionalPhoto(source,compressedPhotoCache) : source; if(billRow)billRow.bill_image=""; return {...row,bill_image:billImage};});})() : [],
   stockReceipts:include("stockReceipts") ? await (async()=>{
@@ -999,13 +1016,13 @@ function stripPatientPhotosDeep(value: any, key = ""): any {
  return output;
 }
 
-const BACKUP_IMAGE_KEYS = new Set(["photo_uri", "photouri", "photos_json", "photos", "bill_image", "bill_files_json"]);
+const BACKUP_IMAGE_KEYS = new Set(["photo_uri", "photouri", "photos_json", "photos", "bill_image", "bill_files_json", "media_uri"]);
 // Receipt invoice attachments are real backup data, not disposable patient-photo
 // caches. Keep them in exported backups while excluding the large JSON from the
 // local diff cache and hashing it for incremental change detection.
 const BACKUP_CACHE_ONLY_KEYS = new Set([...BACKUP_IMAGE_KEYS, "attachments_json"]);
 const BACKUP_NESTED_JSON_KEYS = new Set(["snapshot_json", "payload_json"]);
-const IMAGE_SIGNATURE_TABLES = new Set(["inventory", "inventoryPurchaseReceipts", "stockReceipts", "implantRecords", "patientHistory", "trash"]);
+const IMAGE_SIGNATURE_TABLES = new Set(["inventory", "inventoryPurchaseReceipts", "stockReceipts", "implantRecords", "patientHistory", "trash", "intelligenceRecords"]);
 
 function stripBackupImages(value: any, key = ""): any {
  if (Array.isArray(value)) return value.map((item) => stripBackupImages(item));
@@ -1144,7 +1161,7 @@ export async function exportIncrementalBackupData(changedTables: string[], onPro
  const allowed = new Set([
   "patients","procedures","inventoryCategories","inventory","patientImplants",
   "patientCustomFields","implantRecords","expenses","users","patientHistory",
-  "inventoryMovements","inventoryPurchaseReceipts","stockReceipts","trash","branding","appSettings"
+  "inventoryMovements","inventoryPurchaseReceipts","stockReceipts","trash","intelligenceRecords","intelligenceRevisions","knowledgeArticles","intelligenceSettings","branding","appSettings"
  ]);
  const requestedTables = Array.from(new Set(changedTables)).filter((name) => allowed.has(name));
  if (!requestedTables.length) throw new Error("There are no changed data tables to sync.");
@@ -1315,6 +1332,7 @@ export async function prepareIncrementalSnapshotCacheFromBackupData(baselineKey:
   "patients", "procedures", "inventoryCategories", "inventory", "patientImplants",
   "patientCustomFields", "implantRecords", "expenses", "users", "patientHistory",
   "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts", "trash",
+  "intelligenceRecords", "intelligenceRevisions", "knowledgeArticles", "intelligenceSettings",
  ];
  const tables: Record<string, any> = {};
  const photoSources: Record<string, string> = {};
@@ -1339,7 +1357,7 @@ export async function prepareIncrementalSnapshotCacheFromBackupData(baselineKey:
 
 function parseHeader(text:string):any{
  let b:any;try{b=JSON.parse(text);}catch{throw new Error("The selected backup file is not valid.");}
- if(!b||![2,3,4,5,6,7,8,9,10,11].includes(b.version)||b.app!==BACKUP_APP)throw new Error("Invalid or unsupported Ortho Logbook backup.");
+ if(!b||![2,3,4,5,6,7,8,9,10,11,12].includes(b.version)||b.app!==BACKUP_APP)throw new Error("Invalid or unsupported Ortho Logbook backup.");
  if(b.encrypted===true){
   if(b.algorithm!=="XSalsa20-Poly1305"||b.kdf!=="SHA-256"||!b.createdAt||!b.salt||!b.nonce||!b.ciphertext)throw new Error("The backup file is incomplete or damaged.");
  } else if(!Array.isArray(b.patients)||!Array.isArray(b.inventory)||!Array.isArray(b.users)){
@@ -1363,6 +1381,10 @@ export async function decryptBackup(text:string,password:string):Promise<BackupD
   data.patientCustomFields=Array.isArray((data as any).patientCustomFields)?data.patientCustomFields:[];
   data.implantRecords=Array.isArray((data as any).implantRecords)?data.implantRecords:[];
   data.trash=Array.isArray((data as any).trash)?data.trash:[];
+  data.intelligenceRecords=Array.isArray((data as any).intelligenceRecords)?data.intelligenceRecords:[];
+  data.intelligenceRevisions=Array.isArray((data as any).intelligenceRevisions)?data.intelligenceRevisions:[];
+  data.knowledgeArticles=Array.isArray((data as any).knowledgeArticles)?data.knowledgeArticles:[];
+  data.intelligenceSettings=Array.isArray((data as any).intelligenceSettings)?data.intelligenceSettings:[];
   return data;
  }
  try{
@@ -1371,7 +1393,7 @@ export async function decryptBackup(text:string,password:string):Promise<BackupD
   const plain=nacl.secretbox.open(cipherBytes,hexToBytes(b.nonce),key);
   if(!plain)throw new Error("Incorrect backup password or damaged backup.");
   const data=JSON.parse(bytesToString(plain)) as BackupData;
-  if(!data||![2,3,4,5,6,7,8,9,10,11].includes(data.version)||data.app!==BACKUP_APP)throw new Error("The decrypted backup is invalid.");
+  if(!data||![2,3,4,5,6,7,8,9,10,11,12].includes(data.version)||data.app!==BACKUP_APP)throw new Error("The decrypted backup is invalid.");
   for(const keyName of ["patients","procedures","inventory","expenses","users","patientHistory","inventoryMovements"]){
     if(!Array.isArray((data as any)[keyName]))throw new Error("The backup is incomplete or damaged.");
   }
@@ -1380,6 +1402,10 @@ export async function decryptBackup(text:string,password:string):Promise<BackupD
   data.patientImplants=Array.isArray((data as any).patientImplants) ? (data as any).patientImplants : [];
   data.stockReceipts=Array.isArray((data as any).stockReceipts) ? (data as any).stockReceipts : [];
   data.trash=Array.isArray((data as any).trash) ? (data as any).trash : [];
+  data.intelligenceRecords=Array.isArray((data as any).intelligenceRecords) ? (data as any).intelligenceRecords : [];
+  data.intelligenceRevisions=Array.isArray((data as any).intelligenceRevisions) ? (data as any).intelligenceRevisions : [];
+  data.knowledgeArticles=Array.isArray((data as any).knowledgeArticles) ? (data as any).knowledgeArticles : [];
+  data.intelligenceSettings=Array.isArray((data as any).intelligenceSettings) ? (data as any).intelligenceSettings : [];
   return data;
  }catch(e){if(e instanceof Error&&e.message.includes("Incorrect backup password"))throw e;throw new Error("Unable to decrypt backup. Check the password and backup file.");}
 }
@@ -1451,7 +1477,7 @@ function restoreJsonArray(value:any){try{const parsed=JSON.parse(String(value ??
 
 export async function restoreBackup(backup:BackupData){
  initializeDatabase({ skipInventoryReset: true });
- if(!backup||![2,3,4,5,6,7,8,9,10,11].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
+ if(!backup||![2,3,4,5,6,7,8,9,10,11,12].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
  backup = materializeBackupPhotoReferences(backup);
  const patients=restoreArray((backup as any).patients);
  const procedures=restoreArray((backup as any).procedures);
