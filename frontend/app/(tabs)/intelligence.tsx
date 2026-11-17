@@ -294,6 +294,7 @@ export default function IntelligenceHubScreen() {
         payload: formFields,
         mediaUri,
         userId,
+        isAdmin,
         changeNote: "Edited in Orthopaedic Intelligence",
       });
       setFormVisible(false);
