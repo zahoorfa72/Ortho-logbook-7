@@ -832,7 +832,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
     return await mapWithConcurrency(rows,2,async(row:any)=>{
       const source=String(row.media_uri||"");
       const mediaUri=!includeAttachedImages ? "" :
-        /^(data:image\/|file:\/\/|content:\/\/)/i.test(source) ? await embedOptionalPhoto(source,compressedPhotoCache,"document") : source;
+        /^(data:image\/|file:\/\/|content:\/\/)/i.test(source) ? await embedOptionalPhoto(source,compressedPhotoCache) : source;
       return {...row,media_uri:mediaUri};
     });
   })() : [],
@@ -845,7 +845,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
       if (snapshot && typeof snapshot==="object" && typeof snapshot.media_uri==="string") {
         const source=snapshot.media_uri;
         if (includeAttachedImages && /^(data:image\/|file:\/\/|content:\/\/)/i.test(source)) {
-          snapshot.media_uri=await embedOptionalPhoto(source,compressedPhotoCache,"document");
+          snapshot.media_uri=await embedOptionalPhoto(source,compressedPhotoCache);
         } else if (!includeAttachedImages) snapshot.media_uri="";
       }
       return {...row,snapshot_json:snapshot ? JSON.stringify(snapshot) : String(row.snapshot_json||"{}")};
