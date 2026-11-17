@@ -1761,7 +1761,7 @@ const usedExpenseIds=new Set<string>();
 //   matching name + category + size and summing quantities.
 export async function mergeBackup(backup: BackupData) {
  initializeDatabase({ skipInventoryReset: true });
- if(!backup||![2,3,4,5,6,7,8,9,10,11].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
+ if(!backup||![2,3,4,5,6,7,8,9,10,11,12].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
  backup = materializeBackupPhotoReferences(backup);
  const stats = { patients: 0, procedures: 0, inventory: 0, inventoryCategories: 0, patientImplants: 0, expenses: 0, users: 0, patientHistory: 0, inventoryMovements: 0, stockReceipts: 0, intelligenceRecords: 0, knowledgeArticles: 0 };
  db.withTransactionSync(() => {
