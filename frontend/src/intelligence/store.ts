@@ -87,11 +87,11 @@ export function listIntelligenceRecords(options: { userId: string; isAdmin: bool
   );
 }
 
-export function getIntelligenceRecord(id: string, userId: string, isAdmin: boolean): IntelligenceRecord | null {
+export function getIntelligenceRecord(id: string, userId: string, isAdmin: boolean, includeDeleted = false): IntelligenceRecord | null {
   initializeIntelligenceStore();
   const row = db.getFirstSync<IntelligenceRecord>(
-    "SELECT r.* FROM ortho_intelligence_records r WHERE r.id=? AND r.deleted_at IS NULL AND (?=1 OR r.created_by=? OR r.patient_id IN (SELECT id FROM patients WHERE created_by=?)) LIMIT 1",
-    [id, isAdmin ? 1 : 0, userId, userId],
+    "SELECT r.* FROM ortho_intelligence_records r WHERE r.id=? AND (?=1 OR r.deleted_at IS NULL) AND (?=1 OR r.created_by=? OR r.patient_id IN (SELECT id FROM patients WHERE created_by=?)) LIMIT 1",
+    [id, includeDeleted ? 1 : 0, isAdmin ? 1 : 0, userId, userId],
   );
   return row || null;
 }
@@ -167,8 +167,25 @@ export function softDeleteIntelligenceRecord(id: string, userId: string, isAdmin
   });
 }
 
+export function listArchivedIntelligenceRecords(options: { userId: string; isAdmin: boolean }): IntelligenceRecord[] {
+  initializeIntelligenceStore();
+  const sql = options.isAdmin
+    ? "SELECT * FROM ortho_intelligence_records WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC LIMIT 1000"
+    : "SELECT * FROM ortho_intelligence_records WHERE deleted_at IS NOT NULL AND (created_by=? OR patient_id IN (SELECT id FROM patients WHERE created_by=?)) ORDER BY deleted_at DESC LIMIT 1000";
+  return db.getAllSync<IntelligenceRecord>(sql, options.isAdmin ? [] : [options.userId, options.userId]);
+}
+
+export function restoreArchivedIntelligenceRecord(id: string, userId: string, isAdmin: boolean) {
+  const existing = getIntelligenceRecord(id, userId, isAdmin, true);
+  if (!existing || !existing.deleted_at) throw new Error("Archived record not found or access denied.");
+  const timestamp = now();
+  db.withTransactionSync(() => {
+    addRevision(existing, userId, "Before restoring archived entry");
+    db.runSync("UPDATE ortho_intelligence_records SET deleted_at=NULL,updated_at=?,updated_by=? WHERE id=?", [timestamp, userId, id]);
+  });
+}
 export function listIntelligenceRevisions(recordId: string, userId: string, isAdmin: boolean) {
-  if (!getIntelligenceRecord(recordId, userId, isAdmin)) return [];
+  if (!getIntelligenceRecord(recordId, userId, isAdmin, true)) return [];
   return db.getAllSync<any>(
     "SELECT id,record_id,snapshot_json,change_note,created_at,created_by FROM ortho_intelligence_revisions WHERE record_id=? ORDER BY created_at DESC LIMIT 100",
     [recordId],
@@ -176,7 +193,7 @@ export function listIntelligenceRevisions(recordId: string, userId: string, isAd
 }
 
 export function restoreIntelligenceRevision(recordId: string, revisionId: string, userId: string, isAdmin: boolean) {
-  const current = getIntelligenceRecord(recordId, userId, isAdmin);
+  const current = getIntelligenceRecord(recordId, userId, isAdmin, true);
   if (!current) throw new Error("Record not found or access denied.");
   const revision = db.getFirstSync<any>("SELECT snapshot_json FROM ortho_intelligence_revisions WHERE id=? AND record_id=? LIMIT 1", [revisionId, recordId]);
   if (!revision) throw new Error("This saved version is no longer available.");
@@ -250,11 +267,15 @@ export function setIntelligenceModuleEnabled(moduleId: string, enabled: boolean,
   );
 }
 
-export function getIntelligenceRecordsForResearch() {
+export function getIntelligenceRecordsForResearch(userId: string, isAdmin: boolean) {
   initializeIntelligenceStore();
+  const patientWhere = isAdmin ? "" : " AND created_by=?";
+  const patientArgs = isAdmin ? [] : [userId];
+  const recordScope = isAdmin ? "" : " AND (created_by=? OR patient_id IN (SELECT id FROM patients WHERE created_by=?))";
+  const recordArgs = isAdmin ? [] : [userId, userId];
   return {
-    procedures: db.getAllSync<any>("SELECT TRIM(procedure) AS label,COUNT(*) AS count FROM patients WHERE TRIM(COALESCE(procedure,''))<>'' GROUP BY TRIM(procedure) ORDER BY count DESC,label COLLATE NOCASE"),
-    diagnoses: db.getAllSync<any>("SELECT TRIM(diagnosis) AS label,COUNT(*) AS count FROM patients WHERE TRIM(COALESCE(diagnosis,''))<>'' GROUP BY TRIM(diagnosis) ORDER BY count DESC,label COLLATE NOCASE"),
-    rehabilitation: db.getAllSync<any>("SELECT json_extract(payload_json,'$.painScore') AS pain_score,COUNT(*) AS count FROM ortho_intelligence_records WHERE kind='rehab' AND deleted_at IS NULL AND json_valid(payload_json) GROUP BY json_extract(payload_json,'$.painScore') ORDER BY pain_score"),
+    procedures: db.getAllSync<any>("SELECT TRIM(procedure) AS label,COUNT(*) AS count FROM patients WHERE TRIM(COALESCE(procedure,''))<>''" + patientWhere + " GROUP BY TRIM(procedure) ORDER BY count DESC,label COLLATE NOCASE", patientArgs),
+    diagnoses: db.getAllSync<any>("SELECT TRIM(diagnosis) AS label,COUNT(*) AS count FROM patients WHERE TRIM(COALESCE(diagnosis,''))<>''" + patientWhere + " GROUP BY TRIM(diagnosis) ORDER BY count DESC,label COLLATE NOCASE", patientArgs),
+    rehabilitation: db.getAllSync<any>("SELECT json_extract(payload_json,'$.painScore') AS pain_score,COUNT(*) AS count FROM ortho_intelligence_records WHERE kind='rehab' AND deleted_at IS NULL AND json_valid(payload_json)" + recordScope + " GROUP BY json_extract(payload_json,'$.painScore') ORDER BY pain_score", recordArgs),
   };
 }
