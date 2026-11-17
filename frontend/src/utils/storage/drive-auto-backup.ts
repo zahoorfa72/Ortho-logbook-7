@@ -18,7 +18,8 @@ const DEBOUNCE_MS = 7000;
 const ALL_SYNC_TABLES = [
   "patients", "procedures", "inventoryCategories", "inventory", "patientImplants",
   "patientCustomFields", "implantRecords", "expenses", "users", "patientHistory",
-  "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts", "trash", "branding", "appSettings",
+  "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts", "trash",
+  "intelligenceRecords", "intelligenceRevisions", "knowledgeArticles", "intelligenceSettings", "branding", "appSettings",
 ] as const;
 const DIRTY_TABLES_KEY = "ortho_drive_pending_tables_v1";
 let timer: ReturnType<typeof setTimeout> | null = null;
@@ -89,6 +90,10 @@ const tableMap: Record<string, string> = {
   inventory_purchase_receipts: "inventoryPurchaseReceipts",
   stock_receipts: "stockReceipts",
   deleted_records: "trash",
+  ortho_intelligence_records: "intelligenceRecords",
+  ortho_intelligence_revisions: "intelligenceRevisions",
+  ortho_knowledge_articles: "knowledgeArticles",
+  ortho_intelligence_settings: "intelligenceSettings",
 };
 
 function persistPendingTables(): Promise<void> {
