@@ -42,7 +42,7 @@ export type PatientJourneyItem = {
 export type SaveIntelligenceInput = {
   id?: string; expectedUpdatedAt?: string; patientId?: string | null; kind: IntelligenceModuleId;
   title: string; eventDate: string; summary?: string; payload: Record<string, string>;
-  mediaUri?: string; changeNote?: string; userId: string;
+  mediaUri?: string; changeNote?: string; userId: string; isAdmin?: boolean;
 };
 
 const now = () => new Date().toISOString();
@@ -232,12 +232,15 @@ export function saveIntelligenceRecord(input: SaveIntelligenceInput): Intelligen
   const payloadJson = validatePayload(payloadValues);
   const mediaUri = cleanText(input.mediaUri, 24000000);
   const patientId = input.patientId ? cleanText(input.patientId, 100) : null;
-  if (patientId && !db.getFirstSync<any>("SELECT id FROM patients WHERE id=? LIMIT 1", [patientId])) {
-    throw new Error("The selected patient no longer exists. Choose the patient again.");
+  if (patientId) {
+    const patient = input.isAdmin
+      ? db.getFirstSync<any>("SELECT id FROM patients WHERE id=? LIMIT 1", [patientId])
+      : db.getFirstSync<any>("SELECT id FROM patients WHERE id=? AND created_by=? LIMIT 1", [patientId, input.userId]);
+    if (!patient) throw new Error("The selected patient no longer exists or you do not have access to it. Choose an available patient again.");
   }
   const timestamp = now();
   if (input.id) {
-    const existing = db.getFirstSync<IntelligenceRecord>("SELECT * FROM ortho_intelligence_records WHERE id=? AND deleted_at IS NULL LIMIT 1", [input.id]);
+    const existing = db.getFirstSync<IntelligenceRecord>("SELECT * FROM ortho_intelligence_records WHERE id=? AND deleted_at IS NULL AND (?=1 OR created_by=? OR patient_id IN (SELECT id FROM patients WHERE created_by=?)) LIMIT 1", [input.id, input.isAdmin ? 1 : 0, input.userId, input.userId]);
     if (!existing) throw new Error("This record is no longer available. Refresh and try again.");
     if (input.expectedUpdatedAt && existing.updated_at !== input.expectedUpdatedAt) {
       throw new Error("This record changed on another screen. Reload it before saving to avoid overwriting newer information.");
