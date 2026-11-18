@@ -10,13 +10,14 @@ import { storage } from "@/src/utils/storage";
 import type { BrandingConfig } from "@/src/theme";
 import { archiveEligiblePatientImages, getLocalPatientImageArchives } from "@/src/utils/storage/patient-image-archive";
 
-const BACKUP_VERSION = 11;
+const BACKUP_VERSION = 12;
 const BACKUP_APP = "Ortho Logbook";
 
 type BackupData = {
   version:number; app:string; createdAt:string;
   patients:any[]; procedures:any[]; inventoryCategories:any[]; inventory:any[]; patientImplants:any[]; patientCustomFields:any[]; implantRecords:any[]; expenses:any[]; users:any[];
   patientHistory:any[]; inventoryMovements:any[]; inventoryPurchaseReceipts:any[]; stockReceipts:any[]; trash?:any[];
+  intelligenceRecords:any[]; intelligenceRevisions:any[]; knowledgeArticles:any[]; intelligenceSettings:any[];
   // Each unique compressed image is stored once and referenced by its rows.
   photoAssets?: Record<string, string>;
   patientImageArchives?: Array<{patientId:string;patientName:string;mrNo:string;fileName:string;sourceStamp:string;archivedAt:string;imageCount:number;driveFileId?:string}>;
@@ -825,6 +826,33 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
   // Live access/session tokens are deliberately excluded from settings backups.
   users:include("users") ? db.getAllSync<any>("SELECT * FROM users ORDER BY created_at ASC") : [],
   patientHistory:embeddedHistory,
+  intelligenceRecords:include("intelligenceRecords") ? await (async()=>{
+    const f=whereForFilter(filter,"event_date");
+    const rows=db.getAllSync<any>("SELECT * FROM ortho_intelligence_records"+f.sql+" ORDER BY event_date ASC,created_at ASC",f.args);
+    return await mapWithConcurrency(rows,2,async(row:any)=>{
+      const source=String(row.media_uri||"");
+      const mediaUri=!includeAttachedImages ? "" :
+        /^(data:image\/|file:\/\/|content:\/\/)/i.test(source) ? await embedOptionalPhoto(source,compressedPhotoCache) : source;
+      return {...row,media_uri:mediaUri};
+    });
+  })() : [],
+  intelligenceRevisions:include("intelligenceRevisions") ? await (async()=>{
+    const f=whereForFilter(filter,"created_at");
+    const rows=db.getAllSync<any>("SELECT * FROM ortho_intelligence_revisions"+f.sql+" ORDER BY created_at ASC",f.args);
+    return await mapWithConcurrency(rows,2,async(row:any)=>{
+      let snapshot:any=null;
+      try { snapshot=JSON.parse(String(row.snapshot_json||"{}")); } catch {}
+      if (snapshot && typeof snapshot==="object" && typeof snapshot.media_uri==="string") {
+        const source=snapshot.media_uri;
+        if (includeAttachedImages && /^(data:image\/|file:\/\/|content:\/\/)/i.test(source)) {
+          snapshot.media_uri=await embedOptionalPhoto(source,compressedPhotoCache);
+        } else if (!includeAttachedImages) snapshot.media_uri="";
+      }
+      return {...row,snapshot_json:snapshot ? JSON.stringify(snapshot) : String(row.snapshot_json||"{}")};
+    });
+  })() : [],
+  knowledgeArticles:include("knowledgeArticles") ? db.getAllSync<any>("SELECT * FROM ortho_knowledge_articles ORDER BY category COLLATE NOCASE,title COLLATE NOCASE") : [],
+  intelligenceSettings:include("intelligenceSettings") ? db.getAllSync<any>("SELECT * FROM ortho_intelligence_settings ORDER BY module_id") : [],
   inventoryMovements:include("inventoryMovements") ? (()=>{if(filter.type==="all") return db.getAllSync<any>("SELECT * FROM inventory_movements ORDER BY created_at ASC"); const f=filter.type==="date" ? {sql:" WHERE date(created_at)=?",args:[filter.value||""]} : filter.type==="month" ? {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]} : filter.type==="halfyear" ? (()=>{const bounds=halfYearMonthBounds(filter.value);return {sql:" WHERE substr(created_at,1,7) BETWEEN ? AND ?",args:[bounds.start,bounds.end]};})() : {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]}; return db.getAllSync<any>(`SELECT * FROM inventory_movements${f.sql} ORDER BY created_at ASC`,f.args);})() : [],
   inventoryPurchaseReceipts:include("inventoryPurchaseReceipts") ? await (async()=>{const f=whereForFilter(filter,"created_at");const rows=db.getAllSync<any>(`SELECT id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,description,created_at,created_by FROM inventory_purchase_receipts${f.sql} ORDER BY created_at ASC`,f.args);return await mapWithConcurrency(rows, 2, async (row:any)=>{const billRow=db.getFirstSync<any>("SELECT bill_image FROM inventory_purchase_receipts WHERE id=?",[row.id]);const source=billRow?.bill_image;const billImage=!includeAttachedImages ? "" : typeof source==="string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(source) ? await embedOptionalPhoto(source,compressedPhotoCache) : source; if(billRow)billRow.bill_image=""; return {...row,bill_image:billImage};});})() : [],
   stockReceipts:include("stockReceipts") ? await (async()=>{
@@ -999,13 +1027,13 @@ function stripPatientPhotosDeep(value: any, key = ""): any {
  return output;
 }
 
-const BACKUP_IMAGE_KEYS = new Set(["photo_uri", "photouri", "photos_json", "photos", "bill_image", "bill_files_json"]);
+const BACKUP_IMAGE_KEYS = new Set(["photo_uri", "photouri", "photos_json", "photos", "bill_image", "bill_files_json", "media_uri"]);
 // Receipt invoice attachments are real backup data, not disposable patient-photo
 // caches. Keep them in exported backups while excluding the large JSON from the
 // local diff cache and hashing it for incremental change detection.
 const BACKUP_CACHE_ONLY_KEYS = new Set([...BACKUP_IMAGE_KEYS, "attachments_json"]);
 const BACKUP_NESTED_JSON_KEYS = new Set(["snapshot_json", "payload_json"]);
-const IMAGE_SIGNATURE_TABLES = new Set(["inventory", "inventoryPurchaseReceipts", "stockReceipts", "implantRecords", "patientHistory", "trash"]);
+const IMAGE_SIGNATURE_TABLES = new Set(["inventory", "inventoryPurchaseReceipts", "stockReceipts", "implantRecords", "patientHistory", "trash", "intelligenceRecords", "intelligenceRevisions"]);
 
 function stripBackupImages(value: any, key = ""): any {
  if (Array.isArray(value)) return value.map((item) => stripBackupImages(item));
@@ -1144,7 +1172,7 @@ export async function exportIncrementalBackupData(changedTables: string[], onPro
  const allowed = new Set([
   "patients","procedures","inventoryCategories","inventory","patientImplants",
   "patientCustomFields","implantRecords","expenses","users","patientHistory",
-  "inventoryMovements","inventoryPurchaseReceipts","stockReceipts","trash","branding","appSettings"
+  "inventoryMovements","inventoryPurchaseReceipts","stockReceipts","trash","intelligenceRecords","intelligenceRevisions","knowledgeArticles","intelligenceSettings","branding","appSettings"
  ]);
  const requestedTables = Array.from(new Set(changedTables)).filter((name) => allowed.has(name));
  if (!requestedTables.length) throw new Error("There are no changed data tables to sync.");
@@ -1315,6 +1343,7 @@ export async function prepareIncrementalSnapshotCacheFromBackupData(baselineKey:
   "patients", "procedures", "inventoryCategories", "inventory", "patientImplants",
   "patientCustomFields", "implantRecords", "expenses", "users", "patientHistory",
   "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts", "trash",
+  "intelligenceRecords", "intelligenceRevisions", "knowledgeArticles", "intelligenceSettings",
  ];
  const tables: Record<string, any> = {};
  const photoSources: Record<string, string> = {};
@@ -1339,7 +1368,7 @@ export async function prepareIncrementalSnapshotCacheFromBackupData(baselineKey:
 
 function parseHeader(text:string):any{
  let b:any;try{b=JSON.parse(text);}catch{throw new Error("The selected backup file is not valid.");}
- if(!b||![2,3,4,5,6,7,8,9,10,11].includes(b.version)||b.app!==BACKUP_APP)throw new Error("Invalid or unsupported Ortho Logbook backup.");
+ if(!b||![2,3,4,5,6,7,8,9,10,11,12].includes(b.version)||b.app!==BACKUP_APP)throw new Error("Invalid or unsupported Ortho Logbook backup.");
  if(b.encrypted===true){
   if(b.algorithm!=="XSalsa20-Poly1305"||b.kdf!=="SHA-256"||!b.createdAt||!b.salt||!b.nonce||!b.ciphertext)throw new Error("The backup file is incomplete or damaged.");
  } else if(!Array.isArray(b.patients)||!Array.isArray(b.inventory)||!Array.isArray(b.users)){
@@ -1363,6 +1392,10 @@ export async function decryptBackup(text:string,password:string):Promise<BackupD
   data.patientCustomFields=Array.isArray((data as any).patientCustomFields)?data.patientCustomFields:[];
   data.implantRecords=Array.isArray((data as any).implantRecords)?data.implantRecords:[];
   data.trash=Array.isArray((data as any).trash)?data.trash:[];
+  data.intelligenceRecords=Array.isArray((data as any).intelligenceRecords)?data.intelligenceRecords:[];
+  data.intelligenceRevisions=Array.isArray((data as any).intelligenceRevisions)?data.intelligenceRevisions:[];
+  data.knowledgeArticles=Array.isArray((data as any).knowledgeArticles)?data.knowledgeArticles:[];
+  data.intelligenceSettings=Array.isArray((data as any).intelligenceSettings)?data.intelligenceSettings:[];
   return data;
  }
  try{
@@ -1371,7 +1404,7 @@ export async function decryptBackup(text:string,password:string):Promise<BackupD
   const plain=nacl.secretbox.open(cipherBytes,hexToBytes(b.nonce),key);
   if(!plain)throw new Error("Incorrect backup password or damaged backup.");
   const data=JSON.parse(bytesToString(plain)) as BackupData;
-  if(!data||![2,3,4,5,6,7,8,9,10,11].includes(data.version)||data.app!==BACKUP_APP)throw new Error("The decrypted backup is invalid.");
+  if(!data||![2,3,4,5,6,7,8,9,10,11,12].includes(data.version)||data.app!==BACKUP_APP)throw new Error("The decrypted backup is invalid.");
   for(const keyName of ["patients","procedures","inventory","expenses","users","patientHistory","inventoryMovements"]){
     if(!Array.isArray((data as any)[keyName]))throw new Error("The backup is incomplete or damaged.");
   }
@@ -1380,6 +1413,10 @@ export async function decryptBackup(text:string,password:string):Promise<BackupD
   data.patientImplants=Array.isArray((data as any).patientImplants) ? (data as any).patientImplants : [];
   data.stockReceipts=Array.isArray((data as any).stockReceipts) ? (data as any).stockReceipts : [];
   data.trash=Array.isArray((data as any).trash) ? (data as any).trash : [];
+  data.intelligenceRecords=Array.isArray((data as any).intelligenceRecords) ? (data as any).intelligenceRecords : [];
+  data.intelligenceRevisions=Array.isArray((data as any).intelligenceRevisions) ? (data as any).intelligenceRevisions : [];
+  data.knowledgeArticles=Array.isArray((data as any).knowledgeArticles) ? (data as any).knowledgeArticles : [];
+  data.intelligenceSettings=Array.isArray((data as any).intelligenceSettings) ? (data as any).intelligenceSettings : [];
   return data;
  }catch(e){if(e instanceof Error&&e.message.includes("Incorrect backup password"))throw e;throw new Error("Unable to decrypt backup. Check the password and backup file.");}
 }
@@ -1451,7 +1488,7 @@ function restoreJsonArray(value:any){try{const parsed=JSON.parse(String(value ??
 
 export async function restoreBackup(backup:BackupData){
  initializeDatabase({ skipInventoryReset: true });
- if(!backup||![2,3,4,5,6,7,8,9,10,11].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
+ if(!backup||![2,3,4,5,6,7,8,9,10,11,12].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
  backup = materializeBackupPhotoReferences(backup);
  const patients=restoreArray((backup as any).patients);
  const procedures=restoreArray((backup as any).procedures);
@@ -1467,7 +1504,17 @@ export async function restoreBackup(backup:BackupData){
  const inventoryPurchaseReceipts=restoreArray((backup as any).inventoryPurchaseReceipts);
  const stockReceipts=restoreArray((backup as any).stockReceipts);
  const trash=restoreArray((backup as any).trash);
- db.withTransactionSync(()=>{
+ 
+ const intelligenceRecords=restoreArray((backup as any).intelligenceRecords);
+ const intelligenceRevisions=restoreArray((backup as any).intelligenceRevisions);
+ const knowledgeArticles=restoreArray((backup as any).knowledgeArticles);
+ const intelligenceSettings=restoreArray((backup as any).intelligenceSettings);
+db.withTransactionSync(()=>{
+  
+  db.runSync("DELETE FROM ortho_intelligence_revisions");
+  db.runSync("DELETE FROM ortho_intelligence_records");
+  db.runSync("DELETE FROM ortho_knowledge_articles");
+  db.runSync("DELETE FROM ortho_intelligence_settings");
   db.runSync("DELETE FROM inventory_movements"); db.runSync("DELETE FROM inventory_purchase_receipts"); db.runSync("DELETE FROM stock_receipts"); db.runSync("DELETE FROM patient_implants"); db.runSync("DELETE FROM patient_history"); db.runSync("DELETE FROM expenses"); db.runSync("DELETE FROM patients"); db.runSync("DELETE FROM patient_custom_fields"); db.runSync("DELETE FROM implant_records"); db.runSync("DELETE FROM procedures"); db.runSync("DELETE FROM inventory"); db.runSync("DELETE FROM inventory_categories"); db.runSync("DELETE FROM users"); db.runSync("DELETE FROM deleted_records");
   const usedPatientIds=new Set<string>();
   const patientIdMap=new Map<string,string>();
@@ -1573,7 +1620,53 @@ export async function restoreBackup(backup:BackupData){
     const role=["admin","doctor","staff"].includes(String(u.role)) ? String(u.role) : "doctor";
     db.runSync("INSERT INTO users (id,email,name,password_hash,recovery_code,role,can_edit_patients,disabled,created_at) VALUES (?,?,?,?,?,?,?,?,?)",[restoredUserId,email,restoreText(u.name,"User"),restoreText(u.password_hash),restoreText(u.recovery_code)||null,role,restoreReal(u.can_edit_patients,1,0)>0?1:0,restoreReal(u.disabled,0,0)>0?1:0,restoreText(u.created_at,new Date().toISOString())]);
   }
-  const usedExpenseIds=new Set<string>();
+  
+  const allowedIntelligenceKinds = new Set(["body_map","xray","implant_passport","digital_twin","xray_review","rehab","surgery_checklist","clinical_note","follow_up"]);
+  const usedIntelligenceIds=new Set<string>();
+  const intelligenceIdMap=new Map<string,string>();
+  for(const record of intelligenceRecords){
+    const kind=restoreText(record.kind), title=restoreText(record.title), eventDate=restoreText(record.event_date);
+    if(!allowedIntelligenceKinds.has(kind)||!title||!/^\d{4}-\d{2}-\d{2}$/.test(eventDate)) continue;
+    const restoredId=restoreRowId(record.id,"intelligence-record",usedIntelligenceIds);
+    if(record.id) intelligenceIdMap.set(String(record.id),restoredId);
+    const rawPatientId=restoreText(record.patient_id);
+    const patientId=rawPatientId ? (patientIdMap.get(rawPatientId)||null) : null;
+    db.runSync(
+      "INSERT INTO ortho_intelligence_records (id,patient_id,kind,title,event_date,summary,payload_json,media_uri,created_at,created_by,updated_at,updated_by,deleted_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+      [restoredId,patientId,kind,title,eventDate,restoreText(record.summary),restoreJsonObject(record.payload_json),restoreText(record.media_uri),
+       restoreText(record.created_at,new Date().toISOString()),userIdMap.get(String(record.created_by||""))||null,
+       restoreText(record.updated_at,restoreText(record.created_at,new Date().toISOString())),userIdMap.get(String(record.updated_by||""))||null,
+       restoreText(record.deleted_at)||null]
+    );
+  }
+  const usedIntelligenceRevisionIds=new Set<string>();
+  for(const revision of intelligenceRevisions){
+    const recordId=intelligenceIdMap.get(String(revision.record_id||""));
+    if(!recordId) continue;
+    db.runSync(
+      "INSERT INTO ortho_intelligence_revisions (id,record_id,snapshot_json,change_note,created_at,created_by) VALUES (?,?,?,?,?,?)",
+      [restoreRowId(revision.id,"intelligence-revision",usedIntelligenceRevisionIds),recordId,restoreText(revision.snapshot_json,"{}"),restoreText(revision.change_note),
+       restoreText(revision.created_at,new Date().toISOString()),userIdMap.get(String(revision.created_by||""))||null]
+    );
+  }
+  const usedKnowledgeIds=new Set<string>();
+  for(const article of knowledgeArticles){
+    const title=restoreText(article.title), body=restoreText(article.body);
+    if(!title||!body) continue;
+    db.runSync(
+      "INSERT INTO ortho_knowledge_articles (id,title,category,body,tags_json,created_at,updated_at,updated_by) VALUES (?,?,?,?,?,?,?,?)",
+      [restoreRowId(article.id,"knowledge-article",usedKnowledgeIds),title,restoreText(article.category),body,restoreJsonArray(article.tags_json),
+       restoreText(article.created_at,new Date().toISOString()),restoreText(article.updated_at,new Date().toISOString()),
+       userIdMap.get(String(article.updated_by||""))||null]
+    );
+  }
+  for(const setting of intelligenceSettings){
+    const moduleId=restoreText(setting.module_id);
+    if(!/^(body_map|xray|implant_passport|digital_twin|xray_review|rehab|surgery_checklist|clinical_note|follow_up|research|knowledge|recovery)$/.test(moduleId)) continue;
+    db.runSync("INSERT OR REPLACE INTO ortho_intelligence_settings (module_id,enabled,updated_at,updated_by) VALUES (?,?,?,?)",
+      [moduleId,restoreReal(setting.enabled,1,0)>0?1:0,restoreText(setting.updated_at,new Date().toISOString()),userIdMap.get(String(setting.updated_by||""))||null]);
+  }
+const usedExpenseIds=new Set<string>();
   for(const e of expenses) db.runSync("INSERT INTO expenses (id,description,amount,belongs_to,doctor_id,date,created_at) VALUES (?,?,?,?,?,?,?)",[restoreRowId(e.id,"expense",usedExpenseIds),restoreText(e.description),restoreReal(e.amount,0,0),restoreText(e.belongs_to,"hospital"),userIdMap.get(String(e.doctor_id||""))||null,restoreText(e.date,new Date().toISOString().slice(0,10)),restoreText(e.created_at,new Date().toISOString())]);
   const usedHistoryIds=new Set<string>();
   for(const h of patientHistory){
@@ -1668,9 +1761,9 @@ export async function restoreBackup(backup:BackupData){
 //   matching name + category + size and summing quantities.
 export async function mergeBackup(backup: BackupData) {
  initializeDatabase({ skipInventoryReset: true });
- if(!backup||![2,3,4,5,6,7,8,9,10,11].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
+ if(!backup||![2,3,4,5,6,7,8,9,10,11,12].includes(backup.version)||backup.app!==BACKUP_APP)throw new Error("Invalid Ortho Logbook backup.");
  backup = materializeBackupPhotoReferences(backup);
- const stats = { patients: 0, procedures: 0, inventory: 0, inventoryCategories: 0, patientImplants: 0, expenses: 0, users: 0, patientHistory: 0, inventoryMovements: 0, stockReceipts: 0 };
+ const stats = { patients: 0, procedures: 0, inventory: 0, inventoryCategories: 0, patientImplants: 0, expenses: 0, users: 0, patientHistory: 0, inventoryMovements: 0, stockReceipts: 0, intelligenceRecords: 0, knowledgeArticles: 0 };
  db.withTransactionSync(() => {
   const has = (table: string, id: string) => !!db.getFirstSync<any>(`SELECT id FROM ${table} WHERE id=?`, [id]);
   for (const p of backup.patients) {
@@ -1791,7 +1884,36 @@ export async function mergeBackup(backup: BackupData) {
    db.runSync("INSERT INTO users (id,email,name,password_hash,recovery_code,role,can_edit_patients,disabled,created_at) VALUES (?,?,?,?,?,?,?,?,?)", [u.id, u.email, u.name, u.password_hash, u.recovery_code||null, u.role||"doctor", Number(u.can_edit_patients??1), Number(u.disabled??0), u.created_at]);
    stats.users++;
   }
-  for (const h of backup.patientHistory) {
+  
+   const allowedIntelligenceKinds = new Set(["body_map","xray","implant_passport","digital_twin","xray_review","rehab","surgery_checklist","clinical_note","follow_up"]);
+   for (const record of backup.intelligenceRecords || []) {
+    if (!record.id || has("ortho_intelligence_records", record.id) || !allowedIntelligenceKinds.has(String(record.kind||""))) continue;
+    if (!String(record.title||"").trim() || !/^\d{4}-\d{2}-\d{2}$/.test(String(record.event_date||""))) continue;
+    const patientId = record.patient_id && has("patients", String(record.patient_id)) ? String(record.patient_id) : null;
+    db.runSync(
+      "INSERT INTO ortho_intelligence_records (id,patient_id,kind,title,event_date,summary,payload_json,media_uri,created_at,created_by,updated_at,updated_by,deleted_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+      [record.id,patientId,record.kind,String(record.title).trim(),record.event_date,record.summary||"",restoreJsonObject(record.payload_json),record.media_uri||"",
+       record.created_at||new Date().toISOString(),record.created_by||null,record.updated_at||record.created_at||new Date().toISOString(),record.updated_by||null,record.deleted_at||null]
+    );
+    stats.intelligenceRecords++;
+   }
+   for (const revision of backup.intelligenceRevisions || []) {
+    if (!revision.id || has("ortho_intelligence_revisions", revision.id) || !has("ortho_intelligence_records", String(revision.record_id||""))) continue;
+    db.runSync("INSERT INTO ortho_intelligence_revisions (id,record_id,snapshot_json,change_note,created_at,created_by) VALUES (?,?,?,?,?,?)",
+      [revision.id,revision.record_id,revision.snapshot_json||"{}",revision.change_note||"",revision.created_at||new Date().toISOString(),revision.created_by||null]);
+   }
+   for (const article of backup.knowledgeArticles || []) {
+    if (!article.id || has("ortho_knowledge_articles", article.id) || !String(article.title||"").trim() || !String(article.body||"").trim()) continue;
+    db.runSync("INSERT INTO ortho_knowledge_articles (id,title,category,body,tags_json,created_at,updated_at,updated_by) VALUES (?,?,?,?,?,?,?,?)",
+      [article.id,String(article.title).trim(),article.category||"",String(article.body),restoreJsonArray(article.tags_json),article.created_at||new Date().toISOString(),article.updated_at||article.created_at||new Date().toISOString(),article.updated_by||null]);
+    stats.knowledgeArticles++;
+   }
+   for (const setting of backup.intelligenceSettings || []) {
+    if (!/^(body_map|xray|implant_passport|digital_twin|xray_review|rehab|surgery_checklist|clinical_note|follow_up|research|knowledge|recovery)$/.test(String(setting.module_id||""))) continue;
+    db.runSync("INSERT OR IGNORE INTO ortho_intelligence_settings (module_id,enabled,updated_at,updated_by) VALUES (?,?,?,?)",
+      [setting.module_id,Number(setting.enabled)>0?1:0,setting.updated_at||new Date().toISOString(),setting.updated_by||null]);
+   }
+for (const h of backup.patientHistory) {
    if (has("patient_history", h.id)) continue;
    db.runSync("INSERT INTO patient_history (id,patient_id,user_id,action,snapshot_json,created_at) VALUES (?,?,?,?,?,?)", [h.id, h.patient_id, h.user_id||null, h.action, h.snapshot_json, h.created_at]);
    stats.patientHistory++;

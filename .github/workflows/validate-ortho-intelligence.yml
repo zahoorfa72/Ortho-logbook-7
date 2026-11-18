@@ -1,0 +1,48 @@
+name: Validate Orthopaedic Intelligence
+
+on:
+  push:
+    branches: [feat/ortho-intelligence-suite]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ortho-intelligence-validation
+  cancel-in-progress: true
+
+jobs:
+  typecheck-and-export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: |
+          corepack enable
+          if [ -f yarn.lock ]; then
+            yarn install --frozen-lockfile --ignore-scripts
+          else
+            yarn install --ignore-scripts
+          fi
+
+      - name: TypeScript validation
+        working-directory: frontend
+        run: npx tsc --noEmit
+
+      - name: Web export smoke test
+        working-directory: frontend
+        env:
+          CI: "1"
+          EXPO_NO_TELEMETRY: "1"
+        run: npx expo export --platform web

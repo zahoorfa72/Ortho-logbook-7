@@ -121,6 +121,53 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
     CREATE TABLE IF NOT EXISTS app_meta (
       key TEXT PRIMARY KEY NOT NULL, value TEXT
     );
+    -- Additive, local-first orthopaedic intelligence data. These tables are isolated
+    -- from existing patient/inventory workflows and are created without modifying
+    -- any existing records.
+    CREATE TABLE IF NOT EXISTS ortho_intelligence_records (
+      id TEXT PRIMARY KEY NOT NULL,
+      patient_id TEXT,
+      kind TEXT NOT NULL,
+      title TEXT NOT NULL,
+      event_date TEXT NOT NULL,
+      summary TEXT NOT NULL DEFAULT '',
+      payload_json TEXT NOT NULL DEFAULT '{}',
+      media_uri TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      created_by TEXT,
+      updated_at TEXT NOT NULL,
+      updated_by TEXT,
+      deleted_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_ortho_intelligence_patient ON ortho_intelligence_records(patient_id, event_date);
+    CREATE INDEX IF NOT EXISTS idx_ortho_intelligence_kind_date ON ortho_intelligence_records(kind, event_date);
+    CREATE INDEX IF NOT EXISTS idx_ortho_intelligence_deleted ON ortho_intelligence_records(deleted_at);
+    CREATE TABLE IF NOT EXISTS ortho_intelligence_revisions (
+      id TEXT PRIMARY KEY NOT NULL,
+      record_id TEXT NOT NULL,
+      snapshot_json TEXT NOT NULL,
+      change_note TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      created_by TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_ortho_intelligence_revisions_record ON ortho_intelligence_revisions(record_id, created_at);
+    CREATE TABLE IF NOT EXISTS ortho_knowledge_articles (
+      id TEXT PRIMARY KEY NOT NULL,
+      title TEXT NOT NULL,
+      category TEXT NOT NULL DEFAULT '',
+      body TEXT NOT NULL,
+      tags_json TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      updated_by TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_ortho_knowledge_title ON ortho_knowledge_articles(title);
+    CREATE TABLE IF NOT EXISTS ortho_intelligence_settings (
+      module_id TEXT PRIMARY KEY NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      updated_at TEXT NOT NULL,
+      updated_by TEXT
+    );
     CREATE INDEX IF NOT EXISTS idx_patients_date ON patients(date);
     CREATE INDEX IF NOT EXISTS idx_patients_procedure ON patients(procedure);
     CREATE INDEX IF NOT EXISTS idx_patients_mr ON patients(mr_no);
