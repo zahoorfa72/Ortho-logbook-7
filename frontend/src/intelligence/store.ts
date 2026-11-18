@@ -28,7 +28,14 @@ export type KnowledgeArticle = {
   id: string; title: string; category: string; body: string; tags_json: string;
   created_at: string; updated_at: string; updated_by: string | null;
 };
-export type PatientOption = { id: string; mrNo: string; name: string; diagnosis: string; procedure: string; date: string };
+export type PatientOption = {
+  id: string; mrNo: string; name: string; diagnosis: string; procedure: string; date: string;
+  gender?: string; age?: string; procedureII?: string; implant?: string; implantII?: string;
+};
+export type PatientContext = PatientOption & {
+  photoUris: string[];
+  implants: Array<{ id: string; name: string; category: string; size: string; quantity: number; createdAt: string }>;
+};
 export type PatientJourneyItem = {
   id: string;
   date: string;
@@ -48,7 +55,10 @@ export type SaveIntelligenceInput = {
 const now = () => new Date().toISOString();
 const cleanText = (value: unknown, max = 4000) => String(value ?? "").trim().slice(0, max);
 
+let intelligenceStoreInitialized = false;
+
 export function initializeIntelligenceStore() {
+  if (intelligenceStoreInitialized) return;
   db.execSync([
     "CREATE TABLE IF NOT EXISTS ortho_intelligence_records (id TEXT PRIMARY KEY NOT NULL,patient_id TEXT,kind TEXT NOT NULL,title TEXT NOT NULL,event_date TEXT NOT NULL,summary TEXT NOT NULL DEFAULT '',payload_json TEXT NOT NULL DEFAULT '{}',media_uri TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL,created_by TEXT,updated_at TEXT NOT NULL,updated_by TEXT,deleted_at TEXT)",
     "CREATE INDEX IF NOT EXISTS idx_ortho_intelligence_patient ON ortho_intelligence_records(patient_id,event_date)",
@@ -60,6 +70,7 @@ export function initializeIntelligenceStore() {
     "CREATE INDEX IF NOT EXISTS idx_ortho_knowledge_title ON ortho_knowledge_articles(title)",
     "CREATE TABLE IF NOT EXISTS ortho_intelligence_settings (module_id TEXT PRIMARY KEY NOT NULL,enabled INTEGER NOT NULL DEFAULT 1,updated_at TEXT NOT NULL,updated_by TEXT)"
   ].join(";\n") + ";");
+  intelligenceStoreInitialized = true;
 }
 
 function serializeRevision(row: IntelligenceRecord) {
@@ -70,15 +81,74 @@ function serializeRevision(row: IntelligenceRecord) {
   });
 }
 
-export function listIntelligencePatients(userId: string, isAdmin: boolean): PatientOption[] {
+export function listIntelligencePatients(
+  userId: string,
+  isAdmin: boolean,
+  search = "",
+  requestedLimit = 60,
+): PatientOption[] {
   initializeIntelligenceStore();
-  const rows = isAdmin
-    ? db.getAllSync<any>("SELECT id,mr_no,name,diagnosis,procedure,date FROM patients ORDER BY date DESC,created_at DESC LIMIT 5000")
-    : db.getAllSync<any>("SELECT id,mr_no,name,diagnosis,procedure,date FROM patients WHERE created_by=? ORDER BY date DESC,created_at DESC LIMIT 5000", [userId]);
+  const limit = Math.max(1, Math.min(100, Math.trunc(requestedLimit) || 60));
+  const query = cleanText(search, 100).toLocaleLowerCase();
+  const where: string[] = [];
+  const args: any[] = [];
+  if (!isAdmin) { where.push("created_by=?"); args.push(userId); }
+  if (query) {
+    where.push("(LOWER(mr_no) LIKE ? OR LOWER(name) LIKE ? OR LOWER(diagnosis) LIKE ? OR LOWER(procedure) LIKE ? OR LOWER(COALESCE(procedure_ii,'')) LIKE ?)");
+    const like = "%" + query + "%"; args.push(like, like, like, like, like);
+  }
+  const rows = db.getAllSync<any>(
+    "SELECT id,mr_no,name,gender,age,diagnosis,procedure,procedure_ii,implant,implant_ii,date FROM patients" +
+      (where.length ? " WHERE " + where.join(" AND ") : "") +
+      " ORDER BY date DESC,created_at DESC LIMIT " + limit, args,
+  );
   return rows.map((row) => ({
     id: String(row.id), mrNo: String(row.mr_no || ""), name: String(row.name || ""),
-    diagnosis: String(row.diagnosis || ""), procedure: String(row.procedure || ""), date: String(row.date || ""),
+    gender: String(row.gender || ""), age: String(row.age || ""),
+    diagnosis: String(row.diagnosis || ""), procedure: String(row.procedure || ""),
+    procedureII: String(row.procedure_ii || ""), implant: String(row.implant || ""),
+    implantII: String(row.implant_ii || ""), date: String(row.date || ""),
   }));
+}
+
+/** Load one selected patient's context without copying huge embedded image blobs into JS. */
+export function getIntelligencePatientContext(patientId: string, userId: string, isAdmin: boolean): PatientContext | null {
+  initializeIntelligenceStore();
+  const patient = db.getFirstSync<any>(
+    `SELECT id,mr_no,name,gender,age,diagnosis,procedure,procedure_ii,implant,implant_ii,date,
+      CASE WHEN length(COALESCE(photos_json,'')) <= 250000 THEN photos_json ELSE '[]' END AS photos_json,
+      CASE WHEN length(COALESCE(photo_uri,'')) <= 4096 THEN photo_uri ELSE '' END AS photo_uri
+     FROM patients WHERE id=? AND (?=1 OR created_by=?) LIMIT 1`,
+    [patientId, isAdmin ? 1 : 0, userId],
+  );
+  if (!patient) return null;
+  let photoUris: string[] = [];
+  try {
+    const parsed = JSON.parse(String(patient.photos_json || "[]"));
+    if (Array.isArray(parsed)) photoUris = parsed
+      .filter((value) => typeof value === "string" && value.length <= 4096 && !/^data:/i.test(value))
+      .map((value) => String(value));
+  } catch {}
+  if (patient.photo_uri && !/^data:/i.test(String(patient.photo_uri)) && String(patient.photo_uri).length <= 4096) {
+    photoUris.unshift(String(patient.photo_uri));
+  }
+  photoUris = [...new Set(photoUris)].slice(0, 30);
+  const implantRows = db.getAllSync<any>(
+    "SELECT id,name,category,size,quantity,created_at FROM patient_implants WHERE patient_id=? ORDER BY created_at DESC LIMIT 100",
+    [patientId],
+  );
+  return {
+    id: String(patient.id), mrNo: String(patient.mr_no || ""), name: String(patient.name || ""),
+    gender: String(patient.gender || ""), age: String(patient.age || ""),
+    diagnosis: String(patient.diagnosis || ""), procedure: String(patient.procedure || ""),
+    procedureII: String(patient.procedure_ii || ""), implant: String(patient.implant || ""),
+    implantII: String(patient.implant_ii || ""), date: String(patient.date || ""),
+    photoUris,
+    implants: implantRows.map((row) => ({
+      id: String(row.id), name: String(row.name || ""), category: String(row.category || ""),
+      size: String(row.size || ""), quantity: Number(row.quantity) || 1, createdAt: String(row.created_at || ""),
+    })),
+  };
 }
 
 
@@ -99,7 +169,7 @@ export function getPatientJourney(patientId: string, userId: string, isAdmin: bo
     source: "patient",
   });
   const history = db.getAllSync<any>(
-    "SELECT id,action,snapshot_json,created_at FROM patient_history WHERE patient_id=? ORDER BY created_at DESC LIMIT 500",
+    "SELECT id,action,snapshot_json,created_at FROM patient_history WHERE patient_id=? ORDER BY created_at DESC LIMIT 200",
     [patientId],
   );
   history.forEach((row) => {
@@ -117,7 +187,7 @@ export function getPatientJourney(patientId: string, userId: string, isAdmin: bo
     });
   });
   const implants = db.getAllSync<any>(
-    "SELECT id,name,category,size,quantity,created_at FROM patient_implants WHERE patient_id=? ORDER BY created_at DESC LIMIT 500",
+    "SELECT id,name,category,size,quantity,created_at FROM patient_implants WHERE patient_id=? ORDER BY created_at DESC LIMIT 200",
     [patientId],
   );
   implants.forEach((row) => items.push({
@@ -128,7 +198,7 @@ export function getPatientJourney(patientId: string, userId: string, isAdmin: bo
     source: "implant",
   }));
   const clinical = db.getAllSync<IntelligenceRecord>(
-    "SELECT * FROM ortho_intelligence_records WHERE patient_id=? AND deleted_at IS NULL ORDER BY event_date DESC,created_at DESC LIMIT 1000",
+    "SELECT * FROM ortho_intelligence_records WHERE patient_id=? AND deleted_at IS NULL ORDER BY event_date DESC,created_at DESC LIMIT 150",
     [patientId],
   );
   clinical.forEach((row) => {
@@ -152,8 +222,11 @@ export function getPatientJourney(patientId: string, userId: string, isAdmin: bo
   return items.sort((a, b) => String(b.date).localeCompare(String(a.date)));
 }
 
-export function listIntelligenceRecords(options: { userId: string; isAdmin: boolean; kind?: IntelligenceModuleId; patientId?: string }): IntelligenceRecord[] {
+export function listIntelligenceRecords(options: {
+  userId: string; isAdmin: boolean; kind?: IntelligenceModuleId; patientId?: string; limit?: number;
+}): IntelligenceRecord[] {
   initializeIntelligenceStore();
+  const limit = Math.max(1, Math.min(250, Math.trunc(options.limit ?? 100) || 100));
   const where = ["r.deleted_at IS NULL"];
   const args: any[] = [];
   if (!options.isAdmin) {
@@ -163,7 +236,7 @@ export function listIntelligenceRecords(options: { userId: string; isAdmin: bool
   if (options.kind) { where.push("r.kind=?"); args.push(options.kind); }
   if (options.patientId) { where.push("r.patient_id=?"); args.push(options.patientId); }
   return db.getAllSync<IntelligenceRecord>(
-    "SELECT r.* FROM ortho_intelligence_records r WHERE " + where.join(" AND ") + " ORDER BY r.event_date DESC,r.created_at DESC LIMIT 1500",
+    "SELECT r.* FROM ortho_intelligence_records r WHERE " + where.join(" AND ") + " ORDER BY r.event_date DESC,r.created_at DESC LIMIT " + limit,
     args,
   );
 }
@@ -276,8 +349,8 @@ export function softDeleteIntelligenceRecord(id: string, userId: string, isAdmin
 export function listArchivedIntelligenceRecords(options: { userId: string; isAdmin: boolean }): IntelligenceRecord[] {
   initializeIntelligenceStore();
   const sql = options.isAdmin
-    ? "SELECT * FROM ortho_intelligence_records WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC LIMIT 1000"
-    : "SELECT * FROM ortho_intelligence_records WHERE deleted_at IS NOT NULL AND (created_by=? OR patient_id IN (SELECT id FROM patients WHERE created_by=?)) ORDER BY deleted_at DESC LIMIT 1000";
+    ? "SELECT * FROM ortho_intelligence_records WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC LIMIT 100"
+    : "SELECT * FROM ortho_intelligence_records WHERE deleted_at IS NOT NULL AND (created_by=? OR patient_id IN (SELECT id FROM patients WHERE created_by=?)) ORDER BY deleted_at DESC LIMIT 100";
   return db.getAllSync<IntelligenceRecord>(sql, options.isAdmin ? [] : [options.userId, options.userId]);
 }
 
@@ -318,13 +391,14 @@ export function restoreIntelligenceRevision(recordId: string, revisionId: string
   });
 }
 
-export function listKnowledgeArticles(search = ""): KnowledgeArticle[] {
+export function listKnowledgeArticles(search = "", requestedLimit = 50): KnowledgeArticle[] {
   initializeIntelligenceStore();
+  const limit = Math.max(1, Math.min(100, Math.trunc(requestedLimit) || 50));
   const query = cleanText(search, 120).toLowerCase();
-  if (!query) return db.getAllSync<KnowledgeArticle>("SELECT * FROM ortho_knowledge_articles ORDER BY category COLLATE NOCASE,title COLLATE NOCASE LIMIT 1000");
+  if (!query) return db.getAllSync<KnowledgeArticle>("SELECT * FROM ortho_knowledge_articles ORDER BY category COLLATE NOCASE,title COLLATE NOCASE LIMIT " + limit);
   const like = "%" + query + "%";
   return db.getAllSync<KnowledgeArticle>(
-    "SELECT * FROM ortho_knowledge_articles WHERE LOWER(title) LIKE ? OR LOWER(category) LIKE ? OR LOWER(body) LIKE ? OR LOWER(tags_json) LIKE ? ORDER BY category COLLATE NOCASE,title COLLATE NOCASE LIMIT 1000",
+    "SELECT * FROM ortho_knowledge_articles WHERE LOWER(title) LIKE ? OR LOWER(category) LIKE ? OR LOWER(body) LIKE ? OR LOWER(tags_json) LIKE ? ORDER BY category COLLATE NOCASE,title COLLATE NOCASE LIMIT " + limit,
     [like, like, like, like],
   );
 }
