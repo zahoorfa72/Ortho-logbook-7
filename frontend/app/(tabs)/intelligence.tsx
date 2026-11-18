@@ -293,14 +293,24 @@ export default function IntelligenceHubScreen() {
     setFormTitle("");
     setFormDate(today());
     setFormSummary("");
-    setFormFields(moduleId === "surgery_checklist" ? { checklist: CHECKLIST_TEMPLATE, status: "Pending" } :
-      moduleId === "follow_up" ? { dueDate: today(), status: "Open", priority: "Routine" } : {});
-    setMediaUri("");
+    const initialFields: Record<string, string> = moduleId === "surgery_checklist"
+      ? { checklist: CHECKLIST_TEMPLATE, status: "Pending" }
+      : moduleId === "follow_up" ? { dueDate: today(), status: "Open", priority: "Routine" } : {};
     const context = selectedPatientId ? getIntelligencePatientContext(selectedPatientId, userId, isAdmin) : null;
+    if (moduleId === "implant_passport" && context && context.implants.length === 1) {
+      const existing = context.implants[0];
+      initialFields.implantName = existing.name;
+      initialFields.category = existing.category;
+      initialFields.dimensions = existing.size;
+      initialFields.patientImplantId = existing.id;
+      initialFields.patientImplantSource = "Existing patient implant record";
+    }
+    setFormFields(initialFields);
+    setMediaUri("");
     setFormPatientId(selectedPatientId);
     setFormPatientContext(context);
-    if (moduleId === "xray" && context) {
-      setFormTitle(context.mrNo + " · " + context.name + " · X-ray");
+    if ((moduleId === "xray" || moduleId === "xray_review") && context) {
+      setFormTitle(context.mrNo + " · " + context.name + " · Imaging");
       setFormSummary([context.diagnosis, context.procedure, context.procedureII].filter(Boolean).join(" · "));
     }
     setFormVisible(true);
