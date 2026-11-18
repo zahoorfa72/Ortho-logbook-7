@@ -36,6 +36,9 @@ jobs:
             yarn install --ignore-scripts
           fi
 
+      - name: Low-stock report filter tests
+        run: node --experimental-strip-types --test tests/low-stock-report-filter.test.mjs
+
       - name: TypeScript validation
         working-directory: frontend
         run: npx tsc --noEmit
