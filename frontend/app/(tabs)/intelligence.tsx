@@ -418,9 +418,20 @@ export default function IntelligenceHubScreen() {
       setFormPatientId(patient?.id || "");
       const context = patient ? getIntelligencePatientContext(patient.id, userId, isAdmin) : null;
       setFormPatientContext(context);
-      if (context && moduleId === "xray") {
-        setFormTitle(current => current || (context.mrNo + " · " + context.name + " · X-ray"));
+      if (context && (moduleId === "xray" || moduleId === "xray_review")) {
+        setFormTitle(current => current || (context.mrNo + " · " + context.name + " · Imaging"));
         setFormSummary(current => current || [context.diagnosis, context.procedure, context.procedureII].filter(Boolean).join(" · "));
+      }
+      if (context && moduleId === "implant_passport" && context.implants.length === 1) {
+        const existing = context.implants[0];
+        setFormFields(current => ({
+          ...current,
+          implantName: current.implantName || existing.name,
+          category: current.category || existing.category,
+          dimensions: current.dimensions || existing.size,
+          patientImplantId: existing.id,
+          patientImplantSource: "Existing patient implant record",
+        }));
       }
     }
     setPatientPickerOpen(false);
