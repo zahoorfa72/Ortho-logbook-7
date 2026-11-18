@@ -198,7 +198,7 @@ export function getPatientJourney(patientId: string, userId: string, isAdmin: bo
     source: "implant",
   }));
   const clinical = db.getAllSync<IntelligenceRecord>(
-    "SELECT * FROM ortho_intelligence_records WHERE patient_id=? AND deleted_at IS NULL ORDER BY event_date DESC,created_at DESC LIMIT 1000",
+    "SELECT * FROM ortho_intelligence_records WHERE patient_id=? AND deleted_at IS NULL ORDER BY event_date DESC,created_at DESC LIMIT 150",
     [patientId],
   );
   clinical.forEach((row) => {
