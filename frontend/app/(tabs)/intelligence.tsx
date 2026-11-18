@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator, Alert, Image, Modal, Pressable, ScrollView, Switch,
+  ActivityIndicator, Alert, Image, InteractionManager, Modal, Pressable, ScrollView, Switch,
   Text, TextInput, View,
 } from "react-native";
 import { router } from "expo-router";
@@ -17,12 +17,12 @@ import { useToast } from "@/src/components/toast";
 import { EmptyState } from "@/src/components/EmptyState";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
 import {
-  deleteKnowledgeArticle, getIntelligenceRecordsForResearch, getPatientJourney, initializeIntelligenceStore,
+  deleteKnowledgeArticle, getIntelligencePatientContext, getIntelligenceRecordsForResearch, getPatientJourney, initializeIntelligenceStore,
   INTELLIGENCE_MODULES, listIntelligenceModuleSettings, listIntelligencePatients,
   listIntelligenceRecords, listIntelligenceRevisions, listKnowledgeArticles, listArchivedIntelligenceRecords,
   restoreArchivedIntelligenceRecord, restoreIntelligenceRevision, saveIntelligenceRecord, saveKnowledgeArticle,
   setIntelligenceModuleEnabled, softDeleteIntelligenceRecord,
-  type IntelligenceModuleId, type IntelligenceRecord, type KnowledgeArticle, type PatientOption, type PatientJourneyItem,
+  type IntelligenceModuleId, type IntelligenceRecord, type KnowledgeArticle, type PatientOption, type PatientJourneyItem, type PatientContext,
 } from "@/src/intelligence/store";
 
 type FieldDefinition = { key: string; label: string; placeholder?: string; multiline?: boolean };
@@ -152,6 +152,9 @@ export default function IntelligenceHubScreen() {
   const { user } = useAuth();
   const toast = useToast();
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const xrayCameraRef = useRef<any>(null);
+  const [xrayCameraOpen, setXrayCameraOpen] = useState(false);
+  const [xrayCameraReady, setXrayCameraReady] = useState(false);
 
   const [moduleId, setModuleId] = useState<IntelligenceModuleId>("body_map");
   const [records, setRecords] = useState<IntelligenceRecord[]>([]);
@@ -167,6 +170,7 @@ export default function IntelligenceHubScreen() {
   const [patientPickerOpen, setPatientPickerOpen] = useState(false);
   const [patientPickerSearch, setPatientPickerSearch] = useState("");
   const [formPatientId, setFormPatientId] = useState("");
+  const [formPatientContext, setFormPatientContext] = useState<PatientContext | null>(null);
   const [formVisible, setFormVisible] = useState(false);
   const [editing, setEditing] = useState<IntelligenceRecord | null>(null);
   const [formTitle, setFormTitle] = useState("");
@@ -198,22 +202,51 @@ export default function IntelligenceHubScreen() {
     if (!userId) return;
     try {
       initializeIntelligenceStore();
-      setRecords(listIntelligenceRecords({ userId, isAdmin }));
-      setArchivedRecords(listArchivedIntelligenceRecords({ userId, isAdmin }));
-      setPatients(listIntelligencePatients(userId, isAdmin));
+      // Only Recovery needs all module records. Other views query a compact
+      // page for the active type and selected patient.
+      const nextRecords = moduleId === "recovery"
+        ? listIntelligenceRecords({ userId, isAdmin, limit: 120 })
+        : moduleId === "digital_twin" || moduleId === "research" || moduleId === "knowledge"
+          ? []
+          : listIntelligenceRecords({ userId, isAdmin, kind: moduleId, patientId: selectedPatientId || undefined, limit: 80 });
+      setRecords(nextRecords);
+      setArchivedRecords(moduleId === "recovery" ? listArchivedIntelligenceRecords({ userId, isAdmin }) : []);
+      setPatients(listIntelligencePatients(userId, isAdmin, "", 60));
       setModuleSettings(listIntelligenceModuleSettings());
-      setKnowledgeArticles(listKnowledgeArticles(knowledgeSearch));
     } catch (error: any) {
       toast(error?.message || "Could not load Orthopaedic Intelligence data.", "error");
     }
-  }, [userId, isAdmin, knowledgeSearch, toast]);
+  }, [userId, isAdmin, moduleId, selectedPatientId, toast]);
 
-  useEffect(() => { refresh(); }, [refresh]);
   useEffect(() => {
-    if (!selectedPatientId || !userId) { setJourneyItems([]); return; }
-    try { setJourneyItems(getPatientJourney(selectedPatientId, userId, isAdmin)); }
-    catch (error: any) { setJourneyItems([]); toast(error?.message || "Could not load patient journey.", "error"); }
-  }, [selectedPatientId, userId, isAdmin, records, toast]);
+    // Allow the first navigation frame to paint before synchronous SQLite reads.
+    const task = InteractionManager.runAfterInteractions(refresh);
+    return () => task.cancel();
+  }, [refresh]);
+
+  useEffect(() => {
+    if (!selectedPatientId || !userId || moduleId !== "digital_twin") { setJourneyItems([]); return; }
+    const task = InteractionManager.runAfterInteractions(() => {
+      try { setJourneyItems(getPatientJourney(selectedPatientId, userId, isAdmin)); }
+      catch (error: any) { setJourneyItems([]); toast(error?.message || "Could not load patient journey.", "error"); }
+    });
+    return () => task.cancel();
+  }, [selectedPatientId, userId, isAdmin, moduleId, toast]);
+
+  useEffect(() => {
+    if (!userId || moduleId !== "knowledge") return;
+    let cancelled = false;
+    let task: { cancel: () => void } | null = null;
+    const timer = setTimeout(() => {
+      task = InteractionManager.runAfterInteractions(() => {
+        if (!cancelled) {
+          try { setKnowledgeArticles(listKnowledgeArticles(knowledgeSearch, 50)); }
+          catch (error: any) { toast(error?.message || "Could not search the knowledge library.", "error"); }
+        }
+      });
+    }, 180);
+    return () => { cancelled = true; clearTimeout(timer); task?.cancel(); };
+  }, [userId, moduleId, knowledgeSearch, toast]);
 
   const visibleModules = INTELLIGENCE_MODULES.filter((module) => moduleSettings[module.id] !== false);
   const activeModule = INTELLIGENCE_MODULES.find((module) => module.id === moduleId) || INTELLIGENCE_MODULES[0];
@@ -253,7 +286,7 @@ export default function IntelligenceHubScreen() {
     [records, selectedPatientId],
   );
 
-  const reloadKnowledge = (query = knowledgeSearch) => setKnowledgeArticles(listKnowledgeArticles(query));
+  const reloadKnowledge = (query = knowledgeSearch) => setKnowledgeArticles(listKnowledgeArticles(query, 50));
   const openNewRecord = () => {
     if (moduleId === "research" || moduleId === "knowledge" || moduleId === "recovery") return;
     setEditing(null);
@@ -263,7 +296,13 @@ export default function IntelligenceHubScreen() {
     setFormFields(moduleId === "surgery_checklist" ? { checklist: CHECKLIST_TEMPLATE, status: "Pending" } :
       moduleId === "follow_up" ? { dueDate: today(), status: "Open", priority: "Routine" } : {});
     setMediaUri("");
+    const context = selectedPatientId ? getIntelligencePatientContext(selectedPatientId, userId, isAdmin) : null;
     setFormPatientId(selectedPatientId);
+    setFormPatientContext(context);
+    if (moduleId === "xray" && context) {
+      setFormTitle(context.mrNo + " · " + context.name + " · X-ray");
+      setFormSummary([context.diagnosis, context.procedure, context.procedureII].filter(Boolean).join(" · "));
+    }
     setFormVisible(true);
   };
 
@@ -276,6 +315,7 @@ export default function IntelligenceHubScreen() {
     setFormFields(safePayload(record));
     setMediaUri(record.media_uri || "");
     setFormPatientId(record.patient_id || "");
+    setFormPatientContext(record.patient_id ? getIntelligencePatientContext(record.patient_id, userId, isAdmin) : null);
     setFormVisible(true);
   };
 
@@ -322,17 +362,20 @@ export default function IntelligenceHubScreen() {
     ]);
   };
 
+  const saveXrayImageCopy = async (sourceUri: string) => {
+    const base = FileSystem.documentDirectory;
+    if (!base) throw new Error("Private app storage is unavailable for this X-ray.");
+    const destination = base + "ortho-intelligence-xray-" + Date.now() + "-" + Math.random().toString(36).slice(2) + ".jpg";
+    await FileSystem.copyAsync({ from: sourceUri, to: destination });
+    return destination;
+  };
+
   const pickXray = async () => {
     try {
-      const result = await launchImageLibraryAsync({ mediaTypes: ["images"], quality: 0.88, allowsEditing: false });
+      // Keep diagnostic images at source quality; lossy resizing is not applied.
+      const result = await launchImageLibraryAsync({ mediaTypes: ["images"], quality: 1, allowsEditing: false });
       if (!result.canceled && result.assets[0]?.uri) {
-        const base = FileSystem.documentDirectory || FileSystem.cacheDirectory;
-        if (!base) throw new Error("Secure app storage is unavailable for this image.");
-        const sourceUri = result.assets[0].uri;
-        const path = sourceUri.split(/[?#]/)[0];
-        const extension = (path.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 5) || "jpg";
-        const destination = base + "ortho-intelligence-xray-" + Date.now() + "-" + Math.random().toString(36).slice(2) + "." + extension;
-        await FileSystem.copyAsync({ from: sourceUri, to: destination });
+        const destination = await saveXrayImageCopy(result.assets[0].uri);
         setMediaUri(destination);
       }
     } catch (error: any) {
@@ -340,9 +383,45 @@ export default function IntelligenceHubScreen() {
     }
   };
 
+  const openXrayCamera = async () => {
+    try {
+      if (!cameraPermission?.granted) {
+        const permission = await requestCameraPermission();
+        if (!permission.granted) { toast("Camera permission is required to capture an X-ray.", "error"); return; }
+      }
+      setXrayCameraReady(false);
+      setXrayCameraOpen(true);
+    } catch (error: any) {
+      toast(error?.message || "Could not open the camera.", "error");
+    }
+  };
+
+  const captureXray = async () => {
+    if (!xrayCameraRef.current || !xrayCameraReady) return;
+    try {
+      const photo = await xrayCameraRef.current.takePictureAsync({ quality: 1, skipProcessing: false, exif: true });
+      if (!photo?.uri) throw new Error("The camera did not return an image.");
+      const destination = await saveXrayImageCopy(photo.uri);
+      setMediaUri(destination);
+      setXrayCameraOpen(false);
+      toast("X-ray image saved at original capture quality.", "success");
+    } catch (error: any) {
+      toast(error?.message || "Could not capture the X-ray.", "error");
+    }
+  };
+
   const selectPatient = (patient: PatientOption | null, mode: "filter" | "form") => {
-    if (mode === "filter") setSelectedPatientId(patient?.id || "");
-    else setFormPatientId(patient?.id || "");
+    if (mode === "filter") {
+      setSelectedPatientId(patient?.id || "");
+    } else {
+      setFormPatientId(patient?.id || "");
+      const context = patient ? getIntelligencePatientContext(patient.id, userId, isAdmin) : null;
+      setFormPatientContext(context);
+      if (context && moduleId === "xray") {
+        setFormTitle(current => current || (context.mrNo + " · " + context.name + " · X-ray"));
+        setFormSummary(current => current || [context.diagnosis, context.procedure, context.procedureII].filter(Boolean).join(" · "));
+      }
+    }
     setPatientPickerOpen(false);
     setPatientPickerSearch("");
   };
@@ -354,12 +433,21 @@ export default function IntelligenceHubScreen() {
   };
   const [pickerMode, setPickerMode] = useState<"filter" | "form">("filter");
 
-  const filteredPatients = useMemo(() => {
-    const q = patientPickerSearch.trim().toLowerCase();
-    return q ? patients.filter((patient) =>
-      [patient.mrNo, patient.name, patient.diagnosis].join(" ").toLowerCase().includes(q)
-    ).slice(0, 100) : patients.slice(0, 100);
-  }, [patients, patientPickerSearch]);
+  const filteredPatients = patients;
+  useEffect(() => {
+    if (!patientPickerOpen || !userId) return;
+    let cancelled = false;
+    let task: { cancel: () => void } | null = null;
+    const timer = setTimeout(() => {
+      task = InteractionManager.runAfterInteractions(() => {
+        if (!cancelled) {
+          try { setPatients(listIntelligencePatients(userId, isAdmin, patientPickerSearch, 50)); }
+          catch (error: any) { toast(error?.message || "Could not search patients.", "error"); }
+        }
+      });
+    }, 180);
+    return () => { cancelled = true; clearTimeout(timer); task?.cancel(); };
+  }, [patientPickerOpen, patientPickerSearch, userId, isAdmin, toast]);
 
   const showRevisions = (record: IntelligenceRecord) => {
     setSelectedRecordId(record.id);
@@ -512,7 +600,7 @@ export default function IntelligenceHubScreen() {
         {isAdmin ? <Pressable style={styles.smallAction} onPress={() => openArticleEditor()}><Ionicons name="add" size={17} color={colors.brandPrimary}/><Text style={styles.smallActionText}>Add reference</Text></Pressable> : null}
       </View>
       <Text style={styles.description}>Only add material approved by your clinical team. The app does not supply or automatically update clinical protocols.</Text>
-      <TextInput value={knowledgeSearch} onChangeText={(value) => { setKnowledgeSearch(value); reloadKnowledge(value); }} placeholder="Search articles, categories and tags" placeholderTextColor={colors.muted} style={styles.searchInput}/>
+      <TextInput value={knowledgeSearch} onChangeText={setKnowledgeSearch} placeholder="Search articles, categories and tags" placeholderTextColor={colors.muted} style={styles.searchInput}/>
       {selectedArticle ? (
         <View style={styles.articleCard}>
           <Pressable onPress={() => setSelectedArticle(null)} style={styles.backInline}><Ionicons name="arrow-back" size={17} color={colors.brandPrimary}/><Text style={styles.smallActionText}>All references</Text></Pressable>
