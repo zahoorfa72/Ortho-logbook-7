@@ -9,6 +9,7 @@ import { defaultBranding } from "@/src/theme";
 import { storage } from "@/src/utils/storage";
 import { buildInventoryHtml } from "@/src/utils/pdf";
 import { formatInventoryLabel } from "@/src/utils/inventory-label";
+import { filterCurrentlyLowStockEvents } from "@/src/utils/low-stock-report-filter";
 import { getGoogleGmailAccessToken } from "@/src/utils/storage/google-drive";
 
 export type LowStockSchedule = "weekly" | "15days" | "monthly" | "onOpen" | "fixedDate";
@@ -267,19 +268,20 @@ async function makePdf(schedule: LowStockSchedule = "weekly", fromDate?: string,
       });
     }
   }
-  const low = [...latestById.values()];
-  if (!low.length) throw new Error(`No new low-stock events were recorded from ${period.start.toLocaleDateString()} to ${period.end.toLocaleDateString()}.`);
-  // Normalize once, sort deterministically, and feed this exact snapshot to
-  // both PDF and WhatsApp. Numeric strings are kept as ordinary decimal values
-  // (e.g. 0.25 remains 0.25) rather than rounded for display.
-  const reportItems: LowStockReportItem[] = low
-    .map((item: any) => ({
+  const periodEvents = [...latestById.values()];
+  if (!periodEvents.length) throw new Error(`No new low-stock events were recorded from ${period.start.toLocaleDateString()} to ${period.end.toLocaleDateString()}.`);
+
+  // A period event alone must not trigger a stale email: read each candidate's
+  // latest local inventory balance and retain it only if it is still at/below
+  // its current minimum. Event time/type remain from the selected report period.
+  const reportItems: LowStockReportItem[] = filterCurrentlyLowStockEvents(periodEvents, all)
+    .map((item) => ({
       id: String(item.id || ""),
       name: String(item.name || "Inventory item").trim(),
       category: String(item.category || ""),
       size: String(item.size || ""),
       quantity: Number(item.quantity),
-      minimumStock: Number(item.minimumStock ?? item.minimum_stock),
+      minimumStock: Number(item.minimumStock),
       unit: String(item.unit || "pcs"),
       lowStockEventAt: item.lowStockEventAt ? String(item.lowStockEventAt) : undefined,
       lowStockEventType: item.lowStockEventType ? String(item.lowStockEventType) : undefined,
@@ -289,7 +291,11 @@ async function makePdf(schedule: LowStockSchedule = "weekly", fromDate?: string,
       formatInventoryLabel(a.category, a.name, a.size).localeCompare(formatInventoryLabel(b.category, b.name, b.size)) ||
       a.id.localeCompare(b.id)
     );
-  if (!reportItems.length) throw new Error("No valid low-stock item quantities were available for the report.");
+  if (!reportItems.length) {
+    throw new Error(
+      `Items that became low-stock from ${period.start.toLocaleDateString()} to ${period.end.toLocaleDateString()} have all recovered above their current minimum stock. No scheduled report was sent.`,
+    );
+  }
   const saved = await storage.getItem<string>("ortho_branding", "");
   let branding: any = defaultBranding;
   if (saved) { try { branding = { ...defaultBranding, ...(typeof saved === "string" ? JSON.parse(saved) : saved) }; } catch {} }
