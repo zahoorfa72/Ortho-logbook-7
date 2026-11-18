@@ -375,7 +375,9 @@ export default function IntelligenceHubScreen() {
   const saveXrayImageCopy = async (sourceUri: string) => {
     const base = FileSystem.documentDirectory;
     if (!base) throw new Error("Private app storage is unavailable for this X-ray.");
-    const destination = base + "ortho-intelligence-xray-" + Date.now() + "-" + Math.random().toString(36).slice(2) + ".jpg";
+    const sourcePath = sourceUri.split(/[?#]/)[0];
+    const extension = (sourcePath.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 5) || "jpg";
+    const destination = base + "ortho-intelligence-xray-" + Date.now() + "-" + Math.random().toString(36).slice(2) + "." + extension;
     await FileSystem.copyAsync({ from: sourceUri, to: destination });
     return destination;
   };
@@ -421,7 +423,9 @@ export default function IntelligenceHubScreen() {
   };
 
   const selectPatient = (patient: PatientOption | null, mode: "filter" | "form") => {
-    setPatients(listIntelligencePatients(userId, isAdmin, "", 60));
+    const recentPatients = listIntelligencePatients(userId, isAdmin, "", 60);
+    if (patient && !recentPatients.some((item) => item.id === patient.id)) recentPatients.unshift(patient);
+    setPatients(recentPatients.slice(0, 61));
     if (mode === "filter") {
       setSelectedPatientId(patient?.id || "");
     } else {
@@ -429,8 +433,8 @@ export default function IntelligenceHubScreen() {
       const context = patient ? getIntelligencePatientContext(patient.id, userId, isAdmin) : null;
       setFormPatientContext(context);
       if (context && (moduleId === "xray" || moduleId === "xray_review")) {
-        setFormTitle(current => current || (context.mrNo + " · " + context.name + " · Imaging"));
-        setFormSummary(current => current || [context.diagnosis, context.procedure, context.procedureII].filter(Boolean).join(" · "));
+        setFormTitle(context.mrNo + " · " + context.name + " · Imaging");
+        setFormSummary([context.diagnosis, context.procedure, context.procedureII].filter(Boolean).join(" · "));
       }
       if (context && moduleId === "implant_passport" && context.implants.length === 1) {
         const existing = context.implants[0];
