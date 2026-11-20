@@ -1067,12 +1067,13 @@ export default function Logbook() {
           String(a.date || "").localeCompare(String(b.date || "")) ||
           String(a.id || "").localeCompare(String(b.id || "")),
       );
-      sorted.forEach((p, i) =>
-        if (p.id) counts.set(String(p.id), {
+      sorted.forEach((p, i) => {
+        if (!p.id) return;
+        counts.set(String(p.id), {
           operationCount: i + 1,
           totalOperations: sorted.length,
-        }));
-      );
+        });
+      });
     }
 
     return source.map((p) => ({ ...p, ...(p.id ? counts.get(p.id) || {} : {}) }));
