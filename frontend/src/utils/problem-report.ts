@@ -22,9 +22,9 @@ type DiagnosticEvent = { at: string; kind: string; message: string };
 
 function safeText(value: unknown, limit = 2400): string {
   return String(value ?? "")
-    .replace(/(access[_ -]?token|refresh[_ -]?token|authorization|password|client[_ -]?secret|api[_ -]?key)\\s*[:=]\\s*[^\\s,;]+/ig, "$1=[redacted]")
-    .replace(/Bearer\\s+[A-Za-z0-9._~+/-]+=*/ig, "Bearer [redacted]")
-    .replace(/(email|phone|mr\\s*no|patient\\s*name)\\s*[:=]\\s*[^\\n,;]+/ig, "$1=[redacted]")
+    .replace(/(access[_ -]?token|refresh[_ -]?token|authorization|password|client[_ -]?secret|api[_ -]?key)\s*[:=]\s*[^\s,;]+/ig, "$1=[redacted]")
+    .replace(/Bearer\s+[A-Za-z0-9._~+/-]+=*/ig, "Bearer [redacted]")
+    .replace(/(email|phone|mr\s*no|patient\s*name)\s*[:=]\s*[^\n,;]+/ig, "$1=[redacted]")
     .slice(0, limit);
 }
 
@@ -154,14 +154,14 @@ export async function buildProblemReport(description = "", currentError?: unknow
       : "not applicable";
   const recent = errors.length
     ? errors.map((item, index) =>
-        `${index + 1}. [${safeText(item.at, 80)}]${item.fatal ? " [fatal]" : ""}${item.context ? " [context: " + safeText(item.context, 300) + "]" : ""} ${safeText(item.message, 1000)}${item.stack ? "\\n   Stack: " + safeText(item.stack, MAX_STACK) : ""}${item.componentStack ? "\\n   Component stack: " + safeText(item.componentStack, MAX_STACK) : ""}`
-      ).join("\\n")
+        `${index + 1}. [${safeText(item.at, 80)}]${item.fatal ? " [fatal]" : ""}${item.context ? " [context: " + safeText(item.context, 300) + "]" : ""} ${safeText(item.message, 1000)}${item.stack ? "\n   Stack: " + safeText(item.stack, MAX_STACK) : ""}${item.componentStack ? "\n   Component stack: " + safeText(item.componentStack, MAX_STACK) : ""}`
+      ).join("\n")
     : "No captured JavaScript errors are saved on this device.";
   const eventText = events.length
-    ? events.map((item, index) => `${index + 1}. [${safeText(item.at, 80)}] [${safeText(item.kind, 60)}] ${safeText(item.message, 300)}`).join("\\n")
+    ? events.map((item, index) => `${index + 1}. [${safeText(item.at, 80)}] [${safeText(item.kind, 60)}] ${safeText(item.message, 300)}`).join("\n")
     : "No recent app-action breadcrumbs are saved.";
   const contextText = context.length
-    ? context.map(item => `[${safeText(item.at, 80)}] [${safeText(item.kind, 80)}] ${safeText(item.message, 160)}`).join("\\n")
+    ? context.map(item => `[${safeText(item.at, 80)}] [${safeText(item.kind, 80)}] ${safeText(item.message, 160)}`).join("\n")
     : "No screen lifecycle context recorded.";
 
   return [
@@ -189,5 +189,5 @@ export async function buildProblemReport(description = "", currentError?: unknow
     "",
     "PRIVACY NOTE",
     "Technical diagnostics only. Access tokens, passwords, API keys, email/phone-like values, MR numbers and patient-name fields are redacted where recognizable. Patient records, patient photos, database contents and arbitrary object values are not collected. Review before sharing.",
-  ].join("\\n");
+  ].join("\n");
 }
