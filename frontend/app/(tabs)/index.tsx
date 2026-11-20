@@ -1047,9 +1047,9 @@ export default function Logbook() {
     const groups = new Map<string, Patient[]>();
 
     const keyOf = (p: Patient) =>
-      (p.name || "").trim().toLowerCase() +
+      String(p.name || "").trim().toLowerCase() +
       "|" +
-      (p.mrNo || "").trim().toLowerCase();
+      String(p.mrNo || "").trim().toLowerCase();
 
     for (const p of source) {
       if (!String(p.name || "").trim() || !String(p.mrNo || "").trim()) continue;
@@ -1068,10 +1068,10 @@ export default function Logbook() {
           String(a.id || "").localeCompare(String(b.id || "")),
       );
       sorted.forEach((p, i) =>
-        counts.set(p.id, {
+        if (p.id) counts.set(String(p.id), {
           operationCount: i + 1,
           totalOperations: sorted.length,
-        }),
+        }));
       );
     }
 
