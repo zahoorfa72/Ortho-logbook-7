@@ -80,19 +80,24 @@ export default function PatientForm() {
   const isEdit = !!id;
   const [implantSearch, setImplantSearch] = useState("");
 
-  const { data: patients } = useQuery<Patient[]>({ queryKey: ["patients"], queryFn: () => api.get("/patients") });
-  const { data: procedures } = useQuery<Procedure[]>({ queryKey: ["procedures"], queryFn: () => api.get("/procedures") });
+  const { data: patientsRaw } = useQuery<Patient[]>({ queryKey: ["patients"], queryFn: () => api.get("/patients") });
+  // Legacy backups and older API deployments can contain null rows. Normalize at
+  // the boundary so render-time selectors never dereference an absent record.
+  const patients = useMemo(() => (Array.isArray(patientsRaw) ? patientsRaw : []).filter((value): value is Patient => !!value && typeof value === "object"), [patientsRaw]);
+  const { data: proceduresRaw } = useQuery<Procedure[]>({ queryKey: ["procedures"], queryFn: () => api.get("/procedures") });
+  const procedures = useMemo(() => (Array.isArray(proceduresRaw) ? proceduresRaw : []).filter((value): value is Procedure => !!value && typeof value === "object" && typeof value.name === "string" && value.name.trim().length > 0), [proceduresRaw]);
   const { data: customFields = [] } = useQuery<any[]>({
     queryKey: ["patient-custom-fields"],
     queryFn: () => api.get("/patient-custom-fields"),
   });
-  const { data: inventory = [] } = useQuery<InventoryItem[]>({
+  const { data: inventoryRaw = [] } = useQuery<InventoryItem[]>({
     queryKey: ["inventory", "patient-search", implantSearch.trim().toLowerCase()],
     queryFn: () => api.get("/inventory?q=" + encodeURIComponent(implantSearch.trim())),
     enabled: implantSearch.trim().length > 0,
     staleTime: 10000,
   });
-  const existing = useMemo(() => (id ? patients?.find((p) => p.id === id) : undefined), [id, patients]);
+  const inventory = useMemo(() => (Array.isArray(inventoryRaw) ? inventoryRaw : []).filter((value): value is InventoryItem => !!value && typeof value === "object" && typeof value.id === "string"), [inventoryRaw]);
+  const existing = useMemo(() => (id ? patients.find((value) => String(value.id ?? "") === String(id)) : undefined), [id, patients]);
   const { data: detailedExisting } = useQuery<Patient | null>({
     queryKey: ["patient-detail", id],
     queryFn: () => api.get("/patients/" + encodeURIComponent(String(id))),
@@ -103,14 +108,14 @@ export default function PatientForm() {
   // records; implants come from inventory only (saving validates stock).
   const procedureSuggestions = useMemo<Suggestion[]>(() => {
     const byLower = new Map<string, string>();
-    for (const x of procedures ?? []) {
-      const n = x.name?.trim();
+    for (const x of procedures) {
+      const n = x.name.trim();
       if (n) byLower.set(n.toLowerCase(), n);
     }
-    for (const pt of patients ?? []) {
-      const n = pt.procedure?.trim();
+    for (const pt of patients) {
+      const n = String(pt.procedure || "").trim();
       if (n && !byLower.has(n.toLowerCase())) byLower.set(n.toLowerCase(), n);
-      const n2 = (pt as any).procedureII?.trim();
+      const n2 = String((pt as any).procedureII || "").trim();
       if (n2 && !byLower.has(n2.toLowerCase())) byLower.set(n2.toLowerCase(), n2);
     }
     return removeDuplicateProcedureAliases([...byLower.values()])
@@ -236,7 +241,7 @@ export default function PatientForm() {
   }, [p.customData?.labOcrManualResults]);
   const allViewerPhotos = [...new Set(p.photos)];
   const [dismissedTrashMatchId, setDismissedTrashMatchId] = useState<string | null>(null);
-  const selectedImplants = p.implants || [];
+  const selectedImplants = (Array.isArray(p.implants) ? p.implants : []).filter((value): value is SelectedImplant => !!value && typeof value === "object");
 
   useEffect(() => {
     AsyncStorage.getItem("ortho_lab_ocr_enabled").then(value => setLabOcrEnabled(value === "true")).catch(() => setLabOcrEnabled(false));
@@ -804,9 +809,9 @@ export default function PatientForm() {
     if (!rawName || !rawMr || !patients?.length) return null;
     const matches = patients.filter(
       (x) =>
-        x.id !== p.id &&
-        x.name.trim().toLowerCase() === rawName &&
-        x.mrNo.trim().toLowerCase() === rawMr,
+        String(x.id ?? "") !== String(p.id ?? "") &&
+        String(x.name || "").trim().toLowerCase() === rawName &&
+        String(x.mrNo || "").trim().toLowerCase() === rawMr,
     );
     if (!matches.length) return null;
     // If editing an existing record we prefer the computed operation count on the list.
