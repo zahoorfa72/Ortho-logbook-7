@@ -1041,7 +1041,9 @@ export default function Logbook() {
   };
 
   const patientsWithOperationCounts = useMemo(() => {
-    const source = data || [];
+    // Treat API/legacy-backup payloads as untrusted: null or malformed rows must
+    // not crash the Logbook list while deriving operation counts.
+    const source = (Array.isArray(data) ? data : []).filter((value): value is Patient => !!value && typeof value === "object");
     const groups = new Map<string, Patient[]>();
 
     const keyOf = (p: Patient) =>
@@ -1050,7 +1052,7 @@ export default function Logbook() {
       (p.mrNo || "").trim().toLowerCase();
 
     for (const p of source) {
-      if (!p.name?.trim() || !p.mrNo?.trim()) continue;
+      if (!String(p.name || "").trim() || !String(p.mrNo || "").trim()) continue;
       const key = keyOf(p);
       const list = groups.get(key) || [];
       list.push(p);
@@ -1073,7 +1075,7 @@ export default function Logbook() {
       );
     }
 
-    return source.map((p) => ({ ...p, ...(counts.get(p.id) || {}) }));
+    return source.map((p) => ({ ...p, ...(p.id ? counts.get(p.id) || {} : {}) }));
   }, [data]);
 
   const missingFirstProcedureCount = useMemo(
@@ -1086,8 +1088,9 @@ export default function Logbook() {
     let list = patientsWithOperationCounts.filter((p) => {
       if (procedureFilter === "missing" && String(p.procedure || "").trim()) return false;
       if (!q) return true;
-      return [p.mrNo, p.name, p.diagnosis, p.procedure, p.procedureII, p.implant, p.implantII, ...(p.implants || []).flatMap(x => [x.category, x.name, x.size])]
-        .join(" ").toLowerCase().includes(q);
+      const implants = (Array.isArray(p.implants) ? p.implants : []).filter(value => !!value && typeof value === "object");
+      return [p.mrNo, p.name, p.diagnosis, p.procedure, p.procedureII, p.implant, p.implantII, ...implants.flatMap(x => [x.category, x.name, x.size])]
+        .map(value => String(value || "")).join(" ").toLowerCase().includes(q);
     });
     list = [...list].sort((a, b) => {
       if (patientSort === "name-asc") return (a.name || "").localeCompare(b.name || "", undefined, { numeric: true, sensitivity: "base" });
@@ -1100,7 +1103,7 @@ export default function Logbook() {
     return list;
   }, [patientsWithOperationCounts, query, patientSort, procedureFilter]);
 
-  const availableYears = useMemo(() => [...new Set((data || []).map(p => String(p.date || "").slice(0,4)).filter(Boolean))].sort().reverse(), [data]);
+  const availableYears = useMemo(() => [...new Set((Array.isArray(data) ? data : []).filter((p): p is Patient => !!p && typeof p === "object").map(p => String(p.date || "").slice(0,4)).filter(Boolean))].sort().reverse(), [data]);
   const filteredForPdf = useCallback(() => {
     const dateKey = (v:string) => {
       const raw=String(v||"").trim();
@@ -1339,8 +1342,8 @@ export default function Logbook() {
         </View>
       ) : (
         <FlatList
-          data={filtered}
-          keyExtractor={(item) => item.id}
+          data={filtered.filter(item => !!item && typeof item === "object")}
+          keyExtractor={(item) => String(item.id || item.mrNo || "patient-row")}
           // Keep the visible patient list responsive on lower-memory Android
           // phones. The default render window can mount many expensive lab
           // result cards at once; smaller batches reduce JS/UI thread stalls.
