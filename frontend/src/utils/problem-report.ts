@@ -25,6 +25,8 @@ function safeText(value: unknown, limit = 2400): string {
     .replace(/(access[_ -]?token|refresh[_ -]?token|authorization|password|client[_ -]?secret|api[_ -]?key)\s*[:=]\s*[^\s,;]+/ig, "$1=[redacted]")
     .replace(/Bearer\s+[A-Za-z0-9._~+/-]+=*/ig, "Bearer [redacted]")
     .replace(/(email|phone|mr\s*no|patient\s*name)\s*[:=]\s*[^\n,;]+/ig, "$1=[redacted]")
+    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/ig, "[email redacted]")
+    .replace(/\b(?:\+?\d[\d ()-]{7,}\d)\b/g, "[phone redacted]")
     .slice(0, limit);
 }
 
