@@ -764,6 +764,44 @@ export const api = {
         [iid],
       ) as any;
     }
+    if (normalizedPath === "/inventory-yearly-requirements") {
+      await requireAdmin();
+      const params = new URLSearchParams(path.split("?")[1] || "");
+      const year = Number(params.get("year")) || new Date().getFullYear();
+      const rows = db.getAllSync<any>(`
+        SELECT i.id, COALESCE(NULLIF(TRIM(i.category),''), c.name, '') AS category,
+          i.name, COALESCE(i.size,'') AS size, COALESCE(i.unit,'pcs') AS unit,
+          COALESCE(i.quantity,0) AS current_stock,
+          COALESCE((SELECT SUM(pi.quantity)
+            FROM patient_implants pi
+            JOIN patients p ON p.id=pi.patient_id
+            WHERE p.date LIKE ?
+              AND (pi.inventory_id=i.id OR (
+                (pi.inventory_id IS NULL OR TRIM(pi.inventory_id)='')
+                AND LOWER(TRIM(COALESCE(pi.name,'')))=LOWER(TRIM(i.name))
+                AND LOWER(TRIM(COALESCE(pi.category,'')))=LOWER(TRIM(COALESCE(NULLIF(i.category,''),c.name,'')))
+                AND LOWER(TRIM(COALESCE(pi.size,'')))=LOWER(TRIM(COALESCE(i.size,'')))
+              ))
+          ),0) AS used_quantity,
+          r.required_quantity AS saved_requirement
+        FROM inventory i
+        LEFT JOIN inventory_categories c ON c.id=i.category_id
+        LEFT JOIN inventory_yearly_requirements r ON r.inventory_id=i.id AND r.year=?
+        ORDER BY COALESCE(NULLIF(TRIM(i.category),''),c.name,''), i.name COLLATE NOCASE, COALESCE(i.size,'')
+      `, [`${year}-%`, year]);
+      return rows.map((r:any) => {
+        const used = Math.max(0, Number(r.used_quantity) || 0);
+        const suggested = Math.max(3, Math.ceil(used * 1.1));
+        const saved = r.saved_requirement == null ? null : Math.max(3, Math.ceil(Number(r.saved_requirement) || 3));
+        return {
+          id:String(r.id), category:String(r.category || ""), name:String(r.name || ""),
+          size:String(r.size || ""), unit:String(r.unit || "pcs"),
+          currentStock:Number(r.current_stock) || 0, usedQuantity:used,
+          requirementQuantity:saved == null ? suggested : saved,
+          isEdited:saved != null,
+        };
+      }) as any;
+    }
     if (normalizedPath.startsWith("/inventory-usage")) {
       const params = new URLSearchParams(path.split("?")[1] || "");
       const period = params.get("period") || "all";
@@ -869,6 +907,23 @@ export const api = {
   async post<T = any>(path: string, body?: any): Promise<T> {
     initializeDatabase();
     const normalizedPath = normalizeRoute(path);
+    if (normalizedPath === "/inventory-yearly-requirements") {
+      await requireAdmin();
+      const year = Math.floor(Number(body?.year));
+      const inventoryId = String(body?.inventoryId || "").trim();
+      const quantity = Math.ceil(Number(body?.requiredQuantity));
+      if (!Number.isFinite(year) || year < 2000 || year > 2200) throw new Error("Choose a valid year.");
+      if (!inventoryId) throw new Error("Inventory item is required.");
+      if (!Number.isFinite(quantity) || quantity < 3) throw new Error("Annual requirement cannot be below 3.");
+      const item = db.getFirstSync<any>("SELECT id FROM inventory WHERE id=? LIMIT 1", [inventoryId]);
+      if (!item) throw new Error("Inventory item not found.");
+      const uid = await currentUser();
+      db.runSync(
+        "INSERT OR REPLACE INTO inventory_yearly_requirements (year,inventory_id,required_quantity,updated_at,updated_by) VALUES (?,?,?,?,?)",
+        [year, inventoryId, quantity, nowIso(), uid],
+      );
+      return { success:true, year, inventoryId, requiredQuantity:quantity } as any;
+    }
     if (normalizedPath === "/trash/restore") {
       await requireAdmin();
       const trashId = String(body?.id || "");
