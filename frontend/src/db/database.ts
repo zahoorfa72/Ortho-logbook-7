@@ -118,6 +118,15 @@ export function initializeDatabase(options?: { skipInventoryReset?: boolean }) {
     CREATE INDEX IF NOT EXISTS idx_stock_receipts_item ON stock_receipts(inventory_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_stock_receipts_date ON stock_receipts(added_date);
     CREATE INDEX IF NOT EXISTS idx_stock_receipts_batch ON stock_receipts(batch_id, created_at);
+    CREATE TABLE IF NOT EXISTS inventory_yearly_requirements (
+      year INTEGER NOT NULL,
+      inventory_id TEXT NOT NULL,
+      required_quantity REAL NOT NULL DEFAULT 3,
+      updated_at TEXT NOT NULL,
+      updated_by TEXT,
+      PRIMARY KEY (year, inventory_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_inventory_yearly_requirements_year ON inventory_yearly_requirements(year);
     CREATE TABLE IF NOT EXISTS app_meta (
       key TEXT PRIMARY KEY NOT NULL, value TEXT
     );
