@@ -967,7 +967,10 @@ export async function commitIncrementalSnapshotCache(baselineKey?: string): Prom
 }
 
 function rowKey(row: any): string | null {
- return row && row.id !== undefined && row.id !== null && String(row.id) !== "" ? String(row.id) : null;
+ if (row && row.id !== undefined && row.id !== null && String(row.id) !== "") return String(row.id);
+ // Yearly requirement rows use a composite primary key in SQLite.
+ if (row && row.year !== undefined && row.inventory_id) return String(row.year) + "|" + String(row.inventory_id);
+ return null;
 }
 
 // Keep original photo bytes out of the local comparison cache. Hash source strings
