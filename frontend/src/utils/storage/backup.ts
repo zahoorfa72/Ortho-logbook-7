@@ -16,7 +16,7 @@ const BACKUP_APP = "Ortho Logbook";
 type BackupData = {
   version:number; app:string; createdAt:string;
   patients:any[]; procedures:any[]; inventoryCategories:any[]; inventory:any[]; patientImplants:any[]; patientCustomFields:any[]; implantRecords:any[]; expenses:any[]; users:any[];
-  patientHistory:any[]; inventoryMovements:any[]; inventoryPurchaseReceipts:any[]; stockReceipts:any[]; trash?:any[];
+  patientHistory:any[]; inventoryMovements:any[]; inventoryPurchaseReceipts:any[]; stockReceipts:any[]; yearlyRequirements?:any[]; trash?:any[];
   intelligenceRecords:any[]; intelligenceRevisions:any[]; knowledgeArticles:any[]; intelligenceSettings:any[];
   // Each unique compressed image is stored once and referenced by its rows.
   photoAssets?: Record<string, string>;
@@ -855,6 +855,7 @@ async function createBackupData(filter: BackupFilter = { type: "all" }, onProgre
   intelligenceSettings:include("intelligenceSettings") ? db.getAllSync<any>("SELECT * FROM ortho_intelligence_settings ORDER BY module_id") : [],
   inventoryMovements:include("inventoryMovements") ? (()=>{if(filter.type==="all") return db.getAllSync<any>("SELECT * FROM inventory_movements ORDER BY created_at ASC"); const f=filter.type==="date" ? {sql:" WHERE date(created_at)=?",args:[filter.value||""]} : filter.type==="month" ? {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]} : filter.type==="halfyear" ? (()=>{const bounds=halfYearMonthBounds(filter.value);return {sql:" WHERE substr(created_at,1,7) BETWEEN ? AND ?",args:[bounds.start,bounds.end]};})() : {sql:" WHERE created_at LIKE ?",args:[`${filter.value||""}-%`]}; return db.getAllSync<any>(`SELECT * FROM inventory_movements${f.sql} ORDER BY created_at ASC`,f.args);})() : [],
   inventoryPurchaseReceipts:include("inventoryPurchaseReceipts") ? await (async()=>{const f=whereForFilter(filter,"created_at");const rows=db.getAllSync<any>(`SELECT id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,description,created_at,created_by FROM inventory_purchase_receipts${f.sql} ORDER BY created_at ASC`,f.args);return await mapWithConcurrency(rows, 2, async (row:any)=>{const billRow=db.getFirstSync<any>("SELECT bill_image FROM inventory_purchase_receipts WHERE id=?",[row.id]);const source=billRow?.bill_image;const billImage=!includeAttachedImages ? "" : typeof source==="string" && /^(data:image\/|file:\/\/|content:\/\/)/i.test(source) ? await embedOptionalPhoto(source,compressedPhotoCache) : source; if(billRow)billRow.bill_image=""; return {...row,bill_image:billImage};});})() : [],
+  yearlyRequirements:include("yearlyRequirements") ? db.getAllSync<any>("SELECT * FROM inventory_yearly_requirements ORDER BY year, inventory_id") : [],
   stockReceipts:include("stockReceipts") ? await (async()=>{
     const f=whereForFilter(filter,"created_at");
     const rows=db.getAllSync<any>(`SELECT id,inventory_id,batch_id,category_id,category,size,quantity,unit,minimum_stock,added_date,bill_image,attachments_json,description,created_at,created_by FROM stock_receipts${f.sql} ORDER BY created_at ASC`,f.args);
@@ -966,7 +967,10 @@ export async function commitIncrementalSnapshotCache(baselineKey?: string): Prom
 }
 
 function rowKey(row: any): string | null {
- return row && row.id !== undefined && row.id !== null && String(row.id) !== "" ? String(row.id) : null;
+ if (row && row.id !== undefined && row.id !== null && String(row.id) !== "") return String(row.id);
+ // Yearly requirement rows use a composite primary key in SQLite.
+ if (row && row.year !== undefined && row.inventory_id) return String(row.year) + "|" + String(row.inventory_id);
+ return null;
 }
 
 // Keep original photo bytes out of the local comparison cache. Hash source strings
@@ -1172,7 +1176,7 @@ export async function exportIncrementalBackupData(changedTables: string[], onPro
  const allowed = new Set([
   "patients","procedures","inventoryCategories","inventory","patientImplants",
   "patientCustomFields","implantRecords","expenses","users","patientHistory",
-  "inventoryMovements","inventoryPurchaseReceipts","stockReceipts","trash","intelligenceRecords","intelligenceRevisions","knowledgeArticles","intelligenceSettings","branding","appSettings"
+  "inventoryMovements","inventoryPurchaseReceipts","stockReceipts","yearlyRequirements","trash","intelligenceRecords","intelligenceRevisions","knowledgeArticles","intelligenceSettings","branding","appSettings"
  ]);
  const requestedTables = Array.from(new Set(changedTables)).filter((name) => allowed.has(name));
  if (!requestedTables.length) throw new Error("There are no changed data tables to sync.");
@@ -1342,7 +1346,7 @@ export async function prepareIncrementalSnapshotCacheFromBackupData(baselineKey:
  const tableNames = [
   "patients", "procedures", "inventoryCategories", "inventory", "patientImplants",
   "patientCustomFields", "implantRecords", "expenses", "users", "patientHistory",
-  "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts", "trash",
+  "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts", "yearlyRequirements", "trash",
   "intelligenceRecords", "intelligenceRevisions", "knowledgeArticles", "intelligenceSettings",
  ];
  const tables: Record<string, any> = {};
@@ -1503,6 +1507,7 @@ export async function restoreBackup(backup:BackupData){
  const inventoryMovements=restoreArray((backup as any).inventoryMovements);
  const inventoryPurchaseReceipts=restoreArray((backup as any).inventoryPurchaseReceipts);
  const stockReceipts=restoreArray((backup as any).stockReceipts);
+ const yearlyRequirements=restoreArray((backup as any).yearlyRequirements);
  const trash=restoreArray((backup as any).trash);
  
  const intelligenceRecords=restoreArray((backup as any).intelligenceRecords);
@@ -1515,7 +1520,7 @@ db.withTransactionSync(()=>{
   db.runSync("DELETE FROM ortho_intelligence_records");
   db.runSync("DELETE FROM ortho_knowledge_articles");
   db.runSync("DELETE FROM ortho_intelligence_settings");
-  db.runSync("DELETE FROM inventory_movements"); db.runSync("DELETE FROM inventory_purchase_receipts"); db.runSync("DELETE FROM stock_receipts"); db.runSync("DELETE FROM patient_implants"); db.runSync("DELETE FROM patient_history"); db.runSync("DELETE FROM expenses"); db.runSync("DELETE FROM patients"); db.runSync("DELETE FROM patient_custom_fields"); db.runSync("DELETE FROM implant_records"); db.runSync("DELETE FROM procedures"); db.runSync("DELETE FROM inventory"); db.runSync("DELETE FROM inventory_categories"); db.runSync("DELETE FROM users"); db.runSync("DELETE FROM deleted_records");
+  db.runSync("DELETE FROM inventory_movements"); db.runSync("DELETE FROM inventory_purchase_receipts"); db.runSync("DELETE FROM stock_receipts"); db.runSync("DELETE FROM inventory_yearly_requirements"); db.runSync("DELETE FROM patient_implants"); db.runSync("DELETE FROM patient_history"); db.runSync("DELETE FROM expenses"); db.runSync("DELETE FROM patients"); db.runSync("DELETE FROM patient_custom_fields"); db.runSync("DELETE FROM implant_records"); db.runSync("DELETE FROM procedures"); db.runSync("DELETE FROM inventory"); db.runSync("DELETE FROM inventory_categories"); db.runSync("DELETE FROM users"); db.runSync("DELETE FROM deleted_records");
   const usedPatientIds=new Set<string>();
   const patientIdMap=new Map<string,string>();
   for(const p of patients){
@@ -1701,6 +1706,11 @@ const usedExpenseIds=new Set<string>();
       restoreText(r.created_at,new Date().toISOString()),
       restoreText(r.created_by)||null
     ]);
+  }
+  for(const req of yearlyRequirements){
+    const inventoryId=inventoryIdMap.get(String(req.inventory_id||""));
+    if(!inventoryId) continue;
+    db.runSync("INSERT OR REPLACE INTO inventory_yearly_requirements (year,inventory_id,required_quantity,updated_at,updated_by) VALUES (?,?,?,?,?)",[Math.floor(Number(req.year)||new Date().getFullYear()),inventoryId,Math.max(3,Math.ceil(Number(req.required_quantity)||3)),restoreText(req.updated_at,new Date().toISOString()),userIdMap.get(String(req.updated_by||""))||null]);
   }
   const usedMovementIds=new Set<string>();
   for(const m of inventoryMovements){

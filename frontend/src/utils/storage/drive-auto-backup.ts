@@ -18,7 +18,7 @@ const DEBOUNCE_MS = 7000;
 const ALL_SYNC_TABLES = [
   "patients", "procedures", "inventoryCategories", "inventory", "patientImplants",
   "patientCustomFields", "implantRecords", "expenses", "users", "patientHistory",
-  "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts", "trash",
+  "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts", "yearlyRequirements", "trash",
   "intelligenceRecords", "intelligenceRevisions", "knowledgeArticles", "intelligenceSettings", "branding", "appSettings",
 ] as const;
 const DIRTY_TABLES_KEY = "ortho_drive_pending_tables_v1";
@@ -89,6 +89,7 @@ const tableMap: Record<string, string> = {
   inventory_movements: "inventoryMovements",
   inventory_purchase_receipts: "inventoryPurchaseReceipts",
   stock_receipts: "stockReceipts",
+  inventory_yearly_requirements: "yearlyRequirements",
   deleted_records: "trash",
   ortho_intelligence_records: "intelligenceRecords",
   ortho_intelligence_revisions: "intelligenceRevisions",
