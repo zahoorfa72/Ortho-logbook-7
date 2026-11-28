@@ -2063,8 +2063,11 @@ export async function applySharedWorkspaceBackup(backup: any): Promise<{ tables:
 
   let appliedRows = 0;
   db.withTransactionSync(() => {
-    for (const spec of prepared) {
+    // Delete child/ledger tables first, then restore parents before dependants.
+    for (const spec of [...prepared].reverse()) {
       db.runSync("DELETE FROM " + spec.table);
+    }
+    for (const spec of prepared) {
       for (const row of spec.rows) {
         const fields = spec.columns.filter((column) => Object.prototype.hasOwnProperty.call(row, column));
         if (!fields.length) continue;
@@ -2075,13 +2078,9 @@ export async function applySharedWorkspaceBackup(backup: any): Promise<{ tables:
           return value;
         });
         const placeholders = fields.map(() => "?").join(",");
-        const conflict = spec.primary.map((column) => '"' + column.replace(/"/g, '""') + '"').join(",");
         const quotedFields = fields.map((column) => '"' + column.replace(/"/g, '""') + '"').join(",");
         db.runSync(
-          "INSERT INTO " + spec.table + " (" + quotedFields + ") VALUES (" + placeholders + ") ON CONFLICT (" + conflict + ") DO UPDATE SET " +
-          fields.filter((field) => !spec.primary.includes(field))
-            .map((field) => '"' + field.replace(/"/g, '""') + '"=excluded."' + field.replace(/"/g, '""') + '"')
-            .join(",") || "INSERT OR REPLACE INTO " + spec.table + " (" + quotedFields + ") VALUES (" + placeholders + ")",
+          "INSERT OR REPLACE INTO " + spec.table + " (" + quotedFields + ") VALUES (" + placeholders + ")",
           values,
         );
         appliedRows += 1;
