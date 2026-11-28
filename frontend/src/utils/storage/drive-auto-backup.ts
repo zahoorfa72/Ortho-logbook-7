@@ -66,6 +66,14 @@ TaskManager.defineTask(BACKGROUND_SYNC_TASK, async ({ error }) => {
   }
 });
 
+async function reconcileApprovedSharedData() {
+  if (!getConnectedGoogleAccount()) await restoreGoogleAccountSilently();
+  const shared = await getSharedWorkspaceStatus();
+  if (shared?.connected) {
+    await syncApprovedSharedWorkspaceToLocal("");
+  }
+}
+
 async function registerBackgroundSyncTask() {
   if (backgroundTaskRegistered) return;
   backgroundTaskRegistered = true;
@@ -390,6 +398,14 @@ export function startAutomaticDriveBackup() {
     }
     await persistPendingTables();
     scheduleBackup();
+    // If this phone has no unsent local changes, reconcile owner-approved
+    // updates on startup as well; Android does not always emit a foreground
+    // transition when the sync worker is initialized.
+    if (!pendingTables.size) {
+      void reconcileApprovedSharedData().catch((error) =>
+        console.warn("[drive-auto-backup] startup shared reconciliation paused:", error)
+      );
+    }
   });
   const subscription = SQLite.addDatabaseChangeListener((event: any) => {
     const changedTable = tableMap[String(event?.tableName || "")];
@@ -413,11 +429,9 @@ export function startAutomaticDriveBackup() {
         // Reconcile approved owner changes when the phone returns online.
         // The shared applier refuses to overwrite this phone while its own
         // approval request is still pending.
-        void getSharedWorkspaceStatus().then(async (shared) => {
-          if (shared?.connected) {
-            await syncApprovedSharedWorkspaceToLocal(String(await storage.secureGet("ortho_current_user", "") || ""));
-          }
-        }).catch((error) => console.warn("[drive-auto-backup] shared reconciliation paused:", error));
+        void reconcileApprovedSharedData().catch((error) =>
+          console.warn("[drive-auto-backup] shared reconciliation paused:", error)
+        );
         return;
       }
       if (state === "background" || state === "inactive") {
