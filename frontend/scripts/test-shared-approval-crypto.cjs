@@ -26,7 +26,8 @@ const {
   verifySharedApprovalPayload,
 } = testModule.exports;
 
-const keys = createSharedApprovalKeyPair();
+async function run() {
+const keys = await createSharedApprovalKeyPair();
 const payload = {
   app: "Ortho Logbook Decision",
   protocolVersion: 2,
@@ -45,3 +46,6 @@ assert.equal(verifySharedApprovalPayload(payload, signature, createSharedApprova
 assert.equal(verifySharedApprovalPayload(payload, "not-a-signature", keys.publicKey), false);
 
 console.log("Shared approval signature tests passed.");
+}
+
+run().catch((error) => { console.error(error); process.exitCode = 1; });
