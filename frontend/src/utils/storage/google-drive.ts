@@ -2042,6 +2042,7 @@ async function backupToGoogleDriveUnlocked(
       delete backupData.fullTables;
       pruneBackupPhotoAssets(backupData);
     }
+    if (await isSharedWorkspaceEnabled()) sanitizeSharedWorkspaceSnapshot(backupData);
     pruneBackupPhotoAssets(backupData);
     if (!FileSystem.cacheDirectory) throw new Error("Device cache storage is unavailable for the Drive backup.");
     stagedFileUri = FileSystem.cacheDirectory + "ortho-drive-stream-" + Date.now() + ".json";
@@ -2082,6 +2083,16 @@ async function backupToGoogleDriveUnlocked(
       delete initialMaster.fullTables;
       pruneBackupPhotoAssets(initialMaster);
       backupText = JSON.stringify(initialMaster);
+    }
+  }
+
+  if (!stagedFileUri && await isSharedWorkspaceEnabled()) {
+    try {
+      const parsedSharedBackup = parseDownloadedBackup(backupText as string);
+      sanitizeSharedWorkspaceSnapshot(parsedSharedBackup);
+      backupText = JSON.stringify(parsedSharedBackup);
+    } catch (error: any) {
+      throw new Error("The shared backup could not be sanitized safely: " + String(error?.message || error));
     }
   }
 
@@ -3286,6 +3297,28 @@ const SHARED_OWNER_SIGNING_KEY = "ortho_shared_owner_signing_key_v1";
 const SHARED_WORKSPACE_MANIFEST = "Ortho Logbook Shared Workspace.json";
 const SHARED_REQUEST_PREFIX = "Ortho Logbook Change Request ";
 const SHARED_DECISION_PREFIX = "Ortho Logbook Decision ";
+function sanitizeSharedWorkspaceSnapshot(snapshot: any): any {
+  if (!snapshot || typeof snapshot !== "object") throw new Error("Invalid shared workspace snapshot.");
+  // Password hashes, recovery codes, role assignments and local account IDs
+  // must never be distributed to Drive editors or other phones.
+  snapshot.users = [];
+  if (snapshot.appSettings && typeof snapshot.appSettings === "object") {
+    const settings = { ...snapshot.appSettings };
+    for (const key of ["googleOAuthClientId", "googleCloudProjectId", "googleAccountEmail", "labOcrApiKey"]) {
+      delete settings[key];
+    }
+    if (settings.asyncStorageSettings && typeof settings.asyncStorageSettings === "object") {
+      settings.asyncStorageSettings = Object.fromEntries(
+        Object.entries(settings.asyncStorageSettings).filter(([key]) =>
+          !/(token|secret|password|credential|api.?key|oauth|google.?account|private.?key|signing.?key)/i.test(String(key))
+        )
+      );
+    }
+    snapshot.appSettings = settings;
+  }
+  return snapshot;
+}
+
 const SHARED_ALLOWED_TABLES = new Set([
   "patients", "procedures", "inventoryCategories", "inventory", "patientImplants",
   "patientCustomFields", "implantRecords", "expenses", "patientHistory",
