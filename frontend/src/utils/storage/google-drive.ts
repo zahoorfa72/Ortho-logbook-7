@@ -4078,10 +4078,23 @@ export async function syncApprovedSharedWorkspaceToLocal(
       throw new Error("Shared sync is paused because this phone has local changes waiting to upload (" + sharedPending.join(", ") + "). Submit those changes first; no local records were replaced.");
     }
     const snapshot = await getApprovedSharedWorkspaceBackup(activeLocalUserId, onProgress);
+    const snapshotHash = await backupContentHash(snapshot.backupText, onProgress);
+    const previousHash = String(await storage.secureGet("ortho_shared_workspace_last_applied_hash_v1", "") || "");
+    if (previousHash && previousHash === snapshotHash) {
+      return {
+        applied: false,
+        approvedEvents: snapshot.approvedEvents,
+        tables: 0,
+        rows: 0,
+        warnings: snapshot.warnings,
+      };
+    }
     const parsed = JSON.parse(snapshot.backupText);
     onProgress?.("Applying approved shared records without changing local user accounts…");
     const result = await applySharedWorkspaceBackup(parsed);
     await markSharedWorkspaceSnapshotApplied(parsed);
+    const savedHash = await storage.secureSet("ortho_shared_workspace_last_applied_hash_v1", snapshotHash);
+    if (!savedHash) throw new Error("Shared records were applied, but the applied-version marker could not be saved. Retry sync safely.");
     return {
       applied: true,
       approvedEvents: snapshot.approvedEvents,
