@@ -2100,6 +2100,10 @@ export async function applySharedWorkspaceBackup(backup: any): Promise<{ tables:
       }
     }
   }
+  if (backup.appSettings && typeof backup.appSettings === "object") {
+    await restoreLabSettings(backup.appSettings);
+    await restoreAsyncStorageSettings(backup.appSettings);
+  }
   queryClient.clear();
   return { tables: prepared.length, rows: appliedRows };
 }
