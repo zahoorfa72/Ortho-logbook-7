@@ -3783,9 +3783,19 @@ export async function getApprovedSharedWorkspaceBackup(
       " change request(s) waiting for approval. Sync is paused so your unapproved local edits are not replaced. Ask the workspace owner to approve or reject them first."
     );
   }
-  onProgress?.("Downloading the approved shared baseline…");
-  const baselineResult = await restoreLatestFromGoogleDrive(onProgress);
-  const baseline: any = parseDownloadedBackup(baselineResult.backupText);
+  onProgress?.("Verifying the owner-controlled shared baseline…");
+  const baselineFile = await findWorkspaceMasterFile(String(status.folderId));
+  if (!baselineFile?.id) {
+    throw new Error("The shared workspace master backup is missing. No local data was changed.");
+  }
+  const baselineOwner = normalizeDriveEmail(baselineFile?.owners?.[0]?.emailAddress);
+  const baselineEditor = normalizeDriveEmail(baselineFile?.lastModifyingUser?.emailAddress);
+  const expectedOwner = normalizeDriveEmail(status.ownerEmail);
+  if (!baselineOwner || !baselineEditor || baselineOwner !== expectedOwner || baselineEditor !== expectedOwner) {
+    throw new Error("The shared master backup was not last modified by its Google Drive owner. Shared sync is blocked because an Editor may have altered the main data.");
+  }
+  onProgress?.("Downloading the verified shared baseline…");
+  const baseline: any = await downloadDriveJsonValidated(String(baselineFile.id), onProgress);
   for (const table of ["yearlyRequirements", "intelligenceRecords", "intelligenceRevisions", "knowledgeArticles", "intelligenceSettings"]) {
     if (!Array.isArray(baseline[table])) baseline[table] = [];
   }
@@ -3804,7 +3814,7 @@ export async function getApprovedSharedWorkspaceBackup(
     .filter((item) => item.value && String(item.value.workspaceId) === String(status.workspaceId))
     .map((item) => [String(item.value.requestId), item.value]));
   const approved: any[] = [];
-  const warnings: string[] = [...((baselineResult as any).recoveryWarnings || [])];
+  const warnings: string[] = [];
   for (const [id, events] of decisionsByRequest.entries()) {
     const outcomes = new Set(events.map((event) => String(event.decision)));
     if (outcomes.size > 1) {
