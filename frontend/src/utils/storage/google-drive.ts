@@ -3670,8 +3670,10 @@ export async function submitSharedChangeRequest(
       "SELECT id,email,name,role FROM users WHERE id=? AND disabled=0 LIMIT 1", [userId]
     ) : null;
     if (!localUser) throw new Error("Log in with your Ortho Logbook user account before submitting a shared change.");
+    // User accounts, password hashes, recovery codes and role assignments
+    // are device/account administration data, never part of staff change requests.
     const tables = Array.from(new Set(changedTables))
-      .filter((name) => SHARED_ALLOWED_TABLES.has(name));
+      .filter((name) => name !== "users" && SHARED_ALLOWED_TABLES.has(name));
     if (!tables.length) return { skipped: true, localOnly: true, message: "No shared-data tables changed." };
 
     onProgress?.("Preparing a private change request for workspace approval…");
