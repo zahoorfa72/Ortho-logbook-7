@@ -61,7 +61,7 @@ function SharedWorkspacePanel() {
       const status = await getSharedWorkspaceStatus();
       setWorkspace(status);
       setAccount(getConnectedGoogleAccount());
-      if (status?.connected && status.isOwner) setRequests(await listSharedChangeRequests());
+      if (status?.connected) setRequests(await listSharedChangeRequests());
       else setRequests([]);
       setMessage(status?.connected ? "Shared workspace refreshed." : status?.error || "Workspace is not connected on this phone.");
     } catch (error) {
@@ -228,7 +228,19 @@ function SharedWorkspacePanel() {
                   )) : <Text style={styles.hint}>No change requests found.</Text>}
                 </>
               ) : (
-                <Text style={styles.hint}>Staff changes are uploaded as approval requests. The app will apply them after the owner approves.</Text>
+                <>
+                  <Text style={styles.hint}>Staff changes are uploaded as approval requests. The app applies approved changes automatically after the owner approves.</Text>
+                  <Text style={styles.cardTitle}>Your change requests</Text>
+                  {requests.filter((item) => String(item.requester?.googleEmail || "").toLowerCase() === String(account || "").toLowerCase()).length ? (
+                    requests.filter((item) => String(item.requester?.googleEmail || "").toLowerCase() === String(account || "").toLowerCase()).map((item) => (
+                      <View key={item.requestId} style={[styles.selectedBox, { marginTop: spacing.xs }]}>
+                        <Text style={styles.selectedTitle}>{item.requestId}</Text>
+                        <Text style={styles.fileInfo}>{item.requestedAt ? new Date(item.requestedAt).toLocaleString() : "Change request"}</Text>
+                        <Text style={styles.hint}>Status: {item.status} · Tables: {(item.tables || []).join(", ")}</Text>
+                      </View>
+                    ))
+                  ) : <Text style={styles.hint}>No requests have been submitted from this Google account yet.</Text>}
+                </>
               )}
               <Pressable style={[styles.secondaryButton, busy && styles.disabledButton, { marginTop: spacing.sm }]} onPress={refresh} disabled={busy}>
                 {busy ? <ActivityIndicator color={colors.onSurface} /> : <Ionicons name="refresh-outline" size={18} color={colors.onSurface} />}
