@@ -189,6 +189,16 @@ function SharedWorkspacePanel() {
                   <Text style={styles.hint}>{workspace.isOwner ? "You control approvals and shared main data." : "Your shared-data changes wait for owner approval."}</Text>
                 </View>
               </View>
+              {Number(workspace.protocolVersion) < 2 ? (
+                workspace.isOwner ? (
+                  <Pressable style={[styles.primaryButton, busy && styles.disabledButton]} onPress={() => initialize(true)} disabled={busy}>
+                    <Ionicons name="shield-checkmark-outline" size={18} color={colors.onBrandPrimary} />
+                    <Text style={styles.primaryText}>Upgrade Owner Approval Security</Text>
+                  </Pressable>
+                ) : (
+                  <Text style={styles.hint}>The workspace owner must upgrade approval security from the owner phone before staff approvals can continue.</Text>
+                )
+              ) : null}
               {workspace.isOwner ? (
                 <>
                   <Text style={styles.cardTitle}>Invite staff Google account</Text>
