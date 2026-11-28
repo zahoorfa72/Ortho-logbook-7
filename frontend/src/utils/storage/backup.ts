@@ -2017,6 +2017,11 @@ export async function applySharedWorkspaceBackup(backup: any): Promise<{ tables:
     throw new Error("The approved shared snapshot is incomplete or unsupported. No local records were changed.");
   }
 
+  // Expand portable image references before any SQL write. Shared backups
+  // store image bytes once in photoAssets; leaving the reference token in a
+  // patient row would make images appear broken on every other phone.
+  backup = materializeBackupPhotoReferences(backup);
+
   // Static identifiers only: never accept a table name from a Drive payload.
   const sharedTables: Array<{ key: string; table: string }> = [
     { key: "patients", table: "patients" },
