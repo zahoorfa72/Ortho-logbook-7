@@ -71,6 +71,25 @@ function SharedWorkspacePanel() {
     }
   };
 
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const status = await getSharedWorkspaceStatus();
+        if (!active) return;
+        setWorkspace(status);
+        setAccount(getConnectedGoogleAccount());
+        if (status?.connected) {
+          const items = await listSharedChangeRequests();
+          if (active) setRequests(items);
+        }
+      } catch (error) {
+        if (active) setMessage(error instanceof Error ? error.message : "Unable to load shared workspace.");
+      }
+    })();
+    return () => { active = false; };
+  }, []);
+
   const connect = async () => {
     setBusy(true);
     try {
