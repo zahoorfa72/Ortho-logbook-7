@@ -508,7 +508,7 @@ export async function restoreGoogleDriveBackupById(fileId: string, onProgress?: 
         continue;
       }
 
-      const syncTables = ["patients","procedures","inventoryCategories","inventory","patientImplants","patientCustomFields","implantRecords","expenses","users","patientHistory","inventoryMovements","inventoryPurchaseReceipts","stockReceipts","trash"];
+      const syncTables = ["patients","procedures","inventoryCategories","inventory","patientImplants","patientCustomFields","implantRecords","expenses","users","patientHistory","inventoryMovements","inventoryPurchaseReceipts","stockReceipts","yearlyRequirements","intelligenceRecords","intelligenceRevisions","knowledgeArticles","intelligenceSettings","trash"];
       if (!syncTables.includes(table)) continue;
       if (!Array.isArray(delta[table])) {
         recoveryWarnings.push(String(deltaFile.name || "An incremental backup") + " is missing table data for " + table + ".");
@@ -520,11 +520,11 @@ export async function restoreGoogleDriveBackupById(fileId: string, onProgress?: 
         // Merge its readable rows conservatively instead of replacing a full table.
         const merged = new Map<string, any>();
         for (const row of Array.isArray(composed[table]) ? composed[table] : []) {
-          const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+          const key = syncRowKey(table, row);
           merged.set(key, row);
         }
         for (const row of delta[table]) {
-          const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+          const key = syncRowKey(table, row);
           const existing = merged.get(key);
           if (table === "patients" && existing &&
               !Object.prototype.hasOwnProperty.call(row, "photo_uri") &&
@@ -543,14 +543,14 @@ export async function restoreGoogleDriveBackupById(fileId: string, onProgress?: 
       } else if (delta._rowDelta === true && !(Array.isArray(delta.fullTables) && delta.fullTables.includes(table))) {
         const merged = new Map<string, any>();
         for (const row of Array.isArray(composed[table]) ? composed[table] : []) {
-          const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+          const key = syncRowKey(table, row);
           merged.set(key, row);
         }
         for (const deletedId of Array.isArray(delta.deletedIds?.[table]) ? delta.deletedIds[table] : []) {
           merged.delete("id:" + String(deletedId));
         }
         for (const row of delta[table]) {
-          const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+          const key = syncRowKey(table, row);
           const existing = merged.get(key);
           if (table === "patients" && existing &&
               !Object.prototype.hasOwnProperty.call(row, "photo_uri") &&
@@ -567,7 +567,7 @@ export async function restoreGoogleDriveBackupById(fileId: string, onProgress?: 
         // then apply its explicit deletion tombstones.
         let mergedRows = mergeRowsByRecency(composed[table] || [], delta[table], table);
         const deletedIds = new Set<string>(Array.isArray(delta.deletedIds?.[table]) ? delta.deletedIds[table].map(String) : []);
-        if (deletedIds.size) mergedRows = mergedRows.filter((row: any) => row?.id == null || !deletedIds.has(String(row.id)));
+        if (deletedIds.size) mergedRows = mergedRows.filter((row: any) => !deletedIds.has(syncRowIdentity(table, row)));
         composed[table] = mergedRows;
       }
       appliedAnyTable = true;
@@ -1727,7 +1727,8 @@ function mergeFullBackupSnapshots(legacy: any, local: any): any {
   const tables = [
     "patients", "procedures", "inventoryCategories", "inventory", "patientImplants",
     "patientCustomFields", "implantRecords", "expenses", "users", "patientHistory",
-    "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts", "trash",
+    "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts", "yearlyRequirements",
+    "intelligenceRecords", "intelligenceRevisions", "knowledgeArticles", "intelligenceSettings", "trash",
   ];
   for (const table of tables) {
     const oldRows = Array.isArray(legacy?.[table]) ? legacy[table] : [];
@@ -1775,25 +1776,35 @@ function mergeRowPreservingStockAttachments(table: string, previous: any, incomi
   return merged;
 }
 
+function syncRowIdentity(table: string, row: any): string {
+  if (table === "yearlyRequirements") return String(row?.year ?? "") + "|" + String(row?.inventory_id ?? "");
+  if (table === "intelligenceSettings") return String(row?.module_id ?? "");
+  if (row?.id != null) return String(row.id);
+  return JSON.stringify(row);
+}
+function syncRowKey(table: string, row: any): string {
+  if (table === "yearlyRequirements") return "yearly:" + syncRowIdentity(table, row);
+  if (table === "intelligenceSettings") return "module:" + syncRowIdentity(table, row);
+  if (table !== "inventory") return row?.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+  const bill = String(row?.bill_image || "").trim();
+  const date = String(row?.added_date || "").trim();
+  if (bill && date) return "inventory-receipt:" + [
+    row?.name, row?.category, row?.size, date, bill,
+  ].map((v) => String(v || "").trim().toLowerCase()).join("|");
+  if (row?.id != null) return "id:" + String(row.id);
+  return "inventory-row:" + [
+    row?.name, row?.category, row?.size, row?.added_date, row?.batch_id,
+  ].map((v) => String(v || "").trim().toLowerCase()).join("|");
+}
+function syncDeletedRowKey(table: string, id: unknown): string {
+  if (table === "yearlyRequirements") return "yearly:" + String(id);
+  if (table === "intelligenceSettings") return "module:" + String(id);
+  return "id:" + String(id);
+}
+
 function mergeRowsByRecency(currentRows: any[], incomingRows: any[], table: string): any[] {
   const rows = new Map<string, any>();
-  const keyFor = (row: any) => {
-    if (table !== "inventory") return row?.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
-    // Prefer the stable record ID so separate stock batches with the same
-    // name/category/size are never collapsed. Across devices, only merge a
-    // row when it has a strong shared receipt identity (bill + date).
-    const bill = String(row?.bill_image || "").trim();
-    const date = String(row?.added_date || "").trim();
-    if (bill && date) {
-      return "inventory-receipt:" + [
-        row?.name, row?.category, row?.size, date, bill,
-      ].map((v) => String(v || "").trim().toLowerCase()).join("|");
-    }
-    if (row?.id != null) return "id:" + String(row.id);
-    return "inventory-row:" + [
-      row?.name, row?.category, row?.size, row?.added_date, row?.batch_id,
-    ].map((v) => String(v || "").trim().toLowerCase()).join("|");
-  };
+  const keyFor = (row: any) => syncRowKey(table, row);
   for (const row of currentRows || []) rows.set(keyFor(row), row);
   for (const row of incomingRows || []) {
     const key = keyFor(row);
@@ -1826,7 +1837,8 @@ function applyIncrementalToMaster(local: any, incoming: any, preserveCurrent = f
   const tables = [
     "patients", "procedures", "inventoryCategories", "inventory", "patientImplants",
     "patientCustomFields", "implantRecords", "expenses", "users", "patientHistory",
-    "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts", "trash",
+    "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts", "yearlyRequirements",
+    "intelligenceRecords", "intelligenceRevisions", "knowledgeArticles", "intelligenceSettings", "trash",
   ];
   const changed = new Set<string>(Array.isArray(incoming.changedTables) ? incoming.changedTables : []);
   const full = new Set<string>(Array.isArray(incoming.fullTables) ? incoming.fullTables : []);
@@ -1839,31 +1851,18 @@ function applyIncrementalToMaster(local: any, incoming: any, preserveCurrent = f
       // by mergeIncrementalPayloads, so this cannot erase a later recreation.
       let mergedRows = mergeRowsByRecency(local[table] || [], incoming[table], table);
       const deletedIds = new Set<string>(Array.isArray(incoming.deletedIds?.[table]) ? incoming.deletedIds[table].map(String) : []);
-      if (deletedIds.size) mergedRows = mergedRows.filter((row: any) => row?.id == null || !deletedIds.has(String(row.id)));
+      if (deletedIds.size) mergedRows = mergedRows.filter((row: any) => !deletedIds.has(syncRowIdentity(table, row)));
       local[table] = mergedRows;
       continue;
     }
     const rows = new Map<string, any>();
-    const keyForRow = (row: any) => {
-      if (table !== "inventory") return row?.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
-      const bill = String(row?.bill_image || "").trim();
-      const date = String(row?.added_date || "").trim();
-      if (bill && date) {
-        return "inventory-receipt:" + [
-          row?.name, row?.category, row?.size, date, bill,
-        ].map((v) => String(v || "").trim().toLowerCase()).join("|");
-      }
-      if (row?.id != null) return "id:" + String(row.id);
-      return "inventory-row:" + [
-        row?.name, row?.category, row?.size, row?.added_date, row?.batch_id,
-      ].map((v) => String(v || "").trim().toLowerCase()).join("|");
-    };
+    const keyForRow = (row: any) => syncRowKey(table, row);
     for (const row of Array.isArray(local[table]) ? local[table] : []) rows.set(keyForRow(row), row);
     if (!preserveCurrent) {
       for (const id of Array.isArray(incoming.deletedIds?.[table]) ? incoming.deletedIds[table] : []) {
         if (table === "inventory") {
           for (const [key, row] of rows.entries()) if (String(row?.id ?? "") === String(id)) rows.delete(key);
-        } else rows.delete("id:" + String(id));
+        } else rows.delete(syncDeletedRowKey(table, id));
       }
     }
     for (const row of incoming[table]) {
@@ -1904,6 +1903,18 @@ function applyIncrementalToMaster(local: any, incoming: any, preserveCurrent = f
   if (Object.prototype.hasOwnProperty.call(incoming, "branding")) local.branding = incoming.branding;
   if (Object.prototype.hasOwnProperty.call(incoming, "appSettings")) local.appSettings = incoming.appSettings;
 
+  if (Array.isArray(incoming?.patients) && Array.isArray(local.patientImageArchives)) {
+    const changedPatients = new Map<string, any>(incoming.patients
+      .filter((patient: any) => patient?.id != null)
+      .map((patient: any) => [String(patient.id), patient]));
+    local.patientImageArchives = local.patientImageArchives.filter((archive: any) => {
+      const patient = changedPatients.get(String(archive?.patientId || ""));
+      if (!patient) return true;
+      const archiveRevision = String(archive?.patientUpdatedAt || "");
+      const patientRevision = String(patient?.updated_at || "");
+      return !archiveRevision || !patientRevision || archiveRevision === patientRevision;
+    });
+  }
   // A patient deletion tombstone must remove its separate-PDF manifest entry
   // as well as its patient row. Otherwise a stale PDF reference can survive
   // journal composition and make restore report an invalid/missing PDF.
@@ -1929,7 +1940,8 @@ type DriveBackupOptions = { skipIfUnchanged?: boolean; onProgress?: (stage: stri
 const REQUIRED_MASTER_TABLES = [
   "patients", "procedures", "inventoryCategories", "inventory", "patientImplants",
   "patientCustomFields", "implantRecords", "expenses", "users", "patientHistory",
-  "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts", "trash",
+  "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts", "yearlyRequirements",
+    "intelligenceRecords", "intelligenceRevisions", "knowledgeArticles", "intelligenceSettings", "trash",
 ] as const;
 
 function hasCompleteMasterSnapshot(value: any): boolean {
@@ -2488,7 +2500,7 @@ async function downloadIncrementalWithRecovery(fileId: string, fileName: string)
     if (app !== "Ortho Logbook") {
       throw new Error("Incremental backup " + fileName + " could not be recovered. Its contents are unavailable or corrupted.");
     }
-    const knownTables = ["patients","procedures","inventoryCategories","inventory","patientImplants","patientCustomFields","implantRecords","expenses","users","patientHistory","inventoryMovements","inventoryPurchaseReceipts","stockReceipts","trash"];
+    const knownTables = ["patients","procedures","inventoryCategories","inventory","patientImplants","patientCustomFields","implantRecords","expenses","users","patientHistory","inventoryMovements","inventoryPurchaseReceipts","stockReceipts","yearlyRequirements","intelligenceRecords","intelligenceRevisions","knowledgeArticles","intelligenceSettings","trash"];
     const recovered: any = { app, incremental: true, _recoveredFromDamage: true, changedTables: Array.isArray(changedTables) ? changedTables : [], _rowDelta: rowDelta, deletedIds: deletedIds && typeof deletedIds === "object" ? deletedIds : {}, fullTables: Array.isArray(fullTables) ? fullTables : [] };
     for (const table of knownTables) {
       const value = extractCompleteJsonProperty(raw, table);
@@ -2515,7 +2527,8 @@ function mergeIncrementalPayloads(previous: any, incoming: any): any {
   const tableNames = [
     "patients", "procedures", "inventoryCategories", "inventory", "patientImplants",
     "patientCustomFields", "implantRecords", "expenses", "users", "patientHistory",
-    "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts", "trash",
+    "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts", "yearlyRequirements",
+    "intelligenceRecords", "intelligenceRevisions", "knowledgeArticles", "intelligenceSettings", "trash",
   ];
   const changedTables = Array.from(new Set([
     ...(Array.isArray(previous.changedTables) ? previous.changedTables : []),
@@ -2554,7 +2567,7 @@ function mergeIncrementalPayloads(previous: any, incoming: any): any {
     const rows = new Map<string, any>();
     if (wasChanged) {
       for (const row of oldRows) {
-        const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+        const key = syncRowKey(table, row);
         rows.set(key, row);
       }
     }
@@ -2562,9 +2575,9 @@ function mergeIncrementalPayloads(previous: any, incoming: any): any {
       ...(Array.isArray(deletedIds[table]) ? deletedIds[table].map(String) : []),
       ...(Array.isArray(incoming.deletedIds?.[table]) ? incoming.deletedIds[table].map(String) : []),
     ]);
-    for (const id of incoming.deletedIds?.[table] || []) rows.delete("id:" + String(id));
+    for (const id of incoming.deletedIds?.[table] || []) rows.delete(syncDeletedRowKey(table, id));
     for (const row of newRows) {
-      const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+      const key = syncRowKey(table, row);
       const old = rows.get(key);
       if (table === "patients" && old &&
           !Object.prototype.hasOwnProperty.call(row, "photo_uri") &&
@@ -2577,7 +2590,7 @@ function mergeIncrementalPayloads(previous: any, incoming: any): any {
       } else {
         rows.set(key, row);
       }
-      if (row && row.id != null) tombstones.delete(String(row.id));
+      tombstones.delete(syncRowIdentity(table, row));
     }
     merged[table] = Array.from(rows.values());
     deletedIds[table] = Array.from(tombstones);
@@ -3121,20 +3134,20 @@ export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) 
         } else {
           recoveryWarnings.push(String(deltaFile.name || "An incremental backup") + " is missing its " + table + " data.");
         }
-      } else if (["patients","procedures","inventoryCategories","inventory","patientImplants","patientCustomFields","implantRecords","expenses","users","patientHistory","inventoryMovements","inventoryPurchaseReceipts","stockReceipts","trash"].includes(table)) {
+      } else if (["patients","procedures","inventoryCategories","inventory","patientImplants","patientCustomFields","implantRecords","expenses","users","patientHistory","inventoryMovements","inventoryPurchaseReceipts","stockReceipts","yearlyRequirements","intelligenceRecords","intelligenceRevisions","knowledgeArticles","intelligenceSettings","trash"].includes(table)) {
         if (Array.isArray(delta[table])) {
           if (delta._recoveredFromDamage !== true && delta._rowDelta === true && !(Array.isArray(delta.fullTables) && delta.fullTables.includes(table))) {
             // Apply only changed records and explicit deletion tombstones.
             // This keeps old records intact while allowing true row-level sync.
             const merged = new Map<string, any>();
             for (const row of Array.isArray(composed[table]) ? composed[table] : []) {
-              const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+              const key = syncRowKey(table, row);
               merged.set(key, row);
             }
             const deleted = delta.deletedIds && Array.isArray(delta.deletedIds[table]) ? delta.deletedIds[table] : [];
             for (const id of deleted) merged.delete("id:" + String(id));
             for (const row of delta[table]) {
-              const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+              const key = syncRowKey(table, row);
               const existing = merged.get(key);
               if (table === "patients" && existing &&
                   !Object.prototype.hasOwnProperty.call(row, "photo_uri") &&
@@ -3154,11 +3167,11 @@ export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) 
             // a damaged file may omit valid rows.
             const merged = new Map<string, any>();
             for (const row of composed[table]) {
-              const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+              const key = syncRowKey(table, row);
               merged.set(key, row);
             }
             for (const row of delta[table]) {
-              const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+              const key = syncRowKey(table, row);
               const existing = merged.get(key);
               if (table === "patients" && existing &&
                   !Object.prototype.hasOwnProperty.call(row, "photo_uri") &&
@@ -3183,7 +3196,7 @@ export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) 
             // journal snapshot: keep newer master records and apply tombstones.
             let mergedRows = mergeRowsByRecency(composed[table] || [], delta[table], table);
             const deletedIds = new Set<string>(Array.isArray(delta.deletedIds?.[table]) ? delta.deletedIds[table].map(String) : []);
-            if (deletedIds.size) mergedRows = mergedRows.filter((row: any) => row?.id == null || !deletedIds.has(String(row.id)));
+            if (deletedIds.size) mergedRows = mergedRows.filter((row: any) => !deletedIds.has(syncRowIdentity(table, row)));
             composed[table] = mergedRows;
           }
           appliedAnyTable = true;
@@ -3259,3 +3272,610 @@ export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) 
   return { backupText: JSON.stringify(composed), name: file.name, modifiedTime: effectiveModifiedTime || String(file.modifiedTime || ""), appliedIncrementals, recoveryWarnings };
 }
 
+
+
+// -----------------------------------------------------------------------------
+// Shared workspace: immutable change requests and approval events.
+// The full backup is a read-only baseline after workspace setup. User changes
+// are appended as separate files; approvals are immutable events. This avoids
+// multi-device read/modify/write races on one shared master backup.
+// -----------------------------------------------------------------------------
+const SHARED_WORKSPACE_KEY = "ortho_shared_workspace_v1";
+const SHARED_WORKSPACE_MANIFEST = "Ortho Logbook Shared Workspace.json";
+const SHARED_REQUEST_PREFIX = "Ortho Logbook Change Request ";
+const SHARED_DECISION_PREFIX = "Ortho Logbook Decision ";
+const SHARED_ALLOWED_TABLES = new Set([
+  "patients", "procedures", "inventoryCategories", "inventory", "patientImplants",
+  "patientCustomFields", "implantRecords", "expenses", "patientHistory",
+  "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts",
+  "yearlyRequirements", "trash", "intelligenceRecords", "intelligenceRevisions",
+  "knowledgeArticles", "intelligenceSettings", "branding", "appSettings",
+]);
+
+function makeSharedEventId(): string {
+  return Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 12);
+}
+function normalizeDriveEmail(value: unknown): string {
+  return String(value || "").trim().toLowerCase();
+}
+async function listFilesInDriveFolder(folderId: string, nameFilter = ""): Promise<any[]> {
+  const clauses = [
+    "'" + escapeDriveQuery(folderId) + "' in parents",
+    "trashed = false",
+  ];
+  if (nameFilter) clauses.push(nameFilter);
+  const q = encodeURIComponent(clauses.join(" and "));
+  const files: any[] = [];
+  let pageToken = "";
+  do {
+    const tokenParam = pageToken ? "&pageToken=" + encodeURIComponent(pageToken) : "";
+    const response = await driveRequest(
+      DRIVE_API + "?q=" + q + "&spaces=drive&pageSize=100&orderBy=modifiedTime%20asc" +
+      "&includeItemsFromAllDrives=true&supportsAllDrives=true" +
+      "&fields=files(id,name,mimeType,modifiedTime,size,parents,owners(emailAddress),lastModifyingUser(emailAddress)),nextPageToken" + tokenParam
+    );
+    const data = await response.json();
+    if (Array.isArray(data.files)) files.push(...data.files);
+    pageToken = typeof data.nextPageToken === "string" ? data.nextPageToken : "";
+  } while (pageToken);
+  return files.filter((file: any) => file?.id && file.mimeType !== DRIVE_FOLDER_MIME);
+}
+async function findAccessibleBackupFolder(createIfMissing: boolean): Promise<any> {
+  const q = encodeURIComponent(
+    "name = '" + escapeDriveQuery(BACKUP_FOLDER_NAME) + "' and mimeType = '" +
+    DRIVE_FOLDER_MIME + "' and trashed = false"
+  );
+  const response = await driveRequest(
+    DRIVE_API + "?q=" + q + "&spaces=drive&pageSize=100&includeItemsFromAllDrives=true" +
+    "&supportsAllDrives=true&fields=files(id,name,mimeType,parents,owners(emailAddress),capabilities(canAddChildren,canListChildren,canEdit))"
+  );
+  const data = await response.json();
+  const folders = Array.isArray(data.files) ? data.files.filter((x: any) => x?.id) : [];
+  if (folders.length === 1) return folders[0];
+  if (folders.length > 1) {
+    const withManifest: any[] = [];
+    for (const folder of folders) {
+      const files = await listFilesInDriveFolder(String(folder.id), "name = '" + escapeDriveQuery(SHARED_WORKSPACE_MANIFEST) + "'");
+      if (files.length) withManifest.push(folder);
+    }
+    if (withManifest.length === 1) return withManifest[0];
+    const currentEmail = normalizeDriveEmail(getConnectedGoogleAccount());
+    const owned = folders.filter((folder: any) =>
+      (Array.isArray(folder.owners) ? folder.owners : []).some((owner: any) =>
+        normalizeDriveEmail(owner?.emailAddress) === currentEmail
+      )
+    );
+    if (owned.length === 1 && withManifest.length === 0) return owned[0];
+    throw new Error("More than one Ortho Logbook backup folder is visible in this Google account. Ask the workspace owner to confirm the correct shared folder; no folder was changed.");
+  }
+  if (!createIfMissing) {
+    throw new Error("The shared Ortho Logbook folder was not found. Ask the workspace owner to share the “Ortho Logbook Backups” folder with this Google account, then reconnect.");
+  }
+  return await getOrCreateBackupFolder();
+}
+async function getWorkspaceFolderMetadata(folderId: string): Promise<any> {
+  const response = await driveRequest(
+    DRIVE_API + "/" + encodeURIComponent(folderId) +
+    "?supportsAllDrives=true&fields=id,name,mimeType,owners(emailAddress),capabilities(canAddChildren,canListChildren,canEdit)"
+  );
+  return await response.json();
+}
+async function findSharedManifestFile(folderId: string): Promise<any | null> {
+  const files = await listFilesInDriveFolder(folderId, "name = '" + escapeDriveQuery(SHARED_WORKSPACE_MANIFEST) + "'");
+  return files.sort((a: any, b: any) =>
+    Date.parse(String(b.modifiedTime || "")) - Date.parse(String(a.modifiedTime || ""))
+  )[0] || null;
+}
+async function readSharedManifest(folderId: string): Promise<{ manifest: any; file: any } | null> {
+  const file = await findSharedManifestFile(folderId);
+  if (!file?.id) return null;
+  const manifest = await downloadDriveJsonValidated(String(file.id));
+  // Fail closed: a Drive folder editor can edit files, so file contents alone
+  // are never proof that the workspace owner authored the manifest. Verify
+  // both the immutable Drive owner and the latest content editor.
+  const manifestOwner = normalizeDriveEmail(file?.owners?.[0]?.emailAddress);
+  const manifestEditor = normalizeDriveEmail(file?.lastModifyingUser?.emailAddress);
+  const declaredOwner = normalizeDriveEmail(manifest?.ownerEmail);
+  if (!manifestOwner || !manifestEditor || !declaredOwner ||
+      manifestOwner !== declaredOwner || manifestEditor !== declaredOwner) {
+    throw new Error("The shared workspace manifest was not authored and last modified by its declared owner. The workspace is locked for safety; ask the owner to reinitialize it from the original Google account.");
+  }
+  if (manifest?.app !== "Ortho Logbook Shared Workspace" ||
+      Number(manifest?.protocolVersion) !== 1 ||
+      String(manifest?.folderId || "") !== String(folderId) ||
+      !String(manifest?.ownerEmail || "").trim() ||
+      !String(manifest?.workspaceId || "").trim()) {
+    throw new Error("The shared workspace manifest is invalid or from an unsupported version. No shared data was changed.");
+  }
+  return { manifest, file };
+}
+async function findWorkspaceMasterFile(folderId: string): Promise<any | null> {
+  const files = await listFilesInDriveFolder(folderId, "name contains 'Ortho Logbook Backup'");
+  const masters = files.filter((file: any) => isMasterBackupName(String(file.name || "")));
+  masters.sort((a: any, b: any) => {
+    const rank = (name: string) => name === sixMonthMasterName() ? 0 :
+      isSixMonthMasterName(name) ? 1 :
+      name === "Ortho Logbook Backup - All Time.orbackup" ? 2 : 3;
+    return rank(String(a.name || "")) - rank(String(b.name || "")) ||
+      Date.parse(String(b.modifiedTime || "")) - Date.parse(String(a.modifiedTime || ""));
+  });
+  return masters[0] || null;
+}
+async function saveSharedWorkspaceLocally(manifest: any, folder: any): Promise<void> {
+  const local = {
+    ...manifest,
+    active: true,
+    canWrite: folder?.capabilities?.canAddChildren === true,
+    connectedGoogleEmail: getConnectedGoogleAccount(),
+    lastConnectedAt: new Date().toISOString(),
+  };
+  const ok = await storage.secureSet(SHARED_WORKSPACE_KEY, JSON.stringify(local));
+  if (!ok) throw new Error("The shared workspace connection could not be saved securely on this phone.");
+}
+async function readSharedWorkspaceLocally(): Promise<any | null> {
+  try {
+    const raw = await storage.secureGet(SHARED_WORKSPACE_KEY, "");
+    const value = JSON.parse(String(raw || ""));
+    if (value?.active === true && value?.workspaceId && value?.folderId) return value;
+  } catch {}
+  return null;
+}
+export async function isSharedWorkspaceEnabled(): Promise<boolean> {
+  return Boolean(await readSharedWorkspaceLocally());
+}
+export async function disconnectSharedWorkspaceOnThisPhone(): Promise<void> {
+  await storage.secureRemove(SHARED_WORKSPACE_KEY);
+}
+export async function initializeOrJoinSharedWorkspace(
+  createIfMissing: boolean,
+  onProgress?: (stage: string) => void,
+): Promise<any> {
+  return queueDriveOperation(async () => {
+    let accountEmail = getConnectedGoogleAccount();
+    if (!accountEmail) {
+      await restoreGoogleAccountSilently();
+      accountEmail = getConnectedGoogleAccount();
+    }
+    if (!accountEmail) throw new Error("Connect the Google account that the workspace owner shared with you.");
+    onProgress?.("Finding the shared Ortho Logbook folder…");
+    const folder = await findAccessibleBackupFolder(createIfMissing);
+    const folderId = String(folder.id);
+    const folderMeta = await getWorkspaceFolderMetadata(folderId);
+    const existing = await readSharedManifest(folderId);
+    if (existing) {
+      if (folderMeta?.capabilities?.canListChildren === false) {
+        throw new Error("This Google account can see the folder but cannot read its contents. Ask the owner to grant Viewer or Editor access.");
+      }
+      await saveSharedWorkspaceLocally(existing.manifest, folderMeta);
+      return {
+        ...existing.manifest,
+        isOwner: normalizeDriveEmail(accountEmail) === normalizeDriveEmail(existing.manifest.ownerEmail),
+        canWrite: folderMeta?.capabilities?.canAddChildren === true,
+        joined: true,
+      };
+    }
+
+    const folderOwner = normalizeDriveEmail(folderMeta?.owners?.[0]?.emailAddress);
+    const ownerEmail = folderOwner || normalizeDriveEmail(accountEmail);
+    if (ownerEmail !== normalizeDriveEmail(accountEmail)) {
+      throw new Error("The shared folder has no workspace manifest yet. Only its Google Drive owner (" + ownerEmail + ") can initialize the workspace. Ask that owner to open Sync & Approval and initialize it.");
+    }
+    if (folderMeta?.capabilities?.canAddChildren === false) {
+      throw new Error("This Google account cannot initialize the workspace because it does not have permission to add files to the shared folder.");
+    }
+
+    onProgress?.("Checking for an existing complete Ortho Logbook master…");
+    let master = await findWorkspaceMasterFile(folderId);
+    if (!master?.id) {
+      onProgress?.("Creating the first complete shared baseline from this phone…");
+      const baseline = await ensureGoogleDriveBaselineUnlocked(onProgress);
+      master = await findWorkspaceMasterFile(folderId);
+      if (!master?.id || baseline?.migrationPending) {
+        throw new Error("The first shared baseline could not be fully verified. No workspace was activated; retry after resolving the backup warning.");
+      }
+    }
+    const masterOwner = normalizeDriveEmail(master?.owners?.[0]?.emailAddress);
+    const masterEditor = normalizeDriveEmail(master?.lastModifyingUser?.emailAddress);
+    if (!masterOwner || !masterEditor || masterOwner !== normalizeDriveEmail(ownerEmail) || masterEditor !== normalizeDriveEmail(ownerEmail)) {
+      throw new Error("The existing master backup was not created and last modified by the workspace owner. It cannot be used as the trusted shared baseline.");
+    }
+    const backup = await downloadDriveJsonValidated(String(master.id), onProgress);
+    for (const table of ["yearlyRequirements", "intelligenceRecords", "intelligenceRevisions", "knowledgeArticles", "intelligenceSettings"]) {
+      if (!Array.isArray(backup[table])) backup[table] = [];
+    }
+    if (!hasCompleteMasterSnapshot(backup)) {
+      throw new Error("The existing Drive backup is not a complete Ortho Logbook master. It was not replaced or deleted.");
+    }
+    const manifest = {
+      app: "Ortho Logbook Shared Workspace",
+      protocolVersion: 1,
+      workspaceId: "ortho-workspace-" + folderId,
+      folderId,
+      ownerEmail: normalizeDriveEmail(accountEmail),
+      createdAt: new Date().toISOString(),
+      approvalRequired: true,
+      baselineFileId: String(master.id),
+      baselineFileName: String(master.name || ""),
+    };
+    onProgress?.("Saving and verifying the shared workspace owner and approval rules…");
+    const uploaded = await uploadContent(JSON.stringify(manifest), undefined, onProgress, SHARED_WORKSPACE_MANIFEST);
+    if (!uploaded?.id) throw new Error("The shared workspace manifest could not be uploaded.");
+    await ensureDriveFileInFolder(String(uploaded.id), folderId);
+    const verified = await downloadDriveJsonValidated(String(uploaded.id), onProgress);
+    if (verified?.workspaceId !== manifest.workspaceId || verified?.ownerEmail !== manifest.ownerEmail) {
+      throw new Error("The shared workspace manifest failed verification. The existing main backup was left unchanged.");
+    }
+    await saveSharedWorkspaceLocally(manifest, folderMeta);
+    return { ...manifest, isOwner: true, canWrite: folderMeta?.capabilities?.canAddChildren === true, joined: false };
+  }, onProgress);
+}
+export async function getSharedWorkspaceStatus(): Promise<any | null> {
+  const local = await readSharedWorkspaceLocally();
+  if (!local) return null;
+  const accountEmail = normalizeDriveEmail(getConnectedGoogleAccount());
+  if (!accountEmail) return { ...local, isOwner: false, canWrite: false, connected: false };
+  try {
+    const folder = await getWorkspaceFolderMetadata(String(local.folderId));
+    const remote = await readSharedManifest(String(local.folderId));
+    if (!remote || remote.manifest.workspaceId !== local.workspaceId) {
+      throw new Error("The shared workspace manifest no longer matches this phone.");
+    }
+    const status = {
+      ...remote.manifest,
+      canWrite: folder?.capabilities?.canAddChildren === true,
+      isOwner: accountEmail === normalizeDriveEmail(remote.manifest.ownerEmail),
+      connected: true,
+    };
+    await saveSharedWorkspaceLocally(remote.manifest, folder);
+    return status;
+  } catch (error: any) {
+    return { ...local, connected: false, canWrite: false, isOwner: false, error: String(error?.message || error) };
+  }
+}
+export async function inviteSharedWorkspaceMember(emailAddress: string): Promise<void> {
+  return queueDriveOperation(async () => {
+    const status = await getSharedWorkspaceStatus();
+    if (!status?.connected || !status.isOwner) {
+      throw new Error("Only the Google account that owns this shared workspace can invite users.");
+    }
+    const email = normalizeDriveEmail(emailAddress);
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("Enter a valid Google account email address.");
+    if (email === normalizeDriveEmail(status.ownerEmail)) throw new Error("The workspace owner already has full access.");
+    const folderId = String(status.folderId);
+    const listResponse = await driveRequest(
+      DRIVE_API + "/" + encodeURIComponent(folderId) +
+      "/permissions?supportsAllDrives=true&pageSize=100&fields=permissions(id,type,emailAddress,role,deleted,permissionDetails(inherited))"
+    );
+    const listData = await listResponse.json();
+    const current = (Array.isArray(listData.permissions) ? listData.permissions : []).find((p: any) =>
+      p?.type === "user" && normalizeDriveEmail(p.emailAddress) === email && p.deleted !== true
+    );
+    const body = JSON.stringify({ type: "user", role: "writer", emailAddress: email });
+    if (current?.id) {
+      if (String(current.role) === "writer") return;
+      await driveRequest(
+        DRIVE_API + "/" + encodeURIComponent(folderId) + "/permissions/" + encodeURIComponent(String(current.id)) +
+        "?supportsAllDrives=true&fields=id,emailAddress,role",
+        { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ role: "writer" }) }
+      );
+      return;
+    }
+    await driveRequest(
+      DRIVE_API + "/" + encodeURIComponent(folderId) +
+      "/permissions?supportsAllDrives=true&sendNotificationEmail=true&fields=id,emailAddress,role",
+      { method: "POST", headers: { "Content-Type": "application/json" }, body }
+    );
+  });
+}
+async function loadSharedRequestAndDecisionFiles(folderId: string): Promise<{ requests: any[]; decisions: any[] }> {
+  const [requestFiles, decisionFiles] = await Promise.all([
+    listFilesInDriveFolder(folderId, "name contains 'Ortho Logbook Change Request'"),
+    listFilesInDriveFolder(folderId, "name contains 'Ortho Logbook Decision'"),
+  ]);
+  const requests: any[] = [];
+  const decisions: any[] = [];
+  for (const file of requestFiles.filter((f: any) => /\.orrequest$/i.test(String(f.name || "")))) {
+    try {
+      const value = await downloadDriveJsonValidated(String(file.id));
+      const fileOwner = normalizeDriveEmail(file?.owners?.[0]?.emailAddress);
+      const fileEditor = normalizeDriveEmail(file?.lastModifyingUser?.emailAddress);
+      const requesterEmail = normalizeDriveEmail(value?.requester?.googleEmail);
+      if (value?.app === "Ortho Logbook Change Request" && value?.requestId && value?.workspaceId &&
+          fileOwner && fileEditor && requesterEmail && fileOwner === requesterEmail && fileEditor === requesterEmail) {
+        requests.push({ file, value });
+      } else {
+        requests.push({ file, value: null, error: "Request rejected: Drive file ownership or last editor does not match the submitting Google account." });
+      }
+    } catch (error: any) {
+      requests.push({
+        file,
+        value: null,
+        error: "This request could not be read: " + String(error?.message || error),
+      });
+    }
+  }
+  for (const file of decisionFiles.filter((f: any) => /\.ordecision$/i.test(String(f.name || "")))) {
+    try {
+      const value = await downloadDriveJsonValidated(String(file.id));
+      const fileOwner = normalizeDriveEmail(file?.owners?.[0]?.emailAddress);
+      const fileEditor = normalizeDriveEmail(file?.lastModifyingUser?.emailAddress);
+      const declaredApprover = normalizeDriveEmail(value?.approvedBy);
+      // A writer can upload a fake decision or edit an owner's old decision.
+      // Google Drive's creator and latest-editor metadata must both identify
+      // the declared owner. Missing metadata is rejected, never trusted.
+      if (value?.app === "Ortho Logbook Decision" && value?.requestId && value?.workspaceId &&
+          declaredApprover && declaredApprover === fileOwner && declaredApprover === fileEditor) {
+        decisions.push({ file, value });
+      } else {
+        console.warn("[shared-workspace] rejected decision without owner-authored Drive metadata", String(file.name || ""));
+      }
+    } catch (error) {
+      console.warn("[shared-workspace] ignored unreadable decision file", error);
+    }
+  }
+  return { requests, decisions };
+}
+function summarizeSharedRequests(requests: any[], decisions: any[], workspaceId: string): any[] {
+  const decisionsByRequest = new Map<string, any[]>();
+  for (const item of decisions) {
+    if (String(item.value.workspaceId) !== workspaceId) continue;
+    const id = String(item.value.requestId);
+    const list = decisionsByRequest.get(id) || [];
+    list.push(item.value);
+    decisionsByRequest.set(id, list);
+  }
+  return requests
+    .filter((item) => item.value && String(item.value.workspaceId) === workspaceId)
+    .map((item) => {
+      const requestId = String(item.value.requestId);
+      const values = decisionsByRequest.get(requestId) || [];
+      const outcomes = new Set(values.map((x: any) => String(x.decision)));
+      const status = outcomes.size > 1 ? "conflict" :
+        outcomes.has("approve") ? "approved" :
+        outcomes.has("reject") ? "rejected" : "pending";
+      const tables = Array.isArray(item.value.delta?.changedTables)
+        ? item.value.delta.changedTables.map(String).filter((x: string) => SHARED_ALLOWED_TABLES.has(x))
+        : [];
+      return {
+        requestId,
+        fileId: String(item.file.id),
+        fileName: String(item.file.name || ""),
+        requestedAt: String(item.value.requestedAt || item.file.modifiedTime || ""),
+        requester: item.value.requester || {},
+        tables,
+        status,
+        error: item.error || "",
+        request: item.value,
+      };
+    })
+    .sort((a, b) => Date.parse(b.requestedAt || "") - Date.parse(a.requestedAt || ""));
+}
+export async function listSharedChangeRequests(): Promise<any[]> {
+  const status = await getSharedWorkspaceStatus();
+  if (!status?.connected) throw new Error(status?.error || "Connect to the shared workspace first.");
+  const { requests, decisions } = await loadSharedRequestAndDecisionFiles(String(status.folderId));
+  return summarizeSharedRequests(requests, decisions, String(status.workspaceId));
+}
+export async function submitSharedChangeRequest(
+  changedTables: string[],
+  onProgress?: (stage: string) => void,
+): Promise<any> {
+  return queueDriveOperation(async () => {
+    const status = await getSharedWorkspaceStatus();
+    if (!status?.connected) throw new Error(status?.error || "Join the shared workspace before submitting changes.");
+    if (!status.canWrite) throw new Error("This Google account has read-only access. Ask the workspace owner to grant Editor access before making shared changes.");
+    const accountEmail = normalizeDriveEmail(getConnectedGoogleAccount());
+    const userId = String(await storage.secureGet("ortho_current_user", "") || "");
+    const localUser = userId ? db.getFirstSync<any>(
+      "SELECT id,email,name,role FROM users WHERE id=? AND disabled=0 LIMIT 1", [userId]
+    ) : null;
+    if (!localUser) throw new Error("Log in with your Ortho Logbook user account before submitting a shared change.");
+    // User accounts, password hashes, recovery codes and role assignments
+    // are device/account administration data, never part of staff change requests.
+    const tables = Array.from(new Set(changedTables))
+      .filter((name) => name !== "users" && SHARED_ALLOWED_TABLES.has(name));
+    if (!tables.length) return { skipped: true, localOnly: true, message: "No shared-data tables changed." };
+
+    onProgress?.("Preparing a private change request for workspace approval…");
+    const delta: any = await exportIncrementalBackupData(tables, onProgress);
+    const actualTables = Array.isArray(delta.changedTables)
+      ? delta.changedTables.map(String).filter((name: string) => SHARED_ALLOWED_TABLES.has(name))
+      : [];
+    if (!actualTables.length) {
+      await commitIncrementalSnapshotCache();
+      return { skipped: true, localOnly: false, message: "No data differences were found." };
+    }
+    // Never distribute local login credentials, password verifiers or recovery codes
+    // as part of a staff member's change request. User administration remains owner-only.
+    delete delta.users;
+    delta.changedTables = actualTables.filter((name: string) => name !== "users");
+    if (delta.appSettings && typeof delta.appSettings === "object") {
+      const safeSettings = { ...delta.appSettings };
+      for (const key of ["googleOAuthClientId", "googleCloudProjectId", "googleAccountEmail", "labOcrApiKey"]) {
+        delete safeSettings[key];
+      }
+      if (safeSettings.asyncStorageSettings && typeof safeSettings.asyncStorageSettings === "object") {
+        safeSettings.asyncStorageSettings = Object.fromEntries(
+          Object.entries(safeSettings.asyncStorageSettings).filter(([key]) =>
+            !/(token|secret|password|credential|api.?key|oauth|google.?account)/i.test(String(key))
+          )
+        );
+      }
+      delta.appSettings = safeSettings;
+    }
+    const requestId = makeSharedEventId();
+    const request = {
+      app: "Ortho Logbook Change Request",
+      protocolVersion: 1,
+      workspaceId: status.workspaceId,
+      requestId,
+      requestedAt: new Date().toISOString(),
+      requester: {
+        googleEmail: accountEmail,
+        localUserId: String(localUser.id),
+        localUserEmail: String(localUser.email || ""),
+        name: String(localUser.name || "App user"),
+        role: String(localUser.role || "staff"),
+      },
+      delta,
+    };
+    onProgress?.("Uploading the approval request without changing shared main data…");
+    const fileName = SHARED_REQUEST_PREFIX + requestId + ".orrequest";
+    const uploaded = await uploadContent(JSON.stringify(request), undefined, onProgress, fileName);
+    if (!uploaded?.id) throw new Error("Google Drive did not confirm the change-request upload. This phone's data was kept; retry sync.");
+    await ensureDriveFileInFolder(String(uploaded.id), String(status.folderId));
+    const verified = await downloadDriveJsonValidated(String(uploaded.id), onProgress);
+    if (verified?.requestId !== requestId || verified?.workspaceId !== status.workspaceId ||
+        !Array.isArray(verified?.delta?.changedTables)) {
+      throw new Error("The uploaded change request failed verification. Local data was kept and the request was not acknowledged.");
+    }
+    await commitIncrementalSnapshotCache();
+    return { skipped: false, requestId, fileName, submittedAt: request.requestedAt };
+  }, onProgress);
+}
+export async function recordSharedChangeDecision(
+  requestId: string,
+  decision: "approve" | "reject",
+): Promise<void> {
+  return queueDriveOperation(async () => {
+    const status = await getSharedWorkspaceStatus();
+    if (!status?.connected || !status.isOwner) {
+      throw new Error("Only the shared workspace owner can approve or reject changes to main data.");
+    }
+    const requests = await listSharedChangeRequests();
+    const target = requests.find((item) => item.requestId === requestId);
+    if (!target?.request || target.error) throw new Error("The selected change request is missing, unreadable, or failed Drive author verification.");
+    if (target.status !== "pending") {
+      throw new Error(target.status === "conflict"
+        ? "This request has conflicting approval decisions. Resolve the conflict before proceeding."
+        : "This request has already been decided.");
+    }
+    const event = {
+      app: "Ortho Logbook Decision",
+      protocolVersion: 1,
+      workspaceId: status.workspaceId,
+      requestId,
+      decision,
+      approvedBy: normalizeDriveEmail(getConnectedGoogleAccount()),
+      approvedAt: new Date().toISOString(),
+      delta: decision === "approve" ? target.request.delta : undefined,
+    };
+    const fileName = SHARED_DECISION_PREFIX + requestId + " " + decision + " " + makeSharedEventId() + ".ordecision";
+    const uploaded = await uploadContent(JSON.stringify(event), undefined, undefined, fileName);
+    if (!uploaded?.id) throw new Error("Google Drive did not confirm the decision event. The request remains pending; refresh and retry.");
+    await ensureDriveFileInFolder(String(uploaded.id), String(status.folderId));
+    const verified = await downloadDriveJsonValidated(String(uploaded.id));
+    if (verified?.requestId !== requestId || verified?.decision !== decision || verified?.workspaceId !== status.workspaceId) {
+      throw new Error("The decision event could not be verified. Refresh the request list before trying again.");
+    }
+  });
+}
+export async function getApprovedSharedWorkspaceBackup(
+  activeLocalUserId = "",
+  onProgress?: (stage: string) => void,
+): Promise<{ backupText: string; warnings: string[]; approvedEvents: number }> {
+  const status = await getSharedWorkspaceStatus();
+  if (!status?.connected) throw new Error(status?.error || "Connect to the shared workspace first.");
+  const { requests, decisions } = await loadSharedRequestAndDecisionFiles(String(status.folderId));
+  const summaries = summarizeSharedRequests(requests, decisions, String(status.workspaceId));
+  const accountEmail = normalizeDriveEmail(getConnectedGoogleAccount());
+  const ownPending = summaries.filter((item) =>
+    item.status === "pending" &&
+    normalizeDriveEmail(item.requester?.googleEmail) === accountEmail &&
+    (!activeLocalUserId || String(item.requester?.localUserId || "") === String(activeLocalUserId))
+  );
+  if (ownPending.length) {
+    throw new Error(
+      "This phone has " + ownPending.length +
+      " change request(s) waiting for approval. Sync is paused so your unapproved local edits are not replaced. Ask the workspace owner to approve or reject them first."
+    );
+  }
+  onProgress?.("Verifying the owner-controlled shared baseline…");
+  const baselineFile = await findWorkspaceMasterFile(String(status.folderId));
+  if (!baselineFile?.id) {
+    throw new Error("The shared workspace master backup is missing. No local data was changed.");
+  }
+  const baselineOwner = normalizeDriveEmail(baselineFile?.owners?.[0]?.emailAddress);
+  const baselineEditor = normalizeDriveEmail(baselineFile?.lastModifyingUser?.emailAddress);
+  const expectedOwner = normalizeDriveEmail(status.ownerEmail);
+  if (!baselineOwner || !baselineEditor || baselineOwner !== expectedOwner || baselineEditor !== expectedOwner) {
+    throw new Error("The shared master backup was not last modified by its Google Drive owner. Shared sync is blocked because an Editor may have altered the main data.");
+  }
+  onProgress?.("Downloading the verified shared baseline…");
+  const baseline: any = await downloadDriveJsonValidated(String(baselineFile.id), onProgress);
+  for (const table of ["yearlyRequirements", "intelligenceRecords", "intelligenceRevisions", "knowledgeArticles", "intelligenceSettings"]) {
+    if (!Array.isArray(baseline[table])) baseline[table] = [];
+  }
+  if (!hasCompleteMasterSnapshot(baseline)) {
+    throw new Error("The shared baseline is incomplete. Local records were not changed.");
+  }
+  const decisionsByRequest = new Map<string, any[]>();
+  for (const item of decisions) {
+    const event = item.value;
+    if (String(event.workspaceId) !== String(status.workspaceId)) continue;
+    const list = decisionsByRequest.get(String(event.requestId)) || [];
+    list.push(event);
+    decisionsByRequest.set(String(event.requestId), list);
+  }
+  const requestMap = new Map(requests
+    .filter((item) => item.value && String(item.value.workspaceId) === String(status.workspaceId))
+    .map((item) => [String(item.value.requestId), item.value]));
+  const approved: any[] = [];
+  const warnings: string[] = [];
+  for (const [id, events] of decisionsByRequest.entries()) {
+    const outcomes = new Set(events.map((event) => String(event.decision)));
+    if (outcomes.size > 1) {
+      warnings.push("Change request " + id + " has conflicting approval events and was not applied.");
+      continue;
+    }
+    if (!outcomes.has("approve")) continue;
+    const event = events
+      .slice()
+      .sort((a, b) => Date.parse(String(a.approvedAt || "")) - Date.parse(String(b.approvedAt || "")))[0];
+    const request = requestMap.get(id);
+    if (!request || !event.delta || request.requestId !== event.requestId) {
+      warnings.push("Approved change request " + id + " could not be matched to its original request.");
+      continue;
+    }
+    if (!Array.isArray(event.delta.changedTables) ||
+        event.delta.changedTables.some((name: string) => !SHARED_ALLOWED_TABLES.has(String(name)))) {
+      warnings.push("Approved change request " + id + " contains an unsupported data table and was skipped.");
+      continue;
+    }
+    approved.push({ id, event });
+  }
+  approved.sort((a, b) =>
+    Date.parse(String(a.event.approvedAt || "")) - Date.parse(String(b.event.approvedAt || ""))
+  );
+  onProgress?.("Applying " + approved.length + " approved change event(s) to the local sync snapshot…");
+  for (const item of approved) {
+    applyIncrementalToMaster(baseline, item.event.delta, false);
+  }
+  baseline.app = "Ortho Logbook";
+  baseline.version = Math.max(Number(baseline.version || 0), 12);
+  baseline.filter = { type: "all" };
+  baseline.incremental = false;
+  delete baseline.changedTables;
+  delete baseline._rowDelta;
+  delete baseline.deletedIds;
+  delete baseline.fullTables;
+  delete baseline._baselineKey;
+  delete baseline._updateCount;
+  if (!hasCompleteMasterSnapshot(baseline)) {
+    throw new Error("The approved shared data did not pass the full backup validation. This phone was not changed.");
+  }
+  onProgress?.("Checking patient PDF references for the approved data…");
+  await downloadPatientImageArchivesFromDrive(baseline, onProgress);
+  return {
+    backupText: JSON.stringify(baseline),
+    warnings,
+    approvedEvents: approved.length,
+  };
+}
+export async function markSharedWorkspaceSnapshotApplied(backup: any): Promise<void> {
+  if (!backup || !hasCompleteMasterSnapshot(backup)) {
+    throw new Error("Cannot mark an incomplete shared snapshot as applied.");
+  }
+  await prepareIncrementalSnapshotCacheFromBackupData("", backup);
+  await commitIncrementalSnapshotCache();
+}

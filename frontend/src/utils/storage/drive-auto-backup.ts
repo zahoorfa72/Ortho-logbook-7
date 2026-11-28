@@ -6,6 +6,8 @@ import {
   getLastDriveBackupStatus,
   getConnectedGoogleAccount,
   restoreGoogleAccountSilently,
+  getSharedWorkspaceStatus,
+  submitSharedChangeRequest,
 } from "@/src/utils/storage/google-drive";
 import { setDriveSyncState, setDriveSyncRefreshHandler } from "@/src/utils/storage/drive-sync-status";
 import { storage } from "@/src/utils/storage";
@@ -180,6 +182,46 @@ async function runBackup(options: { verifyPatientPdfs?: boolean } = {}): Promise
     // failure occurs, retry the same work in smaller table groups. Each group
     // uses the normal verified journal/cache path, so changes remain recoverable
     // and a retry after partial success is safe (already-synced groups diff to no-op).
+    // When this phone has joined a shared workspace, staff edits must become
+    // approval requests. They must never write directly into the shared master.
+    // If Drive is temporarily unavailable, keep the queue and retry later.
+    const sharedStatus = await getSharedWorkspaceStatus();
+    if (sharedStatus) {
+      if (!sharedStatus.connected) {
+        throw new Error(sharedStatus.error || "Shared workspace is offline. Changes remain queued on this phone.");
+      }
+      if (!sharedStatus.isOwner) {
+        const sharedTables = batch.filter((name) => name !== "users");
+        if (sharedTables.length) {
+          const requestResult = await submitSharedChangeRequest(sharedTables, (message) => {
+            setDriveSyncState({ phase: "uploading", updates: batch.length, message });
+          });
+          if (requestResult?.requestId) {
+            setDriveSyncState({
+              phase: "waiting",
+              updates: 0,
+              message: "Change request " + requestResult.requestId + " sent · waiting for workspace owner approval",
+            });
+          } else {
+            setDriveSyncState({
+              phase: "success",
+              updates: 0,
+              message: "No shared record changes found · account-only data was kept on this phone",
+            });
+          }
+        } else {
+          setDriveSyncState({
+            phase: "success",
+            updates: 0,
+            message: "Account and login settings stay on this phone · no shared data was uploaded",
+          });
+        }
+        batch.forEach((name) => inFlightTables.delete(name));
+        await persistPendingTables();
+        return true;
+      }
+    }
+
     const syncBatch = async (tables: string[]): Promise<any> => {
       try {
         return await backupIncrementalToGoogleDrive(tables, (message) => {
