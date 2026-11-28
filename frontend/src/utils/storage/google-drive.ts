@@ -3962,6 +3962,18 @@ export async function syncApprovedSharedWorkspaceToLocal(
   onProgress?: (stage: string) => void,
 ): Promise<{ applied: boolean; approvedEvents: number; tables: number; rows: number; warnings: string[] }> {
   return queueDriveOperation(async () => {
+    // Never replace shared tables while this phone has unsubmitted local edits.
+    // The queue survives app restarts, so this guard also protects background sync.
+    const pendingRaw = await storage.getItem<string>("ortho_drive_pending_tables_v1", "");
+    let pendingTables: any[] = [];
+    try {
+      const parsedPending = typeof pendingRaw === "string" ? JSON.parse(pendingRaw) : pendingRaw;
+      if (Array.isArray(parsedPending)) pendingTables = parsedPending;
+    } catch {}
+    const sharedPending = pendingTables.filter((name) => SHARED_ALLOWED_TABLES.has(String(name)));
+    if (sharedPending.length) {
+      throw new Error("Shared sync is paused because this phone has local changes waiting to upload (" + sharedPending.join(", ") + "). Submit those changes first; no local records were replaced.");
+    }
     const snapshot = await getApprovedSharedWorkspaceBackup(activeLocalUserId, onProgress);
     const parsed = JSON.parse(snapshot.backupText);
     onProgress?.("Applying approved shared records without changing local user accounts…");
