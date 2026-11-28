@@ -2809,7 +2809,7 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
       for (const key of ["googleOAuthClientId", "googleCloudProjectId", "googleAccountEmail", "labOcrApiKey"]) delete safe[key];
       if (safe.asyncStorageSettings && typeof safe.asyncStorageSettings === "object") {
         safe.asyncStorageSettings = Object.fromEntries(Object.entries(safe.asyncStorageSettings).filter(([key]) =>
-          !/(token|secret|password|credential|api.?key|oauth|google.?account|private.?key|signing.?key)/i.test(String(key))
+          !/(token|secret|password|credential|api.?key|oauth|google.?account|private.?key|signing.?key|patient.?image.?archives|local[_-]?uri|file[_-]?uri)/i.test(String(key))
         ));
       }
       delta.appSettings = safe;
@@ -3356,7 +3356,7 @@ function sanitizeSharedWorkspaceSnapshot(snapshot: any): any {
     if (settings.asyncStorageSettings && typeof settings.asyncStorageSettings === "object") {
       settings.asyncStorageSettings = Object.fromEntries(
         Object.entries(settings.asyncStorageSettings).filter(([key]) =>
-          !/(token|secret|password|credential|api.?key|oauth|google.?account|private.?key|signing.?key)/i.test(String(key))
+          !/(token|secret|password|credential|api.?key|oauth|google.?account|private.?key|signing.?key|patient.?image.?archives|local[_-]?uri|file[_-]?uri)/i.test(String(key))
         )
       );
     }
@@ -3923,7 +3923,7 @@ export async function submitSharedChangeRequest(
       if (safeSettings.asyncStorageSettings && typeof safeSettings.asyncStorageSettings === "object") {
         safeSettings.asyncStorageSettings = Object.fromEntries(
           Object.entries(safeSettings.asyncStorageSettings).filter(([key]) =>
-            !/(token|secret|password|credential|api.?key|oauth|google.?account)/i.test(String(key))
+            !/(token|secret|password|credential|api.?key|oauth|google.?account|patient.?image.?archives|local[_-]?uri|file[_-]?uri)/i.test(String(key))
           )
         );
       }
