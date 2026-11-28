@@ -4072,8 +4072,9 @@ export async function getApprovedSharedWorkspaceBackup(
       .slice()
       .sort((a, b) => Date.parse(String(a.approvedAt || "")) - Date.parse(String(b.approvedAt || "")))[0];
     const request = requestMap.get(id);
-    if (!request || !event.delta || request.requestId !== event.requestId) {
-      warnings.push("Approved change request " + id + " could not be matched to its original request.");
+    if (!request || !event.delta || request.requestId !== event.requestId ||
+        JSON.stringify(request.delta) !== JSON.stringify(event.delta)) {
+      warnings.push("Approved change request " + id + " could not be matched to its exact original payload.");
       continue;
     }
     if (!Array.isArray(event.delta.changedTables) ||
