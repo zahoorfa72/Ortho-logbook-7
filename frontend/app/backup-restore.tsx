@@ -690,14 +690,12 @@ export default function BackupRestoreScreen() {
           <Pressable onPress={() => router.back()} style={styles.headerBtn}>
             <Ionicons name="arrow-back" size={24} color={colors.onSurface} />
           </Pressable>
-          <Text style={styles.headerTitle}>Sync & Backup</Text>
+          <Text style={styles.headerTitle}>Shared Sync & Approval</Text>
           <View style={styles.headerBtn} />
         </View>
-        <View style={styles.center}>
-          <Ionicons name="lock-closed-outline" size={40} color={colors.muted} />
-          <Text style={styles.blockedTitle}>Administrator only</Text>
-          <Text style={styles.blockedSub}>Only the administrator can create or restore backups.</Text>
-        </View>
+        <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xl }}>
+          <SharedWorkspacePanel />
+        </ScrollView>
       </View>
     );
   }
@@ -716,6 +714,8 @@ export default function BackupRestoreScreen() {
         contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xl }}
         keyboardShouldPersistTaps="handled"
       >
+        <SharedWorkspacePanel />
+
         {lastRestoredBackup ? (
           <View style={styles.tipCard}>
             <Ionicons name="checkmark-circle-outline" size={20} color={colors.brandPrimary} />
