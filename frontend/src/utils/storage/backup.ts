@@ -1996,3 +1996,109 @@ for (const h of backup.patientHistory) {
 }
 
 export async function restoreEncryptedBackup(text:string,password:string){return restoreBackup(await decryptBackup(text,password));}
+
+
+/**
+ * Apply an owner-approved shared snapshot without restoring device accounts.
+ * This is deliberately separate from restoreBackup()/mergeBackup(): those
+ * functions are user-driven backup workflows and may import local users.
+ *
+ * Shared snapshots are authoritative for the allow-listed shared tables only.
+ * The local users table, login/session state, OAuth credentials and device
+ * settings are never read from or written by this function.
+ */
+export async function applySharedWorkspaceBackup(backup: any): Promise<{ tables: number; rows: number }> {
+  initializeDatabase();
+  if (!backup || backup.app !== BACKUP_APP || !Number.isFinite(Number(backup.version)) ||
+      Number(backup.version) < 12 || backup.incremental === true ||
+      !Array.isArray(backup.patients) || !Array.isArray(backup.procedures) ||
+      !Array.isArray(backup.inventory) || !Array.isArray(backup.expenses)) {
+    throw new Error("The approved shared snapshot is incomplete or unsupported. No local records were changed.");
+  }
+
+  // Static identifiers only: never accept a table name from a Drive payload.
+  const sharedTables: Array<{ key: string; table: string }> = [
+    { key: "patients", table: "patients" },
+    { key: "procedures", table: "procedures" },
+    { key: "inventoryCategories", table: "inventory_categories" },
+    { key: "inventory", table: "inventory" },
+    { key: "patientImplants", table: "patient_implants" },
+    { key: "patientCustomFields", table: "patient_custom_fields" },
+    { key: "implantRecords", table: "implant_records" },
+    { key: "expenses", table: "expenses" },
+    { key: "patientHistory", table: "patient_history" },
+    { key: "inventoryMovements", table: "inventory_movements" },
+    { key: "inventoryPurchaseReceipts", table: "inventory_purchase_receipts" },
+    { key: "stockReceipts", table: "stock_receipts" },
+    { key: "yearlyRequirements", table: "inventory_yearly_requirements" },
+    { key: "trash", table: "deleted_records" },
+    { key: "intelligenceRecords", table: "ortho_intelligence_records" },
+    { key: "intelligenceRevisions", table: "ortho_intelligence_revisions" },
+    { key: "knowledgeArticles", table: "ortho_knowledge_articles" },
+    { key: "intelligenceSettings", table: "ortho_intelligence_settings" },
+  ];
+
+  const prepared: Array<{ table: string; columns: string[]; primary: string[]; rows: any[] }> = [];
+  for (const spec of sharedTables) {
+    // Omitted optional arrays are left untouched for older but otherwise valid
+    // complete snapshots. Present arrays are authoritative, including [].
+    if (!Object.prototype.hasOwnProperty.call(backup, spec.key)) continue;
+    const rows = backup[spec.key];
+    if (!Array.isArray(rows)) throw new Error("Invalid shared table payload: " + spec.key);
+    const info = db.getAllSync<any>("PRAGMA table_info(" + spec.table + ")");
+    const columns = info.map((column: any) => String(column.name));
+    const primary = info
+      .filter((column: any) => Number(column.pk) > 0)
+      .sort((a: any, b: any) => Number(a.pk) - Number(b.pk))
+      .map((column: any) => String(column.name));
+    if (!columns.length || !primary.length) throw new Error("Local database schema is missing shared table " + spec.table + ".");
+    for (const row of rows) {
+      if (!row || typeof row !== "object" || Array.isArray(row)) throw new Error("Invalid row in shared table " + spec.key + ".");
+      if (primary.some((key) => row[key] === undefined || row[key] === null || row[key] === "")) {
+        throw new Error("A shared record in " + spec.key + " has no valid primary key. No local records were changed.");
+      }
+    }
+    prepared.push({ table: spec.table, columns, primary, rows });
+  }
+
+  let appliedRows = 0;
+  db.withTransactionSync(() => {
+    for (const spec of prepared) {
+      db.runSync("DELETE FROM " + spec.table);
+      for (const row of spec.rows) {
+        const fields = spec.columns.filter((column) => Object.prototype.hasOwnProperty.call(row, column));
+        if (!fields.length) continue;
+        const values = fields.map((field) => {
+          const value = row[field];
+          if (value === undefined) return null;
+          if (value !== null && typeof value === "object") return JSON.stringify(value);
+          return value;
+        });
+        const placeholders = fields.map(() => "?").join(",");
+        const conflict = spec.primary.map((column) => '"' + column.replace(/"/g, '""') + '"').join(",");
+        const quotedFields = fields.map((column) => '"' + column.replace(/"/g, '""') + '"').join(",");
+        db.runSync(
+          "INSERT INTO " + spec.table + " (" + quotedFields + ") VALUES (" + placeholders + ") ON CONFLICT (" + conflict + ") DO UPDATE SET " +
+          fields.filter((field) => !spec.primary.includes(field))
+            .map((field) => '"' + field.replace(/"/g, '""') + '"=excluded."' + field.replace(/"/g, '""') + '"')
+            .join(",") || "INSERT OR REPLACE INTO " + spec.table + " (" + quotedFields + ") VALUES (" + placeholders + ")",
+          values,
+        );
+        appliedRows += 1;
+      }
+    }
+  });
+
+  // Branding is shared presentation data. Device-specific Google credentials,
+  // user accounts, API keys and all session/auth settings deliberately remain local.
+  if (Object.prototype.hasOwnProperty.call(backup, "branding")) {
+    if (backup.branding === null) {
+      await storage.removeItem("ortho_branding");
+    } else if (backup.branding && typeof backup.branding === "object" && !Array.isArray(backup.branding)) {
+      if (!(await storage.setItem("ortho_branding", JSON.stringify(backup.branding)))) {
+        throw new Error("Shared records were applied, but branding could not be saved. Retry shared sync.");
+      }
+    }
+  }
+  return { tables: prepared.length, rows: appliedRows };
+}
