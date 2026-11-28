@@ -1,4 +1,5 @@
 import { GoogleSignin, statusCodes } from "@react-native-google-signin/google-signin";
+import { createSharedApprovalKeyPair, signSharedApprovalPayload, verifySharedApprovalPayload } from "@/src/utils/storage/shared-approval-crypto";
 import { NativeModules, Platform } from "react-native";
 import * as FileSystem from "expo-file-system/legacy";
 import { exportUnencryptedBackup, exportUnencryptedBackupData, exportIncrementalBackup, exportIncrementalBackupData, prepareIncrementalSnapshotCacheFromBackupData, commitIncrementalSnapshotCache, pruneBackupPhotoAssets, applySharedWorkspaceBackup, type BackupFilter } from "@/src/utils/storage/backup";
@@ -3281,6 +3282,7 @@ export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) 
 // multi-device read/modify/write races on one shared master backup.
 // -----------------------------------------------------------------------------
 const SHARED_WORKSPACE_KEY = "ortho_shared_workspace_v1";
+const SHARED_OWNER_SIGNING_KEY = "ortho_shared_owner_signing_key_v1";
 const SHARED_WORKSPACE_MANIFEST = "Ortho Logbook Shared Workspace.json";
 const SHARED_REQUEST_PREFIX = "Ortho Logbook Change Request ";
 const SHARED_DECISION_PREFIX = "Ortho Logbook Decision ";
@@ -3381,7 +3383,8 @@ async function readSharedManifest(folderId: string): Promise<{ manifest: any; fi
     throw new Error("The shared workspace manifest was not authored and last modified by its declared owner. The workspace is locked for safety; ask the owner to reinitialize it from the original Google account.");
   }
   if (manifest?.app !== "Ortho Logbook Shared Workspace" ||
-      Number(manifest?.protocolVersion) !== 1 ||
+      ![1, 2].includes(Number(manifest?.protocolVersion)) ||
+      (Number(manifest?.protocolVersion) >= 2 && !/^[0-9a-f]{64}$/i.test(String(manifest?.ownerPublicKey || ""))) ||
       String(manifest?.folderId || "") !== String(folderId) ||
       !String(manifest?.ownerEmail || "").trim() ||
       !String(manifest?.workspaceId || "").trim()) {
@@ -3446,10 +3449,45 @@ export async function initializeOrJoinSharedWorkspace(
       if (folderMeta?.capabilities?.canListChildren === false) {
         throw new Error("This Google account can see the folder but cannot read its contents. Ask the owner to grant Viewer or Editor access.");
       }
-      await saveSharedWorkspaceLocally(existing.manifest, folderMeta);
+      let manifest = existing.manifest;
+      const isOwner = normalizeDriveEmail(accountEmail) === normalizeDriveEmail(manifest.ownerEmail);
+      // Upgrade older metadata-based approval workspaces to signed owner
+      // decisions. Staff cannot perform this migration.
+      if (Number(manifest.protocolVersion) < 2 || !manifest.ownerPublicKey) {
+        if (!isOwner) {
+          throw new Error("The workspace needs a one-time security upgrade. Ask its owner to open Sync & Approval on the owner phone before joining.");
+        }
+        let keyPair: { publicKey: string; secretKey: string };
+        const savedKey = await storage.secureGet(SHARED_OWNER_SIGNING_KEY, "");
+        try {
+          const parsed = JSON.parse(String(savedKey || ""));
+          if (parsed?.publicKey && parsed?.secretKey) keyPair = parsed;
+          else throw new Error("missing key");
+        } catch {
+          keyPair = createSharedApprovalKeyPair();
+          const saved = await storage.secureSet(SHARED_OWNER_SIGNING_KEY, JSON.stringify(keyPair));
+          if (!saved) throw new Error("The owner signing key could not be stored securely on this phone.");
+        }
+        manifest = { ...manifest, protocolVersion: 2, ownerPublicKey: keyPair.publicKey, securityUpgradedAt: new Date().toISOString() };
+        const upgraded = await uploadContent(JSON.stringify(manifest), undefined, onProgress, SHARED_WORKSPACE_MANIFEST);
+        if (!upgraded?.id) throw new Error("The signed-approval security upgrade could not be uploaded.");
+        await ensureDriveFileInFolder(String(upgraded.id), folderId);
+        const check = await downloadDriveJsonValidated(String(upgraded.id), onProgress);
+        if (check?.protocolVersion !== 2 || check?.ownerPublicKey !== keyPair.publicKey) {
+          throw new Error("The signed-approval security upgrade failed verification.");
+        }
+      } else if (isOwner) {
+        const savedKey = await storage.secureGet(SHARED_OWNER_SIGNING_KEY, "");
+        let localPair: any = null;
+        try { localPair = JSON.parse(String(savedKey || "")); } catch {}
+        if (!localPair?.secretKey || localPair.publicKey !== manifest.ownerPublicKey) {
+          throw new Error("This owner phone does not have the private signing key for this workspace. Do not reset it; recover the original owner phone or create a new workspace.");
+        }
+      }
+      await saveSharedWorkspaceLocally(manifest, folderMeta);
       return {
-        ...existing.manifest,
-        isOwner: normalizeDriveEmail(accountEmail) === normalizeDriveEmail(existing.manifest.ownerEmail),
+        ...manifest,
+        isOwner,
         canWrite: folderMeta?.capabilities?.canAddChildren === true,
         joined: true,
       };
@@ -3486,12 +3524,16 @@ export async function initializeOrJoinSharedWorkspace(
     if (!hasCompleteMasterSnapshot(backup)) {
       throw new Error("The existing Drive backup is not a complete Ortho Logbook master. It was not replaced or deleted.");
     }
+    const keyPair = createSharedApprovalKeyPair();
+    const keySaved = await storage.secureSet(SHARED_OWNER_SIGNING_KEY, JSON.stringify(keyPair));
+    if (!keySaved) throw new Error("The owner approval signing key could not be stored securely. The workspace was not activated.");
     const manifest = {
       app: "Ortho Logbook Shared Workspace",
-      protocolVersion: 1,
+      protocolVersion: 2,
       workspaceId: "ortho-workspace-" + folderId,
       folderId,
       ownerEmail: normalizeDriveEmail(accountEmail),
+      ownerPublicKey: keyPair.publicKey,
       createdAt: new Date().toISOString(),
       approvalRequired: true,
       baselineFileId: String(master.id),
