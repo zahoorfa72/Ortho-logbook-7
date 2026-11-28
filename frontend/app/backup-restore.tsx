@@ -218,7 +218,7 @@ function SharedWorkspacePanel() {
                   <Text style={styles.hint}>The workspace owner must upgrade approval security from the owner phone before staff approvals can continue.</Text>
                 )
               ) : null}
-              {workspace.isOwner ? (
+              {workspace.isOwner && Number(workspace.protocolVersion) >= 2 ? (
                 <>
                   <Text style={styles.cardTitle}>Invite staff Google account</Text>
                   <TextInput value={inviteEmail} onChangeText={setInviteEmail} placeholder="staff@gmail.com" autoCapitalize="none" keyboardType="email-address" placeholderTextColor={colors.muted} style={styles.input} />
@@ -246,6 +246,8 @@ function SharedWorkspacePanel() {
                     </View>
                   )) : <Text style={styles.hint}>No change requests found.</Text>}
                 </>
+              ) : workspace.isOwner ? (
+                <Text style={styles.hint}>Upgrade owner approval security before inviting staff or reviewing requests.</Text>
               ) : (
                 <>
                   <Text style={styles.hint}>Staff changes are uploaded as approval requests. The app applies approved changes automatically after the owner approves.</Text>
