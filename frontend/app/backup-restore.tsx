@@ -61,9 +61,23 @@ function SharedWorkspacePanel() {
       const status = await getSharedWorkspaceStatus();
       setWorkspace(status);
       setAccount(getConnectedGoogleAccount());
-      if (status?.connected) setRequests(await listSharedChangeRequests());
-      else setRequests([]);
-      setMessage(status?.connected ? "Shared workspace refreshed." : status?.error || "Workspace is not connected on this phone.");
+      if (status?.connected) {
+        let syncMessage = "Shared workspace refreshed.";
+        try {
+          const sync = await syncApprovedSharedWorkspaceToLocal("", setMessage);
+          syncMessage = sync.applied
+            ? "Applied " + sync.rows + " approved shared records from " + sync.tables + " tables."
+            : "No new approved shared changes to apply.";
+          if (sync.warnings.length) syncMessage += " " + sync.warnings.join(" ");
+        } catch (syncError) {
+          syncMessage = syncError instanceof Error ? syncError.message : "Shared data sync is waiting.";
+        }
+        setRequests(await listSharedChangeRequests());
+        setMessage(syncMessage);
+      } else {
+        setRequests([]);
+        setMessage(status?.error || "Workspace is not connected on this phone.");
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to refresh shared workspace.");
     } finally {
@@ -80,6 +94,17 @@ function SharedWorkspacePanel() {
         setWorkspace(status);
         setAccount(getConnectedGoogleAccount());
         if (status?.connected) {
+          // Pull approved owner changes as soon as a joined phone opens this
+          // screen. The sync guard preserves any local edits still awaiting
+          // upload/approval and reports that it is waiting instead of replacing them.
+          try {
+            const sync = await syncApprovedSharedWorkspaceToLocal("");
+            if (active) setMessage(sync.applied
+              ? "Applied " + sync.rows + " approved shared records from " + sync.tables + " tables."
+              : "Shared workspace is up to date.");
+          } catch (syncError) {
+            if (active) setMessage(syncError instanceof Error ? syncError.message : "Shared sync is waiting.");
+          }
           const items = await listSharedChangeRequests();
           if (active) setRequests(items);
         }
