@@ -3359,6 +3359,20 @@ function makeSharedEventId(): string {
 function normalizeDriveEmail(value: unknown): string {
   return String(value || "").trim().toLowerCase();
 }
+function requireLocalAdministrator(action: string): void {
+  const userId = String((storage as any).secureGet ? "" : "");
+  // Local account identity is device-specific and never comes from Drive.
+  // The caller performs the asynchronous secure-store read before this check.
+}
+async function assertLocalAdministrator(action: string): Promise<void> {
+  const userId = String(await storage.secureGet("ortho_current_user", "") || "");
+  const localUser = userId ? db.getFirstSync<any>(
+    "SELECT id,role,disabled FROM users WHERE id=? LIMIT 1", [userId]
+  ) : null;
+  if (!localUser || Number(localUser.disabled || 0) === 1 || String(localUser.role || "") !== "admin") {
+    throw new Error("Only a logged-in local administrator can " + action + " for the shared workspace.");
+  }
+}
 async function listFilesInDriveFolder(folderId: string, nameFilter = ""): Promise<any[]> {
   const clauses = [
     "'" + escapeDriveQuery(folderId) + "' in parents",
@@ -3571,6 +3585,7 @@ export async function initializeOrJoinSharedWorkspace(
 
     const folderOwner = normalizeDriveEmail(folderMeta?.owners?.[0]?.emailAddress);
     const ownerEmail = folderOwner || normalizeDriveEmail(accountEmail);
+    if (ownerEmail === normalizeDriveEmail(accountEmail)) await assertLocalAdministrator("initialize the owner workspace");
     if (ownerEmail !== normalizeDriveEmail(accountEmail)) {
       throw new Error("The shared folder has no workspace manifest yet. Only its Google Drive owner (" + ownerEmail + ") can initialize the workspace. Ask that owner to open Sync & Approval and initialize it.");
     }
@@ -3668,6 +3683,7 @@ export async function inviteSharedWorkspaceMember(emailAddress: string): Promise
     if (!status?.connected || !status.isOwner) {
       throw new Error("Only the Google account that owns this shared workspace can invite users.");
     }
+    await assertLocalAdministrator("invite staff");
     const email = normalizeDriveEmail(emailAddress);
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("Enter a valid Google account email address.");
     if (email === normalizeDriveEmail(status.ownerEmail)) throw new Error("The workspace owner already has full access.");
@@ -3891,6 +3907,7 @@ export async function recordSharedChangeDecision(
     if (!status?.connected || !status.isOwner) {
       throw new Error("Only the shared workspace owner can approve or reject changes to main data.");
     }
+    await assertLocalAdministrator("approve or reject shared changes");
     const requests = await listSharedChangeRequests();
     const target = requests.find((item) => item.requestId === requestId);
     if (!target?.request || target.error) throw new Error("The selected change request is missing, unreadable, or failed Drive author verification.");
