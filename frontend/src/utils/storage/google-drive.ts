@@ -3312,7 +3312,7 @@ async function listFilesInDriveFolder(folderId: string, nameFilter = ""): Promis
     const response = await driveRequest(
       DRIVE_API + "?q=" + q + "&spaces=drive&pageSize=100&orderBy=modifiedTime%20asc" +
       "&includeItemsFromAllDrives=true&supportsAllDrives=true" +
-      "&fields=files(id,name,mimeType,modifiedTime,size,parents,owners(emailAddress)),nextPageToken" + tokenParam
+      "&fields=files(id,name,mimeType,modifiedTime,size,parents,owners(emailAddress),lastModifyingUser(emailAddress)),nextPageToken" + tokenParam
     );
     const data = await response.json();
     if (Array.isArray(data.files)) files.push(...data.files);
@@ -3370,6 +3370,16 @@ async function readSharedManifest(folderId: string): Promise<{ manifest: any; fi
   const file = await findSharedManifestFile(folderId);
   if (!file?.id) return null;
   const manifest = await downloadDriveJsonValidated(String(file.id));
+  // Fail closed: a Drive folder editor can edit files, so file contents alone
+  // are never proof that the workspace owner authored the manifest. Verify
+  // both the immutable Drive owner and the latest content editor.
+  const manifestOwner = normalizeDriveEmail(file?.owners?.[0]?.emailAddress);
+  const manifestEditor = normalizeDriveEmail(file?.lastModifyingUser?.emailAddress);
+  const declaredOwner = normalizeDriveEmail(manifest?.ownerEmail);
+  if (!manifestOwner || !manifestEditor || !declaredOwner ||
+      manifestOwner !== declaredOwner || manifestEditor !== declaredOwner) {
+    throw new Error("The shared workspace manifest was not authored and last modified by its declared owner. The workspace is locked for safety; ask the owner to reinitialize it from the original Google account.");
+  }
   if (manifest?.app !== "Ortho Logbook Shared Workspace" ||
       Number(manifest?.protocolVersion) !== 1 ||
       String(manifest?.folderId || "") !== String(folderId) ||
@@ -3562,8 +3572,14 @@ async function loadSharedRequestAndDecisionFiles(folderId: string): Promise<{ re
   for (const file of requestFiles.filter((f: any) => /\.orrequest$/i.test(String(f.name || "")))) {
     try {
       const value = await downloadDriveJsonValidated(String(file.id));
-      if (value?.app === "Ortho Logbook Change Request" && value?.requestId && value?.workspaceId) {
+      const fileOwner = normalizeDriveEmail(file?.owners?.[0]?.emailAddress);
+      const fileEditor = normalizeDriveEmail(file?.lastModifyingUser?.emailAddress);
+      const requesterEmail = normalizeDriveEmail(value?.requester?.googleEmail);
+      if (value?.app === "Ortho Logbook Change Request" && value?.requestId && value?.workspaceId &&
+          fileOwner && fileEditor && requesterEmail && fileOwner === requesterEmail && fileEditor === requesterEmail) {
         requests.push({ file, value });
+      } else {
+        requests.push({ file, value: null, error: "Request rejected: Drive file ownership or last editor does not match the submitting Google account." });
       }
     } catch (error: any) {
       requests.push({
@@ -3576,8 +3592,17 @@ async function loadSharedRequestAndDecisionFiles(folderId: string): Promise<{ re
   for (const file of decisionFiles.filter((f: any) => /\.ordecision$/i.test(String(f.name || "")))) {
     try {
       const value = await downloadDriveJsonValidated(String(file.id));
-      if (value?.app === "Ortho Logbook Decision" && value?.requestId && value?.workspaceId) {
+      const fileOwner = normalizeDriveEmail(file?.owners?.[0]?.emailAddress);
+      const fileEditor = normalizeDriveEmail(file?.lastModifyingUser?.emailAddress);
+      const declaredApprover = normalizeDriveEmail(value?.approvedBy);
+      // A writer can upload a fake decision or edit an owner's old decision.
+      // Google Drive's creator and latest-editor metadata must both identify
+      // the declared owner. Missing metadata is rejected, never trusted.
+      if (value?.app === "Ortho Logbook Decision" && value?.requestId && value?.workspaceId &&
+          declaredApprover && declaredApprover === fileOwner && declaredApprover === fileEditor) {
         decisions.push({ file, value });
+      } else {
+        console.warn("[shared-workspace] rejected decision without owner-authored Drive metadata", String(file.name || ""));
       }
     } catch (error) {
       console.warn("[shared-workspace] ignored unreadable decision file", error);
@@ -3712,7 +3737,7 @@ export async function recordSharedChangeDecision(
     }
     const requests = await listSharedChangeRequests();
     const target = requests.find((item) => item.requestId === requestId);
-    if (!target?.request || target.error) throw new Error("The selected change request is missing or unreadable.");
+    if (!target?.request || target.error) throw new Error("The selected change request is missing, unreadable, or failed Drive author verification.");
     if (target.status !== "pending") {
       throw new Error(target.status === "conflict"
         ? "This request has conflicting approval decisions. Resolve the conflict before proceeding."
