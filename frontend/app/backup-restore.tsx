@@ -12,7 +12,7 @@ import { queryClient } from "@/src/query-client";
 import { useAuth } from "@/src/auth/AuthContext";
 import { Segmented } from "@/src/components/Segmented";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
-import { backupIncrementalToGoogleDrive, createPreviousHalfYearArchiveToGoogleDrive, connectGoogleAccount, disconnectGoogleAccount, getConnectedGoogleAccount, restoreLatestFromGoogleDrive, listGoogleDriveBackups, restoreGoogleDriveBackupById, getSharedWorkspaceStatus, submitSharedChangeRequest } from "@/src/utils/storage/google-drive";
+import { backupIncrementalToGoogleDrive, createPreviousHalfYearArchiveToGoogleDrive, connectGoogleAccount, disconnectGoogleAccount, getConnectedGoogleAccount, restoreLatestFromGoogleDrive, listGoogleDriveBackups, restoreGoogleDriveBackupById, getSharedWorkspaceStatus, submitSharedChangeRequest, initializeOrJoinSharedWorkspace, inviteSharedWorkspaceMember, listSharedChangeRequests, recordSharedChangeDecision, syncApprovedSharedWorkspaceToLocal } from "@/src/utils/storage/google-drive";
 import { refreshAutomaticDriveBackup, triggerAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-backup";
 
  // Selective restore reads from the single complete Drive master snapshot.
@@ -44,6 +44,262 @@ import { refreshAutomaticDriveBackup, triggerAutomaticDriveBackup } from "@/src/
      changedTables: undefined,
    };
  }
+
+function SharedWorkspacePanel() {
+  const { colors } = useTheme();
+  const styles = useStyles();
+  const [account, setAccount] = useState<string | null>(getConnectedGoogleAccount());
+  const [workspace, setWorkspace] = useState<any | null>(null);
+  const [requests, setRequests] = useState<any[]>([]);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+
+  const refresh = async () => {
+    setBusy(true);
+    try {
+      const status = await getSharedWorkspaceStatus();
+      setWorkspace(status);
+      setAccount(getConnectedGoogleAccount());
+      if (status?.connected) {
+        let syncMessage = "Shared workspace refreshed.";
+        try {
+          const sync = await syncApprovedSharedWorkspaceToLocal("", setMessage);
+          syncMessage = sync.applied
+            ? "Applied " + sync.rows + " approved shared records from " + sync.tables + " tables."
+            : "No new approved shared changes to apply.";
+          if (sync.warnings.length) syncMessage += " " + sync.warnings.join(" ");
+        } catch (syncError) {
+          syncMessage = syncError instanceof Error ? syncError.message : "Shared data sync is waiting.";
+        }
+        setRequests(await listSharedChangeRequests());
+        setMessage(syncMessage);
+      } else {
+        setRequests([]);
+        setMessage(status?.error || "Workspace is not connected on this phone.");
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to refresh shared workspace.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const status = await getSharedWorkspaceStatus();
+        if (!active) return;
+        setWorkspace(status);
+        setAccount(getConnectedGoogleAccount());
+        if (status?.connected) {
+          // Pull approved owner changes as soon as a joined phone opens this
+          // screen. The sync guard preserves any local edits still awaiting
+          // upload/approval and reports that it is waiting instead of replacing them.
+          try {
+            const sync = await syncApprovedSharedWorkspaceToLocal("");
+            if (active) setMessage(sync.applied
+              ? "Applied " + sync.rows + " approved shared records from " + sync.tables + " tables."
+              : "Shared workspace is up to date.");
+          } catch (syncError) {
+            if (active) setMessage(syncError instanceof Error ? syncError.message : "Shared sync is waiting.");
+          }
+          const items = await listSharedChangeRequests();
+          if (active) setRequests(items);
+        }
+      } catch (error) {
+        if (active) setMessage(error instanceof Error ? error.message : "Unable to load shared workspace.");
+      }
+    })();
+    return () => { active = false; };
+  }, []);
+
+  const connect = async () => {
+    setBusy(true);
+    try {
+      const email = await connectGoogleAccount();
+      setAccount(email);
+      setMessage("Google account connected. Choose Create or Join below.");
+    } catch (error) {
+      Alert.alert("Google connection failed", error instanceof Error ? error.message : "Unable to connect Google.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const initialize = async (createIfMissing: boolean) => {
+    setBusy(true);
+    setMessage(createIfMissing ? "Creating or upgrading owner workspace…" : "Joining the shared workspace…");
+    try {
+      const result = await initializeOrJoinSharedWorkspace(createIfMissing, setMessage);
+      setWorkspace({ ...result, connected: true });
+      setMessage(result.isOwner ? "Owner workspace is ready." : "Joined shared workspace. Staff changes require owner approval.");
+      setRequests(await listSharedChangeRequests());
+    } catch (error) {
+      Alert.alert(createIfMissing ? "Workspace setup failed" : "Join failed", error instanceof Error ? error.message : "Unable to set up shared workspace.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const invite = async () => {
+    const email = inviteEmail.trim();
+    if (!email) {
+      Alert.alert("Email required", "Enter the staff member's Google account email address.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await inviteSharedWorkspaceMember(email);
+      setInviteEmail("");
+      Alert.alert("Invitation sent", email + " now has access to the shared Drive folder. They can join from their phone.");
+      await refresh();
+    } catch (error) {
+      Alert.alert("Invitation failed", error instanceof Error ? error.message : "Unable to invite this Google account.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const decide = async (requestId: string, decision: "approve" | "reject") => {
+    Alert.alert(
+      decision === "approve" ? "Approve shared changes?" : "Reject shared changes?",
+      decision === "approve"
+        ? "These changes will become part of the shared main data and sync to connected phones."
+        : "These changes will not enter shared main data.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: decision === "approve" ? "Approve" : "Reject",
+          style: decision === "reject" ? "destructive" : "default",
+          onPress: async () => {
+            setBusy(true);
+            try {
+              await recordSharedChangeDecision(requestId, decision);
+              if (decision === "approve") {
+                await syncApprovedSharedWorkspaceToLocal(String(await storage.secureGet("ortho_current_user", "") || ""), setMessage);
+              }
+              await refresh();
+              Alert.alert(decision === "approve" ? "Approved" : "Rejected", decision === "approve"
+                ? "Approved changes were applied to the owner phone. Other phones will reconcile them on their next sync."
+                : "The request was rejected.");
+            } catch (error) {
+              Alert.alert("Decision failed", error instanceof Error ? error.message : "Unable to record the owner decision.");
+            } finally {
+              setBusy(false);
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  return (
+    <View style={styles.card}>
+      <Text style={styles.cardTitle}>Shared Google Drive Workspace</Text>
+      <Text style={styles.cardSub}>
+        Use one owner phone as the shared master. Staff phones submit changes for approval; only owner-approved changes enter shared main data. Local user accounts and passwords stay on each phone.
+      </Text>
+      {!account ? (
+        <Pressable style={[styles.primaryButton, busy && styles.disabledButton]} onPress={connect} disabled={busy}>
+          {busy ? <ActivityIndicator color={colors.onBrandPrimary} /> : <Ionicons name="logo-google" size={18} color={colors.onBrandPrimary} />}
+          <Text style={styles.primaryText}>Connect Google Account</Text>
+        </Pressable>
+      ) : (
+        <>
+          <View style={styles.selectedBox}>
+            <Text style={styles.selectedTitle}>Connected Google account</Text>
+            <Text style={styles.fileName}>{account}</Text>
+          </View>
+          {!workspace?.connected ? (
+            <View style={{ gap: spacing.sm, marginTop: spacing.sm }}>
+              <Pressable style={[styles.primaryButton, busy && styles.disabledButton]} onPress={() => initialize(true)} disabled={busy}>
+                <Ionicons name="shield-checkmark-outline" size={18} color={colors.onBrandPrimary} />
+                <Text style={styles.primaryText}>Create / Upgrade Owner Workspace</Text>
+              </Pressable>
+              <Pressable style={[styles.secondaryButton, busy && styles.disabledButton]} onPress={() => initialize(false)} disabled={busy}>
+                <Ionicons name="people-outline" size={18} color={colors.onSurface} />
+                <Text style={styles.secondaryText}>Join Existing Shared Workspace</Text>
+              </Pressable>
+            </View>
+          ) : (
+            <>
+              <View style={styles.tipCard}>
+                <Ionicons name={workspace.isOwner ? "shield-checkmark-outline" : "people-outline"} size={20} color={colors.brandPrimary} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.selectedTitle}>{workspace.isOwner ? "Workspace owner" : "Staff phone"}</Text>
+                  <Text style={styles.fileInfo}>{workspace.workspaceId}</Text>
+                  <Text style={styles.hint}>{workspace.isOwner ? "You control approvals and shared main data." : "Your shared-data changes wait for owner approval."}</Text>
+                </View>
+              </View>
+              {Number(workspace.protocolVersion) < 2 ? (
+                workspace.isOwner ? (
+                  <Pressable style={[styles.primaryButton, busy && styles.disabledButton]} onPress={() => initialize(true)} disabled={busy}>
+                    <Ionicons name="shield-checkmark-outline" size={18} color={colors.onBrandPrimary} />
+                    <Text style={styles.primaryText}>Upgrade Owner Approval Security</Text>
+                  </Pressable>
+                ) : (
+                  <Text style={styles.hint}>The workspace owner must upgrade approval security from the owner phone before staff approvals can continue.</Text>
+                )
+              ) : null}
+              {workspace.isOwner && Number(workspace.protocolVersion) >= 2 ? (
+                <>
+                  <Text style={styles.cardTitle}>Invite staff Google account</Text>
+                  <TextInput value={inviteEmail} onChangeText={setInviteEmail} placeholder="staff@gmail.com" autoCapitalize="none" keyboardType="email-address" placeholderTextColor={colors.muted} style={styles.input} />
+                  <Pressable style={[styles.secondaryButton, busy && styles.disabledButton]} onPress={invite} disabled={busy}>
+                    <Ionicons name="person-add-outline" size={18} color={colors.onSurface} />
+                    <Text style={styles.secondaryText}>Invite Staff</Text>
+                  </Pressable>
+                  <Text style={styles.cardTitle}>Change requests ({requests.length})</Text>
+                  {requests.length ? requests.map((item) => (
+                    <View key={item.requestId} style={[styles.selectedBox, { marginTop: spacing.xs }]}>
+                      <Text style={styles.selectedTitle}>{item.requester?.name || item.requester?.googleEmail || "Staff user"}</Text>
+                      <Text style={styles.fileInfo}>{item.requester?.googleEmail || ""} · {item.requestId}</Text>
+                      <Text style={styles.hint}>Tables: {(item.tables || []).join(", ") || "No table details"} · Status: {item.status}</Text>
+                      {item.error ? <Text style={styles.hint}>{item.error}</Text> : null}
+                      {item.status === "pending" ? (
+                        <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.sm }}>
+                          <Pressable style={[styles.primaryButton, { flex: 1 }, busy && styles.disabledButton]} onPress={() => decide(item.requestId, "approve")} disabled={busy}>
+                            <Text style={styles.primaryText}>Approve</Text>
+                          </Pressable>
+                          <Pressable style={[styles.secondaryButton, { flex: 1 }, busy && styles.disabledButton]} onPress={() => decide(item.requestId, "reject")} disabled={busy}>
+                            <Text style={styles.secondaryText}>Reject</Text>
+                          </Pressable>
+                        </View>
+                      ) : null}
+                    </View>
+                  )) : <Text style={styles.hint}>No change requests found.</Text>}
+                </>
+              ) : workspace.isOwner ? (
+                <Text style={styles.hint}>Upgrade owner approval security before inviting staff or reviewing requests.</Text>
+              ) : (
+                <>
+                  <Text style={styles.hint}>Staff changes are uploaded as approval requests. The app applies approved changes automatically after the owner approves.</Text>
+                  <Text style={styles.cardTitle}>Your change requests</Text>
+                  {requests.filter((item) => String(item.requester?.googleEmail || "").toLowerCase() === String(account || "").toLowerCase()).length ? (
+                    requests.filter((item) => String(item.requester?.googleEmail || "").toLowerCase() === String(account || "").toLowerCase()).map((item) => (
+                      <View key={item.requestId} style={[styles.selectedBox, { marginTop: spacing.xs }]}>
+                        <Text style={styles.selectedTitle}>{item.requestId}</Text>
+                        <Text style={styles.fileInfo}>{item.requestedAt ? new Date(item.requestedAt).toLocaleString() : "Change request"}</Text>
+                        <Text style={styles.hint}>Status: {item.status} · Tables: {(item.tables || []).join(", ")}</Text>
+                      </View>
+                    ))
+                  ) : <Text style={styles.hint}>No requests have been submitted from this Google account yet.</Text>}
+                </>
+              )}
+              <Pressable style={[styles.secondaryButton, busy && styles.disabledButton, { marginTop: spacing.sm }]} onPress={refresh} disabled={busy}>
+                {busy ? <ActivityIndicator color={colors.onSurface} /> : <Ionicons name="refresh-outline" size={18} color={colors.onSurface} />}
+                <Text style={styles.secondaryText}>Refresh Workspace / Requests</Text>
+              </Pressable>
+            </>
+          )}
+        </>
+      )}
+      {message ? <Text style={styles.hint}>{message}</Text> : null}
+    </View>
+  );
+}
 
 export default function BackupRestoreScreen() {
   const { user } = useAuth();
@@ -502,14 +758,12 @@ export default function BackupRestoreScreen() {
           <Pressable onPress={() => router.back()} style={styles.headerBtn}>
             <Ionicons name="arrow-back" size={24} color={colors.onSurface} />
           </Pressable>
-          <Text style={styles.headerTitle}>Sync & Backup</Text>
+          <Text style={styles.headerTitle}>Shared Sync & Approval</Text>
           <View style={styles.headerBtn} />
         </View>
-        <View style={styles.center}>
-          <Ionicons name="lock-closed-outline" size={40} color={colors.muted} />
-          <Text style={styles.blockedTitle}>Administrator only</Text>
-          <Text style={styles.blockedSub}>Only the administrator can create or restore backups.</Text>
-        </View>
+        <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xl }}>
+          <SharedWorkspacePanel />
+        </ScrollView>
       </View>
     );
   }
@@ -528,6 +782,8 @@ export default function BackupRestoreScreen() {
         contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xl }}
         keyboardShouldPersistTaps="handled"
       >
+        <SharedWorkspacePanel />
+
         {lastRestoredBackup ? (
           <View style={styles.tipCard}>
             <Ionicons name="checkmark-circle-outline" size={20} color={colors.brandPrimary} />

@@ -8,6 +8,7 @@ import {
   restoreGoogleAccountSilently,
   getSharedWorkspaceStatus,
   submitSharedChangeRequest,
+  syncApprovedSharedWorkspaceToLocal,
 } from "@/src/utils/storage/google-drive";
 import { setDriveSyncState, setDriveSyncRefreshHandler } from "@/src/utils/storage/drive-sync-status";
 import { storage } from "@/src/utils/storage";
@@ -50,7 +51,11 @@ TaskManager.defineTask(BACKGROUND_SYNC_TASK, async ({ error }) => {
     // forcing a full audit of all patient PDFs every 15 minutes made ordinary
     // navigation feel frozen and repeatedly showed "Checking patient image PDF".
     // SQLite change events and the durable queue already record changed tables.
-    if (!pendingTables.size) return BackgroundTask.BackgroundTaskResult.Success;
+    if (!pendingTables.size) {
+      const shared = await getSharedWorkspaceStatus();
+      if (shared?.connected) await syncApprovedSharedWorkspaceToLocal(String(await storage.secureGet("ortho_current_user", "") || ""));
+      return BackgroundTask.BackgroundTaskResult.Success;
+    }
     const completed = await runBackup();
     return completed
       ? BackgroundTask.BackgroundTaskResult.Success
@@ -60,6 +65,14 @@ TaskManager.defineTask(BACKGROUND_SYNC_TASK, async ({ error }) => {
     return BackgroundTask.BackgroundTaskResult.Failed;
   }
 });
+
+async function reconcileApprovedSharedData() {
+  if (!getConnectedGoogleAccount()) await restoreGoogleAccountSilently();
+  const shared = await getSharedWorkspaceStatus();
+  if (shared?.connected) {
+    await syncApprovedSharedWorkspaceToLocal("");
+  }
+}
 
 async function registerBackgroundSyncTask() {
   if (backgroundTaskRegistered) return;
@@ -385,6 +398,14 @@ export function startAutomaticDriveBackup() {
     }
     await persistPendingTables();
     scheduleBackup();
+    // If this phone has no unsent local changes, reconcile owner-approved
+    // updates on startup as well; Android does not always emit a foreground
+    // transition when the sync worker is initialized.
+    if (!pendingTables.size) {
+      void reconcileApprovedSharedData().catch((error) =>
+        console.warn("[drive-auto-backup] startup shared reconciliation paused:", error)
+      );
+    }
   });
   const subscription = SQLite.addDatabaseChangeListener((event: any) => {
     const changedTable = tableMap[String(event?.tableName || "")];
@@ -402,6 +423,15 @@ export function startAutomaticDriveBackup() {
       if (state === "active" && pendingTables.size) {
         // Resume any changes retained while Android suspended the JS runtime.
         scheduleBackup();
+        return;
+      }
+      if (state === "active" && !pendingTables.size) {
+        // Reconcile approved owner changes when the phone returns online.
+        // The shared applier refuses to overwrite this phone while its own
+        // approval request is still pending.
+        void reconcileApprovedSharedData().catch((error) =>
+          console.warn("[drive-auto-backup] shared reconciliation paused:", error)
+        );
         return;
       }
       if (state === "background" || state === "inactive") {

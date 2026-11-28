@@ -1,0 +1,75 @@
+name: Validate Shared Drive Android Sync
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "frontend/src/utils/storage/google-drive.ts"
+      - "frontend/src/utils/storage/backup.ts"
+      - "frontend/src/utils/storage/drive-auto-backup.ts"
+      - "frontend/src/utils/storage/shared-approval-crypto.ts"
+      - "frontend/app/backup-restore.tsx"
+      - "frontend/scripts/test-shared-approval-crypto.cjs"
+      - ".github/workflows/validate-shared-drive-android.yml"
+
+concurrency:
+  group: shared-drive-android-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: TypeScript, signature tests and Android debug build
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      NDK_VERSION: "27.1.12297006"
+      ORG_GRADLE_PROJECT_reactNativeArchitectures: "arm64-v8a"
+      EXPO_PUBLIC_USE_RN_FETCH: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android NDK and CMake
+        run: |
+          set -euo pipefail
+          SDKMAN="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMAN" --licenses >/dev/null 2>&1 || true
+          "$SDKMAN" --install "ndk;${NDK_VERSION}" "cmake;3.22.1"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Install JavaScript dependencies
+        working-directory: frontend
+        run: yarn install --frozen-lockfile --ignore-scripts
+
+      - name: TypeScript validation
+        working-directory: frontend
+        run: npx tsc --noEmit
+
+      - name: Verify owner approval signatures
+        working-directory: frontend
+        run: node scripts/test-shared-approval-crypto.cjs
+
+      - name: Generate Android native project
+        working-directory: frontend
+        env:
+          CI: "1"
+          EXPO_NO_TELEMETRY: "1"
+        run: npx expo prebuild --platform android --no-install --non-interactive --clean
+
+      - name: Build Android debug APK
+        working-directory: frontend/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --stacktrace --no-daemon

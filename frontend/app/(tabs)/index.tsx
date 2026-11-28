@@ -1204,6 +1204,15 @@ export default function Logbook() {
               </Pressable>
             )}
             <Pressable
+              testID="shared-sync-button"
+              accessibilityLabel="Shared Sync and Approval"
+              onPress={() => router.push("/backup-restore")}
+              style={styles.iconBtn}
+              hitSlop={8}
+            >
+              <Ionicons name="cloud-outline" size={22} color={colors.onSurfaceSecondary} />
+            </Pressable>
+            <Pressable
               testID="report-problem-button"
               accessibilityLabel="Report a Problem"
               onPress={() => router.push("/report-problem")}

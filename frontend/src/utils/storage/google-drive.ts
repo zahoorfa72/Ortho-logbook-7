@@ -1,7 +1,8 @@
 import { GoogleSignin, statusCodes } from "@react-native-google-signin/google-signin";
+import { createSharedApprovalKeyPair, signSharedApprovalPayload, verifySharedApprovalPayload } from "@/src/utils/storage/shared-approval-crypto";
 import { NativeModules, Platform } from "react-native";
 import * as FileSystem from "expo-file-system/legacy";
-import { exportUnencryptedBackup, exportUnencryptedBackupData, exportIncrementalBackup, exportIncrementalBackupData, prepareIncrementalSnapshotCacheFromBackupData, commitIncrementalSnapshotCache, pruneBackupPhotoAssets, type BackupFilter } from "@/src/utils/storage/backup";
+import { exportUnencryptedBackup, exportUnencryptedBackupData, exportIncrementalBackup, exportIncrementalBackupData, prepareIncrementalSnapshotCacheFromBackupData, commitIncrementalSnapshotCache, pruneBackupPhotoAssets, applySharedWorkspaceBackup, type BackupFilter } from "@/src/utils/storage/backup";
 import { markBackupTaken } from "@/src/utils/backup-reminder";
 import { storage } from "@/src/utils/storage";
 import { db, initializeDatabase } from "@/src/db/database";
@@ -287,6 +288,8 @@ async function findBackupByName(name: string) {
 }
 
 async function writeHalfYearArchiveUnlocked(year: number, half: "H1" | "H2", onProgress?: (stage: string) => void, overwrite = false) {
+  await assertJoinedSharedWorkspaceBeforeDriveWrite();
+  await assertSharedWorkspaceOwnerForDirectWrite();
   if (!Number.isInteger(year) || year < 2000 || year > 2200) throw new Error("Choose a valid archive year.");
   const value = String(year) + "-" + half;
   const name = halfYearArchiveName(year, half);
@@ -1140,6 +1143,8 @@ async function uploadPatientPdf(archive: PatientImageArchive, folderId: string, 
 }
 export async function ensurePatientImagePdfOnDrive(patientId: string, onProgress?: (stage: string) => void): Promise<{ fileId: string; fileName: string; url: string }> {
   return queueDriveOperation(async () => {
+    await assertJoinedSharedWorkspaceBeforeDriveWrite();
+    await assertSharedWorkspaceOwnerForDirectWrite();
     const archive = await archivePatientImagesForPatient(patientId, onProgress);
     onProgress?.("Checking the Patient Image PDFs folder in Google Drive…");
     const folder = await getOrCreatePatientImagePdfFolder();
@@ -1224,6 +1229,15 @@ async function processPendingPatientPdfDeletes(onProgress?: (stage: string) => v
 export async function deletePatientImagePdfFromDrive(patientId: string): Promise<void> {
   const id = String(patientId || "").trim();
   if (!id) return;
+  // Staff deletions remain local until their patient deletion is approved.
+  // Never remove or replace the shared PDF before the owner accepts the request.
+  try {
+    await assertJoinedSharedWorkspaceBeforeDriveWrite();
+    await assertSharedWorkspaceOwnerForDirectWrite();
+  } catch {
+    await removePatientImageArchive(id);
+    return;
+  }
   await queuePatientPdfDeletion(id);
   try {
     await queueDriveOperation(async () => {
@@ -1240,6 +1254,8 @@ export async function uploadPatientImageArchivesToDrive(
   patientIds?: string[],
   verifyExisting = false,
 ): Promise<void> {
+  await assertJoinedSharedWorkspaceBeforeDriveWrite();
+  await assertSharedWorkspaceOwnerForDirectWrite();
   try {
     await processPendingPatientPdfDeletes(onProgress);
     const allArchives = await getLocalPatientImageArchives();
@@ -1985,11 +2001,41 @@ async function mergeLegacyIntoFirstMaster(localSnapshot: any, onProgress?: (stag
   return localSnapshot;
 }
 
+async function assertSharedWorkspaceOwnerForDirectWrite(): Promise<void> {
+  const status = await getSharedWorkspaceStatus();
+  if (status && !status.connected) {
+    throw new Error(status.error || "Shared Drive access could not be verified. Direct uploads are paused.");
+  }
+  if (status?.connected && !status.isOwner) {
+    throw new Error("Staff phones cannot write directly to shared main data. Submit the changes for owner approval instead.");
+  }
+}
+
+async function assertJoinedSharedWorkspaceBeforeDriveWrite(): Promise<void> {
+  if (await readSharedWorkspaceLocally()) return;
+  try {
+    const folder = await findAccessibleBackupFolder(false);
+    const remote = await readSharedManifest(String(folder.id));
+    if (remote) {
+      throw new Error("A shared Ortho Logbook workspace is available in this Google Drive account. Join or initialize it from Sync & Approval before uploading; direct backup is blocked to protect the shared master.");
+    }
+  } catch (error: any) {
+    const message = String(error?.message || error);
+    if (message.includes("A shared Ortho Logbook workspace is available")) throw error;
+    if (message.includes("was not found")) return;
+    // Ambiguous or unverifiable folders fail closed: never risk writing to a
+    // shared master when the app cannot determine whether this is a workspace.
+    throw new Error("Google Drive backup is paused because the shared backup folder could not be verified: " + message);
+  }
+}
+
 async function backupToGoogleDriveUnlocked(
   _password?: string,
   filter: BackupFilter = { type: "all" },
   options: DriveBackupOptions = {},
 ) {
+  await assertJoinedSharedWorkspaceBeforeDriveWrite();
+  await assertSharedWorkspaceOwnerForDirectWrite();
   options.onProgress?.("Preparing backup data…");
   const isMasterBackup = filter.type === "all";
   if (isMasterBackup) {
@@ -2041,6 +2087,7 @@ async function backupToGoogleDriveUnlocked(
       delete backupData.fullTables;
       pruneBackupPhotoAssets(backupData);
     }
+    if (await isSharedWorkspaceEnabled()) sanitizeSharedWorkspaceSnapshot(backupData);
     pruneBackupPhotoAssets(backupData);
     if (!FileSystem.cacheDirectory) throw new Error("Device cache storage is unavailable for the Drive backup.");
     stagedFileUri = FileSystem.cacheDirectory + "ortho-drive-stream-" + Date.now() + ".json";
@@ -2081,6 +2128,16 @@ async function backupToGoogleDriveUnlocked(
       delete initialMaster.fullTables;
       pruneBackupPhotoAssets(initialMaster);
       backupText = JSON.stringify(initialMaster);
+    }
+  }
+
+  if (!stagedFileUri && await isSharedWorkspaceEnabled()) {
+    try {
+      const parsedSharedBackup = parseDownloadedBackup(backupText as string);
+      sanitizeSharedWorkspaceSnapshot(parsedSharedBackup);
+      backupText = JSON.stringify(parsedSharedBackup);
+    } catch (error: any) {
+      throw new Error("The shared backup could not be sanitized safely: " + String(error?.message || error));
     }
   }
 
@@ -2741,6 +2798,8 @@ async function archiveCompletedMonths(onProgress?: (stage: string) => void) {
 }
 
 async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], onProgress?: (stage: string) => void, verifyPatientPdfs = false) {
+  await assertJoinedSharedWorkspaceBeforeDriveWrite();
+  await assertSharedWorkspaceOwnerForDirectWrite();
   onProgress?.("Checking whether saved records changed…");
   // Export the row-level delta first. This identifies the exact patient IDs
   // changed since the last confirmed snapshot, so routine edits do not scan
@@ -2765,6 +2824,23 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
   } else {
     const backupText = await exportIncrementalBackup(effectiveChangedTables, onProgress, baselineKey);
     delta = JSON.parse(backupText);
+  }
+
+  const sharedWorkspaceActive = await isSharedWorkspaceEnabled();
+  if (sharedWorkspaceActive) {
+    delete delta.users;
+    if (Array.isArray(delta.changedTables)) delta.changedTables = delta.changedTables.filter((name: string) => name !== "users");
+    if (delta.deletedIds && typeof delta.deletedIds === "object") delete delta.deletedIds.users;
+    if (delta.appSettings && typeof delta.appSettings === "object") {
+      const safe = { ...delta.appSettings };
+      for (const key of ["googleOAuthClientId", "googleCloudProjectId", "googleAccountEmail", "labOcrApiKey"]) delete safe[key];
+      if (safe.asyncStorageSettings && typeof safe.asyncStorageSettings === "object") {
+        safe.asyncStorageSettings = Object.fromEntries(Object.entries(safe.asyncStorageSettings).filter(([key]) =>
+          !/(token|secret|password|credential|api.?key|oauth|google.?account|private.?key|signing.?key|patient.?image.?archives|local[_-]?uri|file[_-]?uri)/i.test(String(key))
+        ));
+      }
+      delta.appSettings = safe;
+    }
   }
 
   // Process only patient rows present in this actual delta. A full-table
@@ -2866,6 +2942,12 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
   if (!master || master.app !== "Ortho Logbook") {
     throw new Error("The current six-month master is unreadable. No change was marked as backed up.");
   }
+  const sharedSecurityBefore = sharedWorkspaceActive
+    ? JSON.stringify({ users: master.users, appSettings: master.appSettings })
+    : "";
+  if (sharedWorkspaceActive) sanitizeSharedWorkspaceSnapshot(master);
+  const sharedSanitizationNeeded = sharedWorkspaceActive &&
+    sharedSecurityBefore !== JSON.stringify({ users: master.users, appSettings: master.appSettings });
 
   // Compare settings semantically with sorted object keys. Settings are stored
   // in AsyncStorage, so their key enumeration order can differ between runs;
@@ -2898,7 +2980,8 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
     ["patients", "patients"], ["procedures", "procedures"],
     ["inventoryCategories", "inventory_categories"], ["inventory", "inventory"],
     ["patientImplants", "patient_implants"], ["patientCustomFields", "patient_custom_fields"],
-    ["implantRecords", "implant_records"], ["expenses", "expenses"], ["users", "users"],
+    ["implantRecords", "implant_records"], ["expenses", "expenses"],
+    ...(!sharedWorkspaceActive ? [["users", "users"] as [string, string]] : []),
     ["patientHistory", "patient_history"], ["inventoryMovements", "inventory_movements"],
     ["inventoryPurchaseReceipts", "inventory_purchase_receipts"], ["stockReceipts", "stock_receipts"],
     ["trash", "deleted_records"],
@@ -2922,6 +3005,7 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
       throw new Error("The full local backup failed its all-table completeness check. The existing Drive master was not changed.");
     }
     const repairedMaster = mergeFullBackupSnapshots(master, completeLocal);
+    if (sharedWorkspaceActive) sanitizeSharedWorkspaceSnapshot(repairedMaster);
     if (!hasCompleteMasterSnapshot(repairedMaster)) {
       throw new Error("The repaired master still lacks required tables or settings. The existing Drive backup was not changed.");
     }
@@ -2946,7 +3030,7 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
   // Only report "up to date" after the master has passed the completeness audit.
   // This repairs older partial uploads even when the local delta cache says no
   // rows changed, while healthy no-op checks still avoid an upload.
-  if (!hasActualChanges && !migrationNeeded) {
+  if (!hasActualChanges && !migrationNeeded && !sharedSanitizationNeeded) {
     await commitIncrementalSnapshotCache(baselineKey);
     return { skipped: true, completedAt: new Date().toISOString(), name: "No changes", accountEmail: getConnectedGoogleAccount() };
   }
@@ -2964,6 +3048,7 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
   }
   const allChanges = legacyJournal ? mergeIncrementalPayloads(legacyJournal, delta) : delta;
   applyIncrementalToMaster(master, allChanges, allChanges._rowDelta !== true);
+  if (sharedWorkspaceActive) sanitizeSharedWorkspaceSnapshot(master);
   if (!hasCompleteMasterSnapshot(master)) {
     throw new Error("The incremental update did not produce a complete master backup. The previous Drive master was not overwritten.");
   }
@@ -3281,9 +3366,32 @@ export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) 
 // multi-device read/modify/write races on one shared master backup.
 // -----------------------------------------------------------------------------
 const SHARED_WORKSPACE_KEY = "ortho_shared_workspace_v1";
+const SHARED_OWNER_SIGNING_KEY = "ortho_shared_owner_signing_key_v1";
 const SHARED_WORKSPACE_MANIFEST = "Ortho Logbook Shared Workspace.json";
 const SHARED_REQUEST_PREFIX = "Ortho Logbook Change Request ";
 const SHARED_DECISION_PREFIX = "Ortho Logbook Decision ";
+function sanitizeSharedWorkspaceSnapshot(snapshot: any): any {
+  if (!snapshot || typeof snapshot !== "object") throw new Error("Invalid shared workspace snapshot.");
+  // Password hashes, recovery codes, role assignments and local account IDs
+  // must never be distributed to Drive editors or other phones.
+  snapshot.users = [];
+  if (snapshot.appSettings && typeof snapshot.appSettings === "object") {
+    const settings = { ...snapshot.appSettings };
+    for (const key of ["googleOAuthClientId", "googleCloudProjectId", "googleAccountEmail", "labOcrApiKey"]) {
+      delete settings[key];
+    }
+    if (settings.asyncStorageSettings && typeof settings.asyncStorageSettings === "object") {
+      settings.asyncStorageSettings = Object.fromEntries(
+        Object.entries(settings.asyncStorageSettings).filter(([key]) =>
+          !/(token|secret|password|credential|api.?key|oauth|google.?account|private.?key|signing.?key|patient.?image.?archives|local[_-]?uri|file[_-]?uri)/i.test(String(key))
+        )
+      );
+    }
+    snapshot.appSettings = settings;
+  }
+  return snapshot;
+}
+
 const SHARED_ALLOWED_TABLES = new Set([
   "patients", "procedures", "inventoryCategories", "inventory", "patientImplants",
   "patientCustomFields", "implantRecords", "expenses", "patientHistory",
@@ -3297,6 +3405,15 @@ function makeSharedEventId(): string {
 }
 function normalizeDriveEmail(value: unknown): string {
   return String(value || "").trim().toLowerCase();
+}
+async function assertLocalAdministrator(action: string): Promise<void> {
+  const userId = String(await storage.secureGet("ortho_current_user", "") || "");
+  const localUser = userId ? db.getFirstSync<any>(
+    "SELECT id,role,disabled FROM users WHERE id=? LIMIT 1", [userId]
+  ) : null;
+  if (!localUser || Number(localUser.disabled || 0) === 1 || String(localUser.role || "") !== "admin") {
+    throw new Error("Only a logged-in local administrator can " + action + " for the shared workspace.");
+  }
 }
 async function listFilesInDriveFolder(folderId: string, nameFilter = ""): Promise<any[]> {
   const clauses = [
@@ -3353,6 +3470,49 @@ async function findAccessibleBackupFolder(createIfMissing: boolean): Promise<any
   }
   return await getOrCreateBackupFolder();
 }
+async function getOrCreatePrivateBackupArchiveFolder(): Promise<any> {
+  const name = "Ortho Logbook Private Backups";
+  const q = encodeURIComponent("name = '" + escapeDriveQuery(name) + "' and mimeType = '" + DRIVE_FOLDER_MIME + "' and trashed = false");
+  const response = await driveRequest(DRIVE_API + "?q=" + q + "&spaces=drive&pageSize=100&fields=files(id,name,mimeType,owners(emailAddress))");
+  const data = await response.json();
+  const folders = Array.isArray(data.files) ? data.files.filter((item: any) => item?.id) : [];
+  const ownerEmail = normalizeDriveEmail(getConnectedGoogleAccount());
+  const owned = folders.filter((item: any) =>
+    (Array.isArray(item.owners) ? item.owners : []).some((owner: any) => normalizeDriveEmail(owner?.emailAddress) === ownerEmail)
+  );
+  if (owned.length === 1) return owned[0];
+  if (owned.length > 1) throw new Error("More than one private Ortho Logbook backup folder exists. Resolve the duplicate folders before enabling staff access.");
+  const created = await driveRequest(DRIVE_API + "?fields=id,name,mimeType", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, mimeType: DRIVE_FOLDER_MIME }),
+  });
+  const folder = await created.json();
+  if (!folder?.id) throw new Error("Could not create a private folder for older backup archives.");
+  return folder;
+}
+async function moveLegacyBackupArchivesOutOfSharedFolder(folderId: string, keepFileId: string): Promise<number> {
+  const files = await listFilesInDriveFolder(folderId, "name contains 'Ortho Logbook Backup'");
+  const oldBackups = files.filter((file: any) =>
+    String(file.id) !== keepFileId && /Ortho Logbook Backup.*\.orbackup$/i.test(String(file.name || ""))
+  );
+  if (!oldBackups.length) return 0;
+  const privateFolder = await getOrCreatePrivateBackupArchiveFolder();
+  let moved = 0;
+  for (const file of oldBackups) {
+    const parents = Array.isArray(file.parents) ? file.parents.map(String) : [folderId];
+    const removeParents = parents.includes(folderId) ? "&removeParents=" + encodeURIComponent(folderId) : "";
+    await driveRequest(
+      DRIVE_API + "/" + encodeURIComponent(String(file.id)) +
+      "?addParents=" + encodeURIComponent(String(privateFolder.id)) + removeParents +
+      "&supportsAllDrives=true&fields=id,name,parents",
+      { method: "PATCH" }
+    );
+    moved += 1;
+  }
+  return moved;
+}
+
 async function getWorkspaceFolderMetadata(folderId: string): Promise<any> {
   const response = await driveRequest(
     DRIVE_API + "/" + encodeURIComponent(folderId) +
@@ -3381,7 +3541,8 @@ async function readSharedManifest(folderId: string): Promise<{ manifest: any; fi
     throw new Error("The shared workspace manifest was not authored and last modified by its declared owner. The workspace is locked for safety; ask the owner to reinitialize it from the original Google account.");
   }
   if (manifest?.app !== "Ortho Logbook Shared Workspace" ||
-      Number(manifest?.protocolVersion) !== 1 ||
+      ![1, 2].includes(Number(manifest?.protocolVersion)) ||
+      (Number(manifest?.protocolVersion) >= 2 && !/^[0-9a-f]{64}$/i.test(String(manifest?.ownerPublicKey || ""))) ||
       String(manifest?.folderId || "") !== String(folderId) ||
       !String(manifest?.ownerEmail || "").trim() ||
       !String(manifest?.workspaceId || "").trim()) {
@@ -3446,10 +3607,64 @@ export async function initializeOrJoinSharedWorkspace(
       if (folderMeta?.capabilities?.canListChildren === false) {
         throw new Error("This Google account can see the folder but cannot read its contents. Ask the owner to grant Viewer or Editor access.");
       }
-      await saveSharedWorkspaceLocally(existing.manifest, folderMeta);
+      let manifest = existing.manifest;
+      const isOwner = normalizeDriveEmail(accountEmail) === normalizeDriveEmail(manifest.ownerEmail);
+      if (isOwner) await assertLocalAdministrator("manage the owner workspace");
+      // Upgrade older metadata-based approval workspaces to signed owner
+      // decisions. Staff cannot perform this migration.
+      if (Number(manifest.protocolVersion) < 2 || !manifest.ownerPublicKey) {
+        if (!isOwner) {
+          throw new Error("The workspace needs a one-time security upgrade. Ask its owner to open Sync & Approval on the owner phone before joining.");
+        }
+        let keyPair: { publicKey: string; secretKey: string };
+        const savedKey = await storage.secureGet(SHARED_OWNER_SIGNING_KEY, "");
+        try {
+          const parsed = JSON.parse(String(savedKey || ""));
+          if (parsed?.publicKey && parsed?.secretKey) keyPair = parsed;
+          else throw new Error("missing key");
+        } catch {
+          keyPair = await createSharedApprovalKeyPair();
+          const saved = await storage.secureSet(SHARED_OWNER_SIGNING_KEY, JSON.stringify(keyPair));
+          if (!saved) throw new Error("The owner signing key could not be stored securely on this phone.");
+        }
+        manifest = { ...manifest, protocolVersion: 2, ownerPublicKey: keyPair.publicKey, securityUpgradedAt: new Date().toISOString() };
+        const upgraded = await uploadContent(JSON.stringify(manifest), undefined, onProgress, SHARED_WORKSPACE_MANIFEST);
+        if (!upgraded?.id) throw new Error("The signed-approval security upgrade could not be uploaded.");
+        await ensureDriveFileInFolder(String(upgraded.id), folderId);
+        const check = await downloadDriveJsonValidated(String(upgraded.id), onProgress);
+        if (check?.protocolVersion !== 2 || check?.ownerPublicKey !== keyPair.publicKey) {
+          throw new Error("The signed-approval security upgrade failed verification.");
+        }
+      } else if (isOwner) {
+        const savedKey = await storage.secureGet(SHARED_OWNER_SIGNING_KEY, "");
+        let localPair: any = null;
+        try { localPair = JSON.parse(String(savedKey || "")); } catch {}
+        if (!localPair?.secretKey || localPair.publicKey !== manifest.ownerPublicKey) {
+          throw new Error("This owner phone does not have the private signing key for this workspace. Do not reset it; recover the original owner phone or create a new workspace.");
+        }
+      }
+      if (isOwner) {
+        const currentMaster = await findWorkspaceMasterFile(folderId);
+        if (!currentMaster?.id) throw new Error("The shared master is missing; the owner must restore a verified baseline before inviting staff.");
+        const currentSnapshot = await downloadDriveJsonValidated(String(currentMaster.id), onProgress);
+        const beforeSecurity = JSON.stringify({ users: currentSnapshot?.users, appSettings: currentSnapshot?.appSettings });
+        sanitizeSharedWorkspaceSnapshot(currentSnapshot);
+        if (beforeSecurity !== JSON.stringify({ users: currentSnapshot.users, appSettings: currentSnapshot.appSettings })) {
+          const safeUpload = await uploadContent(JSON.stringify(currentSnapshot), String(currentMaster.id), onProgress, String(currentMaster.name || BACKUP_NAME));
+          if (!safeUpload?.id || String(safeUpload.id) !== String(currentMaster.id)) {
+            throw new Error("The shared master could not be sanitized to keep local credentials private. No staff invitations or approvals are enabled.");
+          }
+          const verifiedSafe = await downloadDriveJsonValidated(String(currentMaster.id), onProgress);
+          if (!hasCompleteMasterSnapshot(verifiedSafe) || (Array.isArray(verifiedSafe.users) && verifiedSafe.users.length)) {
+            throw new Error("The shared master still contains local account data after sanitization. Shared access remains blocked.");
+          }
+        }
+        await moveLegacyBackupArchivesOutOfSharedFolder(folderId, String(currentMaster.id));
+      }
+      await saveSharedWorkspaceLocally(manifest, folderMeta);
       return {
-        ...existing.manifest,
-        isOwner: normalizeDriveEmail(accountEmail) === normalizeDriveEmail(existing.manifest.ownerEmail),
+        ...manifest,
+        isOwner,
         canWrite: folderMeta?.capabilities?.canAddChildren === true,
         joined: true,
       };
@@ -3457,6 +3672,7 @@ export async function initializeOrJoinSharedWorkspace(
 
     const folderOwner = normalizeDriveEmail(folderMeta?.owners?.[0]?.emailAddress);
     const ownerEmail = folderOwner || normalizeDriveEmail(accountEmail);
+    if (ownerEmail === normalizeDriveEmail(accountEmail)) await assertLocalAdministrator("initialize the owner workspace");
     if (ownerEmail !== normalizeDriveEmail(accountEmail)) {
       throw new Error("The shared folder has no workspace manifest yet. Only its Google Drive owner (" + ownerEmail + ") can initialize the workspace. Ask that owner to open Sync & Approval and initialize it.");
     }
@@ -3486,12 +3702,29 @@ export async function initializeOrJoinSharedWorkspace(
     if (!hasCompleteMasterSnapshot(backup)) {
       throw new Error("The existing Drive backup is not a complete Ortho Logbook master. It was not replaced or deleted.");
     }
+    const beforeSecurity = JSON.stringify({ users: backup.users, appSettings: backup.appSettings });
+    sanitizeSharedWorkspaceSnapshot(backup);
+    if (beforeSecurity !== JSON.stringify({ users: backup.users, appSettings: backup.appSettings })) {
+      const safeUpload = await uploadContent(JSON.stringify(backup), String(master.id), onProgress, String(master.name || BACKUP_NAME));
+      if (!safeUpload?.id || String(safeUpload.id) !== String(master.id)) {
+        throw new Error("The initial shared master could not be sanitized. The workspace was not activated.");
+      }
+      const verifiedSafe = await downloadDriveJsonValidated(String(master.id), onProgress);
+      if (!hasCompleteMasterSnapshot(verifiedSafe) || (Array.isArray(verifiedSafe.users) && verifiedSafe.users.length)) {
+        throw new Error("The initial shared master still contains local account records. The workspace was not activated.");
+      }
+    }
+    await moveLegacyBackupArchivesOutOfSharedFolder(folderId, String(master.id));
+    const keyPair = await createSharedApprovalKeyPair();
+    const keySaved = await storage.secureSet(SHARED_OWNER_SIGNING_KEY, JSON.stringify(keyPair));
+    if (!keySaved) throw new Error("The owner approval signing key could not be stored securely. The workspace was not activated.");
     const manifest = {
       app: "Ortho Logbook Shared Workspace",
-      protocolVersion: 1,
+      protocolVersion: 2,
       workspaceId: "ortho-workspace-" + folderId,
       folderId,
       ownerEmail: normalizeDriveEmail(accountEmail),
+      ownerPublicKey: keyPair.publicKey,
       createdAt: new Date().toISOString(),
       approvalRequired: true,
       baselineFileId: String(master.id),
@@ -3538,6 +3771,7 @@ export async function inviteSharedWorkspaceMember(emailAddress: string): Promise
     if (!status?.connected || !status.isOwner) {
       throw new Error("Only the Google account that owns this shared workspace can invite users.");
     }
+    await assertLocalAdministrator("invite staff");
     const email = normalizeDriveEmail(emailAddress);
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("Enter a valid Google account email address.");
     if (email === normalizeDriveEmail(status.ownerEmail)) throw new Error("The workspace owner already has full access.");
@@ -3567,7 +3801,21 @@ export async function inviteSharedWorkspaceMember(emailAddress: string): Promise
     );
   });
 }
+function sharedDecisionSignedPayload(value: any): any {
+  const payload: any = {
+    app: "Ortho Logbook Decision",
+    protocolVersion: Number(value?.protocolVersion),
+    workspaceId: String(value?.workspaceId || ""),
+    requestId: String(value?.requestId || ""),
+    decision: String(value?.decision || ""),
+    approvedBy: normalizeDriveEmail(value?.approvedBy),
+    approvedAt: String(value?.approvedAt || ""),
+  };
+  if (Object.prototype.hasOwnProperty.call(value || {}, "delta")) payload.delta = value.delta;
+  return payload;
+}
 async function loadSharedRequestAndDecisionFiles(folderId: string): Promise<{ requests: any[]; decisions: any[] }> {
+  const remoteManifest = (await readSharedManifest(folderId))?.manifest;
   const [requestFiles, decisionFiles] = await Promise.all([
     listFilesInDriveFolder(folderId, "name contains 'Ortho Logbook Change Request'"),
     listFilesInDriveFolder(folderId, "name contains 'Ortho Logbook Decision'"),
@@ -3603,8 +3851,13 @@ async function loadSharedRequestAndDecisionFiles(folderId: string): Promise<{ re
       // A writer can upload a fake decision or edit an owner's old decision.
       // Google Drive's creator and latest-editor metadata must both identify
       // the declared owner. Missing metadata is rejected, never trusted.
-      if (value?.app === "Ortho Logbook Decision" && value?.requestId && value?.workspaceId &&
-          declaredApprover && declaredApprover === fileOwner && declaredApprover === fileEditor) {
+      const signedPayload = sharedDecisionSignedPayload(value);
+      const validSignature = Number(remoteManifest?.protocolVersion) >= 2 &&
+        String(remoteManifest?.ownerEmail || "").toLowerCase() === declaredApprover &&
+        verifySharedApprovalPayload(signedPayload, String(value?.signature || ""), String(remoteManifest?.ownerPublicKey || ""));
+      if (value?.app === "Ortho Logbook Decision" && Number(value?.protocolVersion) === 2 &&
+          value?.requestId && value?.workspaceId && declaredApprover &&
+          declaredApprover === fileOwner && declaredApprover === fileEditor && validSignature) {
         decisions.push({ file, value });
       } else {
         console.warn("[shared-workspace] rejected decision without owner-authored Drive metadata", String(file.name || ""));
@@ -3697,7 +3950,7 @@ export async function submitSharedChangeRequest(
       if (safeSettings.asyncStorageSettings && typeof safeSettings.asyncStorageSettings === "object") {
         safeSettings.asyncStorageSettings = Object.fromEntries(
           Object.entries(safeSettings.asyncStorageSettings).filter(([key]) =>
-            !/(token|secret|password|credential|api.?key|oauth|google.?account)/i.test(String(key))
+            !/(token|secret|password|credential|api.?key|oauth|google.?account|patient.?image.?archives|local[_-]?uri|file[_-]?uri)/i.test(String(key))
           )
         );
       }
@@ -3742,6 +3995,7 @@ export async function recordSharedChangeDecision(
     if (!status?.connected || !status.isOwner) {
       throw new Error("Only the shared workspace owner can approve or reject changes to main data.");
     }
+    await assertLocalAdministrator("approve or reject shared changes");
     const requests = await listSharedChangeRequests();
     const target = requests.find((item) => item.requestId === requestId);
     if (!target?.request || target.error) throw new Error("The selected change request is missing, unreadable, or failed Drive author verification.");
@@ -3750,23 +4004,35 @@ export async function recordSharedChangeDecision(
         ? "This request has conflicting approval decisions. Resolve the conflict before proceeding."
         : "This request has already been decided.");
     }
-    const event = {
+    const signingKeyRaw = await storage.secureGet(SHARED_OWNER_SIGNING_KEY, "");
+    let signingKey: any = null;
+    try { signingKey = JSON.parse(String(signingKeyRaw || "")); } catch {}
+    if (!signingKey?.secretKey || signingKey.publicKey !== status.ownerPublicKey) {
+      throw new Error("This phone does not hold the verified owner signing key. The approval was not written.");
+    }
+    const signedPayload: any = {
       app: "Ortho Logbook Decision",
-      protocolVersion: 1,
+      protocolVersion: 2,
       workspaceId: status.workspaceId,
       requestId,
       decision,
       approvedBy: normalizeDriveEmail(getConnectedGoogleAccount()),
       approvedAt: new Date().toISOString(),
-      delta: decision === "approve" ? target.request.delta : undefined,
+    };
+    if (decision === "approve") signedPayload.delta = target.request.delta;
+    const event = {
+      ...signedPayload,
+      signature: signSharedApprovalPayload(signedPayload, signingKey.secretKey),
     };
     const fileName = SHARED_DECISION_PREFIX + requestId + " " + decision + " " + makeSharedEventId() + ".ordecision";
     const uploaded = await uploadContent(JSON.stringify(event), undefined, undefined, fileName);
     if (!uploaded?.id) throw new Error("Google Drive did not confirm the decision event. The request remains pending; refresh and retry.");
     await ensureDriveFileInFolder(String(uploaded.id), String(status.folderId));
     const verified = await downloadDriveJsonValidated(String(uploaded.id));
-    if (verified?.requestId !== requestId || verified?.decision !== decision || verified?.workspaceId !== status.workspaceId) {
-      throw new Error("The decision event could not be verified. Refresh the request list before trying again.");
+    if (verified?.requestId !== requestId || verified?.decision !== decision ||
+        verified?.workspaceId !== status.workspaceId || Number(verified?.protocolVersion) !== 2 ||
+        !verifySharedApprovalPayload(sharedDecisionSignedPayload(verified), String(verified?.signature || ""), String(status.ownerPublicKey || ""))) {
+      throw new Error("The signed decision event could not be verified. Refresh the request list before trying again.");
     }
   });
 }
@@ -3833,8 +4099,9 @@ export async function getApprovedSharedWorkspaceBackup(
       .slice()
       .sort((a, b) => Date.parse(String(a.approvedAt || "")) - Date.parse(String(b.approvedAt || "")))[0];
     const request = requestMap.get(id);
-    if (!request || !event.delta || request.requestId !== event.requestId) {
-      warnings.push("Approved change request " + id + " could not be matched to its original request.");
+    if (!request || !event.delta || request.requestId !== event.requestId ||
+        JSON.stringify(request.delta) !== JSON.stringify(event.delta)) {
+      warnings.push("Approved change request " + id + " could not be matched to its exact original payload.");
       continue;
     }
     if (!Array.isArray(event.delta.changedTables) ||
@@ -3878,4 +4145,78 @@ export async function markSharedWorkspaceSnapshotApplied(backup: any): Promise<v
   }
   await prepareIncrementalSnapshotCacheFromBackupData("", backup);
   await commitIncrementalSnapshotCache();
+}
+
+
+/**
+ * Pull owner-approved shared changes and apply them to this phone's shared
+ * tables. The account-safe applier intentionally leaves users and device
+ * authentication settings untouched.
+ */
+export async function syncApprovedSharedWorkspaceToLocal(
+  activeLocalUserId = "",
+  onProgress?: (stage: string) => void,
+): Promise<{ applied: boolean; approvedEvents: number; tables: number; rows: number; warnings: string[] }> {
+  return queueDriveOperation(async () => {
+    // Never replace shared tables while this phone has unsubmitted local edits.
+    // The queue survives app restarts, so this guard also protects background sync.
+    const pendingRaw = await storage.getItem<string>("ortho_drive_pending_tables_v1", "");
+    let pendingTables: any[] = [];
+    try {
+      const parsedPending = typeof pendingRaw === "string" ? JSON.parse(pendingRaw) : pendingRaw;
+      if (Array.isArray(parsedPending)) pendingTables = parsedPending;
+    } catch {}
+    const sharedPending = pendingTables.filter((name) => SHARED_ALLOWED_TABLES.has(String(name)));
+    if (sharedPending.length) {
+      throw new Error("Shared sync is paused because this phone has local changes waiting to upload (" + sharedPending.join(", ") + "). Submit those changes first; no local records were replaced.");
+    }
+    const snapshot = await getApprovedSharedWorkspaceBackup(activeLocalUserId, onProgress);
+    const snapshotHash = await backupContentHash(snapshot.backupText, onProgress);
+    const previousHash = String(await storage.secureGet("ortho_shared_workspace_last_applied_hash_v1", "") || "");
+    if (previousHash && previousHash === snapshotHash) {
+      return {
+        applied: false,
+        approvedEvents: snapshot.approvedEvents,
+        tables: 0,
+        rows: 0,
+        warnings: snapshot.warnings,
+      };
+    }
+    const parsed = JSON.parse(snapshot.backupText);
+    const currentPatientIds = new Set<string>(
+      db.getAllSync<any>("SELECT id FROM patients").map((row: any) => String(row.id))
+    );
+    const incomingPatientIds = new Set<string>(
+      (Array.isArray(parsed.patients) ? parsed.patients : [])
+        .filter((row: any) => row?.id != null)
+        .map((row: any) => String(row.id))
+    );
+    const approvedPatientDeletions = Array.from(currentPatientIds).filter((id) => !incomingPatientIds.has(id));
+    const workspaceStatus = await getSharedWorkspaceStatus();
+    onProgress?.("Applying approved shared records without changing local user accounts…");
+    const result = await applySharedWorkspaceBackup(parsed);
+    // Remove device-local archive copies for deleted patients. Only the owner
+    // may delete the corresponding shared Drive PDF, and only after the
+    // approved snapshot has removed that patient from shared main data.
+    for (const patientId of approvedPatientDeletions) {
+      await removePatientImageArchive(patientId);
+      if (workspaceStatus?.connected && workspaceStatus.isOwner) {
+        try {
+          await deletePatientPdfFilesFromDrive(patientId);
+        } catch {
+          await queuePatientPdfDeletion(patientId);
+        }
+      }
+    }
+    await markSharedWorkspaceSnapshotApplied(parsed);
+    const savedHash = await storage.secureSet("ortho_shared_workspace_last_applied_hash_v1", snapshotHash);
+    if (!savedHash) throw new Error("Shared records were applied, but the applied-version marker could not be saved. Retry sync safely.");
+    return {
+      applied: true,
+      approvedEvents: snapshot.approvedEvents,
+      tables: result.tables,
+      rows: result.rows,
+      warnings: snapshot.warnings,
+    };
+  }, onProgress);
 }
