@@ -4183,8 +4183,31 @@ export async function syncApprovedSharedWorkspaceToLocal(
       };
     }
     const parsed = JSON.parse(snapshot.backupText);
+    const currentPatientIds = new Set<string>(
+      db.getAllSync<any>("SELECT id FROM patients").map((row: any) => String(row.id))
+    );
+    const incomingPatientIds = new Set<string>(
+      (Array.isArray(parsed.patients) ? parsed.patients : [])
+        .filter((row: any) => row?.id != null)
+        .map((row: any) => String(row.id))
+    );
+    const approvedPatientDeletions = Array.from(currentPatientIds).filter((id) => !incomingPatientIds.has(id));
+    const workspaceStatus = await getSharedWorkspaceStatus();
     onProgress?.("Applying approved shared records without changing local user accounts…");
     const result = await applySharedWorkspaceBackup(parsed);
+    // Remove device-local archive copies for deleted patients. Only the owner
+    // may delete the corresponding shared Drive PDF, and only after the
+    // approved snapshot has removed that patient from shared main data.
+    for (const patientId of approvedPatientDeletions) {
+      await removePatientImageArchive(patientId);
+      if (workspaceStatus?.connected && workspaceStatus.isOwner) {
+        try {
+          await deletePatientPdfFilesFromDrive(patientId);
+        } catch {
+          await queuePatientPdfDeletion(patientId);
+        }
+      }
+    }
     await markSharedWorkspaceSnapshotApplied(parsed);
     const savedHash = await storage.secureSet("ortho_shared_workspace_last_applied_hash_v1", snapshotHash);
     if (!savedHash) throw new Error("Shared records were applied, but the applied-version marker could not be saved. Retry sync safely.");
