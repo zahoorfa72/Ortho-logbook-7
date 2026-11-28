@@ -3474,6 +3474,11 @@ export async function initializeOrJoinSharedWorkspace(
         throw new Error("The first shared baseline could not be fully verified. No workspace was activated; retry after resolving the backup warning.");
       }
     }
+    const masterOwner = normalizeDriveEmail(master?.owners?.[0]?.emailAddress);
+    const masterEditor = normalizeDriveEmail(master?.lastModifyingUser?.emailAddress);
+    if (!masterOwner || !masterEditor || masterOwner !== normalizeDriveEmail(ownerEmail) || masterEditor !== normalizeDriveEmail(ownerEmail)) {
+      throw new Error("The existing master backup was not created and last modified by the workspace owner. It cannot be used as the trusted shared baseline.");
+    }
     const backup = await downloadDriveJsonValidated(String(master.id), onProgress);
     for (const table of ["yearlyRequirements", "intelligenceRecords", "intelligenceRevisions", "knowledgeArticles", "intelligenceSettings"]) {
       if (!Array.isArray(backup[table])) backup[table] = [];
