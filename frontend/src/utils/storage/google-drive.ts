@@ -3937,8 +3937,10 @@ export async function recordSharedChangeDecision(
     if (!uploaded?.id) throw new Error("Google Drive did not confirm the decision event. The request remains pending; refresh and retry.");
     await ensureDriveFileInFolder(String(uploaded.id), String(status.folderId));
     const verified = await downloadDriveJsonValidated(String(uploaded.id));
-    if (verified?.requestId !== requestId || verified?.decision !== decision || verified?.workspaceId !== status.workspaceId) {
-      throw new Error("The decision event could not be verified. Refresh the request list before trying again.");
+    if (verified?.requestId !== requestId || verified?.decision !== decision ||
+        verified?.workspaceId !== status.workspaceId || Number(verified?.protocolVersion) !== 2 ||
+        !verifySharedApprovalPayload(sharedDecisionSignedPayload(verified), String(verified?.signature || ""), String(status.ownerPublicKey || ""))) {
+      throw new Error("The signed decision event could not be verified. Refresh the request list before trying again.");
     }
   });
 }
