@@ -2895,10 +2895,12 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
   if (!master || master.app !== "Ortho Logbook") {
     throw new Error("The current six-month master is unreadable. No change was marked as backed up.");
   }
-  const sharedSanitizationNeeded = sharedWorkspaceActive &&
-    ((Array.isArray(master.users) && master.users.length > 0) ||
-      (master.appSettings && ["googleOAuthClientId", "googleCloudProjectId", "googleAccountEmail", "labOcrApiKey"].some((key) => Object.prototype.hasOwnProperty.call(master.appSettings, key))));
+  const sharedSecurityBefore = sharedWorkspaceActive
+    ? JSON.stringify({ users: master.users, appSettings: master.appSettings })
+    : "";
   if (sharedWorkspaceActive) sanitizeSharedWorkspaceSnapshot(master);
+  const sharedSanitizationNeeded = sharedWorkspaceActive &&
+    sharedSecurityBefore !== JSON.stringify({ users: master.users, appSettings: master.appSettings });
 
   // Compare settings semantically with sorted object keys. Settings are stored
   // in AsyncStorage, so their key enumeration order can differ between runs;
@@ -3541,6 +3543,23 @@ export async function initializeOrJoinSharedWorkspace(
           throw new Error("This owner phone does not have the private signing key for this workspace. Do not reset it; recover the original owner phone or create a new workspace.");
         }
       }
+      if (isOwner) {
+        const currentMaster = await findWorkspaceMasterFile(folderId);
+        if (!currentMaster?.id) throw new Error("The shared master is missing; the owner must restore a verified baseline before inviting staff.");
+        const currentSnapshot = await downloadDriveJsonValidated(String(currentMaster.id), onProgress);
+        const beforeSecurity = JSON.stringify({ users: currentSnapshot?.users, appSettings: currentSnapshot?.appSettings });
+        sanitizeSharedWorkspaceSnapshot(currentSnapshot);
+        if (beforeSecurity !== JSON.stringify({ users: currentSnapshot.users, appSettings: currentSnapshot.appSettings })) {
+          const safeUpload = await uploadContent(JSON.stringify(currentSnapshot), String(currentMaster.id), onProgress, String(currentMaster.name || BACKUP_NAME));
+          if (!safeUpload?.id || String(safeUpload.id) !== String(currentMaster.id)) {
+            throw new Error("The shared master could not be sanitized to keep local credentials private. No staff invitations or approvals are enabled.");
+          }
+          const verifiedSafe = await downloadDriveJsonValidated(String(currentMaster.id), onProgress);
+          if (!hasCompleteMasterSnapshot(verifiedSafe) || (Array.isArray(verifiedSafe.users) && verifiedSafe.users.length)) {
+            throw new Error("The shared master still contains local account data after sanitization. Shared access remains blocked.");
+          }
+        }
+      }
       await saveSharedWorkspaceLocally(manifest, folderMeta);
       return {
         ...manifest,
@@ -3580,6 +3599,18 @@ export async function initializeOrJoinSharedWorkspace(
     }
     if (!hasCompleteMasterSnapshot(backup)) {
       throw new Error("The existing Drive backup is not a complete Ortho Logbook master. It was not replaced or deleted.");
+    }
+    const beforeSecurity = JSON.stringify({ users: backup.users, appSettings: backup.appSettings });
+    sanitizeSharedWorkspaceSnapshot(backup);
+    if (beforeSecurity !== JSON.stringify({ users: backup.users, appSettings: backup.appSettings })) {
+      const safeUpload = await uploadContent(JSON.stringify(backup), String(master.id), onProgress, String(master.name || BACKUP_NAME));
+      if (!safeUpload?.id || String(safeUpload.id) !== String(master.id)) {
+        throw new Error("The initial shared master could not be sanitized. The workspace was not activated.");
+      }
+      const verifiedSafe = await downloadDriveJsonValidated(String(master.id), onProgress);
+      if (!hasCompleteMasterSnapshot(verifiedSafe) || (Array.isArray(verifiedSafe.users) && verifiedSafe.users.length)) {
+        throw new Error("The initial shared master still contains local account records. The workspace was not activated.");
+      }
     }
     const keyPair = createSharedApprovalKeyPair();
     const keySaved = await storage.secureSet(SHARED_OWNER_SIGNING_KEY, JSON.stringify(keyPair));
