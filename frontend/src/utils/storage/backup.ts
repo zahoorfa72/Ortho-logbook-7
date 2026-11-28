@@ -7,6 +7,7 @@ import nacl from "tweetnacl";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { db, initializeDatabase, markInventoryResetDone, repairDatabaseData } from "@/src/db/database";
 import { storage } from "@/src/utils/storage";
+import { queryClient } from "@/src/query-client";
 import type { BrandingConfig } from "@/src/theme";
 import { archiveEligiblePatientImages, getLocalPatientImageArchives } from "@/src/utils/storage/patient-image-archive";
 
@@ -2099,5 +2100,6 @@ export async function applySharedWorkspaceBackup(backup: any): Promise<{ tables:
       }
     }
   }
+  queryClient.clear();
   return { tables: prepared.length, rows: appliedRows };
 }
