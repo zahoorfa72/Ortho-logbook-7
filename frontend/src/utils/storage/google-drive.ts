@@ -2779,6 +2779,23 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
     delta = JSON.parse(backupText);
   }
 
+  const sharedWorkspaceActive = await isSharedWorkspaceEnabled();
+  if (sharedWorkspaceActive) {
+    delete delta.users;
+    if (Array.isArray(delta.changedTables)) delta.changedTables = delta.changedTables.filter((name: string) => name !== "users");
+    if (delta.deletedIds && typeof delta.deletedIds === "object") delete delta.deletedIds.users;
+    if (delta.appSettings && typeof delta.appSettings === "object") {
+      const safe = { ...delta.appSettings };
+      for (const key of ["googleOAuthClientId", "googleCloudProjectId", "googleAccountEmail", "labOcrApiKey"]) delete safe[key];
+      if (safe.asyncStorageSettings && typeof safe.asyncStorageSettings === "object") {
+        safe.asyncStorageSettings = Object.fromEntries(Object.entries(safe.asyncStorageSettings).filter(([key]) =>
+          !/(token|secret|password|credential|api.?key|oauth|google.?account|private.?key|signing.?key)/i.test(String(key))
+        ));
+      }
+      delta.appSettings = safe;
+    }
+  }
+
   // Process only patient rows present in this actual delta. A full-table
   // snapshot (first baseline/legacy migration) is handled by the full-backup
   // path, while normal edits pass a bounded list of IDs.
@@ -2878,6 +2895,10 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
   if (!master || master.app !== "Ortho Logbook") {
     throw new Error("The current six-month master is unreadable. No change was marked as backed up.");
   }
+  const sharedSanitizationNeeded = sharedWorkspaceActive &&
+    ((Array.isArray(master.users) && master.users.length > 0) ||
+      (master.appSettings && ["googleOAuthClientId", "googleCloudProjectId", "googleAccountEmail", "labOcrApiKey"].some((key) => Object.prototype.hasOwnProperty.call(master.appSettings, key))));
+  if (sharedWorkspaceActive) sanitizeSharedWorkspaceSnapshot(master);
 
   // Compare settings semantically with sorted object keys. Settings are stored
   // in AsyncStorage, so their key enumeration order can differ between runs;
@@ -2910,7 +2931,8 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
     ["patients", "patients"], ["procedures", "procedures"],
     ["inventoryCategories", "inventory_categories"], ["inventory", "inventory"],
     ["patientImplants", "patient_implants"], ["patientCustomFields", "patient_custom_fields"],
-    ["implantRecords", "implant_records"], ["expenses", "expenses"], ["users", "users"],
+    ["implantRecords", "implant_records"], ["expenses", "expenses"],
+    ...(!sharedWorkspaceActive ? [["users", "users"] as [string, string]] : []),
     ["patientHistory", "patient_history"], ["inventoryMovements", "inventory_movements"],
     ["inventoryPurchaseReceipts", "inventory_purchase_receipts"], ["stockReceipts", "stock_receipts"],
     ["trash", "deleted_records"],
@@ -2934,6 +2956,7 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
       throw new Error("The full local backup failed its all-table completeness check. The existing Drive master was not changed.");
     }
     const repairedMaster = mergeFullBackupSnapshots(master, completeLocal);
+    if (sharedWorkspaceActive) sanitizeSharedWorkspaceSnapshot(repairedMaster);
     if (!hasCompleteMasterSnapshot(repairedMaster)) {
       throw new Error("The repaired master still lacks required tables or settings. The existing Drive backup was not changed.");
     }
@@ -2958,7 +2981,7 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
   // Only report "up to date" after the master has passed the completeness audit.
   // This repairs older partial uploads even when the local delta cache says no
   // rows changed, while healthy no-op checks still avoid an upload.
-  if (!hasActualChanges && !migrationNeeded) {
+  if (!hasActualChanges && !migrationNeeded && !sharedSanitizationNeeded) {
     await commitIncrementalSnapshotCache(baselineKey);
     return { skipped: true, completedAt: new Date().toISOString(), name: "No changes", accountEmail: getConnectedGoogleAccount() };
   }
@@ -2976,6 +2999,7 @@ async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], o
   }
   const allChanges = legacyJournal ? mergeIncrementalPayloads(legacyJournal, delta) : delta;
   applyIncrementalToMaster(master, allChanges, allChanges._rowDelta !== true);
+  if (sharedWorkspaceActive) sanitizeSharedWorkspaceSnapshot(master);
   if (!hasCompleteMasterSnapshot(master)) {
     throw new Error("The incremental update did not produce a complete master backup. The previous Drive master was not overwritten.");
   }
