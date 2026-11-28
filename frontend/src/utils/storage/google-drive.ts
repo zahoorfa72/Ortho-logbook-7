@@ -1,7 +1,7 @@
 import { GoogleSignin, statusCodes } from "@react-native-google-signin/google-signin";
 import { NativeModules, Platform } from "react-native";
 import * as FileSystem from "expo-file-system/legacy";
-import { exportUnencryptedBackup, exportUnencryptedBackupData, exportIncrementalBackup, exportIncrementalBackupData, prepareIncrementalSnapshotCacheFromBackupData, commitIncrementalSnapshotCache, pruneBackupPhotoAssets, type BackupFilter } from "@/src/utils/storage/backup";
+import { exportUnencryptedBackup, exportUnencryptedBackupData, exportIncrementalBackup, exportIncrementalBackupData, prepareIncrementalSnapshotCacheFromBackupData, commitIncrementalSnapshotCache, pruneBackupPhotoAssets, applySharedWorkspaceBackup, type BackupFilter } from "@/src/utils/storage/backup";
 import { markBackupTaken } from "@/src/utils/backup-reminder";
 import { storage } from "@/src/utils/storage";
 import { db, initializeDatabase } from "@/src/db/database";
@@ -3878,4 +3878,30 @@ export async function markSharedWorkspaceSnapshotApplied(backup: any): Promise<v
   }
   await prepareIncrementalSnapshotCacheFromBackupData("", backup);
   await commitIncrementalSnapshotCache();
+}
+
+
+/**
+ * Pull owner-approved shared changes and apply them to this phone's shared
+ * tables. The account-safe applier intentionally leaves users and device
+ * authentication settings untouched.
+ */
+export async function syncApprovedSharedWorkspaceToLocal(
+  activeLocalUserId = "",
+  onProgress?: (stage: string) => void,
+): Promise<{ applied: boolean; approvedEvents: number; tables: number; rows: number; warnings: string[] }> {
+  return queueDriveOperation(async () => {
+    const snapshot = await getApprovedSharedWorkspaceBackup(activeLocalUserId, onProgress);
+    const parsed = JSON.parse(snapshot.backupText);
+    onProgress?.("Applying approved shared records without changing local user accounts…");
+    const result = await applySharedWorkspaceBackup(parsed);
+    await markSharedWorkspaceSnapshotApplied(parsed);
+    return {
+      applied: true,
+      approvedEvents: snapshot.approvedEvents,
+      tables: result.tables,
+      rows: result.rows,
+      warnings: snapshot.warnings,
+    };
+  }, onProgress);
 }
