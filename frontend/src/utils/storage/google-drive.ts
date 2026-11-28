@@ -1,7 +1,7 @@
 import { GoogleSignin, statusCodes } from "@react-native-google-signin/google-signin";
 import { NativeModules, Platform } from "react-native";
 import * as FileSystem from "expo-file-system/legacy";
-import { exportUnencryptedBackup, exportUnencryptedBackupData, exportIncrementalBackup, exportIncrementalBackupData, prepareIncrementalSnapshotCacheFromBackupData, commitIncrementalSnapshotCache, pruneBackupPhotoAssets, restoreBackup, type BackupFilter } from "@/src/utils/storage/backup";
+import { exportUnencryptedBackup, exportUnencryptedBackupData, exportIncrementalBackup, exportIncrementalBackupData, prepareIncrementalSnapshotCacheFromBackupData, commitIncrementalSnapshotCache, pruneBackupPhotoAssets, type BackupFilter } from "@/src/utils/storage/backup";
 import { markBackupTaken } from "@/src/utils/backup-reminder";
 import { storage } from "@/src/utils/storage";
 import { db, initializeDatabase } from "@/src/db/database";
@@ -3641,7 +3641,6 @@ export async function submitSharedChangeRequest(
     // as part of a staff member's change request. User administration remains owner-only.
     delete delta.users;
     delta.changedTables = actualTables.filter((name: string) => name !== "users");
-    delete delta.changedTables.includes("users");
     if (delta.appSettings && typeof delta.appSettings === "object") {
       const safeSettings = { ...delta.appSettings };
       for (const key of ["googleOAuthClientId", "googleCloudProjectId", "googleAccountEmail", "labOcrApiKey"]) {
