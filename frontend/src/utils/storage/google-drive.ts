@@ -1986,11 +1986,30 @@ async function mergeLegacyIntoFirstMaster(localSnapshot: any, onProgress?: (stag
   return localSnapshot;
 }
 
+async function assertJoinedSharedWorkspaceBeforeDriveWrite(): Promise<void> {
+  if (await readSharedWorkspaceLocally()) return;
+  try {
+    const folder = await findAccessibleBackupFolder(false);
+    const remote = await readSharedManifest(String(folder.id));
+    if (remote) {
+      throw new Error("A shared Ortho Logbook workspace is available in this Google Drive account. Join or initialize it from Sync & Approval before uploading; direct backup is blocked to protect the shared master.");
+    }
+  } catch (error: any) {
+    const message = String(error?.message || error);
+    if (message.includes("A shared Ortho Logbook workspace is available")) throw error;
+    if (message.includes("was not found")) return;
+    // Ambiguous or unverifiable folders fail closed: never risk writing to a
+    // shared master when the app cannot determine whether this is a workspace.
+    throw new Error("Google Drive backup is paused because the shared backup folder could not be verified: " + message);
+  }
+}
+
 async function backupToGoogleDriveUnlocked(
   _password?: string,
   filter: BackupFilter = { type: "all" },
   options: DriveBackupOptions = {},
 ) {
+  await assertJoinedSharedWorkspaceBeforeDriveWrite();
   options.onProgress?.("Preparing backup data…");
   const isMasterBackup = filter.type === "all";
   if (isMasterBackup) {
@@ -2753,6 +2772,7 @@ async function archiveCompletedMonths(onProgress?: (stage: string) => void) {
 }
 
 async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], onProgress?: (stage: string) => void, verifyPatientPdfs = false) {
+  await assertJoinedSharedWorkspaceBeforeDriveWrite();
   onProgress?.("Checking whether saved records changed…");
   // Export the row-level delta first. This identifies the exact patient IDs
   // changed since the last confirmed snapshot, so routine edits do not scan
