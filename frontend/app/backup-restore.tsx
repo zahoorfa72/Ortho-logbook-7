@@ -110,7 +110,7 @@ function SharedWorkspacePanel() {
       const result = await initializeOrJoinSharedWorkspace(createIfMissing, setMessage);
       setWorkspace({ ...result, connected: true });
       setMessage(result.isOwner ? "Owner workspace is ready." : "Joined shared workspace. Staff changes require owner approval.");
-      if (result.isOwner) setRequests(await listSharedChangeRequests());
+      setRequests(await listSharedChangeRequests());
     } catch (error) {
       Alert.alert(createIfMissing ? "Workspace setup failed" : "Join failed", error instanceof Error ? error.message : "Unable to set up shared workspace.");
     } finally {
