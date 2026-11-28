@@ -12,7 +12,7 @@ import { queryClient } from "@/src/query-client";
 import { useAuth } from "@/src/auth/AuthContext";
 import { Segmented } from "@/src/components/Segmented";
 import { fontFamily, fontSize, makeStyles, radius, spacing, useTheme } from "@/src/theme";
-import { backupIncrementalToGoogleDrive, createPreviousHalfYearArchiveToGoogleDrive, connectGoogleAccount, disconnectGoogleAccount, getConnectedGoogleAccount, restoreLatestFromGoogleDrive, listGoogleDriveBackups, restoreGoogleDriveBackupById } from "@/src/utils/storage/google-drive";
+import { backupIncrementalToGoogleDrive, createPreviousHalfYearArchiveToGoogleDrive, connectGoogleAccount, disconnectGoogleAccount, getConnectedGoogleAccount, restoreLatestFromGoogleDrive, listGoogleDriveBackups, restoreGoogleDriveBackupById, getSharedWorkspaceStatus, submitSharedChangeRequest } from "@/src/utils/storage/google-drive";
 import { refreshAutomaticDriveBackup, triggerAutomaticDriveBackup } from "@/src/utils/storage/drive-auto-backup";
 
  // Selective restore reads from the single complete Drive master snapshot.
@@ -186,8 +186,29 @@ export default function BackupRestoreScreen() {
     try {
       setDriveLoading(true);
       setDriveStatus("Preparing backup data…");
-      // Manual Drive backup updates the current six-month master and its change
-      // journal; it does not create a separate monthly snapshot file.
+      // A non-owner joined to a shared workspace must request approval instead
+      // of writing directly to the shared master through the manual backup button.
+      const sharedStatus = await getSharedWorkspaceStatus();
+      if (sharedStatus) {
+        if (!sharedStatus.connected) throw new Error(sharedStatus.error || "Shared workspace is unavailable. Local data was not uploaded.");
+        if (!sharedStatus.isOwner) {
+          const request = await submitSharedChangeRequest([
+            "patients", "procedures", "inventoryCategories", "inventory", "patientImplants",
+            "patientCustomFields", "implantRecords", "expenses", "patientHistory",
+            "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts", "trash",
+            "branding", "appSettings",
+          ], setDriveStatus);
+          Alert.alert(
+            request?.requestId ? "Approval request sent" : "No changes to submit",
+            request?.requestId
+              ? "Your changes were sent to the workspace owner. They will not enter shared main data until the owner approves the request."
+              : "No new shared-data changes were found."
+          );
+          return;
+        }
+      }
+      // Only the shared workspace owner, or a phone not joined to a shared
+      // workspace, may update the rolling master directly.
       const result = await backupIncrementalToGoogleDrive([
         "patients", "procedures", "inventoryCategories", "inventory", "patientImplants",
         "patientCustomFields", "implantRecords", "expenses", "users", "patientHistory",
