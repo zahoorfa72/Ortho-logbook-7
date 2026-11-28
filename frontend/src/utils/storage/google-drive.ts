@@ -3519,6 +3519,7 @@ export async function initializeOrJoinSharedWorkspace(
       }
       let manifest = existing.manifest;
       const isOwner = normalizeDriveEmail(accountEmail) === normalizeDriveEmail(manifest.ownerEmail);
+      if (isOwner) await assertLocalAdministrator("manage the owner workspace");
       // Upgrade older metadata-based approval workspaces to signed owner
       // decisions. Staff cannot perform this migration.
       if (Number(manifest.protocolVersion) < 2 || !manifest.ownerPublicKey) {
