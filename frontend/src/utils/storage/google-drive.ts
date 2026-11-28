@@ -3596,7 +3596,7 @@ export async function initializeOrJoinSharedWorkspace(
           if (parsed?.publicKey && parsed?.secretKey) keyPair = parsed;
           else throw new Error("missing key");
         } catch {
-          keyPair = createSharedApprovalKeyPair();
+          keyPair = await createSharedApprovalKeyPair();
           const saved = await storage.secureSet(SHARED_OWNER_SIGNING_KEY, JSON.stringify(keyPair));
           if (!saved) throw new Error("The owner signing key could not be stored securely on this phone.");
         }
@@ -3688,7 +3688,7 @@ export async function initializeOrJoinSharedWorkspace(
       }
     }
     await moveLegacyBackupArchivesOutOfSharedFolder(folderId, String(master.id));
-    const keyPair = createSharedApprovalKeyPair();
+    const keyPair = await createSharedApprovalKeyPair();
     const keySaved = await storage.secureSet(SHARED_OWNER_SIGNING_KEY, JSON.stringify(keyPair));
     if (!keySaved) throw new Error("The owner approval signing key could not be stored securely. The workspace was not activated.");
     const manifest = {
