@@ -3359,11 +3359,6 @@ function makeSharedEventId(): string {
 function normalizeDriveEmail(value: unknown): string {
   return String(value || "").trim().toLowerCase();
 }
-function requireLocalAdministrator(action: string): void {
-  const userId = String((storage as any).secureGet ? "" : "");
-  // Local account identity is device-specific and never comes from Drive.
-  // The caller performs the asynchronous secure-store read before this check.
-}
 async function assertLocalAdministrator(action: string): Promise<void> {
   const userId = String(await storage.secureGet("ortho_current_user", "") || "");
   const localUser = userId ? db.getFirstSync<any>(
