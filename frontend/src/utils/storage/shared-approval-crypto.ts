@@ -1,4 +1,5 @@
 import nacl from "tweetnacl";
+import * as Crypto from "expo-crypto";
 
 const toHex = (bytes: Uint8Array): string =>
   Array.from(bytes).map((value) => value.toString(16).padStart(2, "0")).join("");
@@ -15,8 +16,11 @@ const fromHex = (value: string): Uint8Array => {
   return bytes;
 };
 
-export function createSharedApprovalKeyPair(): { publicKey: string; secretKey: string } {
-  const pair = nacl.sign.keyPair();
+export async function createSharedApprovalKeyPair(): Promise<{ publicKey: string; secretKey: string }> {
+  // Use Expo's platform CSPRNG explicitly instead of relying on a global
+  // crypto.getRandomValues polyfill being installed in every Android build.
+  const seed = await Crypto.getRandomBytesAsync(nacl.sign.seedLength);
+  const pair = nacl.sign.keyPair.fromSeed(seed);
   return { publicKey: toHex(pair.publicKey), secretKey: toHex(pair.secretKey) };
 }
 
