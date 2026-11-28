@@ -288,6 +288,8 @@ async function findBackupByName(name: string) {
 }
 
 async function writeHalfYearArchiveUnlocked(year: number, half: "H1" | "H2", onProgress?: (stage: string) => void, overwrite = false) {
+  await assertJoinedSharedWorkspaceBeforeDriveWrite();
+  await assertSharedWorkspaceOwnerForDirectWrite();
   if (!Number.isInteger(year) || year < 2000 || year > 2200) throw new Error("Choose a valid archive year.");
   const value = String(year) + "-" + half;
   const name = halfYearArchiveName(year, half);
@@ -1141,6 +1143,8 @@ async function uploadPatientPdf(archive: PatientImageArchive, folderId: string, 
 }
 export async function ensurePatientImagePdfOnDrive(patientId: string, onProgress?: (stage: string) => void): Promise<{ fileId: string; fileName: string; url: string }> {
   return queueDriveOperation(async () => {
+    await assertJoinedSharedWorkspaceBeforeDriveWrite();
+    await assertSharedWorkspaceOwnerForDirectWrite();
     const archive = await archivePatientImagesForPatient(patientId, onProgress);
     onProgress?.("Checking the Patient Image PDFs folder in Google Drive…");
     const folder = await getOrCreatePatientImagePdfFolder();
@@ -1225,6 +1229,15 @@ async function processPendingPatientPdfDeletes(onProgress?: (stage: string) => v
 export async function deletePatientImagePdfFromDrive(patientId: string): Promise<void> {
   const id = String(patientId || "").trim();
   if (!id) return;
+  // Staff deletions remain local until their patient deletion is approved.
+  // Never remove or replace the shared PDF before the owner accepts the request.
+  try {
+    await assertJoinedSharedWorkspaceBeforeDriveWrite();
+    await assertSharedWorkspaceOwnerForDirectWrite();
+  } catch {
+    await removePatientImageArchive(id);
+    return;
+  }
   await queuePatientPdfDeletion(id);
   try {
     await queueDriveOperation(async () => {
@@ -1241,6 +1254,8 @@ export async function uploadPatientImageArchivesToDrive(
   patientIds?: string[],
   verifyExisting = false,
 ): Promise<void> {
+  await assertJoinedSharedWorkspaceBeforeDriveWrite();
+  await assertSharedWorkspaceOwnerForDirectWrite();
   try {
     await processPendingPatientPdfDeletes(onProgress);
     const allArchives = await getLocalPatientImageArchives();
@@ -1986,6 +2001,16 @@ async function mergeLegacyIntoFirstMaster(localSnapshot: any, onProgress?: (stag
   return localSnapshot;
 }
 
+async function assertSharedWorkspaceOwnerForDirectWrite(): Promise<void> {
+  const status = await getSharedWorkspaceStatus();
+  if (status && !status.connected) {
+    throw new Error(status.error || "Shared Drive access could not be verified. Direct uploads are paused.");
+  }
+  if (status?.connected && !status.isOwner) {
+    throw new Error("Staff phones cannot write directly to shared main data. Submit the changes for owner approval instead.");
+  }
+}
+
 async function assertJoinedSharedWorkspaceBeforeDriveWrite(): Promise<void> {
   if (await readSharedWorkspaceLocally()) return;
   try {
@@ -2010,6 +2035,7 @@ async function backupToGoogleDriveUnlocked(
   options: DriveBackupOptions = {},
 ) {
   await assertJoinedSharedWorkspaceBeforeDriveWrite();
+  await assertSharedWorkspaceOwnerForDirectWrite();
   options.onProgress?.("Preparing backup data…");
   const isMasterBackup = filter.type === "all";
   if (isMasterBackup) {
@@ -2773,6 +2799,7 @@ async function archiveCompletedMonths(onProgress?: (stage: string) => void) {
 
 async function backupIncrementalToGoogleDriveUnlocked(changedTables: string[], onProgress?: (stage: string) => void, verifyPatientPdfs = false) {
   await assertJoinedSharedWorkspaceBeforeDriveWrite();
+  await assertSharedWorkspaceOwnerForDirectWrite();
   onProgress?.("Checking whether saved records changed…");
   // Export the row-level delta first. This identifies the exact patient IDs
   // changed since the last confirmed snapshot, so routine edits do not scan
