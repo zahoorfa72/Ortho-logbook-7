@@ -1210,7 +1210,7 @@ export default function Logbook() {
               style={styles.iconBtn}
               hitSlop={8}
             >
-              <Ionicons name="cloud-sync-outline" size={22} color={colors.onSurfaceSecondary} />
+              <Ionicons name="cloud-outline" size={22} color={colors.onSurfaceSecondary} />
             </Pressable>
             <Pressable
               testID="report-problem-button"
