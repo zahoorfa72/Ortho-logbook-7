@@ -8,6 +8,7 @@ import {
   restoreGoogleAccountSilently,
   getSharedWorkspaceStatus,
   submitSharedChangeRequest,
+  syncApprovedSharedWorkspaceToLocal,
 } from "@/src/utils/storage/google-drive";
 import { setDriveSyncState, setDriveSyncRefreshHandler } from "@/src/utils/storage/drive-sync-status";
 import { storage } from "@/src/utils/storage";
@@ -50,7 +51,11 @@ TaskManager.defineTask(BACKGROUND_SYNC_TASK, async ({ error }) => {
     // forcing a full audit of all patient PDFs every 15 minutes made ordinary
     // navigation feel frozen and repeatedly showed "Checking patient image PDF".
     // SQLite change events and the durable queue already record changed tables.
-    if (!pendingTables.size) return BackgroundTask.BackgroundTaskResult.Success;
+    if (!pendingTables.size) {
+      const shared = await getSharedWorkspaceStatus();
+      if (shared?.connected) await syncApprovedSharedWorkspaceToLocal(String(await storage.secureGet("ortho_current_user", "") || ""));
+      return BackgroundTask.BackgroundTaskResult.Success;
+    }
     const completed = await runBackup();
     return completed
       ? BackgroundTask.BackgroundTaskResult.Success
@@ -402,6 +407,17 @@ export function startAutomaticDriveBackup() {
       if (state === "active" && pendingTables.size) {
         // Resume any changes retained while Android suspended the JS runtime.
         scheduleBackup();
+        return;
+      }
+      if (state === "active" && !pendingTables.size) {
+        // Reconcile approved owner changes when the phone returns online.
+        // The shared applier refuses to overwrite this phone while its own
+        // approval request is still pending.
+        void getSharedWorkspaceStatus().then(async (shared) => {
+          if (shared?.connected) {
+            await syncApprovedSharedWorkspaceToLocal(String(await storage.secureGet("ortho_current_user", "") || ""));
+          }
+        }).catch((error) => console.warn("[drive-auto-backup] shared reconciliation paused:", error));
         return;
       }
       if (state === "background" || state === "inactive") {
