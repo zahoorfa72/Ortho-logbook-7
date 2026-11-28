@@ -3423,6 +3423,49 @@ async function findAccessibleBackupFolder(createIfMissing: boolean): Promise<any
   }
   return await getOrCreateBackupFolder();
 }
+async function getOrCreatePrivateBackupArchiveFolder(): Promise<any> {
+  const name = "Ortho Logbook Private Backups";
+  const q = encodeURIComponent("name = '" + escapeDriveQuery(name) + "' and mimeType = '" + DRIVE_FOLDER_MIME + "' and trashed = false");
+  const response = await driveRequest(DRIVE_API + "?q=" + q + "&spaces=drive&pageSize=100&fields=files(id,name,mimeType,owners(emailAddress))");
+  const data = await response.json();
+  const folders = Array.isArray(data.files) ? data.files.filter((item: any) => item?.id) : [];
+  const ownerEmail = normalizeDriveEmail(getConnectedGoogleAccount());
+  const owned = folders.filter((item: any) =>
+    (Array.isArray(item.owners) ? item.owners : []).some((owner: any) => normalizeDriveEmail(owner?.emailAddress) === ownerEmail)
+  );
+  if (owned.length === 1) return owned[0];
+  if (owned.length > 1) throw new Error("More than one private Ortho Logbook backup folder exists. Resolve the duplicate folders before enabling staff access.");
+  const created = await driveRequest(DRIVE_API + "?fields=id,name,mimeType", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, mimeType: DRIVE_FOLDER_MIME }),
+  });
+  const folder = await created.json();
+  if (!folder?.id) throw new Error("Could not create a private folder for older backup archives.");
+  return folder;
+}
+async function moveLegacyBackupArchivesOutOfSharedFolder(folderId: string, keepFileId: string): Promise<number> {
+  const files = await listFilesInDriveFolder(folderId, "name contains 'Ortho Logbook Backup'");
+  const oldBackups = files.filter((file: any) =>
+    String(file.id) !== keepFileId && /Ortho Logbook Backup.*\.orbackup$/i.test(String(file.name || ""))
+  );
+  if (!oldBackups.length) return 0;
+  const privateFolder = await getOrCreatePrivateBackupArchiveFolder();
+  let moved = 0;
+  for (const file of oldBackups) {
+    const parents = Array.isArray(file.parents) ? file.parents.map(String) : [folderId];
+    const removeParents = parents.includes(folderId) ? "&removeParents=" + encodeURIComponent(folderId) : "";
+    await driveRequest(
+      DRIVE_API + "/" + encodeURIComponent(String(file.id)) +
+      "?addParents=" + encodeURIComponent(String(privateFolder.id)) + removeParents +
+      "&supportsAllDrives=true&fields=id,name,parents",
+      { method: "PATCH" }
+    );
+    moved += 1;
+  }
+  return moved;
+}
+
 async function getWorkspaceFolderMetadata(folderId: string): Promise<any> {
   const response = await driveRequest(
     DRIVE_API + "/" + encodeURIComponent(folderId) +
@@ -3569,6 +3612,7 @@ export async function initializeOrJoinSharedWorkspace(
             throw new Error("The shared master still contains local account data after sanitization. Shared access remains blocked.");
           }
         }
+        await moveLegacyBackupArchivesOutOfSharedFolder(folderId, String(currentMaster.id));
       }
       await saveSharedWorkspaceLocally(manifest, folderMeta);
       return {
@@ -3623,6 +3667,7 @@ export async function initializeOrJoinSharedWorkspace(
         throw new Error("The initial shared master still contains local account records. The workspace was not activated.");
       }
     }
+    await moveLegacyBackupArchivesOutOfSharedFolder(folderId, String(master.id));
     const keyPair = createSharedApprovalKeyPair();
     const keySaved = await storage.secureSet(SHARED_OWNER_SIGNING_KEY, JSON.stringify(keyPair));
     if (!keySaved) throw new Error("The owner approval signing key could not be stored securely. The workspace was not activated.");
