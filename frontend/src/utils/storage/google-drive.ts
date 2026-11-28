@@ -3609,7 +3609,21 @@ export async function inviteSharedWorkspaceMember(emailAddress: string): Promise
     );
   });
 }
+function sharedDecisionSignedPayload(value: any): any {
+  const payload: any = {
+    app: "Ortho Logbook Decision",
+    protocolVersion: Number(value?.protocolVersion),
+    workspaceId: String(value?.workspaceId || ""),
+    requestId: String(value?.requestId || ""),
+    decision: String(value?.decision || ""),
+    approvedBy: normalizeDriveEmail(value?.approvedBy),
+    approvedAt: String(value?.approvedAt || ""),
+  };
+  if (Object.prototype.hasOwnProperty.call(value || {}, "delta")) payload.delta = value.delta;
+  return payload;
+}
 async function loadSharedRequestAndDecisionFiles(folderId: string): Promise<{ requests: any[]; decisions: any[] }> {
+  const remoteManifest = (await readSharedManifest(folderId))?.manifest;
   const [requestFiles, decisionFiles] = await Promise.all([
     listFilesInDriveFolder(folderId, "name contains 'Ortho Logbook Change Request'"),
     listFilesInDriveFolder(folderId, "name contains 'Ortho Logbook Decision'"),
@@ -3645,8 +3659,13 @@ async function loadSharedRequestAndDecisionFiles(folderId: string): Promise<{ re
       // A writer can upload a fake decision or edit an owner's old decision.
       // Google Drive's creator and latest-editor metadata must both identify
       // the declared owner. Missing metadata is rejected, never trusted.
-      if (value?.app === "Ortho Logbook Decision" && value?.requestId && value?.workspaceId &&
-          declaredApprover && declaredApprover === fileOwner && declaredApprover === fileEditor) {
+      const signedPayload = sharedDecisionSignedPayload(value);
+      const validSignature = Number(remoteManifest?.protocolVersion) >= 2 &&
+        String(remoteManifest?.ownerEmail || "").toLowerCase() === declaredApprover &&
+        verifySharedApprovalPayload(signedPayload, String(value?.signature || ""), String(remoteManifest?.ownerPublicKey || ""));
+      if (value?.app === "Ortho Logbook Decision" && Number(value?.protocolVersion) === 2 &&
+          value?.requestId && value?.workspaceId && declaredApprover &&
+          declaredApprover === fileOwner && declaredApprover === fileEditor && validSignature) {
         decisions.push({ file, value });
       } else {
         console.warn("[shared-workspace] rejected decision without owner-authored Drive metadata", String(file.name || ""));
@@ -3792,15 +3811,25 @@ export async function recordSharedChangeDecision(
         ? "This request has conflicting approval decisions. Resolve the conflict before proceeding."
         : "This request has already been decided.");
     }
-    const event = {
+    const signingKeyRaw = await storage.secureGet(SHARED_OWNER_SIGNING_KEY, "");
+    let signingKey: any = null;
+    try { signingKey = JSON.parse(String(signingKeyRaw || "")); } catch {}
+    if (!signingKey?.secretKey || signingKey.publicKey !== status.ownerPublicKey) {
+      throw new Error("This phone does not hold the verified owner signing key. The approval was not written.");
+    }
+    const signedPayload: any = {
       app: "Ortho Logbook Decision",
-      protocolVersion: 1,
+      protocolVersion: 2,
       workspaceId: status.workspaceId,
       requestId,
       decision,
       approvedBy: normalizeDriveEmail(getConnectedGoogleAccount()),
       approvedAt: new Date().toISOString(),
-      delta: decision === "approve" ? target.request.delta : undefined,
+    };
+    if (decision === "approve") signedPayload.delta = target.request.delta;
+    const event = {
+      ...signedPayload,
+      signature: signSharedApprovalPayload(signedPayload, signingKey.secretKey),
     };
     const fileName = SHARED_DECISION_PREFIX + requestId + " " + decision + " " + makeSharedEventId() + ".ordecision";
     const uploaded = await uploadContent(JSON.stringify(event), undefined, undefined, fileName);
