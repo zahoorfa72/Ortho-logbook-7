@@ -508,7 +508,7 @@ export async function restoreGoogleDriveBackupById(fileId: string, onProgress?: 
         continue;
       }
 
-      const syncTables = ["patients","procedures","inventoryCategories","inventory","patientImplants","patientCustomFields","implantRecords","expenses","users","patientHistory","inventoryMovements","inventoryPurchaseReceipts","stockReceipts","trash"];
+      const syncTables = ["patients","procedures","inventoryCategories","inventory","patientImplants","patientCustomFields","implantRecords","expenses","users","patientHistory","inventoryMovements","inventoryPurchaseReceipts","stockReceipts","yearlyRequirements","intelligenceRecords","intelligenceRevisions","knowledgeArticles","intelligenceSettings","trash"];
       if (!syncTables.includes(table)) continue;
       if (!Array.isArray(delta[table])) {
         recoveryWarnings.push(String(deltaFile.name || "An incremental backup") + " is missing table data for " + table + ".");
@@ -520,11 +520,11 @@ export async function restoreGoogleDriveBackupById(fileId: string, onProgress?: 
         // Merge its readable rows conservatively instead of replacing a full table.
         const merged = new Map<string, any>();
         for (const row of Array.isArray(composed[table]) ? composed[table] : []) {
-          const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+          const key = syncRowKey(table, row);
           merged.set(key, row);
         }
         for (const row of delta[table]) {
-          const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+          const key = syncRowKey(table, row);
           const existing = merged.get(key);
           if (table === "patients" && existing &&
               !Object.prototype.hasOwnProperty.call(row, "photo_uri") &&
@@ -543,14 +543,14 @@ export async function restoreGoogleDriveBackupById(fileId: string, onProgress?: 
       } else if (delta._rowDelta === true && !(Array.isArray(delta.fullTables) && delta.fullTables.includes(table))) {
         const merged = new Map<string, any>();
         for (const row of Array.isArray(composed[table]) ? composed[table] : []) {
-          const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+          const key = syncRowKey(table, row);
           merged.set(key, row);
         }
         for (const deletedId of Array.isArray(delta.deletedIds?.[table]) ? delta.deletedIds[table] : []) {
           merged.delete("id:" + String(deletedId));
         }
         for (const row of delta[table]) {
-          const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+          const key = syncRowKey(table, row);
           const existing = merged.get(key);
           if (table === "patients" && existing &&
               !Object.prototype.hasOwnProperty.call(row, "photo_uri") &&
@@ -567,7 +567,7 @@ export async function restoreGoogleDriveBackupById(fileId: string, onProgress?: 
         // then apply its explicit deletion tombstones.
         let mergedRows = mergeRowsByRecency(composed[table] || [], delta[table], table);
         const deletedIds = new Set<string>(Array.isArray(delta.deletedIds?.[table]) ? delta.deletedIds[table].map(String) : []);
-        if (deletedIds.size) mergedRows = mergedRows.filter((row: any) => row?.id == null || !deletedIds.has(String(row.id)));
+        if (deletedIds.size) mergedRows = mergedRows.filter((row: any) => !deletedIds.has(syncRowIdentity(table, row)));
         composed[table] = mergedRows;
       }
       appliedAnyTable = true;
@@ -1727,7 +1727,8 @@ function mergeFullBackupSnapshots(legacy: any, local: any): any {
   const tables = [
     "patients", "procedures", "inventoryCategories", "inventory", "patientImplants",
     "patientCustomFields", "implantRecords", "expenses", "users", "patientHistory",
-    "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts", "trash",
+    "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts", "yearlyRequirements",
+    "intelligenceRecords", "intelligenceRevisions", "knowledgeArticles", "intelligenceSettings", "trash",
   ];
   for (const table of tables) {
     const oldRows = Array.isArray(legacy?.[table]) ? legacy[table] : [];
@@ -1775,25 +1776,35 @@ function mergeRowPreservingStockAttachments(table: string, previous: any, incomi
   return merged;
 }
 
+function syncRowIdentity(table: string, row: any): string {
+  if (table === "yearlyRequirements") return String(row?.year ?? "") + "|" + String(row?.inventory_id ?? "");
+  if (table === "intelligenceSettings") return String(row?.module_id ?? "");
+  if (row?.id != null) return String(row.id);
+  return JSON.stringify(row);
+}
+function syncRowKey(table: string, row: any): string {
+  if (table === "yearlyRequirements") return "yearly:" + syncRowIdentity(table, row);
+  if (table === "intelligenceSettings") return "module:" + syncRowIdentity(table, row);
+  if (table !== "inventory") return row?.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+  const bill = String(row?.bill_image || "").trim();
+  const date = String(row?.added_date || "").trim();
+  if (bill && date) return "inventory-receipt:" + [
+    row?.name, row?.category, row?.size, date, bill,
+  ].map((v) => String(v || "").trim().toLowerCase()).join("|");
+  if (row?.id != null) return "id:" + String(row.id);
+  return "inventory-row:" + [
+    row?.name, row?.category, row?.size, row?.added_date, row?.batch_id,
+  ].map((v) => String(v || "").trim().toLowerCase()).join("|");
+}
+function syncDeletedRowKey(table: string, id: unknown): string {
+  if (table === "yearlyRequirements") return "yearly:" + String(id);
+  if (table === "intelligenceSettings") return "module:" + String(id);
+  return "id:" + String(id);
+}
+
 function mergeRowsByRecency(currentRows: any[], incomingRows: any[], table: string): any[] {
   const rows = new Map<string, any>();
-  const keyFor = (row: any) => {
-    if (table !== "inventory") return row?.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
-    // Prefer the stable record ID so separate stock batches with the same
-    // name/category/size are never collapsed. Across devices, only merge a
-    // row when it has a strong shared receipt identity (bill + date).
-    const bill = String(row?.bill_image || "").trim();
-    const date = String(row?.added_date || "").trim();
-    if (bill && date) {
-      return "inventory-receipt:" + [
-        row?.name, row?.category, row?.size, date, bill,
-      ].map((v) => String(v || "").trim().toLowerCase()).join("|");
-    }
-    if (row?.id != null) return "id:" + String(row.id);
-    return "inventory-row:" + [
-      row?.name, row?.category, row?.size, row?.added_date, row?.batch_id,
-    ].map((v) => String(v || "").trim().toLowerCase()).join("|");
-  };
+  const keyFor = (row: any) => syncRowKey(table, row);
   for (const row of currentRows || []) rows.set(keyFor(row), row);
   for (const row of incomingRows || []) {
     const key = keyFor(row);
@@ -1826,7 +1837,8 @@ function applyIncrementalToMaster(local: any, incoming: any, preserveCurrent = f
   const tables = [
     "patients", "procedures", "inventoryCategories", "inventory", "patientImplants",
     "patientCustomFields", "implantRecords", "expenses", "users", "patientHistory",
-    "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts", "trash",
+    "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts", "yearlyRequirements",
+    "intelligenceRecords", "intelligenceRevisions", "knowledgeArticles", "intelligenceSettings", "trash",
   ];
   const changed = new Set<string>(Array.isArray(incoming.changedTables) ? incoming.changedTables : []);
   const full = new Set<string>(Array.isArray(incoming.fullTables) ? incoming.fullTables : []);
@@ -1839,31 +1851,18 @@ function applyIncrementalToMaster(local: any, incoming: any, preserveCurrent = f
       // by mergeIncrementalPayloads, so this cannot erase a later recreation.
       let mergedRows = mergeRowsByRecency(local[table] || [], incoming[table], table);
       const deletedIds = new Set<string>(Array.isArray(incoming.deletedIds?.[table]) ? incoming.deletedIds[table].map(String) : []);
-      if (deletedIds.size) mergedRows = mergedRows.filter((row: any) => row?.id == null || !deletedIds.has(String(row.id)));
+      if (deletedIds.size) mergedRows = mergedRows.filter((row: any) => !deletedIds.has(syncRowIdentity(table, row)));
       local[table] = mergedRows;
       continue;
     }
     const rows = new Map<string, any>();
-    const keyForRow = (row: any) => {
-      if (table !== "inventory") return row?.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
-      const bill = String(row?.bill_image || "").trim();
-      const date = String(row?.added_date || "").trim();
-      if (bill && date) {
-        return "inventory-receipt:" + [
-          row?.name, row?.category, row?.size, date, bill,
-        ].map((v) => String(v || "").trim().toLowerCase()).join("|");
-      }
-      if (row?.id != null) return "id:" + String(row.id);
-      return "inventory-row:" + [
-        row?.name, row?.category, row?.size, row?.added_date, row?.batch_id,
-      ].map((v) => String(v || "").trim().toLowerCase()).join("|");
-    };
+    const keyForRow = (row: any) => syncRowKey(table, row);
     for (const row of Array.isArray(local[table]) ? local[table] : []) rows.set(keyForRow(row), row);
     if (!preserveCurrent) {
       for (const id of Array.isArray(incoming.deletedIds?.[table]) ? incoming.deletedIds[table] : []) {
         if (table === "inventory") {
           for (const [key, row] of rows.entries()) if (String(row?.id ?? "") === String(id)) rows.delete(key);
-        } else rows.delete("id:" + String(id));
+        } else rows.delete(syncDeletedRowKey(table, id));
       }
     }
     for (const row of incoming[table]) {
@@ -1904,6 +1903,18 @@ function applyIncrementalToMaster(local: any, incoming: any, preserveCurrent = f
   if (Object.prototype.hasOwnProperty.call(incoming, "branding")) local.branding = incoming.branding;
   if (Object.prototype.hasOwnProperty.call(incoming, "appSettings")) local.appSettings = incoming.appSettings;
 
+  if (Array.isArray(incoming?.patients) && Array.isArray(local.patientImageArchives)) {
+    const changedPatients = new Map<string, any>(incoming.patients
+      .filter((patient: any) => patient?.id != null)
+      .map((patient: any) => [String(patient.id), patient]));
+    local.patientImageArchives = local.patientImageArchives.filter((archive: any) => {
+      const patient = changedPatients.get(String(archive?.patientId || ""));
+      if (!patient) return true;
+      const archiveRevision = String(archive?.patientUpdatedAt || "");
+      const patientRevision = String(patient?.updated_at || "");
+      return !archiveRevision || !patientRevision || archiveRevision === patientRevision;
+    });
+  }
   // A patient deletion tombstone must remove its separate-PDF manifest entry
   // as well as its patient row. Otherwise a stale PDF reference can survive
   // journal composition and make restore report an invalid/missing PDF.
@@ -1929,7 +1940,8 @@ type DriveBackupOptions = { skipIfUnchanged?: boolean; onProgress?: (stage: stri
 const REQUIRED_MASTER_TABLES = [
   "patients", "procedures", "inventoryCategories", "inventory", "patientImplants",
   "patientCustomFields", "implantRecords", "expenses", "users", "patientHistory",
-  "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts", "trash",
+  "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts", "yearlyRequirements",
+    "intelligenceRecords", "intelligenceRevisions", "knowledgeArticles", "intelligenceSettings", "trash",
 ] as const;
 
 function hasCompleteMasterSnapshot(value: any): boolean {
@@ -2488,7 +2500,7 @@ async function downloadIncrementalWithRecovery(fileId: string, fileName: string)
     if (app !== "Ortho Logbook") {
       throw new Error("Incremental backup " + fileName + " could not be recovered. Its contents are unavailable or corrupted.");
     }
-    const knownTables = ["patients","procedures","inventoryCategories","inventory","patientImplants","patientCustomFields","implantRecords","expenses","users","patientHistory","inventoryMovements","inventoryPurchaseReceipts","stockReceipts","trash"];
+    const knownTables = ["patients","procedures","inventoryCategories","inventory","patientImplants","patientCustomFields","implantRecords","expenses","users","patientHistory","inventoryMovements","inventoryPurchaseReceipts","stockReceipts","yearlyRequirements","intelligenceRecords","intelligenceRevisions","knowledgeArticles","intelligenceSettings","trash"];
     const recovered: any = { app, incremental: true, _recoveredFromDamage: true, changedTables: Array.isArray(changedTables) ? changedTables : [], _rowDelta: rowDelta, deletedIds: deletedIds && typeof deletedIds === "object" ? deletedIds : {}, fullTables: Array.isArray(fullTables) ? fullTables : [] };
     for (const table of knownTables) {
       const value = extractCompleteJsonProperty(raw, table);
@@ -2515,7 +2527,8 @@ function mergeIncrementalPayloads(previous: any, incoming: any): any {
   const tableNames = [
     "patients", "procedures", "inventoryCategories", "inventory", "patientImplants",
     "patientCustomFields", "implantRecords", "expenses", "users", "patientHistory",
-    "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts", "trash",
+    "inventoryMovements", "inventoryPurchaseReceipts", "stockReceipts", "yearlyRequirements",
+    "intelligenceRecords", "intelligenceRevisions", "knowledgeArticles", "intelligenceSettings", "trash",
   ];
   const changedTables = Array.from(new Set([
     ...(Array.isArray(previous.changedTables) ? previous.changedTables : []),
@@ -2554,7 +2567,7 @@ function mergeIncrementalPayloads(previous: any, incoming: any): any {
     const rows = new Map<string, any>();
     if (wasChanged) {
       for (const row of oldRows) {
-        const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+        const key = syncRowKey(table, row);
         rows.set(key, row);
       }
     }
@@ -2562,9 +2575,9 @@ function mergeIncrementalPayloads(previous: any, incoming: any): any {
       ...(Array.isArray(deletedIds[table]) ? deletedIds[table].map(String) : []),
       ...(Array.isArray(incoming.deletedIds?.[table]) ? incoming.deletedIds[table].map(String) : []),
     ]);
-    for (const id of incoming.deletedIds?.[table] || []) rows.delete("id:" + String(id));
+    for (const id of incoming.deletedIds?.[table] || []) rows.delete(syncDeletedRowKey(table, id));
     for (const row of newRows) {
-      const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+      const key = syncRowKey(table, row);
       const old = rows.get(key);
       if (table === "patients" && old &&
           !Object.prototype.hasOwnProperty.call(row, "photo_uri") &&
@@ -2577,7 +2590,7 @@ function mergeIncrementalPayloads(previous: any, incoming: any): any {
       } else {
         rows.set(key, row);
       }
-      if (row && row.id != null) tombstones.delete(String(row.id));
+      tombstones.delete(syncRowIdentity(table, row));
     }
     merged[table] = Array.from(rows.values());
     deletedIds[table] = Array.from(tombstones);
@@ -3121,20 +3134,20 @@ export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) 
         } else {
           recoveryWarnings.push(String(deltaFile.name || "An incremental backup") + " is missing its " + table + " data.");
         }
-      } else if (["patients","procedures","inventoryCategories","inventory","patientImplants","patientCustomFields","implantRecords","expenses","users","patientHistory","inventoryMovements","inventoryPurchaseReceipts","stockReceipts","trash"].includes(table)) {
+      } else if (["patients","procedures","inventoryCategories","inventory","patientImplants","patientCustomFields","implantRecords","expenses","users","patientHistory","inventoryMovements","inventoryPurchaseReceipts","stockReceipts","yearlyRequirements","intelligenceRecords","intelligenceRevisions","knowledgeArticles","intelligenceSettings","trash"].includes(table)) {
         if (Array.isArray(delta[table])) {
           if (delta._recoveredFromDamage !== true && delta._rowDelta === true && !(Array.isArray(delta.fullTables) && delta.fullTables.includes(table))) {
             // Apply only changed records and explicit deletion tombstones.
             // This keeps old records intact while allowing true row-level sync.
             const merged = new Map<string, any>();
             for (const row of Array.isArray(composed[table]) ? composed[table] : []) {
-              const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+              const key = syncRowKey(table, row);
               merged.set(key, row);
             }
             const deleted = delta.deletedIds && Array.isArray(delta.deletedIds[table]) ? delta.deletedIds[table] : [];
             for (const id of deleted) merged.delete("id:" + String(id));
             for (const row of delta[table]) {
-              const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+              const key = syncRowKey(table, row);
               const existing = merged.get(key);
               if (table === "patients" && existing &&
                   !Object.prototype.hasOwnProperty.call(row, "photo_uri") &&
@@ -3154,11 +3167,11 @@ export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) 
             // a damaged file may omit valid rows.
             const merged = new Map<string, any>();
             for (const row of composed[table]) {
-              const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+              const key = syncRowKey(table, row);
               merged.set(key, row);
             }
             for (const row of delta[table]) {
-              const key = row && row.id != null ? "id:" + String(row.id) : "row:" + JSON.stringify(row);
+              const key = syncRowKey(table, row);
               const existing = merged.get(key);
               if (table === "patients" && existing &&
                   !Object.prototype.hasOwnProperty.call(row, "photo_uri") &&
@@ -3183,7 +3196,7 @@ export async function restoreLatestFromGoogleDrive(onProgress?: (stage: string) 
             // journal snapshot: keep newer master records and apply tombstones.
             let mergedRows = mergeRowsByRecency(composed[table] || [], delta[table], table);
             const deletedIds = new Set<string>(Array.isArray(delta.deletedIds?.[table]) ? delta.deletedIds[table].map(String) : []);
-            if (deletedIds.size) mergedRows = mergedRows.filter((row: any) => row?.id == null || !deletedIds.has(String(row.id)));
+            if (deletedIds.size) mergedRows = mergedRows.filter((row: any) => !deletedIds.has(syncRowIdentity(table, row)));
             composed[table] = mergedRows;
           }
           appliedAnyTable = true;
@@ -3452,6 +3465,9 @@ export async function initializeOrJoinSharedWorkspace(
       }
     }
     const backup = await downloadDriveJsonValidated(String(master.id), onProgress);
+    for (const table of ["yearlyRequirements", "intelligenceRecords", "intelligenceRevisions", "knowledgeArticles", "intelligenceSettings"]) {
+      if (!Array.isArray(backup[table])) backup[table] = [];
+    }
     if (!hasCompleteMasterSnapshot(backup)) {
       throw new Error("The existing Drive backup is not a complete Ortho Logbook master. It was not replaced or deleted.");
     }
@@ -3745,6 +3761,9 @@ export async function getApprovedSharedWorkspaceBackup(
   onProgress?.("Downloading the approved shared baseline…");
   const baselineResult = await restoreLatestFromGoogleDrive(onProgress);
   const baseline: any = parseDownloadedBackup(baselineResult.backupText);
+  for (const table of ["yearlyRequirements", "intelligenceRecords", "intelligenceRevisions", "knowledgeArticles", "intelligenceSettings"]) {
+    if (!Array.isArray(baseline[table])) baseline[table] = [];
+  }
   if (!hasCompleteMasterSnapshot(baseline)) {
     throw new Error("The shared baseline is incomplete. Local records were not changed.");
   }
